@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { createRoot } from 'react-dom/client'
 
-import Layout from './layouts'
+import Layout from '@public/layouts'
 
 function App() {
 	const [count, setCount] = useState(0)
