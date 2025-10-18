@@ -7,15 +7,21 @@
     "build": "bun build --compile --target bun --outfile server src/index.ts"
   },
   "dependencies": {
+    "@atproto/api": "^0.17.3",
+    "@atproto/lex-cli": "^0.9.5",
+    "@atproto/oauth-client-node": "^0.3.9",
+    "@atproto/xrpc-server": "^0.9.5",
+    "@elysiajs/cors": "^1.4.0",
     "@elysiajs/eden": "^1.4.3",
     "@elysiajs/openapi": "^1.4.11",
     "@elysiajs/static": "^1.4.2",
     "@tanstack/react-query": "^5.90.2",
     "clsx": "^2.1.1",
     "elysia": "latest",
+    "iron-session": "^8.0.4",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "tailwindcss": "^4.1.14"
+    "tailwindcss": "4"
   },
   "devDependencies": {
     "@types/react": "^19.2.2",
