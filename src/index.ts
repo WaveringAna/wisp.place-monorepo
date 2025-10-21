@@ -10,6 +10,8 @@ import {
 	getOAuthClient,
 	getCurrentKeys
 } from './lib/oauth-client'
+import { authRoutes } from './routes/auth'
+import { wispRoutes } from './routes/wisp'
 
 const config: Config = {
 	domain: (Bun.env.DOMAIN ?? `https://${BASE_HOST}`) as `https://${string}`,
@@ -29,27 +31,8 @@ export const app = new Elysia()
 			prefix: '/'
 		})
 	)
-	.post('/api/auth/signin', async (c) => {
-		try {
-			const { handle } = await c.request.json()
-			const state = crypto.randomUUID()
-			const url = await client.authorize(handle, { state })
-			return { url: url.toString() }
-		} catch (err) {
-			console.error('Signin error', err)
-			return  { error: 'Authentication failed' }
-		}
-	})
-	.get('/api/auth/callback', async (c) => {
-		const params = new URLSearchParams(c.query)
-		const { session } = await client.callback(params)
-		if (!session) return { error: 'Authentication failed' }
-
-		const cookieSession = c.cookie
-		cookieSession.did.value = session.did
-
-		return c.redirect('/')
-	})
+	.use(authRoutes(client))
+	.use(wispRoutes(client))
 	.get('/client-metadata.json', (c) => {
 		return createClientMetadata(config)
 	})

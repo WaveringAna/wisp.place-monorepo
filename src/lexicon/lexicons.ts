@@ -42,15 +42,17 @@ export const schemaDict = {
       },
       file: {
         type: 'object',
-        required: ['type', 'hash'],
+        required: ['type', 'blob'],
         properties: {
           type: {
             type: 'string',
             const: 'file',
           },
-          hash: {
-            type: 'string',
-            description: 'Content blob hash',
+          blob: {
+            type: 'blob',
+            accept: ['*/*'],
+            maxSize: 1000000,
+            description: 'Content blob ref',
           },
         },
       },

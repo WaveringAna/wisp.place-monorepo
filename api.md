@@ -37,7 +37,5 @@
  *
  * Routes:
  *   GET  /wisp/sites                - List all sites for authenticated user
- *   GET  /wisp/fs/:site             - Get site record (metadata/manifest)
- *   GET  /wisp/fs/:site/file/*      - Get individual file content by path
  *   POST /wisp/upload-files         - Upload and deploy files as a site
  */
