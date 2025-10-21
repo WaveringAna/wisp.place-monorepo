@@ -32,8 +32,8 @@ export function validateRecord<V>(v: V) {
 export interface File {
   $type?: 'place.wisp.fs#file'
   type: 'file'
-  /** Content blob hash */
-  hash: string
+  /** Content blob ref */
+  blob: BlobRef
 }
 
 const hashFile = 'file'
