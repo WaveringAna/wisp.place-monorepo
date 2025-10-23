@@ -16,7 +16,7 @@ export default function Layout({ children, className }: LayoutProps) {
 		<QueryClientProvider client={client}>
 			<div
 				className={clsx(
-					'flex flex-col justify-center items-center w-full min-h-screen',
+					'flex flex-col items-center w-full min-h-screen',
 					className
 				)}
 			>
