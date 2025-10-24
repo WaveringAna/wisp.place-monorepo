@@ -13,6 +13,7 @@ import {
 import { authRoutes } from './routes/auth'
 import { wispRoutes } from './routes/wisp'
 import { domainRoutes } from './routes/domain'
+import { userRoutes } from './routes/user'
 
 const config: Config = {
 	domain: (Bun.env.DOMAIN ?? `https://${BASE_HOST}`) as `https://${string}`,
@@ -35,6 +36,7 @@ export const app = new Elysia()
 	.use(authRoutes(client))
 	.use(wispRoutes(client))
 	.use(domainRoutes(client))
+	.use(userRoutes(client))
 	.get('/client-metadata.json', (c) => {
 		return createClientMetadata(config)
 	})

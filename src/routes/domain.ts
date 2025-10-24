@@ -9,7 +9,16 @@ import {
 	isValidHandle,
 	toDomain,
 	updateDomain,
+	getCustomDomainInfo,
+	getCustomDomainById,
+	claimCustomDomain,
+	deleteCustomDomain,
+	updateCustomDomainVerification,
+	updateWispDomainSite,
+	updateCustomDomainRkey
 } from '../lib/db'
+import { createHash } from 'crypto'
+import { verifyCustomDomain } from '../lib/dns-verify'
 
 export const domainRoutes = (client: NodeOAuthClient) =>
 	new Elysia({ prefix: '/api/domain' })
@@ -125,5 +134,106 @@ export const domainRoutes = (client: NodeOAuthClient) =>
 			} catch (err) {
 				console.error("domain/update error", err);
 				throw new Error(`Failed to update: ${err instanceof Error ? err.message : 'Unknown error'}`);
+			}
+		})
+		.post('/custom/add', async ({ body, auth }) => {
+			try {
+				const { domain } = body as { domain: string };
+				const domainLower = domain.toLowerCase().trim();
+
+				// Basic validation
+				if (!domainLower || domainLower.length < 3) {
+					throw new Error('Invalid domain');
+				}
+
+				// Check if already exists
+				const existing = await getCustomDomainInfo(domainLower);
+				if (existing) {
+					throw new Error('Domain already claimed');
+				}
+
+				// Create hash for ID
+				const hash = createHash('sha256').update(`${auth.did}:${domainLower}`).digest('hex').substring(0, 16);
+
+				// Store in database only
+				await claimCustomDomain(auth.did, domainLower, hash);
+
+				return {
+					success: true,
+					id: hash,
+					domain: domainLower,
+					verified: false
+				};
+			} catch (err) {
+				console.error('custom domain add error', err);
+				throw new Error(`Failed to add domain: ${err instanceof Error ? err.message : 'Unknown error'}`);
+			}
+		})
+		.post('/custom/verify', async ({ body, auth }) => {
+			try {
+				const { id } = body as { id: string };
+
+				// Get domain from database
+				const domainInfo = await getCustomDomainById(id);
+				if (!domainInfo) {
+					throw new Error('Domain not found');
+				}
+
+				// Verify DNS records (TXT + CNAME)
+				console.log(`Verifying custom domain: ${domainInfo.domain}`);
+				const result = await verifyCustomDomain(domainInfo.domain, auth.did, id);
+
+				// Update verification status in database
+				await updateCustomDomainVerification(id, result.verified);
+
+				return {
+					success: true,
+					verified: result.verified,
+					error: result.error,
+					found: result.found
+				};
+			} catch (err) {
+				console.error('custom domain verify error', err);
+				throw new Error(`Failed to verify domain: ${err instanceof Error ? err.message : 'Unknown error'}`);
+			}
+		})
+		.delete('/custom/:id', async ({ params, auth }) => {
+			try {
+				const { id } = params;
+
+				// Delete from database
+				await deleteCustomDomain(id);
+
+				return { success: true };
+			} catch (err) {
+				console.error('custom domain delete error', err);
+				throw new Error(`Failed to delete domain: ${err instanceof Error ? err.message : 'Unknown error'}`);
+			}
+		})
+		.post('/wisp/map-site', async ({ body, auth }) => {
+			try {
+				const { siteRkey } = body as { siteRkey: string | null };
+
+				// Update wisp.place domain to point to this site
+				await updateWispDomainSite(auth.did, siteRkey);
+
+				return { success: true };
+			} catch (err) {
+				console.error('wisp domain map error', err);
+				throw new Error(`Failed to map site: ${err instanceof Error ? err.message : 'Unknown error'}`);
+			}
+		})
+		.post('/custom/:id/map-site', async ({ params, body, auth }) => {
+			try {
+				const { id } = params;
+				const { siteRkey } = body as { siteRkey: string | null };
+
+				// Update custom domain to point to this site
+				await updateCustomDomainRkey(id, siteRkey || 'self');
+
+				return { success: true };
+			} catch (err) {
+				console.error('custom domain map error', err);
+				throw new Error(`Failed to map site: ${err instanceof Error ? err.message : 'Unknown error'}`);
 			}
 		});

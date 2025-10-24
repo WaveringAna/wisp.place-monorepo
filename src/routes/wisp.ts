@@ -9,6 +9,7 @@ import {
 	createManifest,
 	updateFileBlobs
 } from '../lib/wisp-utils'
+import { upsertSite } from '../lib/db'
 
 export const wispRoutes = (client: NodeOAuthClient) =>
 	new Elysia({ prefix: '/wisp' })
@@ -27,17 +28,66 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 				console.log('🚀 Starting upload process', { siteName, fileCount: Array.isArray(files) ? files.length : 1 });
 
 				try {
-					if (!files || (Array.isArray(files) ? files.length === 0 : !files)) {
-						console.error('❌ No files provided');
-						throw new Error('No files provided')
-					}
-
 					if (!siteName) {
 						console.error('❌ Site name is required');
 						throw new Error('Site name is required')
 					}
 
 					console.log('✅ Initial validation passed');
+
+					// Check if files were provided
+					const hasFiles = files && (Array.isArray(files) ? files.length > 0 : !!files);
+
+					if (!hasFiles) {
+						console.log('📝 Creating empty site (no files provided)');
+
+						// Create agent with OAuth session
+						console.log('🔐 Creating agent with OAuth session');
+						const agent = new Agent((url, init) => auth.session.fetchHandler(url, init))
+						console.log('✅ Agent created successfully');
+
+						// Create empty manifest
+						const emptyManifest = {
+							$type: 'place.wisp.fs',
+							site: siteName,
+							root: {
+								type: 'directory',
+								entries: []
+							},
+							fileCount: 0,
+							createdAt: new Date().toISOString()
+						};
+
+						// Use site name as rkey
+						const rkey = siteName;
+
+						// Create the record with explicit rkey
+						console.log(`📝 Creating empty site record in repo with rkey: ${rkey}`);
+						const record = await agent.com.atproto.repo.putRecord({
+							repo: auth.did,
+							collection: 'place.wisp.fs',
+							rkey: rkey,
+							record: emptyManifest
+						});
+
+						console.log('✅ Empty site record created successfully:', {
+							uri: record.data.uri,
+							cid: record.data.cid
+						});
+
+						// Store site in database cache
+						console.log('💾 Storing site in database cache');
+						await upsertSite(auth.did, rkey, siteName);
+						console.log('✅ Site stored in database');
+
+						return {
+							success: true,
+							uri: record.data.uri,
+							cid: record.data.cid,
+							fileCount: 0,
+							siteName
+						};
+					}
 
 					// Create agent with OAuth session
 					console.log('🔐 Creating agent with OAuth session');
@@ -124,7 +174,50 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 					}
 
 					if (uploadedFiles.length === 0) {
-						throw new Error('No valid web files found to upload. Allowed types: HTML, CSS, JS, images, fonts, PDFs, and other web assets.');
+						console.log('⚠️  No valid web files found, creating empty site instead');
+
+						// Create empty manifest
+						const emptyManifest = {
+							$type: 'place.wisp.fs',
+							site: siteName,
+							root: {
+								type: 'directory',
+								entries: []
+							},
+							fileCount: 0,
+							createdAt: new Date().toISOString()
+						};
+
+						// Use site name as rkey
+						const rkey = siteName;
+
+						// Create the record with explicit rkey
+						console.log(`📝 Creating empty site record in repo with rkey: ${rkey}`);
+						const record = await agent.com.atproto.repo.putRecord({
+							repo: auth.did,
+							collection: 'place.wisp.fs',
+							rkey: rkey,
+							record: emptyManifest
+						});
+
+						console.log('✅ Empty site record created successfully:', {
+							uri: record.data.uri,
+							cid: record.data.cid
+						});
+
+						// Store site in database cache
+						console.log('💾 Storing site in database cache');
+						await upsertSite(auth.did, rkey, siteName);
+						console.log('✅ Site stored in database');
+
+						return {
+							success: true,
+							uri: record.data.uri,
+							cid: record.data.cid,
+							fileCount: 0,
+							siteName,
+							message: 'Site created but no valid web files were found to upload'
+						};
 					}
 
 					console.log('✅ File conversion completed');
@@ -194,11 +287,15 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 					const manifest = createManifest(siteName, updatedDirectory, fileCount);
 					console.log('✅ Manifest created');
 
-					// Create the record
-					console.log('📝 Creating record in repo');
-					const record = await agent.com.atproto.repo.createRecord({
+					// Use site name as rkey
+					const rkey = siteName;
+
+					// Create the record with explicit rkey
+					console.log(`📝 Creating record in repo with rkey: ${rkey}`);
+					const record = await agent.com.atproto.repo.putRecord({
 						repo: auth.did,
 						collection: 'place.wisp.fs',
+						rkey: rkey,
 						record: manifest
 					});
 
@@ -206,6 +303,11 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 						uri: record.data.uri,
 						cid: record.data.cid
 					});
+
+					// Store site in database cache
+					console.log('💾 Storing site in database cache');
+					await upsertSite(auth.did, rkey, siteName);
+					console.log('✅ Site stored in database');
 
 					const result = {
 						success: true,
