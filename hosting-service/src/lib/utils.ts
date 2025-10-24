@@ -102,6 +102,18 @@ export function extractBlobCid(blobRef: any): string | null {
 
 export async function downloadAndCacheSite(did: string, rkey: string, record: WispFsRecord, pdsEndpoint: string): Promise<void> {
   console.log('Caching site', did, rkey);
+
+  // Validate record structure
+  if (!record.root) {
+    console.error('Record missing root directory:', JSON.stringify(record, null, 2));
+    throw new Error('Invalid record structure: missing root directory');
+  }
+
+  if (!record.root.entries || !Array.isArray(record.root.entries)) {
+    console.error('Record root missing entries array:', JSON.stringify(record.root, null, 2));
+    throw new Error('Invalid record structure: root missing entries array');
+  }
+
   await cacheFiles(did, rkey, record.root.entries, pdsEndpoint, '');
 }
 
