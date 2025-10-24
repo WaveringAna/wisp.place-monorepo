@@ -229,6 +229,16 @@ export const domainRoutes = (client: NodeOAuthClient) =>
 			try {
 				const { id } = params;
 
+				// Verify ownership before deleting
+				const domainInfo = await getCustomDomainById(id);
+				if (!domainInfo) {
+					throw new Error('Domain not found');
+				}
+
+				if (domainInfo.did !== auth.did) {
+					throw new Error('Unauthorized: You do not own this domain');
+				}
+
 				// Delete from database
 				await deleteCustomDomain(id);
 
@@ -255,6 +265,16 @@ export const domainRoutes = (client: NodeOAuthClient) =>
 			try {
 				const { id } = params;
 				const { siteRkey } = body as { siteRkey: string | null };
+
+				// Verify ownership before updating
+				const domainInfo = await getCustomDomainById(id);
+				if (!domainInfo) {
+					throw new Error('Domain not found');
+				}
+
+				if (domainInfo.did !== auth.did) {
+					throw new Error('Unauthorized: You do not own this domain');
+				}
 
 				// Update custom domain to point to this site
 				await updateCustomDomainRkey(id, siteRkey || 'self');

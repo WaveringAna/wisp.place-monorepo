@@ -1,13 +1,26 @@
 import { Hono } from 'hono';
 import { serveStatic } from 'hono/bun';
 import { getWispDomain, getCustomDomain, getCustomDomainByHash } from './lib/db';
-import { resolveDid, getPdsForDid, fetchSiteRecord, downloadAndCacheSite, getCachedFilePath, isCached } from './lib/utils';
+import { resolveDid, getPdsForDid, fetchSiteRecord, downloadAndCacheSite, getCachedFilePath, isCached, sanitizePath } from './lib/utils';
 import { rewriteHtmlPaths, isHtmlContent } from './lib/html-rewriter';
 import { existsSync } from 'fs';
 
 const app = new Hono();
 
 const BASE_HOST = process.env.BASE_HOST || 'wisp.place';
+
+/**
+ * Validate site name (rkey) to prevent injection attacks
+ * Must match AT Protocol rkey format
+ */
+function isValidRkey(rkey: string): boolean {
+  if (!rkey || typeof rkey !== 'string') return false;
+  if (rkey.length < 1 || rkey.length > 512) return false;
+  if (rkey === '.' || rkey === '..') return false;
+  if (rkey.includes('/') || rkey.includes('\\') || rkey.includes('\0')) return false;
+  const validRkeyPattern = /^[a-zA-Z0-9._~:-]+$/;
+  return validRkeyPattern.test(rkey);
+}
 
 // Helper to serve files from cache
 async function serveFromCache(did: string, rkey: string, filePath: string) {
@@ -119,9 +132,15 @@ async function ensureSiteCached(did: string, rkey: string): Promise<boolean> {
 app.get('/s/:identifier/:site/*', async (c) => {
   const identifier = c.req.param('identifier');
   const site = c.req.param('site');
-  const filePath = c.req.path.replace(`/s/${identifier}/${site}/`, '');
+  const rawPath = c.req.path.replace(`/s/${identifier}/${site}/`, '');
+  const filePath = sanitizePath(rawPath);
 
   console.log('[Direct] Serving', { identifier, site, filePath });
+
+  // Validate site name (rkey)
+  if (!isValidRkey(site)) {
+    return c.text('Invalid site name', 400);
+  }
 
   // Resolve identifier to DID
   const did = await resolveDid(identifier);
@@ -143,7 +162,8 @@ app.get('/s/:identifier/:site/*', async (c) => {
 // Route 3: DNS routing for custom domains - /hash.dns.wisp.place/*
 app.get('/*', async (c) => {
   const hostname = c.req.header('host') || '';
-  const path = c.req.path.replace(/^\//, '');
+  const rawPath = c.req.path.replace(/^\//, '');
+  const path = sanitizePath(rawPath);
 
   console.log('[Request]', { hostname, path });
 
@@ -165,6 +185,10 @@ app.get('/*', async (c) => {
     }
 
     const rkey = customDomain.rkey || 'self';
+    if (!isValidRkey(rkey)) {
+      return c.text('Invalid site configuration', 500);
+    }
+
     const cached = await ensureSiteCached(customDomain.did, rkey);
     if (!cached) {
       return c.text('Site not found', 404);
@@ -185,6 +209,10 @@ app.get('/*', async (c) => {
     }
 
     const rkey = domainInfo.rkey || 'self';
+    if (!isValidRkey(rkey)) {
+      return c.text('Invalid site configuration', 500);
+    }
+
     const cached = await ensureSiteCached(domainInfo.did, rkey);
     if (!cached) {
       return c.text('Site not found', 404);
@@ -202,6 +230,10 @@ app.get('/*', async (c) => {
   }
 
   const rkey = customDomain.rkey || 'self';
+  if (!isValidRkey(rkey)) {
+    return c.text('Invalid site configuration', 500);
+  }
+
   const cached = await ensureSiteCached(customDomain.did, rkey);
   if (!cached) {
     return c.text('Site not found', 404);

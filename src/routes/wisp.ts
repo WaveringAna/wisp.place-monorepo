@@ -11,6 +11,32 @@ import {
 } from '../lib/wisp-utils'
 import { upsertSite } from '../lib/db'
 
+/**
+ * Validate site name (rkey) according to AT Protocol specifications
+ * - Must be 1-512 characters
+ * - Can only contain: alphanumeric, dots, dashes, underscores, tildes, colons
+ * - Cannot be just "." or ".."
+ * - Cannot contain path traversal sequences
+ */
+function isValidSiteName(siteName: string): boolean {
+	if (!siteName || typeof siteName !== 'string') return false;
+
+	// Length check (AT Protocol rkey limit)
+	if (siteName.length < 1 || siteName.length > 512) return false;
+
+	// Check for path traversal
+	if (siteName === '.' || siteName === '..') return false;
+	if (siteName.includes('/') || siteName.includes('\\')) return false;
+	if (siteName.includes('\0')) return false;
+
+	// AT Protocol rkey format: alphanumeric, dots, dashes, underscores, tildes, colons
+	// Based on NSID format rules
+	const validRkeyPattern = /^[a-zA-Z0-9._~:-]+$/;
+	if (!validRkeyPattern.test(siteName)) return false;
+
+	return true;
+}
+
 export const wispRoutes = (client: NodeOAuthClient) =>
 	new Elysia({ prefix: '/wisp' })
 		.derive(async ({ cookie }) => {
@@ -31,6 +57,11 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 					if (!siteName) {
 						console.error('❌ Site name is required');
 						throw new Error('Site name is required')
+					}
+
+					if (!isValidSiteName(siteName)) {
+						console.error('❌ Invalid site name format');
+						throw new Error('Invalid site name: must be 1-512 characters and contain only alphanumeric, dots, dashes, underscores, tildes, and colons')
 					}
 
 					console.log('✅ Initial validation passed');
