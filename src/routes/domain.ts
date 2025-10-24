@@ -6,6 +6,7 @@ import {
 	claimDomain,
 	getDomainByDid,
 	isDomainAvailable,
+	isDomainRegistered,
 	isValidHandle,
 	toDomain,
 	updateDomain,
@@ -22,23 +23,20 @@ import { verifyCustomDomain } from '../lib/dns-verify'
 
 export const domainRoutes = (client: NodeOAuthClient) =>
 	new Elysia({ prefix: '/api/domain' })
-		.derive(async ({ cookie }) => {
-			const auth = await requireAuth(client, cookie)
-			return { auth }
-		})
+		// Public endpoints (no auth required)
 		.get('/check', async ({ query }) => {
 			try {
 				const handle = (query.handle || "")
 					.trim()
 					.toLowerCase();
-				
+
 				if (!isValidHandle(handle)) {
 					return {
 						available: false,
 						reason: "invalid"
 					};
 				}
-				
+
 				const available = await isDomainAvailable(handle);
 				return {
 					available,
@@ -50,6 +48,36 @@ export const domainRoutes = (client: NodeOAuthClient) =>
 					available: false
 				};
 			}
+		})
+		.get('/registered', async ({ query, set }) => {
+			try {
+				const domain = (query.domain || "").trim().toLowerCase();
+
+				if (!domain) {
+					set.status = 400;
+					return { error: 'Domain parameter required' };
+				}
+
+				const result = await isDomainRegistered(domain);
+
+				// For Caddy on-demand TLS: 200 = allow, 404 = deny
+				if (result.registered) {
+					set.status = 200;
+					return result;
+				} else {
+					set.status = 404;
+					return { registered: false };
+				}
+			} catch (err) {
+				console.error("domain/registered error", err);
+				set.status = 500;
+				return { error: 'Failed to check domain' };
+			}
+		})
+		// Authenticated endpoints (require auth)
+		.derive(async ({ cookie }) => {
+			const auth = await requireAuth(client, cookie)
+			return { auth }
 		})
 		.post('/claim', async ({ body, auth }) => {
 			try {

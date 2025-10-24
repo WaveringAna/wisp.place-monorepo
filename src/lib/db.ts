@@ -120,6 +120,43 @@ export const isDomainAvailable = async (handle: string): Promise<boolean> => {
     return rows.length === 0;
 };
 
+export const isDomainRegistered = async (domain: string) => {
+    const domainLower = domain.toLowerCase().trim();
+
+    // Check wisp.place subdomains
+    const wispDomain = await db`
+        SELECT did, domain, rkey FROM domains WHERE domain = ${domainLower}
+    `;
+
+    if (wispDomain.length > 0) {
+        return {
+            registered: true,
+            type: 'wisp' as const,
+            domain: wispDomain[0].domain,
+            did: wispDomain[0].did,
+            rkey: wispDomain[0].rkey
+        };
+    }
+
+    // Check custom domains
+    const customDomain = await db`
+        SELECT id, domain, did, rkey, verified FROM custom_domains WHERE domain = ${domainLower}
+    `;
+
+    if (customDomain.length > 0) {
+        return {
+            registered: true,
+            type: 'custom' as const,
+            domain: customDomain[0].domain,
+            did: customDomain[0].did,
+            rkey: customDomain[0].rkey,
+            verified: customDomain[0].verified
+        };
+    }
+
+    return { registered: false };
+};
+
 export const claimDomain = async (did: string, handle: string): Promise<string> => {
     const h = handle.trim().toLowerCase();
     if (!isValidHandle(h)) throw new Error('invalid_handle');
