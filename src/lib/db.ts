@@ -39,9 +39,17 @@ await db`
     CREATE TABLE IF NOT EXISTS domains (
         domain TEXT PRIMARY KEY,
         did TEXT UNIQUE NOT NULL,
+        rkey TEXT,
         created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())
     )
 `;
+
+// Add rkey column if it doesn't exist (for existing databases)
+try {
+    await db`ALTER TABLE domains ADD COLUMN IF NOT EXISTS rkey TEXT`;
+} catch (err) {
+    // Column might already exist, ignore
+}
 
 // Custom domains table for BYOD (bring your own domain)
 await db`
@@ -94,6 +102,11 @@ export const getDomainByDid = async (did: string): Promise<string | null> => {
     return rows[0]?.domain ?? null;
 };
 
+export const getWispDomainInfo = async (did: string) => {
+    const rows = await db`SELECT domain, rkey FROM domains WHERE did = ${did}`;
+    return rows[0] ?? null;
+};
+
 export const getDidByDomain = async (domain: string): Promise<string | null> => {
     const rows = await db`SELECT did FROM domains WHERE domain = ${domain.toLowerCase()}`;
     return rows[0]?.did ?? null;
@@ -140,6 +153,19 @@ export const updateDomain = async (did: string, handle: string): Promise<string>
         // Unique constraint violations -> already taken by someone else
         throw new Error('conflict');
     }
+};
+
+export const updateWispDomainSite = async (did: string, siteRkey: string | null): Promise<void> => {
+    await db`
+        UPDATE domains
+        SET rkey = ${siteRkey}
+        WHERE did = ${did}
+    `;
+};
+
+export const getWispDomainSite = async (did: string): Promise<string | null> => {
+    const rows = await db`SELECT rkey FROM domains WHERE did = ${did}`;
+    return rows[0]?.rkey ?? null;
 };
 
 const stateStore = {
@@ -283,12 +309,12 @@ export const getCustomDomainById = async (id: string) => {
     return rows[0] ?? null;
 };
 
-export const claimCustomDomain = async (did: string, domain: string, siteName: string, hash: string) => {
+export const claimCustomDomain = async (did: string, domain: string, hash: string, rkey: string = 'self') => {
     const domainLower = domain.toLowerCase();
     try {
         await db`
-            INSERT INTO custom_domains (id, domain, did, site_name, verified, created_at)
-            VALUES (${hash}, ${domainLower}, ${did}, ${siteName}, false, EXTRACT(EPOCH FROM NOW()))
+            INSERT INTO custom_domains (id, domain, did, rkey, verified, created_at)
+            VALUES (${hash}, ${domainLower}, ${did}, ${rkey}, false, EXTRACT(EPOCH FROM NOW()))
         `;
         return { success: true, hash };
     } catch (err) {
@@ -297,10 +323,10 @@ export const claimCustomDomain = async (did: string, domain: string, siteName: s
     }
 };
 
-export const updateCustomDomainSite = async (id: string, siteName: string) => {
+export const updateCustomDomainRkey = async (id: string, rkey: string) => {
     const rows = await db`
         UPDATE custom_domains
-        SET site_name = ${siteName}
+        SET rkey = ${rkey}
         WHERE id = ${id}
         RETURNING *
     `;
@@ -326,12 +352,12 @@ export const getSitesByDid = async (did: string) => {
     return rows;
 };
 
-export const upsertSite = async (did: string, siteName: string, displayName?: string) => {
+export const upsertSite = async (did: string, rkey: string, displayName?: string) => {
     try {
         await db`
-            INSERT INTO sites (did, site_name, display_name, created_at, updated_at)
-            VALUES (${did}, ${siteName}, ${displayName || null}, EXTRACT(EPOCH FROM NOW()), EXTRACT(EPOCH FROM NOW()))
-            ON CONFLICT (did, site_name)
+            INSERT INTO sites (did, rkey, display_name, created_at, updated_at)
+            VALUES (${did}, ${rkey}, ${displayName || null}, EXTRACT(EPOCH FROM NOW()), EXTRACT(EPOCH FROM NOW()))
+            ON CONFLICT (did, rkey)
             DO UPDATE SET
                 display_name = COALESCE(EXCLUDED.display_name, sites.display_name),
                 updated_at = EXTRACT(EPOCH FROM NOW())
