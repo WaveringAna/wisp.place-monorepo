@@ -391,12 +391,18 @@ export const getSitesByDid = async (did: string) => {
 
 export const upsertSite = async (did: string, rkey: string, displayName?: string) => {
     try {
+        // Only set display_name if provided (not undefined/null/empty)
+        const cleanDisplayName = displayName && displayName.trim() ? displayName.trim() : null;
+
         await db`
             INSERT INTO sites (did, rkey, display_name, created_at, updated_at)
-            VALUES (${did}, ${rkey}, ${displayName || null}, EXTRACT(EPOCH FROM NOW()), EXTRACT(EPOCH FROM NOW()))
+            VALUES (${did}, ${rkey}, ${cleanDisplayName}, EXTRACT(EPOCH FROM NOW()), EXTRACT(EPOCH FROM NOW()))
             ON CONFLICT (did, rkey)
             DO UPDATE SET
-                display_name = COALESCE(EXCLUDED.display_name, sites.display_name),
+                display_name = CASE
+                    WHEN EXCLUDED.display_name IS NOT NULL THEN EXCLUDED.display_name
+                    ELSE sites.display_name
+                END,
                 updated_at = EXTRACT(EPOCH FROM NOW())
         `;
         return { success: true };

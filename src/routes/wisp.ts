@@ -51,31 +51,21 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 					files: File | File[]
 				};
 
-				console.log('🚀 Starting upload process', { siteName, fileCount: Array.isArray(files) ? files.length : 1 });
-
 				try {
 					if (!siteName) {
-						console.error('❌ Site name is required');
 						throw new Error('Site name is required')
 					}
 
 					if (!isValidSiteName(siteName)) {
-						console.error('❌ Invalid site name format');
 						throw new Error('Invalid site name: must be 1-512 characters and contain only alphanumeric, dots, dashes, underscores, tildes, and colons')
 					}
-
-					console.log('✅ Initial validation passed');
 
 					// Check if files were provided
 					const hasFiles = files && (Array.isArray(files) ? files.length > 0 : !!files);
 
 					if (!hasFiles) {
-						console.log('📝 Creating empty site (no files provided)');
-
 						// Create agent with OAuth session
-						console.log('🔐 Creating agent with OAuth session');
 						const agent = new Agent((url, init) => auth.session.fetchHandler(url, init))
-						console.log('✅ Agent created successfully');
 
 						// Create empty manifest
 						const emptyManifest = {
@@ -92,8 +82,6 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 						// Use site name as rkey
 						const rkey = siteName;
 
-						// Create the record with explicit rkey
-						console.log(`📝 Creating empty site record in repo with rkey: ${rkey}`);
 						const record = await agent.com.atproto.repo.putRecord({
 							repo: auth.did,
 							collection: 'place.wisp.fs',
@@ -101,15 +89,7 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 							record: emptyManifest
 						});
 
-						console.log('✅ Empty site record created successfully:', {
-							uri: record.data.uri,
-							cid: record.data.cid
-						});
-
-						// Store site in database cache
-						console.log('💾 Storing site in database cache');
 						await upsertSite(auth.did, rkey, siteName);
-						console.log('✅ Site stored in database');
 
 						return {
 							success: true,
@@ -121,14 +101,11 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 					}
 
 					// Create agent with OAuth session
-					console.log('🔐 Creating agent with OAuth session');
 					const agent = new Agent((url, init) => auth.session.fetchHandler(url, init))
-					console.log('✅ Agent created successfully');
 
 					// Convert File objects to UploadedFile format
 					// Elysia gives us File objects directly, handle both single file and array
 					const fileArray = Array.isArray(files) ? files : [files];
-					console.log(`📁 Processing ${fileArray.length} files`);
 					const uploadedFiles: UploadedFile[] = [];
 
 					// Define allowed file extensions for static site hosting
@@ -161,29 +138,23 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 					for (let i = 0; i < fileArray.length; i++) {
 						const file = fileArray[i];
 						const fileExtension = '.' + file.name.split('.').pop()?.toLowerCase();
-						
-						console.log(`📄 Processing file ${i + 1}/${fileArray.length}: ${file.name} (${file.size} bytes, ${file.type})`);
-						
+
 						// Skip excluded files
 						if (excludedFiles.has(fileExtension)) {
-							console.log(`⏭️  Skipping excluded file: ${file.name}`);
 							continue;
 						}
-						
+
 						// Skip files that aren't in allowed extensions
 						if (!allowedExtensions.has(fileExtension)) {
-							console.log(`⏭️  Skipping non-web file: ${file.name} (${fileExtension})`);
 							continue;
 						}
-						
+
 						// Skip files that are too large (limit to 100MB per file)
 						const maxSize = 100 * 1024 * 1024; // 100MB
 						if (file.size > maxSize) {
-							console.log(`⏭️  Skipping large file: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)}MB > 100MB limit)`);
 							continue;
 						}
-						
-						console.log(`✅ Including file: ${file.name}`);
+
 						const arrayBuffer = await file.arrayBuffer();
 						uploadedFiles.push({
 							name: file.name,
@@ -196,16 +167,12 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 					// Check total size limit (300MB)
 					const totalSize = uploadedFiles.reduce((sum, file) => sum + file.size, 0);
 					const maxTotalSize = 300 * 1024 * 1024; // 300MB
-					
-					console.log(`📊 Filtered to ${uploadedFiles.length} files from ${fileArray.length} total files`);
-					console.log(`📦 Total size: ${(totalSize / 1024 / 1024).toFixed(2)}MB (limit: 300MB)`);
 
 					if (totalSize > maxTotalSize) {
 						throw new Error(`Total upload size ${(totalSize / 1024 / 1024).toFixed(2)}MB exceeds 300MB limit`);
 					}
 
 					if (uploadedFiles.length === 0) {
-						console.log('⚠️  No valid web files found, creating empty site instead');
 
 						// Create empty manifest
 						const emptyManifest = {
@@ -222,8 +189,6 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 						// Use site name as rkey
 						const rkey = siteName;
 
-						// Create the record with explicit rkey
-						console.log(`📝 Creating empty site record in repo with rkey: ${rkey}`);
 						const record = await agent.com.atproto.repo.putRecord({
 							repo: auth.did,
 							collection: 'place.wisp.fs',
@@ -231,15 +196,7 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 							record: emptyManifest
 						});
 
-						console.log('✅ Empty site record created successfully:', {
-							uri: record.data.uri,
-							cid: record.data.cid
-						});
-
-						// Store site in database cache
-						console.log('💾 Storing site in database cache');
 						await upsertSite(auth.did, rkey, siteName);
-						console.log('✅ Site stored in database');
 
 						return {
 							success: true,
@@ -251,30 +208,14 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 						};
 					}
 
-					console.log('✅ File conversion completed');
-
 					// Process files into directory structure
-					console.log('🏗️  Building directory structure');
 					const { directory, fileCount } = processUploadedFiles(uploadedFiles);
-					console.log(`✅ Directory structure created with ${fileCount} files`);
 
-					// Upload files as blobs
-					const uploadResults: FileUploadResult[] = [];
-					const filePaths: string[] = [];
+					// Upload files as blobs in parallel
+					const mimeTypeMismatches: Array<{file: string, sent: string, returned: string}> = [];
 
-					console.log('⬆️  Starting blob upload process');
-					for (let i = 0; i < uploadedFiles.length; i++) {
-						const file = uploadedFiles[i];
-						console.log(`📤 Uploading blob ${i + 1}/${uploadedFiles.length}: ${file.name}`);
-						
+					const uploadPromises = uploadedFiles.map(async (file, i) => {
 						try {
-							console.log(`🔍 Upload details:`, {
-								fileName: file.name,
-								fileSize: file.size,
-								mimeType: file.mimeType,
-								contentLength: file.content.length
-							});
-
 							const uploadResult = await agent.com.atproto.repo.uploadBlob(
 								file.content,
 								{
@@ -282,63 +223,117 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 								}
 							);
 
-							console.log(`✅ Upload successful for ${file.name}:`, {
-								hash: uploadResult.data.blob.ref.toString(),
-								mimeType: uploadResult.data.blob.mimeType,
-								size: uploadResult.data.blob.size
-							});
+							const sentMimeType = file.mimeType;
+							const returnedBlobRef = uploadResult.data.blob;
 
-							uploadResults.push({
-								hash: uploadResult.data.blob.ref.toString(),
-								blobRef: uploadResult.data.blob
-							});
+							// Track MIME type mismatches for summary
+							if (sentMimeType !== returnedBlobRef.mimeType) {
+								mimeTypeMismatches.push({
+									file: file.name,
+									sent: sentMimeType,
+									returned: returnedBlobRef.mimeType
+								});
+							}
 
-							filePaths.push(file.name);
+							// Use the blob ref exactly as returned from PDS
+							return {
+								result: {
+									hash: returnedBlobRef.ref.$link || returnedBlobRef.ref.toString(),
+									blobRef: returnedBlobRef
+								},
+								filePath: file.name,
+								sentMimeType,
+								returnedMimeType: returnedBlobRef.mimeType
+							};
 						} catch (uploadError) {
-							console.error(`❌ Upload failed for file ${file.name}:`, uploadError);
-							console.error('Upload error details:', {
-								fileName: file.name,
-								fileSize: file.size,
-								mimeType: file.mimeType,
-								error: uploadError
-							});
+							console.error(`❌ Upload failed for ${file.name}:`, uploadError);
 							throw uploadError;
 						}
+					});
+
+					// Wait for all uploads to complete
+					const uploadedBlobs = await Promise.all(uploadPromises);
+
+					// Show MIME type mismatch summary
+					if (mimeTypeMismatches.length > 0) {
+						console.warn(`\n⚠️  PDS changed MIME types for ${mimeTypeMismatches.length} files:`);
+						mimeTypeMismatches.slice(0, 20).forEach(m => {
+							console.warn(`   ${m.file}: ${m.sent} → ${m.returned}`);
+						});
+						if (mimeTypeMismatches.length > 20) {
+							console.warn(`   ... and ${mimeTypeMismatches.length - 20} more`);
+						}
+						console.warn('');
 					}
 
-					console.log('✅ All blobs uploaded successfully');
+					// CRITICAL: Find files uploaded as application/octet-stream
+					const octetStreamFiles = uploadedBlobs.filter(b => b.returnedMimeType === 'application/octet-stream');
+					if (octetStreamFiles.length > 0) {
+						console.error(`\n🚨 FILES UPLOADED AS application/octet-stream (${octetStreamFiles.length}):`);
+						octetStreamFiles.forEach(f => {
+							console.error(`   ${f.filePath}: sent=${f.sentMimeType}, returned=${f.returnedMimeType}`);
+						});
+						console.error('');
+					}
+
+					// Extract results and file paths in correct order
+					const uploadResults: FileUploadResult[] = uploadedBlobs.map(blob => blob.result);
+					const filePaths: string[] = uploadedBlobs.map(blob => blob.filePath);
 
 					// Update directory with file blobs
-					console.log('🔄 Updating file blobs in directory structure');
 					const updatedDirectory = updateFileBlobs(directory, uploadResults, filePaths);
-					console.log('✅ File blobs updated');
 
 					// Create manifest
-					console.log('📋 Creating manifest');
 					const manifest = createManifest(siteName, updatedDirectory, fileCount);
-					console.log('✅ Manifest created');
 
 					// Use site name as rkey
 					const rkey = siteName;
 
-					// Create the record with explicit rkey
-					console.log(`📝 Creating record in repo with rkey: ${rkey}`);
-					const record = await agent.com.atproto.repo.putRecord({
-						repo: auth.did,
-						collection: 'place.wisp.fs',
-						rkey: rkey,
-						record: manifest
-					});
+					let record;
+					try {
+						record = await agent.com.atproto.repo.putRecord({
+							repo: auth.did,
+							collection: 'place.wisp.fs',
+							rkey: rkey,
+							record: manifest
+						});
+					} catch (putRecordError: any) {
+						console.error('\n❌ Failed to create record on PDS');
+						console.error('Error:', putRecordError.message);
 
-					console.log('✅ Record created successfully:', {
-						uri: record.data.uri,
-						cid: record.data.cid
-					});
+						// Try to identify which file has the MIME type mismatch
+						if (putRecordError.message?.includes('Mimetype') || putRecordError.message?.includes('mimeType')) {
+							console.error('\n🔍 Analyzing manifest for MIME type issues...');
+
+							// Recursively check all blobs in manifest
+							const checkBlobs = (node: any, path: string = '') => {
+								if (node.type === 'file' && node.blob) {
+									const mimeType = node.blob.mimeType;
+									console.error(`   File: ${path} - MIME: ${mimeType}`);
+								} else if (node.type === 'directory' && node.entries) {
+									for (const entry of node.entries) {
+										const entryPath = path ? `${path}/${entry.name}` : entry.name;
+										checkBlobs(entry.node, entryPath);
+									}
+								}
+							};
+
+							checkBlobs(manifest.root, '');
+
+							console.error('\n📊 Blob upload summary:');
+							uploadedBlobs.slice(0, 20).forEach((b, i) => {
+								console.error(`   [${i}] ${b.filePath}: sent=${b.sentMimeType}, returned=${b.returnedMimeType}`);
+							});
+							if (uploadedBlobs.length > 20) {
+								console.error(`   ... and ${uploadedBlobs.length - 20} more`);
+							}
+						}
+
+						throw putRecordError;
+					}
 
 					// Store site in database cache
-					console.log('💾 Storing site in database cache');
 					await upsertSite(auth.did, rkey, siteName);
-					console.log('✅ Site stored in database');
 
 					const result = {
 						success: true,
@@ -348,7 +343,6 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 						siteName
 					};
 
-					console.log('🎉 Upload process completed successfully');
 					return result;
 				} catch (error) {
 					console.error('❌ Upload error:', error);

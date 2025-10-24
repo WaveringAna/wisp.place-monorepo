@@ -52,7 +52,13 @@ export const app = new Elysia()
 			})
 		}
 	})
-	.use(cors())
+	.use(cors({
+		origin: config.domain,
+		credentials: true,
+		methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+		allowedHeaders: ['Content-Type', 'Authorization'],
+		maxAge: 86400 // 24 hours
+	}))
 	.listen(8000)
 
 console.log(

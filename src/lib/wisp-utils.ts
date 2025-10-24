@@ -22,7 +22,6 @@ export interface ProcessedDirectory {
  * Process uploaded files into a directory structure
  */
 export function processUploadedFiles(files: UploadedFile[]): ProcessedDirectory {
-	console.log(`🏗️  Processing ${files.length} uploaded files`);
 	const entries: Entry[] = [];
 	let fileCount = 0;
 
@@ -34,11 +33,8 @@ export function processUploadedFiles(files: UploadedFile[]): ProcessedDirectory 
 		const normalizedPath = file.name.replace(/^[^\/]*\//, '');
 		const parts = normalizedPath.split('/');
 
-		console.log(`📄 Processing file: ${file.name} -> normalized: ${normalizedPath}`);
-
 		if (parts.length === 1) {
 			// Root level file
-			console.log(`📁 Root level file: ${parts[0]}`);
 			entries.push({
 				name: parts[0],
 				node: {
@@ -51,10 +47,8 @@ export function processUploadedFiles(files: UploadedFile[]): ProcessedDirectory 
 		} else {
 			// File in subdirectory
 			const dirPath = parts.slice(0, -1).join('/');
-			console.log(`📂 Subdirectory file: ${dirPath}/${parts[parts.length - 1]}`);
 			if (!directoryMap.has(dirPath)) {
 				directoryMap.set(dirPath, []);
-				console.log(`➕ Created directory: ${dirPath}`);
 			}
 			directoryMap.get(dirPath)!.push({
 				...file,
@@ -64,14 +58,11 @@ export function processUploadedFiles(files: UploadedFile[]): ProcessedDirectory 
 	}
 
 	// Process subdirectories
-	console.log(`📂 Processing ${directoryMap.size} subdirectories`);
 	for (const [dirPath, dirFiles] of directoryMap) {
-		console.log(`📁 Processing directory: ${dirPath} with ${dirFiles.length} files`);
 		const dirEntries: Entry[] = [];
 
 		for (const file of dirFiles) {
 			const fileName = file.name.split('/').pop()!;
-			console.log(`  📄 Adding file to directory: ${fileName}`);
 			dirEntries.push({
 				name: fileName,
 				node: {
@@ -86,8 +77,6 @@ export function processUploadedFiles(files: UploadedFile[]): ProcessedDirectory 
 		// Build nested directory structure
 		const pathParts = dirPath.split('/');
 		let currentEntries = entries;
-
-		console.log(`🏗️  Building nested structure for path: ${pathParts.join('/')}`);
 
 		for (let i = 0; i < pathParts.length; i++) {
 			const part = pathParts[i];
@@ -107,10 +96,8 @@ export function processUploadedFiles(files: UploadedFile[]): ProcessedDirectory 
 					node: newDir
 				};
 				currentEntries.push(existingEntry);
-				console.log(`  ➕ Created directory entry: ${part}`);
 			} else if ('entries' in existingEntry.node && isLast) {
 				(existingEntry.node as any).entries.push(...dirEntries);
-				console.log(`  📝 Added files to existing directory: ${part}`);
 			}
 
 			if (existingEntry && 'entries' in existingEntry.node) {
@@ -118,8 +105,6 @@ export function processUploadedFiles(files: UploadedFile[]): ProcessedDirectory 
 			}
 		}
 	}
-
-	console.log(`✅ Directory structure completed with ${fileCount} total files`);
 
 	const result = {
 		directory: {
@@ -130,7 +115,6 @@ export function processUploadedFiles(files: UploadedFile[]): ProcessedDirectory 
 		fileCount
 	};
 
-	console.log('📋 Final directory structure:', JSON.stringify(result, null, 2));
 	return result;
 }
 
@@ -142,55 +126,77 @@ export function createManifest(
 	root: Directory,
 	fileCount: number
 ): Record {
-	const manifest: Record = {
+	return {
 		$type: 'place.wisp.fs' as const,
 		site: siteName,
 		root,
 		fileCount,
 		createdAt: new Date().toISOString()
 	};
-
-	console.log(`📋 Created manifest for site "${siteName}" with ${fileCount} files`);
-	console.log('📄 Manifest structure:', JSON.stringify(manifest, null, 2));
-
-	return manifest;
 }
 
 /**
  * Update file blobs in directory structure after upload
+ * Uses path-based matching to correctly match files in nested directories
  */
 export function updateFileBlobs(
 	directory: Directory,
 	uploadResults: FileUploadResult[],
-	filePaths: string[]
+	filePaths: string[],
+	currentPath: string = ''
 ): Directory {
-	console.log(`🔄 Updating file blobs: ${uploadResults.length} results for ${filePaths.length} paths`);
+	const mimeTypeMismatches: string[] = [];
 
 	const updatedEntries = directory.entries.map(entry => {
 		if ('type' in entry.node && entry.node.type === 'file') {
-			const fileIndex = filePaths.findIndex(path => path.endsWith(entry.name));
+			// Build the full path for this file
+			const fullPath = currentPath ? `${currentPath}/${entry.name}` : entry.name;
+
+			// Find exact match in filePaths (need to handle normalized paths)
+			const fileIndex = filePaths.findIndex((path) => {
+				// Normalize both paths by removing leading base folder
+				const normalizedUploadPath = path.replace(/^[^\/]*\//, '');
+				const normalizedEntryPath = fullPath;
+				return normalizedUploadPath === normalizedEntryPath || path === fullPath;
+			});
+
 			if (fileIndex !== -1 && uploadResults[fileIndex]) {
-				console.log(`  🔗 Updating blob for file: ${entry.name} -> ${uploadResults[fileIndex].hash}`);
+				const blobRef = uploadResults[fileIndex].blobRef;
+				const uploadedPath = filePaths[fileIndex];
+
+				// Check if MIME types make sense for this file extension
+				const expectedMime = getExpectedMimeType(entry.name);
+				if (expectedMime && blobRef.mimeType !== expectedMime && !blobRef.mimeType.startsWith(expectedMime)) {
+					mimeTypeMismatches.push(`${fullPath}: expected ${expectedMime}, got ${blobRef.mimeType} (from upload: ${uploadedPath})`);
+				}
+
 				return {
 					...entry,
 					node: {
 						$type: 'place.wisp.fs#file' as const,
 						type: 'file' as const,
-						blob: uploadResults[fileIndex].blobRef
+						blob: blobRef
 					}
 				};
 			} else {
-				console.warn(`  ⚠️  Could not find upload result for file: ${entry.name}`);
+				console.error(`❌ BLOB MATCHING ERROR: Could not find blob for file: ${fullPath}`);
+				console.error(`   Available paths:`, filePaths.slice(0, 10), filePaths.length > 10 ? `... and ${filePaths.length - 10} more` : '');
 			}
 		} else if ('type' in entry.node && entry.node.type === 'directory') {
-			console.log(`  📂 Recursively updating directory: ${entry.name}`);
+			const dirPath = currentPath ? `${currentPath}/${entry.name}` : entry.name;
 			return {
 				...entry,
-				node: updateFileBlobs(entry.node as Directory, uploadResults, filePaths)
+				node: updateFileBlobs(entry.node as Directory, uploadResults, filePaths, dirPath)
 			};
 		}
 		return entry;
 	}) as Entry[];
+
+	if (mimeTypeMismatches.length > 0) {
+		console.error('\n⚠️  MIME TYPE MISMATCHES DETECTED IN MANIFEST:');
+		mimeTypeMismatches.forEach(m => console.error(`   ${m}`));
+		console.error('');
+	}
 
 	const result = {
 		$type: 'place.wisp.fs#directory' as const,
@@ -198,6 +204,24 @@ export function updateFileBlobs(
 		entries: updatedEntries
 	};
 
-	console.log('✅ File blobs updated');
 	return result;
+}
+
+function getExpectedMimeType(filename: string): string | null {
+	const ext = filename.toLowerCase().split('.').pop();
+	const mimeMap: Record<string, string> = {
+		'html': 'text/html',
+		'htm': 'text/html',
+		'css': 'text/css',
+		'js': 'text/javascript',
+		'mjs': 'text/javascript',
+		'json': 'application/json',
+		'jpg': 'image/jpeg',
+		'jpeg': 'image/jpeg',
+		'png': 'image/png',
+		'gif': 'image/gif',
+		'webp': 'image/webp',
+		'svg': 'image/svg+xml',
+	};
+	return ext ? (mimeMap[ext] || null) : null;
 }
