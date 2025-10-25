@@ -119,8 +119,8 @@ async function ensureSiteCached(did: string, rkey: string): Promise<boolean> {
   }
 
   // Fetch and cache the site
-  const record = await fetchSiteRecord(did, rkey);
-  if (!record) {
+  const siteData = await fetchSiteRecord(did, rkey);
+  if (!siteData) {
     console.error('Site record not found', did, rkey);
     return false;
   }
@@ -132,7 +132,7 @@ async function ensureSiteCached(did: string, rkey: string): Promise<boolean> {
   }
 
   try {
-    await downloadAndCacheSite(did, rkey, record, pdsEndpoint);
+    await downloadAndCacheSite(did, rkey, siteData.record, pdsEndpoint, siteData.cid);
     return true;
   } catch (err) {
     console.error('Failed to cache site', did, rkey, err);
@@ -153,17 +153,25 @@ app.get('/*', async (c) => {
 
   // Check if this is sites.wisp.place subdomain
   if (hostname === `sites.${BASE_HOST}` || hostname === `sites.${BASE_HOST}:${process.env.PORT || 3000}`) {
-    // Extract identifier and site from path: /did:plc:123abc/sitename/file.html
-    const pathParts = rawPath.split('/');
+    // Sanitize the path FIRST to prevent path traversal
+    const sanitizedFullPath = sanitizePath(rawPath);
+
+    // Extract identifier and site from sanitized path: did:plc:123abc/sitename/file.html
+    const pathParts = sanitizedFullPath.split('/');
     if (pathParts.length < 2) {
       return c.text('Invalid path format. Expected: /identifier/sitename/path', 400);
     }
 
     const identifier = pathParts[0];
     const site = pathParts[1];
-    const filePath = sanitizePath(pathParts.slice(2).join('/'));
+    const filePath = pathParts.slice(2).join('/');
 
     console.log('[Sites] Serving', { identifier, site, filePath });
+
+    // Additional validation: identifier must be a valid DID or handle format
+    if (!identifier || identifier.length < 3 || identifier.includes('..') || identifier.includes('\0')) {
+      return c.text('Invalid identifier', 400);
+    }
 
     // Validate site name (rkey)
     if (!isValidRkey(site)) {
