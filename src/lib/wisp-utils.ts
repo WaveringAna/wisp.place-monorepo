@@ -145,8 +145,6 @@ export function updateFileBlobs(
 	filePaths: string[],
 	currentPath: string = ''
 ): Directory {
-	const mimeTypeMismatches: string[] = [];
-
 	const updatedEntries = directory.entries.map(entry => {
 		if ('type' in entry.node && entry.node.type === 'file') {
 			// Build the full path for this file
@@ -162,13 +160,6 @@ export function updateFileBlobs(
 
 			if (fileIndex !== -1 && uploadResults[fileIndex]) {
 				const blobRef = uploadResults[fileIndex].blobRef;
-				const uploadedPath = filePaths[fileIndex];
-
-				// Check if MIME types make sense for this file extension
-				const expectedMime = getExpectedMimeType(entry.name);
-				if (expectedMime && blobRef.mimeType !== expectedMime && !blobRef.mimeType.startsWith(expectedMime)) {
-					mimeTypeMismatches.push(`${fullPath}: expected ${expectedMime}, got ${blobRef.mimeType} (from upload: ${uploadedPath})`);
-				}
 
 				return {
 					...entry,
@@ -192,12 +183,6 @@ export function updateFileBlobs(
 		return entry;
 	}) as Entry[];
 
-	if (mimeTypeMismatches.length > 0) {
-		console.error('\n⚠️  MIME TYPE MISMATCHES DETECTED IN MANIFEST:');
-		mimeTypeMismatches.forEach(m => console.error(`   ${m}`));
-		console.error('');
-	}
-
 	const result = {
 		$type: 'place.wisp.fs#directory' as const,
 		type: 'directory' as const,
@@ -205,23 +190,4 @@ export function updateFileBlobs(
 	};
 
 	return result;
-}
-
-function getExpectedMimeType(filename: string): string | null {
-	const ext = filename.toLowerCase().split('.').pop();
-	const mimeMap: Record<string, string> = {
-		'html': 'text/html',
-		'htm': 'text/html',
-		'css': 'text/css',
-		'js': 'text/javascript',
-		'mjs': 'text/javascript',
-		'json': 'application/json',
-		'jpg': 'image/jpeg',
-		'jpeg': 'image/jpeg',
-		'png': 'image/png',
-		'gif': 'image/gif',
-		'webp': 'image/webp',
-		'svg': 'image/svg+xml',
-	};
-	return ext ? (mimeMap[ext] || null) : null;
 }

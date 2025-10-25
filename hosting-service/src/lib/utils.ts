@@ -3,8 +3,34 @@ import type { WispFsRecord, Directory, Entry, File } from './types';
 import { existsSync, mkdirSync } from 'fs';
 import { writeFile } from 'fs/promises';
 import { safeFetchJson, safeFetchBlob } from './safe-fetch';
+import { CID } from 'multiformats/cid';
 
 const CACHE_DIR = './cache/sites';
+
+// Type guards for different blob reference formats
+interface IpldLink {
+  $link: string;
+}
+
+interface TypedBlobRef {
+  ref: CID | IpldLink;
+}
+
+interface UntypedBlobRef {
+  cid: string;
+}
+
+function isIpldLink(obj: unknown): obj is IpldLink {
+  return typeof obj === 'object' && obj !== null && '$link' in obj && typeof (obj as IpldLink).$link === 'string';
+}
+
+function isTypedBlobRef(obj: unknown): obj is TypedBlobRef {
+  return typeof obj === 'object' && obj !== null && 'ref' in obj;
+}
+
+function isUntypedBlobRef(obj: unknown): obj is UntypedBlobRef {
+  return typeof obj === 'object' && obj !== null && 'cid' in obj && typeof (obj as UntypedBlobRef).cid === 'string';
+}
 
 export async function resolveDid(identifier: string): Promise<string | null> {
   try {
@@ -85,18 +111,32 @@ export async function fetchSiteRecord(did: string, rkey: string): Promise<WispFs
   }
 }
 
-export function extractBlobCid(blobRef: any): string | null {
-  if (typeof blobRef === 'object' && blobRef !== null) {
-    if ('ref' in blobRef && blobRef.ref?.$link) {
-      return blobRef.ref.$link;
+export function extractBlobCid(blobRef: unknown): string | null {
+  // Check if it's a direct IPLD link
+  if (isIpldLink(blobRef)) {
+    return blobRef.$link;
+  }
+
+  // Check if it's a typed blob ref with a ref property
+  if (isTypedBlobRef(blobRef)) {
+    const ref = blobRef.ref;
+
+    // Check if ref is a CID object
+    if (CID.isCID(ref)) {
+      return ref.toString();
     }
-    if ('cid' in blobRef && typeof blobRef.cid === 'string') {
-      return blobRef.cid;
-    }
-    if ('$link' in blobRef && typeof blobRef.$link === 'string') {
-      return blobRef.$link;
+
+    // Check if ref is an IPLD link object
+    if (isIpldLink(ref)) {
+      return ref.$link;
     }
   }
+
+  // Check if it's an untyped blob ref with a cid string
+  if (isUntypedBlobRef(blobRef)) {
+    return blobRef.cid;
+  }
+
   return null;
 }
 

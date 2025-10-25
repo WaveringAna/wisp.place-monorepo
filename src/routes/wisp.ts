@@ -159,7 +159,7 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 						uploadedFiles.push({
 							name: file.name,
 							content: Buffer.from(arrayBuffer),
-							mimeType: file.type || 'application/octet-stream',
+							mimeType: 'application/octet-stream',
 							size: file.size
 						});
 					}
@@ -211,34 +211,23 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 					// Process files into directory structure
 					const { directory, fileCount } = processUploadedFiles(uploadedFiles);
 
-					// Upload files as blobs in parallel
-					const mimeTypeMismatches: Array<{file: string, sent: string, returned: string}> = [];
-
+					// Upload files as blobs in parallel (always as octet-stream)
 					const uploadPromises = uploadedFiles.map(async (file, i) => {
 						try {
 							const uploadResult = await agent.com.atproto.repo.uploadBlob(
 								file.content,
 								{
-									encoding: file.mimeType
+									encoding: 'application/octet-stream'
 								}
 							);
 
 							const sentMimeType = file.mimeType;
 							const returnedBlobRef = uploadResult.data.blob;
 
-							// Track MIME type mismatches for summary
-							if (sentMimeType !== returnedBlobRef.mimeType) {
-								mimeTypeMismatches.push({
-									file: file.name,
-									sent: sentMimeType,
-									returned: returnedBlobRef.mimeType
-								});
-							}
-
 							// Use the blob ref exactly as returned from PDS
 							return {
 								result: {
-									hash: returnedBlobRef.ref.$link || returnedBlobRef.ref.toString(),
+									hash: returnedBlobRef.ref.toString(),
 									blobRef: returnedBlobRef
 								},
 								filePath: file.name,
@@ -253,28 +242,6 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 
 					// Wait for all uploads to complete
 					const uploadedBlobs = await Promise.all(uploadPromises);
-
-					// Show MIME type mismatch summary
-					if (mimeTypeMismatches.length > 0) {
-						console.warn(`\n⚠️  PDS changed MIME types for ${mimeTypeMismatches.length} files:`);
-						mimeTypeMismatches.slice(0, 20).forEach(m => {
-							console.warn(`   ${m.file}: ${m.sent} → ${m.returned}`);
-						});
-						if (mimeTypeMismatches.length > 20) {
-							console.warn(`   ... and ${mimeTypeMismatches.length - 20} more`);
-						}
-						console.warn('');
-					}
-
-					// CRITICAL: Find files uploaded as application/octet-stream
-					const octetStreamFiles = uploadedBlobs.filter(b => b.returnedMimeType === 'application/octet-stream');
-					if (octetStreamFiles.length > 0) {
-						console.error(`\n🚨 FILES UPLOADED AS application/octet-stream (${octetStreamFiles.length}):`);
-						octetStreamFiles.forEach(f => {
-							console.error(`   ${f.filePath}: sent=${f.sentMimeType}, returned=${f.returnedMimeType}`);
-						});
-						console.error('');
-					}
 
 					// Extract results and file paths in correct order
 					const uploadResults: FileUploadResult[] = uploadedBlobs.map(blob => blob.result);
@@ -300,34 +267,6 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 					} catch (putRecordError: any) {
 						console.error('\n❌ Failed to create record on PDS');
 						console.error('Error:', putRecordError.message);
-
-						// Try to identify which file has the MIME type mismatch
-						if (putRecordError.message?.includes('Mimetype') || putRecordError.message?.includes('mimeType')) {
-							console.error('\n🔍 Analyzing manifest for MIME type issues...');
-
-							// Recursively check all blobs in manifest
-							const checkBlobs = (node: any, path: string = '') => {
-								if (node.type === 'file' && node.blob) {
-									const mimeType = node.blob.mimeType;
-									console.error(`   File: ${path} - MIME: ${mimeType}`);
-								} else if (node.type === 'directory' && node.entries) {
-									for (const entry of node.entries) {
-										const entryPath = path ? `${path}/${entry.name}` : entry.name;
-										checkBlobs(entry.node, entryPath);
-									}
-								}
-							};
-
-							checkBlobs(manifest.root, '');
-
-							console.error('\n📊 Blob upload summary:');
-							uploadedBlobs.slice(0, 20).forEach((b, i) => {
-								console.error(`   [${i}] ${b.filePath}: sent=${b.sentMimeType}, returned=${b.returnedMimeType}`);
-							});
-							if (uploadedBlobs.length > 20) {
-								console.error(`   ... and ${uploadedBlobs.length - 20} more`);
-							}
-						}
 
 						throw putRecordError;
 					}

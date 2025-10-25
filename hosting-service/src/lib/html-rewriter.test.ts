@@ -8,62 +8,62 @@ import { rewriteHtmlPaths, isHtmlContent } from './html-rewriter';
 
 test('rewriteHtmlPaths - rewrites absolute paths in src attributes', () => {
   const html = '<img src="/logo.png">';
-  const result = rewriteHtmlPaths(html, '/s/did:plc:123/mysite/');
-  expect(result).toBe('<img src="/s/did:plc:123/mysite/logo.png">');
+  const result = rewriteHtmlPaths(html, '/did:plc:123/mysite/');
+  expect(result).toBe('<img src="/did:plc:123/mysite/logo.png">');
 });
 
 test('rewriteHtmlPaths - rewrites absolute paths in href attributes', () => {
   const html = '<link rel="stylesheet" href="/style.css">';
-  const result = rewriteHtmlPaths(html, '/s/did:plc:123/mysite/');
-  expect(result).toBe('<link rel="stylesheet" href="/s/did:plc:123/mysite/style.css">');
+  const result = rewriteHtmlPaths(html, '/did:plc:123/mysite/');
+  expect(result).toBe('<link rel="stylesheet" href="/did:plc:123/mysite/style.css">');
 });
 
 test('rewriteHtmlPaths - preserves external URLs', () => {
   const html = '<img src="https://example.com/logo.png">';
-  const result = rewriteHtmlPaths(html, '/s/did:plc:123/mysite/');
+  const result = rewriteHtmlPaths(html, '/did:plc:123/mysite/');
   expect(result).toBe('<img src="https://example.com/logo.png">');
 });
 
 test('rewriteHtmlPaths - preserves protocol-relative URLs', () => {
   const html = '<script src="//cdn.example.com/script.js"></script>';
-  const result = rewriteHtmlPaths(html, '/s/did:plc:123/mysite/');
+  const result = rewriteHtmlPaths(html, '/did:plc:123/mysite/');
   expect(result).toBe('<script src="//cdn.example.com/script.js"></script>');
 });
 
 test('rewriteHtmlPaths - preserves data URIs', () => {
   const html = '<img src="data:image/png;base64,abc123">';
-  const result = rewriteHtmlPaths(html, '/s/did:plc:123/mysite/');
+  const result = rewriteHtmlPaths(html, '/did:plc:123/mysite/');
   expect(result).toBe('<img src="data:image/png;base64,abc123">');
 });
 
 test('rewriteHtmlPaths - preserves anchors', () => {
   const html = '<a href="/#section">Jump</a>';
-  const result = rewriteHtmlPaths(html, '/s/did:plc:123/mysite/');
+  const result = rewriteHtmlPaths(html, '/did:plc:123/mysite/');
   expect(result).toBe('<a href="/#section">Jump</a>');
 });
 
 test('rewriteHtmlPaths - preserves relative paths', () => {
   const html = '<img src="./logo.png">';
-  const result = rewriteHtmlPaths(html, '/s/did:plc:123/mysite/');
+  const result = rewriteHtmlPaths(html, '/did:plc:123/mysite/');
   expect(result).toBe('<img src="./logo.png">');
 });
 
 test('rewriteHtmlPaths - handles single quotes', () => {
   const html = "<img src='/logo.png'>";
-  const result = rewriteHtmlPaths(html, '/s/did:plc:123/mysite/');
-  expect(result).toBe("<img src='/s/did:plc:123/mysite/logo.png'>");
+  const result = rewriteHtmlPaths(html, '/did:plc:123/mysite/');
+  expect(result).toBe("<img src='/did:plc:123/mysite/logo.png'>");
 });
 
 test('rewriteHtmlPaths - handles srcset', () => {
   const html = '<img srcset="/logo.png 1x, /logo@2x.png 2x">';
-  const result = rewriteHtmlPaths(html, '/s/did:plc:123/mysite/');
-  expect(result).toBe('<img srcset="/s/did:plc:123/mysite/logo.png 1x, /s/did:plc:123/mysite/logo@2x.png 2x">');
+  const result = rewriteHtmlPaths(html, '/did:plc:123/mysite/');
+  expect(result).toBe('<img srcset="/did:plc:123/mysite/logo.png 1x, /did:plc:123/mysite/logo@2x.png 2x">');
 });
 
 test('rewriteHtmlPaths - handles form actions', () => {
   const html = '<form action="/submit"></form>';
-  const result = rewriteHtmlPaths(html, '/s/did:plc:123/mysite/');
-  expect(result).toBe('<form action="/s/did:plc:123/mysite/submit"></form>');
+  const result = rewriteHtmlPaths(html, '/did:plc:123/mysite/');
+  expect(result).toBe('<form action="/did:plc:123/mysite/submit"></form>');
 });
 
 test('rewriteHtmlPaths - handles complex HTML', () => {
@@ -83,12 +83,12 @@ test('rewriteHtmlPaths - handles complex HTML', () => {
 </html>
   `.trim();
 
-  const result = rewriteHtmlPaths(html, '/s/did:plc:123/mysite/');
+  const result = rewriteHtmlPaths(html, '/did:plc:123/mysite/');
 
-  expect(result).toContain('href="/s/did:plc:123/mysite/style.css"');
-  expect(result).toContain('src="/s/did:plc:123/mysite/app.js"');
-  expect(result).toContain('src="/s/did:plc:123/mysite/images/logo.png"');
-  expect(result).toContain('href="/s/did:plc:123/mysite/about"');
+  expect(result).toContain('href="/did:plc:123/mysite/style.css"');
+  expect(result).toContain('src="/did:plc:123/mysite/app.js"');
+  expect(result).toContain('src="/did:plc:123/mysite/images/logo.png"');
+  expect(result).toContain('href="/did:plc:123/mysite/about"');
   expect(result).toContain('href="https://example.com"'); // External preserved
   expect(result).toContain('href="#section"'); // Anchor preserved
 });
