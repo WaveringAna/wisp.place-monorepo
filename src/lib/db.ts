@@ -387,9 +387,10 @@ const ensureKeys = async (): Promise<JoseKey[]> => {
     return keys;
 };
 
-let currentKeys: JoseKey[] = [];
-
-export const getCurrentKeys = () => currentKeys;
+// Load keys from database every time (stateless - safe for horizontal scaling)
+export const getCurrentKeys = async (): Promise<JoseKey[]> => {
+    return await loadPersistedKeys();
+};
 
 // Key rotation - rotate keys older than 30 days (monthly rotation)
 const KEY_MAX_AGE = 30 * 24 * 60 * 60; // 30 days in seconds
@@ -423,9 +424,6 @@ export const rotateKeysIfNeeded = async (): Promise<boolean> => {
 
         console.log(`[KeyRotation] Rotated key ${oldKid}`);
 
-        // Reload keys into memory
-        currentKeys = await ensureKeys();
-
         return true;
     } catch (err) {
         console.error('[KeyRotation] Failed to rotate keys:', err);
@@ -434,13 +432,11 @@ export const rotateKeysIfNeeded = async (): Promise<boolean> => {
 };
 
 export const getOAuthClient = async (config: { domain: `https://${string}`, clientName: string }) => {
-    if (currentKeys.length === 0) {
-        currentKeys = await ensureKeys();
-    }
+    const keys = await ensureKeys();
 
     return new NodeOAuthClient({
         clientMetadata: createClientMetadata(config),
-        keyset: currentKeys,
+        keyset: keys,
         stateStore,
         sessionStore
     });

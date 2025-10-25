@@ -17,6 +17,8 @@ import { wispRoutes } from './routes/wisp'
 import { domainRoutes } from './routes/domain'
 import { userRoutes } from './routes/user'
 import { csrfProtection } from './lib/csrf'
+import { DNSVerificationWorker } from './lib/dns-verification-worker'
+import { logger } from './lib/logger'
 
 const config: Config = {
 	domain: (Bun.env.DOMAIN ?? `https://${BASE_HOST}`) as `https://${string}`,
@@ -38,6 +40,17 @@ runMaintenance()
 
 // Schedule maintenance to run every hour
 setInterval(runMaintenance, 60 * 60 * 1000)
+
+// Start DNS verification worker (runs every hour)
+const dnsVerifier = new DNSVerificationWorker(
+	60 * 60 * 1000, // 1 hour
+	(msg, data) => {
+		logger.info('[DNS Verifier]', msg, data || '')
+	}
+)
+
+dnsVerifier.start()
+logger.info('[DNS Verifier] Started - checking custom domains every hour')
 
 export const app = new Elysia()
 	// Security headers middleware
@@ -66,11 +79,6 @@ export const app = new Elysia()
 		set.headers['Permissions-Policy'] = 'geolocation=(), microphone=(), camera=()'
 	})
 	.use(
-		openapi({
-			references: fromTypes()
-		})
-	)
-	.use(
 		await staticPlugin({
 			prefix: '/'
 		})
@@ -83,8 +91,8 @@ export const app = new Elysia()
 	.get('/client-metadata.json', (c) => {
 		return createClientMetadata(config)
 	})
-	.get('/jwks.json', (c) => {
-		const keys = getCurrentKeys()
+	.get('/jwks.json', async (c) => {
+		const keys = await getCurrentKeys()
 		if (!keys.length) return { keys: [] }
 
 		return {
@@ -93,6 +101,28 @@ export const app = new Elysia()
 				const { ...pub } = jwk
 				return pub
 			})
+		}
+	})
+	.get('/api/health', () => {
+		const dnsVerifierHealth = dnsVerifier.getHealth()
+		return {
+			status: 'ok',
+			timestamp: new Date().toISOString(),
+			dnsVerifier: dnsVerifierHealth
+		}
+	})
+	.post('/api/admin/verify-dns', async () => {
+		try {
+			await dnsVerifier.trigger()
+			return {
+				success: true,
+				message: 'DNS verification triggered'
+			}
+		} catch (error) {
+			return {
+				success: false,
+				error: error instanceof Error ? error.message : String(error)
+			}
 		}
 	})
 	.use(cors({

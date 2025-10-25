@@ -94,6 +94,8 @@ function Dashboard() {
 	const [selectedFiles, setSelectedFiles] = useState<FileList | null>(null)
 	const [isUploading, setIsUploading] = useState(false)
 	const [uploadProgress, setUploadProgress] = useState('')
+	const [skippedFiles, setSkippedFiles] = useState<Array<{ name: string; reason: string }>>([])
+	const [uploadedCount, setUploadedCount] = useState(0)
 
 	// Custom domain modal state
 	const [addDomainModalOpen, setAddDomainModalOpen] = useState(false)
@@ -232,17 +234,22 @@ function Dashboard() {
 			const data = await response.json()
 			if (data.success) {
 				setUploadProgress('Upload complete!')
+				setSkippedFiles(data.skippedFiles || [])
+				setUploadedCount(data.uploadedCount || data.fileCount || 0)
 				setSiteName('')
 				setSelectedFiles(null)
 
 				// Refresh sites list
 				await fetchSites()
 
-				// Reset form
+				// Reset form - give more time if there are skipped files
+				const resetDelay = data.skippedFiles && data.skippedFiles.length > 0 ? 4000 : 1500
 				setTimeout(() => {
 					setUploadProgress('')
+					setSkippedFiles([])
+					setUploadedCount(0)
 					setIsUploading(false)
-				}, 1500)
+				}, resetDelay)
 			} else {
 				throw new Error(data.error || 'Upload failed')
 			}
@@ -714,6 +721,9 @@ function Dashboard() {
 										onChange={(e) => setSiteName(e.target.value)}
 										disabled={isUploading}
 									/>
+									<p className="text-xs text-muted-foreground">
+										File limits: 100MB per file, 300MB total
+									</p>
 								</div>
 
 								<div className="grid md:grid-cols-2 gap-4">
@@ -774,11 +784,44 @@ function Dashboard() {
 								</div>
 
 								{uploadProgress && (
-									<div className="p-4 bg-muted rounded-lg">
-										<div className="flex items-center gap-2">
-											<Loader2 className="w-4 h-4 animate-spin" />
-											<span className="text-sm">{uploadProgress}</span>
+									<div className="space-y-3">
+										<div className="p-4 bg-muted rounded-lg">
+											<div className="flex items-center gap-2">
+												<Loader2 className="w-4 h-4 animate-spin" />
+												<span className="text-sm">{uploadProgress}</span>
+											</div>
 										</div>
+
+										{skippedFiles.length > 0 && (
+											<div className="p-4 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
+												<div className="flex items-start gap-2 text-yellow-600 dark:text-yellow-400 mb-2">
+													<AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+													<div className="flex-1">
+														<span className="font-medium">
+															{skippedFiles.length} file{skippedFiles.length > 1 ? 's' : ''} skipped
+														</span>
+														{uploadedCount > 0 && (
+															<span className="text-sm ml-2">
+																({uploadedCount} uploaded successfully)
+															</span>
+														)}
+													</div>
+												</div>
+												<div className="ml-6 space-y-1 max-h-32 overflow-y-auto">
+													{skippedFiles.slice(0, 5).map((file, idx) => (
+														<div key={idx} className="text-xs">
+															<span className="font-mono">{file.name}</span>
+															<span className="text-muted-foreground"> - {file.reason}</span>
+														</div>
+													))}
+													{skippedFiles.length > 5 && (
+														<div className="text-xs text-muted-foreground">
+															...and {skippedFiles.length - 5} more
+														</div>
+													)}
+												</div>
+											</div>
+										)}
 									</div>
 								)}
 
