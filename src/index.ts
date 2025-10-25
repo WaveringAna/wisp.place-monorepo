@@ -16,6 +16,7 @@ import { authRoutes } from './routes/auth'
 import { wispRoutes } from './routes/wisp'
 import { domainRoutes } from './routes/domain'
 import { userRoutes } from './routes/user'
+import { csrfProtection } from './lib/csrf'
 
 const config: Config = {
 	domain: (Bun.env.DOMAIN ?? `https://${BASE_HOST}`) as `https://${string}`,
@@ -74,6 +75,7 @@ export const app = new Elysia()
 			prefix: '/'
 		})
 	)
+	.use(csrfProtection())
 	.use(authRoutes(client))
 	.use(wispRoutes(client))
 	.use(domainRoutes(client))
@@ -96,8 +98,9 @@ export const app = new Elysia()
 	.use(cors({
 		origin: config.domain,
 		credentials: true,
-		methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
-		allowedHeaders: ['Content-Type', 'Authorization'],
+		methods: ['GET', 'POST', 'DELETE', 'PUT', 'PATCH', 'OPTIONS'],
+		allowedHeaders: ['Content-Type', 'Authorization', 'Origin', 'X-Forwarded-Host'],
+		exposeHeaders: ['Content-Type'],
 		maxAge: 86400 // 24 hours
 	}))
 	.listen(8000)

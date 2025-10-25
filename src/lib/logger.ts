@@ -14,6 +14,15 @@ export const logger = {
         }
     },
 
+    // Warning logging (always logged but may be sanitized in production)
+    warn: (message: string, context?: Record<string, any>) => {
+        if (isDev) {
+            console.warn(message, context);
+        } else {
+            console.warn(message);
+        }
+    },
+
     // Safe error logging - sanitizes in production
     error: (message: string, error?: any) => {
         if (isDev) {
