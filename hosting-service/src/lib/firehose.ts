@@ -1,70 +1,24 @@
 import { existsSync, rmSync } from 'fs';
-import type { WispFsRecord } from './types';
 import { getPdsForDid, downloadAndCacheSite, extractBlobCid, fetchSiteRecord } from './utils';
 import { upsertSite } from './db';
 import { safeFetch } from './safe-fetch';
+import { isRecord, validateRecord } from '../lexicon/types/place/wisp/fs';
+import { Firehose } from '@atproto/sync';
+import { IdResolver } from '@atproto/identity';
 
 const CACHE_DIR = './cache/sites';
-const JETSTREAM_URL = 'wss://jetstream2.us-west.bsky.network/subscribe';
-const RECONNECT_DELAY = 5000; // 5 seconds
-const MAX_RECONNECT_DELAY = 60000; // 1 minute
-
-interface JetstreamCommitEvent {
-  did: string;
-  time_us: number;
-  type: 'com' | 'identity' | 'account';
-  kind: 'commit';
-  commit: {
-    rev: string;
-    operation: 'create' | 'update' | 'delete';
-    collection: string;
-    rkey: string;
-    record?: any;
-    cid?: string;
-  };
-}
-
-interface JetstreamIdentityEvent {
-  did: string;
-  time_us: number;
-  type: 'identity';
-  kind: 'update';
-  identity: {
-    did: string;
-    handle: string;
-    seq: number;
-    time: string;
-  };
-}
-
-interface JetstreamAccountEvent {
-  did: string;
-  time_us: number;
-  type: 'account';
-  kind: 'update' | 'delete';
-  account: {
-    active: boolean;
-    did: string;
-    seq: number;
-    time: string;
-  };
-}
-
-type JetstreamEvent =
-  | JetstreamCommitEvent
-  | JetstreamIdentityEvent
-  | JetstreamAccountEvent;
 
 export class FirehoseWorker {
-  private ws: WebSocket | null = null;
-  private reconnectAttempts = 0;
-  private reconnectTimeout: Timer | null = null;
+  private firehose: Firehose | null = null;
+  private idResolver: IdResolver;
   private isShuttingDown = false;
   private lastEventTime = Date.now();
 
   constructor(
     private logger?: (msg: string, data?: Record<string, unknown>) => void,
-  ) {}
+  ) {
+    this.idResolver = new IdResolver();
+  }
 
   private log(msg: string, data?: Record<string, unknown>) {
     const log = this.logger || console.log;
@@ -80,125 +34,87 @@ export class FirehoseWorker {
     this.log('Stopping firehose worker');
     this.isShuttingDown = true;
 
-    if (this.reconnectTimeout) {
-      clearTimeout(this.reconnectTimeout);
-      this.reconnectTimeout = null;
-    }
-
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
+    if (this.firehose) {
+      this.firehose.destroy();
+      this.firehose = null;
     }
   }
 
   private connect() {
     if (this.isShuttingDown) return;
 
-    const url = new URL(JETSTREAM_URL);
-    url.searchParams.set('wantedCollections', 'place.wisp.fs');
+    this.log('Connecting to AT Protocol firehose');
 
-    this.log('Connecting to Jetstream', { url: url.toString() });
-
-    try {
-      this.ws = new WebSocket(url.toString());
-
-      this.ws.onopen = () => {
-        this.log('Connected to Jetstream');
-        this.reconnectAttempts = 0;
-        this.lastEventTime = Date.now();
-      };
-
-      this.ws.onmessage = async (event) => {
+    this.firehose = new Firehose({
+      idResolver: this.idResolver,
+      service: 'wss://bsky.network',
+      filterCollections: ['place.wisp.fs'],
+      handleEvent: async (evt) => {
         this.lastEventTime = Date.now();
 
-        try {
-          const data = JSON.parse(event.data as string) as JetstreamEvent;
-          await this.handleEvent(data);
-        } catch (err) {
-          this.log('Error processing event', {
-            error: err instanceof Error ? err.message : String(err),
+        // Watch for write events
+        if (evt.event === 'create' || evt.event === 'update') {
+          const record = evt.record;
+
+          // If the write is a valid place.wisp.fs record
+          if (
+            evt.collection === 'place.wisp.fs' &&
+            isRecord(record) &&
+            validateRecord(record).success
+          ) {
+            this.log('Received place.wisp.fs event', {
+              did: evt.did,
+              event: evt.event,
+              rkey: evt.rkey,
+            });
+
+            try {
+              await this.handleCreateOrUpdate(evt.did, evt.rkey, record, evt.cid?.toString());
+            } catch (err) {
+              this.log('Error handling event', {
+                did: evt.did,
+                event: evt.event,
+                rkey: evt.rkey,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            }
+          }
+        } else if (evt.event === 'delete' && evt.collection === 'place.wisp.fs') {
+          this.log('Received delete event', {
+            did: evt.did,
+            rkey: evt.rkey,
           });
+
+          try {
+            await this.handleDelete(evt.did, evt.rkey);
+          } catch (err) {
+            this.log('Error handling delete', {
+              did: evt.did,
+              rkey: evt.rkey,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
         }
-      };
-
-      this.ws.onerror = (error) => {
-        this.log('WebSocket error', { error: String(error) });
-      };
-
-      this.ws.onclose = () => {
-        this.log('WebSocket closed');
-        this.ws = null;
-
-        if (!this.isShuttingDown) {
-          this.scheduleReconnect();
-        }
-      };
-    } catch (err) {
-      this.log('Failed to create WebSocket', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      this.scheduleReconnect();
-    }
-  }
-
-  private scheduleReconnect() {
-    if (this.isShuttingDown) return;
-
-    this.reconnectAttempts++;
-    const delay = Math.min(
-      RECONNECT_DELAY * Math.pow(2, this.reconnectAttempts - 1),
-      MAX_RECONNECT_DELAY,
-    );
-
-    this.log(`Scheduling reconnect attempt ${this.reconnectAttempts}`, {
-      delay: `${delay}ms`,
+      },
+      onError: (err) => {
+        this.log('Firehose error', {
+          error: err instanceof Error ? err.message : String(err),
+          stack: err instanceof Error ? err.stack : undefined,
+          fullError: err,
+        });
+        console.error('Full firehose error:', err);
+      },
     });
 
-    this.reconnectTimeout = setTimeout(() => {
-      this.connect();
-    }, delay);
-  }
-
-  private async handleEvent(event: JetstreamEvent) {
-    if (event.kind !== 'commit') return;
-
-    const commitEvent = event as JetstreamCommitEvent;
-    const { commit, did } = commitEvent;
-
-    if (commit.collection !== 'place.wisp.fs') return;
-
-    this.log('Received place.wisp.fs event', {
-      did,
-      operation: commit.operation,
-      rkey: commit.rkey,
-    });
-
-    try {
-      if (commit.operation === 'create' || commit.operation === 'update') {
-        // Pass the CID from the event for verification
-        await this.handleCreateOrUpdate(did, commit.rkey, commit.record, commit.cid);
-      } else if (commit.operation === 'delete') {
-        await this.handleDelete(did, commit.rkey);
-      }
-    } catch (err) {
-      this.log('Error handling event', {
-        did,
-        operation: commit.operation,
-        rkey: commit.rkey,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
+    this.firehose.start();
+    this.log('Firehose started');
   }
 
   private async handleCreateOrUpdate(did: string, site: string, record: any, eventCid?: string) {
     this.log('Processing create/update', { did, site });
 
-    if (!this.validateRecord(record)) {
-      this.log('Invalid record structure, skipping', { did, site });
-      return;
-    }
-
-    const fsRecord = record as WispFsRecord;
+    // Record is already validated in handleEvent
+    const fsRecord = record;
 
     const pdsEndpoint = await getPdsForDid(did);
     if (!pdsEndpoint) {
@@ -291,14 +207,6 @@ export class FirehoseWorker {
     this.log('Successfully processed delete', { did, site });
   }
 
-  private validateRecord(record: any): boolean {
-    if (!record || typeof record !== 'object') return false;
-    if (record.$type !== 'place.wisp.fs') return false;
-    if (!record.root || typeof record.root !== 'object') return false;
-    if (!record.site || typeof record.site !== 'string') return false;
-    return true;
-  }
-
   private deleteCache(did: string, site: string) {
     const cacheDir = `${CACHE_DIR}/${did}/${site}`;
 
@@ -324,12 +232,11 @@ export class FirehoseWorker {
   }
 
   getHealth() {
-    const isConnected = this.ws !== null && this.ws.readyState === WebSocket.OPEN;
+    const isConnected = this.firehose !== null;
     const timeSinceLastEvent = Date.now() - this.lastEventTime;
 
     return {
       connected: isConnected,
-      reconnectAttempts: this.reconnectAttempts,
       lastEventTime: this.lastEventTime,
       timeSinceLastEvent,
       healthy: isConnected && timeSinceLastEvent < 300000, // 5 minutes

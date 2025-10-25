@@ -11,6 +11,7 @@ import {
 } from '../lib/wisp-utils'
 import { upsertSite } from '../lib/db'
 import { logger } from '../lib/logger'
+import { validateRecord } from '../lexicon/types/place/wisp/fs'
 
 function isValidSiteName(siteName: string): boolean {
 	if (!siteName || typeof siteName !== 'string') return false;
@@ -72,6 +73,12 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 							fileCount: 0,
 							createdAt: new Date().toISOString()
 						};
+
+						// Validate the manifest
+						const validationResult = validateRecord(emptyManifest);
+						if (!validationResult.success) {
+							throw new Error(`Invalid manifest: ${validationResult.error?.message || 'Validation failed'}`);
+						}
 
 						// Use site name as rkey
 						const rkey = siteName;
@@ -186,6 +193,12 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 							fileCount: 0,
 							createdAt: new Date().toISOString()
 						};
+
+						// Validate the manifest
+						const validationResult = validateRecord(emptyManifest);
+						if (!validationResult.success) {
+							throw new Error(`Invalid manifest: ${validationResult.error?.message || 'Validation failed'}`);
+						}
 
 						// Use site name as rkey
 						const rkey = siteName;

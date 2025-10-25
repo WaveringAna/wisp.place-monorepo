@@ -1,7 +1,6 @@
 import { Elysia } from 'elysia'
 import { cors } from '@elysiajs/cors'
 import { staticPlugin } from '@elysiajs/static'
-import { openapi, fromTypes } from '@elysiajs/openapi'
 
 import type { Config } from './lib/types'
 import { BASE_HOST } from './lib/constants'

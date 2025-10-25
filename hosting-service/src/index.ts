@@ -1,9 +1,9 @@
-import { serve } from 'bun';
-import app from './server';
-import { FirehoseWorker } from './lib/firehose';
+import { serve } from '@hono/node-server';
+import app from './server.js';
+import { FirehoseWorker } from './lib/firehose.js';
 import { mkdirSync, existsSync } from 'fs';
 
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3001;
 const CACHE_DIR = './cache/sites';
 
 // Ensure cache directory exists
@@ -40,20 +40,20 @@ Wisp Hosting Service
 Server:       http://localhost:${PORT}
 Health:       http://localhost:${PORT}/health
 Cache:        ${CACHE_DIR}
-Firehose:     Connected to Jetstream
+Firehose:     Connected to Firehose
 `);
 
 // Graceful shutdown
-process.on('SIGINT', () => {
+process.on('SIGINT', async () => {
   console.log('\n🛑 Shutting down...');
   firehose.stop();
-  server.stop();
+  server.close();
   process.exit(0);
 });
 
-process.on('SIGTERM', () => {
+process.on('SIGTERM', async () => {
   console.log('\n🛑 Shutting down...');
   firehose.stop();
-  server.stop();
+  server.close();
   process.exit(0);
 });
