@@ -10,7 +10,7 @@ import {
 } from '@public/components/ui/card'
 import { Input } from '@public/components/ui/input'
 import { Label } from '@public/components/ui/label'
-import { Globe, Upload, CheckCircle2, Loader2 } from 'lucide-react'
+import { Globe, Upload, CheckCircle2, Loader2, AlertCircle } from 'lucide-react'
 import Layout from '@public/layouts'
 
 type OnboardingStep = 'domain' | 'upload' | 'complete'
@@ -28,6 +28,8 @@ function Onboarding() {
 	const [selectedFiles, setSelectedFiles] = useState<FileList | null>(null)
 	const [isUploading, setIsUploading] = useState(false)
 	const [uploadProgress, setUploadProgress] = useState('')
+	const [skippedFiles, setSkippedFiles] = useState<Array<{ name: string; reason: string }>>([])
+	const [uploadedCount, setUploadedCount] = useState(0)
 
 	// Check domain availability as user types
 	useEffect(() => {
@@ -117,10 +119,19 @@ function Onboarding() {
 			const data = await response.json()
 			if (data.success) {
 				setUploadProgress('Upload complete!')
-				// Redirect to the claimed domain
-				setTimeout(() => {
-					window.location.href = `https://${claimedDomain}`
-				}, 1500)
+				setSkippedFiles(data.skippedFiles || [])
+				setUploadedCount(data.uploadedCount || data.fileCount || 0)
+
+				// If there are skipped files, show them briefly before redirecting
+				if (data.skippedFiles && data.skippedFiles.length > 0) {
+					setTimeout(() => {
+						window.location.href = `https://${claimedDomain}`
+					}, 3000) // Give more time to see skipped files
+				} else {
+					setTimeout(() => {
+						window.location.href = `https://${claimedDomain}`
+					}, 1500)
+				}
 			} else {
 				throw new Error(data.error || 'Upload failed')
 			}
@@ -355,16 +366,52 @@ function Onboarding() {
 								<p className="text-xs text-muted-foreground">
 									Supported: HTML, CSS, JS, images, fonts, and more
 								</p>
+								<p className="text-xs text-muted-foreground">
+									Limits: 100MB per file, 300MB total
+								</p>
 							</div>
 
 							{uploadProgress && (
-								<div className="p-4 bg-muted rounded-lg">
-									<div className="flex items-center gap-2">
-										<Loader2 className="w-4 h-4 animate-spin" />
-										<span className="text-sm">
-											{uploadProgress}
-										</span>
+								<div className="space-y-3">
+									<div className="p-4 bg-muted rounded-lg">
+										<div className="flex items-center gap-2">
+											<Loader2 className="w-4 h-4 animate-spin" />
+											<span className="text-sm">
+												{uploadProgress}
+											</span>
+										</div>
 									</div>
+
+									{skippedFiles.length > 0 && (
+										<div className="p-4 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
+											<div className="flex items-start gap-2 text-yellow-600 dark:text-yellow-400 mb-2">
+												<AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+												<div className="flex-1">
+													<span className="font-medium">
+														{skippedFiles.length} file{skippedFiles.length > 1 ? 's' : ''} skipped
+													</span>
+													{uploadedCount > 0 && (
+														<span className="text-sm ml-2">
+															({uploadedCount} uploaded successfully)
+														</span>
+													)}
+												</div>
+											</div>
+											<div className="ml-6 space-y-1 max-h-32 overflow-y-auto">
+												{skippedFiles.slice(0, 5).map((file, idx) => (
+													<div key={idx} className="text-xs">
+														<span className="font-mono">{file.name}</span>
+														<span className="text-muted-foreground"> - {file.reason}</span>
+													</div>
+												))}
+												{skippedFiles.length > 5 && (
+													<div className="text-xs text-muted-foreground">
+														...and {skippedFiles.length - 5} more
+													</div>
+												)}
+											</div>
+										</div>
+									)}
 								</div>
 							)}
 

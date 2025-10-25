@@ -4,7 +4,6 @@ import { existsSync, mkdirSync, readFileSync } from 'fs';
 import { writeFile, readFile } from 'fs/promises';
 import { safeFetchJson, safeFetchBlob } from './safe-fetch';
 import { CID } from 'multiformats/cid';
-import { createHash } from 'crypto';
 
 const CACHE_DIR = './cache/sites';
 const CACHE_TTL = 14 * 24 * 60 * 60 * 1000; // 14 days cache TTL
@@ -16,7 +15,6 @@ interface CacheMetadata {
   rkey: string;
 }
 
-// Type guards for different blob reference formats
 interface IpldLink {
   $link: string;
 }
@@ -63,10 +61,8 @@ export async function getPdsForDid(did: string): Promise<string | null> {
     let doc;
 
     if (did.startsWith('did:plc:')) {
-      // Resolve did:plc from plc.directory
       doc = await safeFetchJson(`https://plc.directory/${encodeURIComponent(did)}`);
     } else if (did.startsWith('did:web:')) {
-      // Resolve did:web from the domain
       const didUrl = didWebToHttps(did);
       doc = await safeFetchJson(didUrl);
     } else {
@@ -85,9 +81,6 @@ export async function getPdsForDid(did: string): Promise<string | null> {
 }
 
 function didWebToHttps(did: string): string {
-  // did:web:example.com -> https://example.com/.well-known/did.json
-  // did:web:example.com:path:to:did -> https://example.com/path/to/did/did.json
-
   const didParts = did.split(':');
   if (didParts.length < 3 || didParts[0] !== 'did' || didParts[1] !== 'web') {
     throw new Error('Invalid did:web format');
@@ -97,10 +90,8 @@ function didWebToHttps(did: string): string {
   const pathParts = didParts.slice(3);
 
   if (pathParts.length === 0) {
-    // No path, use .well-known
     return `https://${domain}/.well-known/did.json`;
   } else {
-    // Has path
     const path = pathParts.join('/');
     return `https://${domain}/${path}/did.json`;
   }
@@ -114,7 +105,6 @@ export async function fetchSiteRecord(did: string, rkey: string): Promise<{ reco
     const url = `${pdsEndpoint}/xrpc/com.atproto.repo.getRecord?repo=${encodeURIComponent(did)}&collection=place.wisp.fs&rkey=${encodeURIComponent(rkey)}`;
     const data = await safeFetchJson(url);
 
-    // Return both the record and its CID for verification
     return {
       record: data.value as WispFsRecord,
       cid: data.cid || ''
@@ -126,27 +116,23 @@ export async function fetchSiteRecord(did: string, rkey: string): Promise<{ reco
 }
 
 export function extractBlobCid(blobRef: unknown): string | null {
-  // Check if it's a direct IPLD link
   if (isIpldLink(blobRef)) {
     return blobRef.$link;
   }
 
-  // Check if it's a typed blob ref with a ref property
   if (isTypedBlobRef(blobRef)) {
     const ref = blobRef.ref;
 
-    // Check if ref is a CID object
-    if (CID.isCID(ref)) {
-      return ref.toString();
+    const cid = CID.asCID(ref);
+    if (cid) {
+      return cid.toString();
     }
 
-    // Check if ref is an IPLD link object
     if (isIpldLink(ref)) {
       return ref.$link;
     }
   }
 
-  // Check if it's an untyped blob ref with a cid string
   if (isUntypedBlobRef(blobRef)) {
     return blobRef.cid;
   }
@@ -157,7 +143,6 @@ export function extractBlobCid(blobRef: unknown): string | null {
 export async function downloadAndCacheSite(did: string, rkey: string, record: WispFsRecord, pdsEndpoint: string, recordCid: string): Promise<void> {
   console.log('Caching site', did, rkey);
 
-  // Validate record structure
   if (!record.root) {
     console.error('Record missing root directory:', JSON.stringify(record, null, 2));
     throw new Error('Invalid record structure: missing root directory');
@@ -170,7 +155,6 @@ export async function downloadAndCacheSite(did: string, rkey: string, record: Wi
 
   await cacheFiles(did, rkey, record.root.entries, pdsEndpoint, '');
 
-  // Save cache metadata with CID for verification
   await saveCacheMetadata(did, rkey, recordCid);
 }
 

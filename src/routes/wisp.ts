@@ -101,6 +101,7 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 					// Elysia gives us File objects directly, handle both single file and array
 					const fileArray = Array.isArray(files) ? files : [files];
 					const uploadedFiles: UploadedFile[] = [];
+					const skippedFiles: Array<{ name: string; reason: string }> = [];
 
 					// Define allowed file extensions for static site hosting
 					const allowedExtensions = new Set([
@@ -135,17 +136,23 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 
 						// Skip excluded files
 						if (excludedFiles.has(fileExtension)) {
+							skippedFiles.push({ name: file.name, reason: 'excluded file type' });
 							continue;
 						}
 
 						// Skip files that aren't in allowed extensions
 						if (!allowedExtensions.has(fileExtension)) {
+							skippedFiles.push({ name: file.name, reason: 'unsupported file type' });
 							continue;
 						}
 
 						// Skip files that are too large (limit to 100MB per file)
 						const maxSize = 100 * 1024 * 1024; // 100MB
 						if (file.size > maxSize) {
+							skippedFiles.push({
+								name: file.name,
+								reason: `file too large (${(file.size / 1024 / 1024).toFixed(2)}MB, max 100MB)`
+							});
 							continue;
 						}
 
@@ -198,6 +205,7 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 							cid: record.data.cid,
 							fileCount: 0,
 							siteName,
+							skippedFiles,
 							message: 'Site created but no valid web files were found to upload'
 						};
 					}
@@ -273,7 +281,9 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 						uri: record.data.uri,
 						cid: record.data.cid,
 						fileCount,
-						siteName
+						siteName,
+						skippedFiles,
+						uploadedCount: uploadedFiles.length
 					};
 
 					return result;

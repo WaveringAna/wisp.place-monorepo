@@ -1,5 +1,5 @@
-import { verifyCustomDomain } from '../../../src/lib/dns-verify';
-import { db } from '../../../src/lib/db';
+import { verifyCustomDomain } from './dns-verify';
+import { db } from './db';
 
 interface VerificationStats {
   totalChecked: number;
