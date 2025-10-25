@@ -34,7 +34,11 @@ async function serveFromCache(did: string, rkey: string, filePath: string) {
 
   if (existsSync(cachedFile)) {
     const file = Bun.file(cachedFile);
-    return new Response(file);
+    return new Response(file, {
+      headers: {
+        'Content-Type': file.type || 'application/octet-stream',
+      },
+    });
   }
 
   // Try index.html for directory-like paths
@@ -42,14 +46,18 @@ async function serveFromCache(did: string, rkey: string, filePath: string) {
     const indexFile = getCachedFilePath(did, rkey, `${requestPath}/index.html`);
     if (existsSync(indexFile)) {
       const file = Bun.file(indexFile);
-      return new Response(file);
+      return new Response(file, {
+        headers: {
+          'Content-Type': 'text/html; charset=utf-8',
+        },
+      });
     }
   }
 
   return new Response('Not Found', { status: 404 });
 }
 
-// Helper to serve files from cache with HTML path rewriting for /s/ routes
+// Helper to serve files from cache with HTML path rewriting for sites.wisp.place routes
 async function serveFromCacheWithRewrite(
   did: string,
   rkey: string,
@@ -78,8 +86,12 @@ async function serveFromCacheWithRewrite(
       });
     }
 
-    // Non-HTML files served as-is
-    return new Response(file);
+    // Non-HTML files served with proper MIME type
+    return new Response(file, {
+      headers: {
+        'Content-Type': file.type || 'application/octet-stream',
+      },
+    });
   }
 
   // Try index.html for directory-like paths
@@ -128,36 +140,8 @@ async function ensureSiteCached(did: string, rkey: string): Promise<boolean> {
   }
 }
 
-// Route 4: Direct file serving (no DB) - /s.wisp.place/:identifier/:site/*
-app.get('/s/:identifier/:site/*', async (c) => {
-  const identifier = c.req.param('identifier');
-  const site = c.req.param('site');
-  const rawPath = c.req.path.replace(`/s/${identifier}/${site}/`, '');
-  const filePath = sanitizePath(rawPath);
-
-  console.log('[Direct] Serving', { identifier, site, filePath });
-
-  // Validate site name (rkey)
-  if (!isValidRkey(site)) {
-    return c.text('Invalid site name', 400);
-  }
-
-  // Resolve identifier to DID
-  const did = await resolveDid(identifier);
-  if (!did) {
-    return c.text('Invalid identifier', 400);
-  }
-
-  // Ensure site is cached
-  const cached = await ensureSiteCached(did, site);
-  if (!cached) {
-    return c.text('Site not found', 404);
-  }
-
-  // Serve with HTML path rewriting to handle absolute paths
-  const basePath = `/s/${identifier}/${site}/`;
-  return serveFromCacheWithRewrite(did, site, filePath, basePath);
-});
+// Route 4: Direct file serving (no DB) - sites.wisp.place/:identifier/:site/*
+// This route is now handled in the catch-all route below
 
 // Route 3: DNS routing for custom domains - /hash.dns.wisp.place/*
 app.get('/*', async (c) => {
@@ -166,6 +150,42 @@ app.get('/*', async (c) => {
   const path = sanitizePath(rawPath);
 
   console.log('[Request]', { hostname, path });
+
+  // Check if this is sites.wisp.place subdomain
+  if (hostname === `sites.${BASE_HOST}` || hostname === `sites.${BASE_HOST}:${process.env.PORT || 3000}`) {
+    // Extract identifier and site from path: /did:plc:123abc/sitename/file.html
+    const pathParts = rawPath.split('/');
+    if (pathParts.length < 2) {
+      return c.text('Invalid path format. Expected: /identifier/sitename/path', 400);
+    }
+
+    const identifier = pathParts[0];
+    const site = pathParts[1];
+    const filePath = sanitizePath(pathParts.slice(2).join('/'));
+
+    console.log('[Sites] Serving', { identifier, site, filePath });
+
+    // Validate site name (rkey)
+    if (!isValidRkey(site)) {
+      return c.text('Invalid site name', 400);
+    }
+
+    // Resolve identifier to DID
+    const did = await resolveDid(identifier);
+    if (!did) {
+      return c.text('Invalid identifier', 400);
+    }
+
+    // Ensure site is cached
+    const cached = await ensureSiteCached(did, site);
+    if (!cached) {
+      return c.text('Site not found', 404);
+    }
+
+    // Serve with HTML path rewriting to handle absolute paths
+    const basePath = `/${identifier}/${site}/`;
+    return serveFromCacheWithRewrite(did, site, filePath, basePath);
+  }
 
   // Check if this is a DNS hash subdomain
   const dnsMatch = hostname.match(/^([a-f0-9]{16})\.dns\.(.+)$/);
