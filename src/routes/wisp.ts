@@ -10,14 +10,8 @@ import {
 	updateFileBlobs
 } from '../lib/wisp-utils'
 import { upsertSite } from '../lib/db'
+import { logger } from '../lib/logger'
 
-/**
- * Validate site name (rkey) according to AT Protocol specifications
- * - Must be 1-512 characters
- * - Can only contain: alphanumeric, dots, dashes, underscores, tildes, colons
- * - Cannot be just "." or ".."
- * - Cannot contain path traversal sequences
- */
 function isValidSiteName(siteName: string): boolean {
 	if (!siteName || typeof siteName !== 'string') return false;
 
@@ -235,7 +229,7 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 								returnedMimeType: returnedBlobRef.mimeType
 							};
 						} catch (uploadError) {
-							console.error(`❌ Upload failed for ${file.name}:`, uploadError);
+							logger.error('[Wisp] Upload failed for file', uploadError);
 							throw uploadError;
 						}
 					});
@@ -265,8 +259,8 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 							record: manifest
 						});
 					} catch (putRecordError: any) {
-						console.error('\n❌ Failed to create record on PDS');
-						console.error('Error:', putRecordError.message);
+						logger.error('[Wisp] Failed to create record on PDS');
+						logger.error('[Wisp] Record creation error', putRecordError);
 
 						throw putRecordError;
 					}
@@ -284,12 +278,11 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 
 					return result;
 				} catch (error) {
-					console.error('❌ Upload error:', error);
-					console.error('Error details:', {
+					logger.error('[Wisp] Upload error', error);
+					logger.errorWithContext('[Wisp] Upload error details', {
 						message: error instanceof Error ? error.message : 'Unknown error',
-						stack: error instanceof Error ? error.stack : undefined,
 						name: error instanceof Error ? error.name : undefined
-					});
+					}, error);
 					throw new Error(`Failed to upload files: ${error instanceof Error ? error.message : 'Unknown error'}`);
 				}
 			}

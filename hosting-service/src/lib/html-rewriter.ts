@@ -77,11 +77,13 @@ export function rewriteHtmlPaths(html: string, basePath: string): string {
   let rewritten = html;
 
   // Rewrite each attribute type
+  // Use more specific patterns to prevent ReDoS attacks
   for (const attr of REWRITABLE_ATTRIBUTES) {
     if (attr === 'srcset') {
-      // Special handling for srcset
+      // Special handling for srcset - use possessive quantifiers via atomic grouping simulation
+      // Limit whitespace to reasonable amount (max 5 spaces) to prevent ReDoS
       const srcsetRegex = new RegExp(
-        `\\b${attr}\\s*=\\s*"([^"]*)"`,
+        `\\b${attr}[ \\t]{0,5}=[ \\t]{0,5}"([^"]*)"`,
         'gi'
       );
       rewritten = rewritten.replace(srcsetRegex, (match, value) => {
@@ -90,12 +92,13 @@ export function rewriteHtmlPaths(html: string, basePath: string): string {
       });
     } else {
       // Regular attributes with quoted values
+      // Limit whitespace to prevent catastrophic backtracking
       const doubleQuoteRegex = new RegExp(
-        `\\b${attr}\\s*=\\s*"([^"]*)"`,
+        `\\b${attr}[ \\t]{0,5}=[ \\t]{0,5}"([^"]*)"`,
         'gi'
       );
       const singleQuoteRegex = new RegExp(
-        `\\b${attr}\\s*=\\s*'([^']*)'`,
+        `\\b${attr}[ \\t]{0,5}=[ \\t]{0,5}'([^']*)'`,
         'gi'
       );
 

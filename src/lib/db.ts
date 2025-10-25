@@ -23,14 +23,16 @@ await db`
     CREATE TABLE IF NOT EXISTS oauth_sessions (
         sub TEXT PRIMARY KEY,
         data TEXT NOT NULL,
-        updated_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())
+        updated_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()),
+        expires_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW()) + 2592000
     )
 `;
 
 await db`
     CREATE TABLE IF NOT EXISTS oauth_keys (
         kid TEXT PRIMARY KEY,
-        jwk TEXT NOT NULL
+        jwk TEXT NOT NULL,
+        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())
     )
 `;
 
@@ -44,9 +46,27 @@ await db`
     )
 `;
 
-// Add rkey column if it doesn't exist (for existing databases)
+// Add columns if they don't exist (for existing databases)
 try {
     await db`ALTER TABLE domains ADD COLUMN IF NOT EXISTS rkey TEXT`;
+} catch (err) {
+    // Column might already exist, ignore
+}
+
+try {
+    await db`ALTER TABLE oauth_sessions ADD COLUMN IF NOT EXISTS expires_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW()) + 2592000`;
+} catch (err) {
+    // Column might already exist, ignore
+}
+
+try {
+    await db`ALTER TABLE oauth_keys ADD COLUMN IF NOT EXISTS created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())`;
+} catch (err) {
+    // Column might already exist, ignore
+}
+
+try {
+    await db`ALTER TABLE oauth_states ADD COLUMN IF NOT EXISTS expires_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) + 3600`;
 } catch (err) {
     // Column might already exist, ignore
 }
@@ -205,19 +225,40 @@ export const getWispDomainSite = async (did: string): Promise<string | null> => 
     return rows[0]?.rkey ?? null;
 };
 
+// Session timeout configuration (30 days in seconds)
+const SESSION_TIMEOUT = 30 * 24 * 60 * 60; // 2592000 seconds
+// OAuth state timeout (1 hour in seconds)
+const STATE_TIMEOUT = 60 * 60; // 3600 seconds
+
 const stateStore = {
     async set(key: string, data: any) {
         console.debug('[stateStore] set', key)
+        const expiresAt = Math.floor(Date.now() / 1000) + STATE_TIMEOUT;
         await db`
-            INSERT INTO oauth_states (key, data)
-            VALUES (${key}, ${JSON.stringify(data)})
-            ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data
+            INSERT INTO oauth_states (key, data, created_at, expires_at)
+            VALUES (${key}, ${JSON.stringify(data)}, EXTRACT(EPOCH FROM NOW()), ${expiresAt})
+            ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, expires_at = ${expiresAt}
         `;
     },
     async get(key: string) {
         console.debug('[stateStore] get', key)
-        const result = await db`SELECT data FROM oauth_states WHERE key = ${key}`;
-        return result[0] ? JSON.parse(result[0].data) : undefined;
+        const now = Math.floor(Date.now() / 1000);
+        const result = await db`
+            SELECT data, expires_at
+            FROM oauth_states
+            WHERE key = ${key}
+        `;
+        if (!result[0]) return undefined;
+
+        // Check if expired
+        const expiresAt = Number(result[0].expires_at);
+        if (expiresAt && now > expiresAt) {
+            console.debug('[stateStore] State expired, deleting', key);
+            await db`DELETE FROM oauth_states WHERE key = ${key}`;
+            return undefined;
+        }
+
+        return JSON.parse(result[0].data);
     },
     async del(key: string) {
         console.debug('[stateStore] del', key)
@@ -228,16 +269,35 @@ const stateStore = {
 const sessionStore = {
     async set(sub: string, data: any) {
         console.debug('[sessionStore] set', sub)
+        const expiresAt = Math.floor(Date.now() / 1000) + SESSION_TIMEOUT;
         await db`
-            INSERT INTO oauth_sessions (sub, data)
-            VALUES (${sub}, ${JSON.stringify(data)})
-            ON CONFLICT (sub) DO UPDATE SET data = EXCLUDED.data, updated_at = EXTRACT(EPOCH FROM NOW())
+            INSERT INTO oauth_sessions (sub, data, updated_at, expires_at)
+            VALUES (${sub}, ${JSON.stringify(data)}, EXTRACT(EPOCH FROM NOW()), ${expiresAt})
+            ON CONFLICT (sub) DO UPDATE SET
+                data = EXCLUDED.data,
+                updated_at = EXTRACT(EPOCH FROM NOW()),
+                expires_at = ${expiresAt}
         `;
     },
     async get(sub: string) {
         console.debug('[sessionStore] get', sub)
-        const result = await db`SELECT data FROM oauth_sessions WHERE sub = ${sub}`;
-        return result[0] ? JSON.parse(result[0].data) : undefined;
+        const now = Math.floor(Date.now() / 1000);
+        const result = await db`
+            SELECT data, expires_at
+            FROM oauth_sessions
+            WHERE sub = ${sub}
+        `;
+        if (!result[0]) return undefined;
+
+        // Check if expired
+        const expiresAt = Number(result[0].expires_at);
+        if (expiresAt && now > expiresAt) {
+            console.log('[sessionStore] Session expired, deleting', sub);
+            await db`DELETE FROM oauth_sessions WHERE sub = ${sub}`;
+            return undefined;
+        }
+
+        return JSON.parse(result[0].data);
     },
     async del(sub: string) {
         console.debug('[sessionStore] del', sub)
@@ -246,6 +306,24 @@ const sessionStore = {
 };
 
 export { sessionStore };
+
+// Cleanup expired sessions and states
+export const cleanupExpiredSessions = async () => {
+    const now = Math.floor(Date.now() / 1000);
+    try {
+        const sessionsDeleted = await db`
+            DELETE FROM oauth_sessions WHERE expires_at < ${now}
+        `;
+        const statesDeleted = await db`
+            DELETE FROM oauth_states WHERE expires_at IS NOT NULL AND expires_at < ${now}
+        `;
+        console.log(`[Cleanup] Deleted ${sessionsDeleted.length} expired sessions and ${statesDeleted.length} expired states`);
+        return { sessions: sessionsDeleted.length, states: statesDeleted.length };
+    } catch (err) {
+        console.error('[Cleanup] Failed to cleanup expired data:', err);
+        return { sessions: 0, states: 0 };
+    }
+};
 
 export const createClientMetadata = (config: { domain: `https://${string}`, clientName: string }): ClientMetadata => ({
     client_id: `${config.domain}/client-metadata.json`,
@@ -272,14 +350,14 @@ const persistKey = async (key: JoseKey) => {
     if (!priv) return;
     const kid = key.kid ?? crypto.randomUUID();
     await db`
-        INSERT INTO oauth_keys (kid, jwk)
-        VALUES (${kid}, ${JSON.stringify(priv)})
+        INSERT INTO oauth_keys (kid, jwk, created_at)
+        VALUES (${kid}, ${JSON.stringify(priv)}, EXTRACT(EPOCH FROM NOW()))
         ON CONFLICT (kid) DO UPDATE SET jwk = EXCLUDED.jwk
     `;
 };
 
 const loadPersistedKeys = async (): Promise<JoseKey[]> => {
-    const rows = await db`SELECT kid, jwk FROM oauth_keys ORDER BY kid`;
+    const rows = await db`SELECT kid, jwk, created_at FROM oauth_keys ORDER BY kid`;
     const keys: JoseKey[] = [];
     for (const row of rows) {
         try {
@@ -312,6 +390,48 @@ const ensureKeys = async (): Promise<JoseKey[]> => {
 let currentKeys: JoseKey[] = [];
 
 export const getCurrentKeys = () => currentKeys;
+
+// Key rotation - rotate keys older than 30 days (monthly rotation)
+const KEY_MAX_AGE = 30 * 24 * 60 * 60; // 30 days in seconds
+
+export const rotateKeysIfNeeded = async (): Promise<boolean> => {
+    const now = Math.floor(Date.now() / 1000);
+    const cutoffTime = now - KEY_MAX_AGE;
+
+    try {
+        // Find keys older than 30 days
+        const oldKeys = await db`
+            SELECT kid, created_at FROM oauth_keys
+            WHERE created_at IS NOT NULL AND created_at < ${cutoffTime}
+            ORDER BY created_at ASC
+        `;
+
+        if (oldKeys.length === 0) {
+            console.log('[KeyRotation] No keys need rotation');
+            return false;
+        }
+
+        console.log(`[KeyRotation] Found ${oldKeys.length} key(s) older than 30 days, rotating oldest key`);
+
+        // Rotate the oldest key
+        const oldestKey = oldKeys[0];
+        const oldKid = oldestKey.kid;
+
+        // Generate new key with same kid
+        const newKey = await JoseKey.generate(['ES256'], oldKid);
+        await persistKey(newKey);
+
+        console.log(`[KeyRotation] Rotated key ${oldKid}`);
+
+        // Reload keys into memory
+        currentKeys = await ensureKeys();
+
+        return true;
+    } catch (err) {
+        console.error('[KeyRotation] Failed to rotate keys:', err);
+        return false;
+    }
+};
 
 export const getOAuthClient = async (config: { domain: `https://${string}`, clientName: string }) => {
     if (currentKeys.length === 0) {

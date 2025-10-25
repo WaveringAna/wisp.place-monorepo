@@ -4,6 +4,7 @@ import { NodeOAuthClient } from '@atproto/oauth-client-node'
 import { Agent } from '@atproto/api'
 import { getSitesByDid, getDomainByDid, getCustomDomainsByDid, getWispDomainInfo } from '../lib/db'
 import { syncSitesFromPDS } from '../lib/sync-sites'
+import { logger } from '../lib/logger'
 
 export const userRoutes = (client: NodeOAuthClient) =>
 	new Elysia({ prefix: '/api/user' })
@@ -27,7 +28,7 @@ export const userRoutes = (client: NodeOAuthClient) =>
 					sitesCount: sites.length
 				}
 			} catch (err) {
-				console.error('user/status error', err)
+				logger.error('[User] Status error', err)
 				throw new Error('Failed to get user status')
 			}
 		})
@@ -41,7 +42,7 @@ export const userRoutes = (client: NodeOAuthClient) =>
 					const profile = await agent.getProfile({ actor: auth.did })
 					handle = profile.data.handle
 				} catch (err) {
-					console.error('Failed to fetch profile:', err)
+					logger.error('[User] Failed to fetch profile', err)
 				}
 
 				return {
@@ -49,7 +50,7 @@ export const userRoutes = (client: NodeOAuthClient) =>
 					handle
 				}
 			} catch (err) {
-				console.error('user/info error', err)
+				logger.error('[User] Info error', err)
 				throw new Error('Failed to get user info')
 			}
 		})
@@ -58,7 +59,7 @@ export const userRoutes = (client: NodeOAuthClient) =>
 				const sites = await getSitesByDid(auth.did)
 				return { sites }
 			} catch (err) {
-				console.error('user/sites error', err)
+				logger.error('[User] Sites error', err)
 				throw new Error('Failed to get sites')
 			}
 		})
@@ -78,13 +79,13 @@ export const userRoutes = (client: NodeOAuthClient) =>
 					customDomains
 				}
 			} catch (err) {
-				console.error('user/domains error', err)
+				logger.error('[User] Domains error', err)
 				throw new Error('Failed to get domains')
 			}
 		})
 		.post('/sync', async ({ auth }) => {
 			try {
-				console.log('[User] Manual sync requested for', auth.did)
+				logger.debug('[User] Manual sync requested for', auth.did)
 				const result = await syncSitesFromPDS(auth.did, auth.session)
 
 				return {
@@ -93,7 +94,7 @@ export const userRoutes = (client: NodeOAuthClient) =>
 					errors: result.errors
 				}
 			} catch (err) {
-				console.error('user/sync error', err)
+				logger.error('[User] Sync error', err)
 				throw new Error('Failed to sync sites')
 			}
 		})
