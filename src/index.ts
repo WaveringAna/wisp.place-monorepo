@@ -8,7 +8,9 @@ import { BASE_HOST } from './lib/constants'
 import {
 	createClientMetadata,
 	getOAuthClient,
-	getCurrentKeys
+	getCurrentKeys,
+	cleanupExpiredSessions,
+	rotateKeysIfNeeded
 } from './lib/oauth-client'
 import { authRoutes } from './routes/auth'
 import { wispRoutes } from './routes/wisp'
@@ -22,7 +24,46 @@ const config: Config = {
 
 const client = await getOAuthClient(config)
 
+// Periodic maintenance: cleanup expired sessions and rotate keys
+// Run every hour
+const runMaintenance = async () => {
+	console.log('[Maintenance] Running periodic maintenance...')
+	await cleanupExpiredSessions()
+	await rotateKeysIfNeeded()
+}
+
+// Run maintenance on startup
+runMaintenance()
+
+// Schedule maintenance to run every hour
+setInterval(runMaintenance, 60 * 60 * 1000)
+
 export const app = new Elysia()
+	// Security headers middleware
+	.onAfterHandle(({ set }) => {
+		// Prevent clickjacking attacks
+		set.headers['X-Frame-Options'] = 'DENY'
+		// Prevent MIME type sniffing
+		set.headers['X-Content-Type-Options'] = 'nosniff'
+		// Strict Transport Security (HSTS) - enforce HTTPS
+		set.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+		// Referrer policy - limit referrer information
+		set.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+		// Content Security Policy
+		set.headers['Content-Security-Policy'] =
+			"default-src 'self'; " +
+			"script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
+			"style-src 'self' 'unsafe-inline'; " +
+			"img-src 'self' data: https:; " +
+			"font-src 'self' data:; " +
+			"connect-src 'self' https:; " +
+			"frame-ancestors 'none'; " +
+			"base-uri 'self'; " +
+			"form-action 'self'"
+		// Additional security headers
+		set.headers['X-XSS-Protection'] = '1; mode=block'
+		set.headers['Permissions-Policy'] = 'geolocation=(), microphone=(), camera=()'
+	})
 	.use(
 		openapi({
 			references: fromTypes()

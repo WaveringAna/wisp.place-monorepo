@@ -20,6 +20,7 @@ import {
 } from '../lib/db'
 import { createHash } from 'crypto'
 import { verifyCustomDomain } from '../lib/dns-verify'
+import { logger } from '../lib/logger'
 
 export const domainRoutes = (client: NodeOAuthClient) =>
 	new Elysia({ prefix: '/api/domain' })
@@ -43,7 +44,7 @@ export const domainRoutes = (client: NodeOAuthClient) =>
 					domain: toDomain(handle)
 				};
 			} catch (err) {
-				console.error("domain/check error", err);
+				logger.error('[Domain] Check error', err);
 				return {
 					available: false
 				};
@@ -69,7 +70,7 @@ export const domainRoutes = (client: NodeOAuthClient) =>
 					return { registered: false };
 				}
 			} catch (err) {
-				console.error("domain/registered error", err);
+				logger.error('[Domain] Registered check error', err);
 				set.status = 500;
 				return { error: 'Failed to check domain' };
 			}
@@ -118,7 +119,7 @@ export const domainRoutes = (client: NodeOAuthClient) =>
 
 				return { success: true, domain };
 			} catch (err) {
-				console.error("domain/claim error", err);
+				logger.error('[Domain] Claim error', err);
 				throw new Error(`Failed to claim: ${err instanceof Error ? err.message : 'Unknown error'}`);
 			}
 		})
@@ -160,7 +161,7 @@ export const domainRoutes = (client: NodeOAuthClient) =>
 
 				return { success: true, domain };
 			} catch (err) {
-				console.error("domain/update error", err);
+				logger.error('[Domain] Update error', err);
 				throw new Error(`Failed to update: ${err instanceof Error ? err.message : 'Unknown error'}`);
 			}
 		})
@@ -193,7 +194,7 @@ export const domainRoutes = (client: NodeOAuthClient) =>
 					verified: false
 				};
 			} catch (err) {
-				console.error('custom domain add error', err);
+				logger.error('[Domain] Custom domain add error', err);
 				throw new Error(`Failed to add domain: ${err instanceof Error ? err.message : 'Unknown error'}`);
 			}
 		})
@@ -208,7 +209,7 @@ export const domainRoutes = (client: NodeOAuthClient) =>
 				}
 
 				// Verify DNS records (TXT + CNAME)
-				console.log(`Verifying custom domain: ${domainInfo.domain}`);
+				logger.debug(`[Domain] Verifying custom domain: ${domainInfo.domain}`);
 				const result = await verifyCustomDomain(domainInfo.domain, auth.did, id);
 
 				// Update verification status in database
@@ -221,7 +222,7 @@ export const domainRoutes = (client: NodeOAuthClient) =>
 					found: result.found
 				};
 			} catch (err) {
-				console.error('custom domain verify error', err);
+				logger.error('[Domain] Custom domain verify error', err);
 				throw new Error(`Failed to verify domain: ${err instanceof Error ? err.message : 'Unknown error'}`);
 			}
 		})
@@ -244,7 +245,7 @@ export const domainRoutes = (client: NodeOAuthClient) =>
 
 				return { success: true };
 			} catch (err) {
-				console.error('custom domain delete error', err);
+				logger.error('[Domain] Custom domain delete error', err);
 				throw new Error(`Failed to delete domain: ${err instanceof Error ? err.message : 'Unknown error'}`);
 			}
 		})
@@ -257,7 +258,7 @@ export const domainRoutes = (client: NodeOAuthClient) =>
 
 				return { success: true };
 			} catch (err) {
-				console.error('wisp domain map error', err);
+				logger.error('[Domain] Wisp domain map error', err);
 				throw new Error(`Failed to map site: ${err instanceof Error ? err.message : 'Unknown error'}`);
 			}
 		})
@@ -281,7 +282,7 @@ export const domainRoutes = (client: NodeOAuthClient) =>
 
 				return { success: true };
 			} catch (err) {
-				console.error('custom domain map error', err);
+				logger.error('[Domain] Custom domain map error', err);
 				throw new Error(`Failed to map site: ${err instanceof Error ? err.message : 'Unknown error'}`);
 			}
 		});

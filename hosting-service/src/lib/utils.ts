@@ -1,11 +1,20 @@
 import { AtpAgent } from '@atproto/api';
 import type { WispFsRecord, Directory, Entry, File } from './types';
-import { existsSync, mkdirSync } from 'fs';
-import { writeFile } from 'fs/promises';
+import { existsSync, mkdirSync, readFileSync } from 'fs';
+import { writeFile, readFile } from 'fs/promises';
 import { safeFetchJson, safeFetchBlob } from './safe-fetch';
 import { CID } from 'multiformats/cid';
+import { createHash } from 'crypto';
 
 const CACHE_DIR = './cache/sites';
+const CACHE_TTL = 14 * 24 * 60 * 60 * 1000; // 14 days cache TTL
+
+interface CacheMetadata {
+  recordCid: string;
+  cachedAt: number;
+  did: string;
+  rkey: string;
+}
 
 // Type guards for different blob reference formats
 interface IpldLink {
@@ -97,14 +106,19 @@ function didWebToHttps(did: string): string {
   }
 }
 
-export async function fetchSiteRecord(did: string, rkey: string): Promise<WispFsRecord | null> {
+export async function fetchSiteRecord(did: string, rkey: string): Promise<{ record: WispFsRecord; cid: string } | null> {
   try {
     const pdsEndpoint = await getPdsForDid(did);
     if (!pdsEndpoint) return null;
 
     const url = `${pdsEndpoint}/xrpc/com.atproto.repo.getRecord?repo=${encodeURIComponent(did)}&collection=place.wisp.fs&rkey=${encodeURIComponent(rkey)}`;
     const data = await safeFetchJson(url);
-    return data.value as WispFsRecord;
+
+    // Return both the record and its CID for verification
+    return {
+      record: data.value as WispFsRecord,
+      cid: data.cid || ''
+    };
   } catch (err) {
     console.error('Failed to fetch site record', did, rkey, err);
     return null;
@@ -140,7 +154,7 @@ export function extractBlobCid(blobRef: unknown): string | null {
   return null;
 }
 
-export async function downloadAndCacheSite(did: string, rkey: string, record: WispFsRecord, pdsEndpoint: string): Promise<void> {
+export async function downloadAndCacheSite(did: string, rkey: string, record: WispFsRecord, pdsEndpoint: string, recordCid: string): Promise<void> {
   console.log('Caching site', did, rkey);
 
   // Validate record structure
@@ -155,6 +169,9 @@ export async function downloadAndCacheSite(did: string, rkey: string, record: Wi
   }
 
   await cacheFiles(did, rkey, record.root.entries, pdsEndpoint, '');
+
+  // Save cache metadata with CID for verification
+  await saveCacheMetadata(did, rkey, recordCid);
 }
 
 async function cacheFiles(
@@ -235,4 +252,55 @@ export function getCachedFilePath(did: string, site: string, filePath: string): 
 
 export function isCached(did: string, site: string): boolean {
   return existsSync(`${CACHE_DIR}/${did}/${site}`);
+}
+
+async function saveCacheMetadata(did: string, rkey: string, recordCid: string): Promise<void> {
+  const metadata: CacheMetadata = {
+    recordCid,
+    cachedAt: Date.now(),
+    did,
+    rkey
+  };
+
+  const metadataPath = `${CACHE_DIR}/${did}/${rkey}/.metadata.json`;
+  const metadataDir = metadataPath.substring(0, metadataPath.lastIndexOf('/'));
+
+  if (!existsSync(metadataDir)) {
+    mkdirSync(metadataDir, { recursive: true });
+  }
+
+  await writeFile(metadataPath, JSON.stringify(metadata, null, 2));
+}
+
+async function getCacheMetadata(did: string, rkey: string): Promise<CacheMetadata | null> {
+  try {
+    const metadataPath = `${CACHE_DIR}/${did}/${rkey}/.metadata.json`;
+    if (!existsSync(metadataPath)) return null;
+
+    const content = await readFile(metadataPath, 'utf-8');
+    return JSON.parse(content) as CacheMetadata;
+  } catch (err) {
+    console.error('Failed to read cache metadata', err);
+    return null;
+  }
+}
+
+export async function isCacheValid(did: string, rkey: string, currentRecordCid?: string): Promise<boolean> {
+  const metadata = await getCacheMetadata(did, rkey);
+  if (!metadata) return false;
+
+  // Check if cache has expired (14 days TTL)
+  const cacheAge = Date.now() - metadata.cachedAt;
+  if (cacheAge > CACHE_TTL) {
+    console.log('[Cache] Cache expired for', did, rkey);
+    return false;
+  }
+
+  // If current CID is provided, verify it matches
+  if (currentRecordCid && metadata.recordCid !== currentRecordCid) {
+    console.log('[Cache] CID mismatch for', did, rkey, 'cached:', metadata.recordCid, 'current:', currentRecordCid);
+    return false;
+  }
+
+  return true;
 }

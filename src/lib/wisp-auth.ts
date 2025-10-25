@@ -2,6 +2,7 @@ import { Did } from "@atproto/api";
 import { NodeOAuthClient } from "@atproto/oauth-client-node";
 import type { OAuthSession } from "@atproto/oauth-client-node";
 import { Cookie } from "elysia";
+import { logger } from "./logger";
 
 
 export interface AuthenticatedContext {
@@ -20,7 +21,7 @@ export const authenticateRequest = async (
         const session = await client.restore(did, "auto");
         return session ? { did, session } : null;
     } catch (err) {
-        console.error('Authentication error:', err);
+        logger.error('[Auth] Authentication error', err);
         return null;
     }
 };

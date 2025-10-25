@@ -175,7 +175,8 @@ export class FirehoseWorker {
 
     try {
       if (commit.operation === 'create' || commit.operation === 'update') {
-        await this.handleCreateOrUpdate(did, commit.rkey, commit.record);
+        // Pass the CID from the event for verification
+        await this.handleCreateOrUpdate(did, commit.rkey, commit.record, commit.cid);
       } else if (commit.operation === 'delete') {
         await this.handleDelete(did, commit.rkey);
       }
@@ -189,7 +190,7 @@ export class FirehoseWorker {
     }
   }
 
-  private async handleCreateOrUpdate(did: string, site: string, record: any) {
+  private async handleCreateOrUpdate(did: string, site: string, record: any, eventCid?: string) {
     this.log('Processing create/update', { did, site });
 
     if (!this.validateRecord(record)) {
@@ -207,21 +208,30 @@ export class FirehoseWorker {
 
     this.log('Resolved PDS', { did, pdsEndpoint });
 
-    // Verify record exists on PDS
+    // Verify record exists on PDS and fetch its CID
+    let verifiedCid: string;
     try {
-      const recordUrl = `${pdsEndpoint}/xrpc/com.atproto.repo.getRecord?repo=${encodeURIComponent(did)}&collection=place.wisp.fs&rkey=${encodeURIComponent(site)}`;
-      const recordRes = await safeFetch(recordUrl);
+      const result = await fetchSiteRecord(did, site);
 
-      if (!recordRes.ok) {
-        this.log('Record not found on PDS, skipping cache', {
+      if (!result) {
+        this.log('Record not found on PDS, skipping cache', { did, site });
+        return;
+      }
+
+      verifiedCid = result.cid;
+
+      // Verify event CID matches PDS CID (prevent cache poisoning)
+      if (eventCid && eventCid !== verifiedCid) {
+        this.log('CID mismatch detected - potential spoofed event', {
           did,
           site,
-          status: recordRes.status,
+          eventCid,
+          verifiedCid
         });
         return;
       }
 
-      this.log('Record verified on PDS', { did, site });
+      this.log('Record verified on PDS', { did, site, cid: verifiedCid });
     } catch (err) {
       this.log('Failed to verify record on PDS', {
         did,
@@ -231,8 +241,8 @@ export class FirehoseWorker {
       return;
     }
 
-    // Cache the record
-    await downloadAndCacheSite(did, site, fsRecord, pdsEndpoint);
+    // Cache the record with verified CID
+    await downloadAndCacheSite(did, site, fsRecord, pdsEndpoint, verifiedCid);
 
     // Upsert site to database
     await upsertSite(did, site, fsRecord.site);
