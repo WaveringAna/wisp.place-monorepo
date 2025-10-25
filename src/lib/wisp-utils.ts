@@ -1,5 +1,6 @@
 import type { BlobRef } from "@atproto/api";
 import type { Record, Directory, File, Entry } from "../lexicon/types/place/wisp/fs";
+import { validateRecord } from "../lexicon/types/place/wisp/fs";
 
 export interface UploadedFile {
 	name: string;
@@ -126,13 +127,21 @@ export function createManifest(
 	root: Directory,
 	fileCount: number
 ): Record {
-	return {
+	const manifest = {
 		$type: 'place.wisp.fs' as const,
 		site: siteName,
 		root,
 		fileCount,
 		createdAt: new Date().toISOString()
 	};
+
+	// Validate the manifest before returning
+	const validationResult = validateRecord(manifest);
+	if (!validationResult.success) {
+		throw new Error(`Invalid manifest: ${validationResult.error?.message || 'Validation failed'}`);
+	}
+
+	return manifest;
 }
 
 /**

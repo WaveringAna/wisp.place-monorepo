@@ -1,9 +1,9 @@
 import { Hono } from 'hono';
-import { serveStatic } from 'hono/bun';
 import { getWispDomain, getCustomDomain, getCustomDomainByHash } from './lib/db';
 import { resolveDid, getPdsForDid, fetchSiteRecord, downloadAndCacheSite, getCachedFilePath, isCached, sanitizePath } from './lib/utils';
 import { rewriteHtmlPaths, isHtmlContent } from './lib/html-rewriter';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
+import { lookup } from 'mime-types';
 
 const app = new Hono();
 
@@ -33,10 +33,11 @@ async function serveFromCache(did: string, rkey: string, filePath: string) {
   const cachedFile = getCachedFilePath(did, rkey, requestPath);
 
   if (existsSync(cachedFile)) {
-    const file = Bun.file(cachedFile);
-    return new Response(file, {
+    const content = readFileSync(cachedFile);
+    const mimeType = lookup(cachedFile) || 'application/octet-stream';
+    return new Response(content, {
       headers: {
-        'Content-Type': file.type || 'application/octet-stream',
+        'Content-Type': mimeType,
       },
     });
   }
@@ -45,8 +46,8 @@ async function serveFromCache(did: string, rkey: string, filePath: string) {
   if (!requestPath.includes('.')) {
     const indexFile = getCachedFilePath(did, rkey, `${requestPath}/index.html`);
     if (existsSync(indexFile)) {
-      const file = Bun.file(indexFile);
-      return new Response(file, {
+      const content = readFileSync(indexFile);
+      return new Response(content, {
         headers: {
           'Content-Type': 'text/html; charset=utf-8',
         },
@@ -73,11 +74,11 @@ async function serveFromCacheWithRewrite(
   const cachedFile = getCachedFilePath(did, rkey, requestPath);
 
   if (existsSync(cachedFile)) {
-    const file = Bun.file(cachedFile);
+    const mimeType = lookup(cachedFile) || 'application/octet-stream';
 
     // Check if this is HTML content that needs rewriting
-    if (isHtmlContent(requestPath, file.type)) {
-      const content = await file.text();
+    if (isHtmlContent(requestPath, mimeType)) {
+      const content = readFileSync(cachedFile, 'utf-8');
       const rewritten = rewriteHtmlPaths(content, basePath);
       return new Response(rewritten, {
         headers: {
@@ -87,9 +88,10 @@ async function serveFromCacheWithRewrite(
     }
 
     // Non-HTML files served with proper MIME type
-    return new Response(file, {
+    const content = readFileSync(cachedFile);
+    return new Response(content, {
       headers: {
-        'Content-Type': file.type || 'application/octet-stream',
+        'Content-Type': mimeType,
       },
     });
   }
@@ -98,8 +100,7 @@ async function serveFromCacheWithRewrite(
   if (!requestPath.includes('.')) {
     const indexFile = getCachedFilePath(did, rkey, `${requestPath}/index.html`);
     if (existsSync(indexFile)) {
-      const file = Bun.file(indexFile);
-      const content = await file.text();
+      const content = readFileSync(indexFile, 'utf-8');
       const rewritten = rewriteHtmlPaths(content, basePath);
       return new Response(rewritten, {
         headers: {
