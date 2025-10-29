@@ -34,6 +34,12 @@ export interface File {
   type: 'file'
   /** Content blob ref */
   blob: BlobRef
+  /** Content encoding (e.g., gzip for compressed files) */
+  encoding?: 'gzip'
+  /** Original MIME type before compression */
+  mimeType?: string
+  /** True if blob content is base64-encoded (used to bypass PDS content sniffing) */
+  base64?: boolean
 }
 
 const hashFile = 'file'

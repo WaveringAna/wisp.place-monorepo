@@ -1,22 +1,57 @@
 import type { BlobRef } from "@atproto/api";
 import type { Record, Directory, File, Entry } from "../lexicon/types/place/wisp/fs";
 import { validateRecord } from "../lexicon/types/place/wisp/fs";
+import { gzipSync } from 'zlib';
 
 export interface UploadedFile {
 	name: string;
 	content: Buffer;
 	mimeType: string;
 	size: number;
+	compressed?: boolean;
+	originalMimeType?: string;
 }
 
 export interface FileUploadResult {
 	hash: string;
 	blobRef: BlobRef;
+	encoding?: 'gzip';
+	mimeType?: string;
+	base64?: boolean;
 }
 
 export interface ProcessedDirectory {
 	directory: Directory;
 	fileCount: number;
+}
+
+/**
+ * Determine if a file should be gzip compressed based on its MIME type
+ */
+export function shouldCompressFile(mimeType: string): boolean {
+	// Compress text-based files
+	const compressibleTypes = [
+		'text/html',
+		'text/css',
+		'text/javascript',
+		'application/javascript',
+		'application/json',
+		'image/svg+xml',
+		'text/xml',
+		'application/xml',
+		'text/plain',
+		'application/x-javascript'
+	];
+
+	// Check if mime type starts with any compressible type
+	return compressibleTypes.some(type => mimeType.startsWith(type));
+}
+
+/**
+ * Compress a file using gzip
+ */
+export function compressFile(content: Buffer): Buffer {
+	return gzipSync(content, { level: 9 });
 }
 
 /**
@@ -168,14 +203,18 @@ export function updateFileBlobs(
 			});
 
 			if (fileIndex !== -1 && uploadResults[fileIndex]) {
-				const blobRef = uploadResults[fileIndex].blobRef;
+				const result = uploadResults[fileIndex];
+				const blobRef = result.blobRef;
 
 				return {
 					...entry,
 					node: {
 						$type: 'place.wisp.fs#file' as const,
 						type: 'file' as const,
-						blob: blobRef
+						blob: blobRef,
+						...(result.encoding && { encoding: result.encoding }),
+						...(result.mimeType && { mimeType: result.mimeType }),
+						...(result.base64 && { base64: result.base64 })
 					}
 				};
 			} else {

@@ -7,7 +7,9 @@ import {
 	type FileUploadResult,
 	processUploadedFiles,
 	createManifest,
-	updateFileBlobs
+	updateFileBlobs,
+	shouldCompressFile,
+	compressFile
 } from '../lib/wisp-utils'
 import { upsertSite } from '../lib/db'
 import { logger } from '../lib/logger'
@@ -164,12 +166,36 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 						}
 
 						const arrayBuffer = await file.arrayBuffer();
-						uploadedFiles.push({
-							name: file.name,
-							content: Buffer.from(arrayBuffer),
-							mimeType: 'application/octet-stream',
-							size: file.size
-						});
+						const originalContent = Buffer.from(arrayBuffer);
+						const originalMimeType = file.type || 'application/octet-stream';
+
+						// Determine if we should compress this file
+						const shouldCompress = shouldCompressFile(originalMimeType);
+
+						if (shouldCompress) {
+							const compressedContent = compressFile(originalContent);
+							// Base64 encode the gzipped content to prevent PDS content sniffing
+							const base64Content = Buffer.from(compressedContent.toString('base64'), 'utf-8');
+							const compressionRatio = (compressedContent.length / originalContent.length * 100).toFixed(1);
+							logger.info(`[Wisp] Compressing ${file.name}: ${originalContent.length} -> ${compressedContent.length} bytes (${compressionRatio}%), base64: ${base64Content.length} bytes`);
+
+							uploadedFiles.push({
+								name: file.name,
+								content: base64Content,
+								mimeType: originalMimeType,
+								size: base64Content.length,
+								compressed: true,
+								originalMimeType
+							});
+						} else {
+							uploadedFiles.push({
+								name: file.name,
+								content: originalContent,
+								mimeType: originalMimeType,
+								size: file.size,
+								compressed: false
+							});
+						}
 					}
 
 					// Check total size limit (300MB)
@@ -226,27 +252,42 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 					// Process files into directory structure
 					const { directory, fileCount } = processUploadedFiles(uploadedFiles);
 
-					// Upload files as blobs in parallel (always as octet-stream)
+					// Upload files as blobs in parallel
+					// For compressed files, we upload as octet-stream and store the original MIME type in metadata
+					// For text/html files, we also use octet-stream as a workaround for PDS image pipeline issues
 					const uploadPromises = uploadedFiles.map(async (file, i) => {
 						try {
+							// If compressed, always upload as octet-stream
+							// Otherwise, workaround: PDS incorrectly processes text/html through image pipeline
+							const uploadMimeType = file.compressed || file.mimeType.startsWith('text/html')
+								? 'application/octet-stream'
+								: file.mimeType;
+
+							const compressionInfo = file.compressed ? ' (gzipped)' : '';
+							logger.info(`[Wisp] Uploading file: ${file.name} (original: ${file.mimeType}, sending as: ${uploadMimeType}, ${file.size} bytes${compressionInfo})`);
+
 							const uploadResult = await agent.com.atproto.repo.uploadBlob(
 								file.content,
 								{
-									encoding: 'application/octet-stream'
+									encoding: uploadMimeType
 								}
 							);
 
-							const sentMimeType = file.mimeType;
 							const returnedBlobRef = uploadResult.data.blob;
 
 							// Use the blob ref exactly as returned from PDS
 							return {
 								result: {
 									hash: returnedBlobRef.ref.toString(),
-									blobRef: returnedBlobRef
+									blobRef: returnedBlobRef,
+									...(file.compressed && {
+										encoding: 'gzip' as const,
+										mimeType: file.originalMimeType || file.mimeType,
+										base64: true
+									})
 								},
 								filePath: file.name,
-								sentMimeType,
+								sentMimeType: file.mimeType,
 								returnedMimeType: returnedBlobRef.mimeType
 							};
 						} catch (uploadError) {

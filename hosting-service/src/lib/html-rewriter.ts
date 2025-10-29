@@ -16,18 +16,23 @@ const REWRITABLE_ATTRIBUTES = [
  * Check if a path should be rewritten
  */
 function shouldRewritePath(path: string): boolean {
-  // Must start with /
-  if (!path.startsWith('/')) return false;
+  // Don't rewrite empty paths
+  if (!path) return false;
 
-  // Don't rewrite protocol-relative URLs
-  if (path.startsWith('//')) return false;
+  // Don't rewrite external URLs (http://, https://, //)
+  if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('//')) {
+    return false;
+  }
 
-  // Don't rewrite anchors
-  if (path.startsWith('/#')) return false;
+  // Don't rewrite data URIs or other schemes (except file paths)
+  if (path.includes(':') && !path.startsWith('./') && !path.startsWith('../')) {
+    return false;
+  }
 
-  // Don't rewrite data URIs or other schemes
-  if (path.includes(':')) return false;
+  // Don't rewrite pure anchors
+  if (path.startsWith('#')) return false;
 
+  // Rewrite absolute paths (/) and relative paths (./ or ../ or plain filenames)
   return true;
 }
 
@@ -39,8 +44,22 @@ function rewritePath(path: string, basePath: string): string {
     return path;
   }
 
-  // Remove leading slash and prepend base path
-  return basePath + path.slice(1);
+  // Handle absolute paths: /file.js -> /base/file.js
+  if (path.startsWith('/')) {
+    return basePath + path.slice(1);
+  }
+
+  // Handle relative paths: ./file.js or ../file.js or file.js -> /base/file.js
+  // Strip leading ./ or ../ and just use the base path
+  let cleanPath = path;
+  if (cleanPath.startsWith('./')) {
+    cleanPath = cleanPath.slice(2);
+  } else if (cleanPath.startsWith('../')) {
+    // For sites.wisp.place, we can't go up from the site root, so just use base path
+    cleanPath = cleanPath.replace(/^(\.\.\/)+/, '');
+  }
+
+  return basePath + cleanPath;
 }
 
 /**
