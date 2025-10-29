@@ -157,7 +157,7 @@ export class FirehoseWorker {
       return;
     }
 
-    // Cache the record with verified CID
+    // Cache the record with verified CID (uses atomic swap internally)
     await downloadAndCacheSite(did, site, fsRecord, pdsEndpoint, verifiedCid);
 
     // Upsert site to database

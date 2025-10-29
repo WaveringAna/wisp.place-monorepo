@@ -54,6 +54,20 @@ export const schemaDict = {
             maxSize: 1000000,
             description: 'Content blob ref',
           },
+          encoding: {
+            type: 'string',
+            enum: ['gzip'],
+            description: 'Content encoding (e.g., gzip for compressed files)',
+          },
+          mimeType: {
+            type: 'string',
+            description: 'Original MIME type before compression',
+          },
+          base64: {
+            type: 'boolean',
+            description:
+              'True if blob content is base64-encoded (used to bypass PDS content sniffing)',
+          },
         },
       },
       directory: {

@@ -21,27 +21,120 @@ export interface CustomDomainLookup {
   verified: boolean;
 }
 
+// In-memory cache with TTL
+interface CacheEntry<T> {
+  data: T;
+  expiry: number;
+}
+
+const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+class SimpleCache<T> {
+  private cache = new Map<string, CacheEntry<T>>();
+
+  get(key: string): T | null {
+    const entry = this.cache.get(key);
+    if (!entry) return null;
+
+    if (Date.now() > entry.expiry) {
+      this.cache.delete(key);
+      return null;
+    }
+
+    return entry.data;
+  }
+
+  set(key: string, data: T): void {
+    this.cache.set(key, {
+      data,
+      expiry: Date.now() + CACHE_TTL_MS,
+    });
+  }
+
+  // Periodic cleanup to prevent memory leaks
+  cleanup(): void {
+    const now = Date.now();
+    for (const [key, entry] of this.cache.entries()) {
+      if (now > entry.expiry) {
+        this.cache.delete(key);
+      }
+    }
+  }
+}
+
+// Create cache instances
+const wispDomainCache = new SimpleCache<DomainLookup | null>();
+const customDomainCache = new SimpleCache<CustomDomainLookup | null>();
+const customDomainHashCache = new SimpleCache<CustomDomainLookup | null>();
+
+// Run cleanup every 5 minutes
+setInterval(() => {
+  wispDomainCache.cleanup();
+  customDomainCache.cleanup();
+  customDomainHashCache.cleanup();
+}, 5 * 60 * 1000);
+
 export async function getWispDomain(domain: string): Promise<DomainLookup | null> {
+  const key = domain.toLowerCase();
+
+  // Check cache first
+  const cached = wispDomainCache.get(key);
+  if (cached !== null) {
+    return cached;
+  }
+
+  // Query database
   const result = await sql<DomainLookup[]>`
-    SELECT did, rkey FROM domains WHERE domain = ${domain.toLowerCase()} LIMIT 1
+    SELECT did, rkey FROM domains WHERE domain = ${key} LIMIT 1
   `;
-  return result[0] || null;
+  const data = result[0] || null;
+
+  // Store in cache
+  wispDomainCache.set(key, data);
+
+  return data;
 }
 
 export async function getCustomDomain(domain: string): Promise<CustomDomainLookup | null> {
+  const key = domain.toLowerCase();
+
+  // Check cache first
+  const cached = customDomainCache.get(key);
+  if (cached !== null) {
+    return cached;
+  }
+
+  // Query database
   const result = await sql<CustomDomainLookup[]>`
     SELECT id, domain, did, rkey, verified FROM custom_domains
-    WHERE domain = ${domain.toLowerCase()} AND verified = true LIMIT 1
+    WHERE domain = ${key} AND verified = true LIMIT 1
   `;
-  return result[0] || null;
+  const data = result[0] || null;
+
+  // Store in cache
+  customDomainCache.set(key, data);
+
+  return data;
 }
 
 export async function getCustomDomainByHash(hash: string): Promise<CustomDomainLookup | null> {
+  // Check cache first
+  const cached = customDomainHashCache.get(hash);
+  if (cached !== null) {
+    return cached;
+  }
+
+  // Query database
   const result = await sql<CustomDomainLookup[]>`
     SELECT id, domain, did, rkey, verified FROM custom_domains
     WHERE id = ${hash} AND verified = true LIMIT 1
   `;
-  return result[0] || null;
+  const data = result[0] || null;
+
+  // Store in cache
+  customDomainHashCache.set(hash, data);
+
+  return data;
 }
 
 export async function upsertSite(did: string, rkey: string, displayName?: string) {

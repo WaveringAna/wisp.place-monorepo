@@ -1,11 +1,11 @@
-import { Hono } from 'hono';
+import { Elysia } from 'elysia';
+import { node } from '@elysiajs/node'
+import { opentelemetry } from '@elysiajs/opentelemetry';
 import { getWispDomain, getCustomDomain, getCustomDomainByHash } from './lib/db';
 import { resolveDid, getPdsForDid, fetchSiteRecord, downloadAndCacheSite, getCachedFilePath, isCached, sanitizePath } from './lib/utils';
 import { rewriteHtmlPaths, isHtmlContent } from './lib/html-rewriter';
 import { existsSync, readFileSync } from 'fs';
 import { lookup } from 'mime-types';
-
-const app = new Hono();
 
 const BASE_HOST = process.env.BASE_HOST || 'wisp.place';
 
@@ -34,6 +34,23 @@ async function serveFromCache(did: string, rkey: string, filePath: string) {
 
   if (existsSync(cachedFile)) {
     const content = readFileSync(cachedFile);
+    const metaFile = `${cachedFile}.meta`;
+
+    // Check if file has compression metadata
+    if (existsSync(metaFile)) {
+      const meta = JSON.parse(readFileSync(metaFile, 'utf-8'));
+      if (meta.encoding === 'gzip' && meta.mimeType) {
+        // Serve gzipped content with proper headers
+        return new Response(content, {
+          headers: {
+            'Content-Type': meta.mimeType,
+            'Content-Encoding': 'gzip',
+          },
+        });
+      }
+    }
+
+    // Serve non-compressed files normally
     const mimeType = lookup(cachedFile) || 'application/octet-stream';
     return new Response(content, {
       headers: {
@@ -47,6 +64,21 @@ async function serveFromCache(did: string, rkey: string, filePath: string) {
     const indexFile = getCachedFilePath(did, rkey, `${requestPath}/index.html`);
     if (existsSync(indexFile)) {
       const content = readFileSync(indexFile);
+      const metaFile = `${indexFile}.meta`;
+
+      // Check if file has compression metadata
+      if (existsSync(metaFile)) {
+        const meta = JSON.parse(readFileSync(metaFile, 'utf-8'));
+        if (meta.encoding === 'gzip' && meta.mimeType) {
+          return new Response(content, {
+            headers: {
+              'Content-Type': meta.mimeType,
+              'Content-Encoding': 'gzip',
+            },
+          });
+        }
+      }
+
       return new Response(content, {
         headers: {
           'Content-Type': 'text/html; charset=utf-8',
@@ -74,11 +106,31 @@ async function serveFromCacheWithRewrite(
   const cachedFile = getCachedFilePath(did, rkey, requestPath);
 
   if (existsSync(cachedFile)) {
-    const mimeType = lookup(cachedFile) || 'application/octet-stream';
+    const metaFile = `${cachedFile}.meta`;
+    let mimeType = lookup(cachedFile) || 'application/octet-stream';
+    let isGzipped = false;
+
+    // Check if file has compression metadata
+    if (existsSync(metaFile)) {
+      const meta = JSON.parse(readFileSync(metaFile, 'utf-8'));
+      if (meta.encoding === 'gzip' && meta.mimeType) {
+        mimeType = meta.mimeType;
+        isGzipped = true;
+      }
+    }
 
     // Check if this is HTML content that needs rewriting
+    // Note: For gzipped HTML with path rewriting, we need to decompress, rewrite, and serve uncompressed
+    // This is a trade-off for the sites.wisp.place domain which needs path rewriting
     if (isHtmlContent(requestPath, mimeType)) {
-      const content = readFileSync(cachedFile, 'utf-8');
+      let content: string;
+      if (isGzipped) {
+        const { gunzipSync } = await import('zlib');
+        const compressed = readFileSync(cachedFile);
+        content = gunzipSync(compressed).toString('utf-8');
+      } else {
+        content = readFileSync(cachedFile, 'utf-8');
+      }
       const rewritten = rewriteHtmlPaths(content, basePath);
       return new Response(rewritten, {
         headers: {
@@ -87,8 +139,16 @@ async function serveFromCacheWithRewrite(
       });
     }
 
-    // Non-HTML files served with proper MIME type
+    // Non-HTML files: serve gzipped content as-is with proper headers
     const content = readFileSync(cachedFile);
+    if (isGzipped) {
+      return new Response(content, {
+        headers: {
+          'Content-Type': mimeType,
+          'Content-Encoding': 'gzip',
+        },
+      });
+    }
     return new Response(content, {
       headers: {
         'Content-Type': mimeType,
@@ -100,7 +160,25 @@ async function serveFromCacheWithRewrite(
   if (!requestPath.includes('.')) {
     const indexFile = getCachedFilePath(did, rkey, `${requestPath}/index.html`);
     if (existsSync(indexFile)) {
-      const content = readFileSync(indexFile, 'utf-8');
+      const metaFile = `${indexFile}.meta`;
+      let isGzipped = false;
+
+      if (existsSync(metaFile)) {
+        const meta = JSON.parse(readFileSync(metaFile, 'utf-8'));
+        if (meta.encoding === 'gzip') {
+          isGzipped = true;
+        }
+      }
+
+      // HTML needs path rewriting, so decompress if needed
+      let content: string;
+      if (isGzipped) {
+        const { gunzipSync } = await import('zlib');
+        const compressed = readFileSync(indexFile);
+        content = gunzipSync(compressed).toString('utf-8');
+      } else {
+        content = readFileSync(indexFile, 'utf-8');
+      }
       const rewritten = rewriteHtmlPaths(content, basePath);
       return new Response(rewritten, {
         headers: {
@@ -141,134 +219,138 @@ async function ensureSiteCached(did: string, rkey: string): Promise<boolean> {
   }
 }
 
-// Route 4: Direct file serving (no DB) - sites.wisp.place/:identifier/:site/*
-// This route is now handled in the catch-all route below
+const app = new Elysia({ adapter: node() })
+  .use(opentelemetry())
+  .get('/*', async ({ request, set }) => {
+    const url = new URL(request.url);
+    const hostname = request.headers.get('host') || '';
+    const rawPath = url.pathname.replace(/^\//, '');
+    const path = sanitizePath(rawPath);
 
-// Route 3: DNS routing for custom domains - /hash.dns.wisp.place/*
-app.get('/*', async (c) => {
-  const hostname = c.req.header('host') || '';
-  const rawPath = c.req.path.replace(/^\//, '');
-  const path = sanitizePath(rawPath);
+    // Check if this is sites.wisp.place subdomain
+    if (hostname === `sites.${BASE_HOST}` || hostname === `sites.${BASE_HOST}:${process.env.PORT || 3000}`) {
+      // Sanitize the path FIRST to prevent path traversal
+      const sanitizedFullPath = sanitizePath(rawPath);
 
-  console.log('[Request]', { hostname, path });
+      // Extract identifier and site from sanitized path: did:plc:123abc/sitename/file.html
+      const pathParts = sanitizedFullPath.split('/');
+      if (pathParts.length < 2) {
+        set.status = 400;
+        return 'Invalid path format. Expected: /identifier/sitename/path';
+      }
 
-  // Check if this is sites.wisp.place subdomain
-  if (hostname === `sites.${BASE_HOST}` || hostname === `sites.${BASE_HOST}:${process.env.PORT || 3000}`) {
-    // Sanitize the path FIRST to prevent path traversal
-    const sanitizedFullPath = sanitizePath(rawPath);
+      const identifier = pathParts[0];
+      const site = pathParts[1];
+      const filePath = pathParts.slice(2).join('/');
 
-    // Extract identifier and site from sanitized path: did:plc:123abc/sitename/file.html
-    const pathParts = sanitizedFullPath.split('/');
-    if (pathParts.length < 2) {
-      return c.text('Invalid path format. Expected: /identifier/sitename/path', 400);
+      // Additional validation: identifier must be a valid DID or handle format
+      if (!identifier || identifier.length < 3 || identifier.includes('..') || identifier.includes('\0')) {
+        set.status = 400;
+        return 'Invalid identifier';
+      }
+
+      // Validate site name (rkey)
+      if (!isValidRkey(site)) {
+        set.status = 400;
+        return 'Invalid site name';
+      }
+
+      // Resolve identifier to DID
+      const did = await resolveDid(identifier);
+      if (!did) {
+        set.status = 400;
+        return 'Invalid identifier';
+      }
+
+      // Ensure site is cached
+      const cached = await ensureSiteCached(did, site);
+      if (!cached) {
+        set.status = 404;
+        return 'Site not found';
+      }
+
+      // Serve with HTML path rewriting to handle absolute paths
+      const basePath = `/${identifier}/${site}/`;
+      return serveFromCacheWithRewrite(did, site, filePath, basePath);
     }
 
-    const identifier = pathParts[0];
-    const site = pathParts[1];
-    const filePath = pathParts.slice(2).join('/');
+    // Check if this is a DNS hash subdomain
+    const dnsMatch = hostname.match(/^([a-f0-9]{16})\.dns\.(.+)$/);
+    if (dnsMatch) {
+      const hash = dnsMatch[1];
+      const baseDomain = dnsMatch[2];
 
-    console.log('[Sites] Serving', { identifier, site, filePath });
+      if (baseDomain !== BASE_HOST) {
+        set.status = 400;
+        return 'Invalid base domain';
+      }
 
-    // Additional validation: identifier must be a valid DID or handle format
-    if (!identifier || identifier.length < 3 || identifier.includes('..') || identifier.includes('\0')) {
-      return c.text('Invalid identifier', 400);
+      const customDomain = await getCustomDomainByHash(hash);
+      if (!customDomain) {
+        set.status = 404;
+        return 'Custom domain not found or not verified';
+      }
+
+      const rkey = customDomain.rkey || 'self';
+      if (!isValidRkey(rkey)) {
+        set.status = 500;
+        return 'Invalid site configuration';
+      }
+
+      const cached = await ensureSiteCached(customDomain.did, rkey);
+      if (!cached) {
+        set.status = 404;
+        return 'Site not found';
+      }
+
+      return serveFromCache(customDomain.did, rkey, path);
     }
 
-    // Validate site name (rkey)
-    if (!isValidRkey(site)) {
-      return c.text('Invalid site name', 400);
+    // Route 2: Registered subdomains - /*.wisp.place/*
+    if (hostname.endsWith(`.${BASE_HOST}`)) {
+      const subdomain = hostname.replace(`.${BASE_HOST}`, '');
+
+      const domainInfo = await getWispDomain(hostname);
+      if (!domainInfo) {
+        set.status = 404;
+        return 'Subdomain not registered';
+      }
+
+      const rkey = domainInfo.rkey || 'self';
+      if (!isValidRkey(rkey)) {
+        set.status = 500;
+        return 'Invalid site configuration';
+      }
+
+      const cached = await ensureSiteCached(domainInfo.did, rkey);
+      if (!cached) {
+        set.status = 404;
+        return 'Site not found';
+      }
+
+      return serveFromCache(domainInfo.did, rkey, path);
     }
 
-    // Resolve identifier to DID
-    const did = await resolveDid(identifier);
-    if (!did) {
-      return c.text('Invalid identifier', 400);
-    }
-
-    // Ensure site is cached
-    const cached = await ensureSiteCached(did, site);
-    if (!cached) {
-      return c.text('Site not found', 404);
-    }
-
-    // Serve with HTML path rewriting to handle absolute paths
-    const basePath = `/${identifier}/${site}/`;
-    return serveFromCacheWithRewrite(did, site, filePath, basePath);
-  }
-
-  // Check if this is a DNS hash subdomain
-  const dnsMatch = hostname.match(/^([a-f0-9]{16})\.dns\.(.+)$/);
-  if (dnsMatch) {
-    const hash = dnsMatch[1];
-    const baseDomain = dnsMatch[2];
-
-    console.log('[DNS Hash] Looking up', { hash, baseDomain });
-
-    if (baseDomain !== BASE_HOST) {
-      return c.text('Invalid base domain', 400);
-    }
-
-    const customDomain = await getCustomDomainByHash(hash);
+    // Route 1: Custom domains - /*
+    const customDomain = await getCustomDomain(hostname);
     if (!customDomain) {
-      return c.text('Custom domain not found or not verified', 404);
+      set.status = 404;
+      return 'Custom domain not found or not verified';
     }
 
     const rkey = customDomain.rkey || 'self';
     if (!isValidRkey(rkey)) {
-      return c.text('Invalid site configuration', 500);
+      set.status = 500;
+      return 'Invalid site configuration';
     }
 
     const cached = await ensureSiteCached(customDomain.did, rkey);
     if (!cached) {
-      return c.text('Site not found', 404);
+      set.status = 404;
+      return 'Site not found';
     }
 
     return serveFromCache(customDomain.did, rkey, path);
-  }
-
-  // Route 2: Registered subdomains - /*.wisp.place/*
-  if (hostname.endsWith(`.${BASE_HOST}`)) {
-    const subdomain = hostname.replace(`.${BASE_HOST}`, '');
-
-    console.log('[Subdomain] Looking up', { subdomain, fullDomain: hostname });
-
-    const domainInfo = await getWispDomain(hostname);
-    if (!domainInfo) {
-      return c.text('Subdomain not registered', 404);
-    }
-
-    const rkey = domainInfo.rkey || 'self';
-    if (!isValidRkey(rkey)) {
-      return c.text('Invalid site configuration', 500);
-    }
-
-    const cached = await ensureSiteCached(domainInfo.did, rkey);
-    if (!cached) {
-      return c.text('Site not found', 404);
-    }
-
-    return serveFromCache(domainInfo.did, rkey, path);
-  }
-
-  // Route 1: Custom domains - /*
-  console.log('[Custom Domain] Looking up', { hostname });
-
-  const customDomain = await getCustomDomain(hostname);
-  if (!customDomain) {
-    return c.text('Custom domain not found or not verified', 404);
-  }
-
-  const rkey = customDomain.rkey || 'self';
-  if (!isValidRkey(rkey)) {
-    return c.text('Invalid site configuration', 500);
-  }
-
-  const cached = await ensureSiteCached(customDomain.did, rkey);
-  if (!cached) {
-    return c.text('Site not found', 404);
-  }
-
-  return serveFromCache(customDomain.did, rkey, path);
-});
+  });
 
 export default app;

@@ -1,7 +1,7 @@
 import { AtpAgent } from '@atproto/api';
 import type { WispFsRecord, Directory, Entry, File } from './types';
-import { existsSync, mkdirSync, readFileSync } from 'fs';
-import { writeFile, readFile } from 'fs/promises';
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'fs';
+import { writeFile, readFile, rename } from 'fs/promises';
 import { safeFetchJson, safeFetchBlob } from './safe-fetch';
 import { CID } from 'multiformats/cid';
 
@@ -153,9 +153,49 @@ export async function downloadAndCacheSite(did: string, rkey: string, record: Wi
     throw new Error('Invalid record structure: root missing entries array');
   }
 
-  await cacheFiles(did, rkey, record.root.entries, pdsEndpoint, '');
+  // Use a temporary directory with timestamp to avoid collisions
+  const tempSuffix = `.tmp-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  const tempDir = `${CACHE_DIR}/${did}/${rkey}${tempSuffix}`;
+  const finalDir = `${CACHE_DIR}/${did}/${rkey}`;
 
-  await saveCacheMetadata(did, rkey, recordCid);
+  try {
+    // Download to temporary directory
+    await cacheFiles(did, rkey, record.root.entries, pdsEndpoint, '', tempSuffix);
+    await saveCacheMetadata(did, rkey, recordCid, tempSuffix);
+
+    // Atomically replace old cache with new cache
+    // On POSIX systems (Linux/macOS), rename is atomic
+    if (existsSync(finalDir)) {
+      // Rename old directory to backup
+      const backupDir = `${finalDir}.old-${Date.now()}`;
+      await rename(finalDir, backupDir);
+
+      try {
+        // Rename new directory to final location
+        await rename(tempDir, finalDir);
+
+        // Clean up old backup
+        rmSync(backupDir, { recursive: true, force: true });
+      } catch (err) {
+        // If rename failed, restore backup
+        if (existsSync(backupDir) && !existsSync(finalDir)) {
+          await rename(backupDir, finalDir);
+        }
+        throw err;
+      }
+    } else {
+      // No existing cache, just rename temp to final
+      await rename(tempDir, finalDir);
+    }
+
+    console.log('Successfully cached site atomically', did, rkey);
+  } catch (err) {
+    // Clean up temp directory on failure
+    if (existsSync(tempDir)) {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+    throw err;
+  }
 }
 
 async function cacheFiles(
@@ -163,16 +203,18 @@ async function cacheFiles(
   site: string,
   entries: Entry[],
   pdsEndpoint: string,
-  pathPrefix: string
+  pathPrefix: string,
+  dirSuffix: string = ''
 ): Promise<void> {
   for (const entry of entries) {
     const currentPath = pathPrefix ? `${pathPrefix}/${entry.name}` : entry.name;
     const node = entry.node;
 
     if ('type' in node && node.type === 'directory' && 'entries' in node) {
-      await cacheFiles(did, site, node.entries, pdsEndpoint, currentPath);
+      await cacheFiles(did, site, node.entries, pdsEndpoint, currentPath, dirSuffix);
     } else if ('type' in node && node.type === 'file' && 'blob' in node) {
-      await cacheFileBlob(did, site, currentPath, node.blob, pdsEndpoint);
+      const fileNode = node as File;
+      await cacheFileBlob(did, site, currentPath, fileNode.blob, pdsEndpoint, fileNode.encoding, fileNode.mimeType, fileNode.base64, dirSuffix);
     }
   }
 }
@@ -182,7 +224,11 @@ async function cacheFileBlob(
   site: string,
   filePath: string,
   blobRef: any,
-  pdsEndpoint: string
+  pdsEndpoint: string,
+  encoding?: 'gzip',
+  mimeType?: string,
+  base64?: boolean,
+  dirSuffix: string = ''
 ): Promise<void> {
   const cid = extractBlobCid(blobRef);
   if (!cid) {
@@ -193,9 +239,17 @@ async function cacheFileBlob(
   const blobUrl = `${pdsEndpoint}/xrpc/com.atproto.sync.getBlob?did=${encodeURIComponent(did)}&cid=${encodeURIComponent(cid)}`;
 
   // Allow up to 100MB per file blob
-  const content = await safeFetchBlob(blobUrl, { maxSize: 100 * 1024 * 1024 });
+  let content = await safeFetchBlob(blobUrl, { maxSize: 100 * 1024 * 1024 });
 
-  const cacheFile = `${CACHE_DIR}/${did}/${site}/${filePath}`;
+  // If content is base64-encoded, decode it back to gzipped binary
+  if (base64 && encoding === 'gzip') {
+    // Convert Uint8Array to Buffer for proper string conversion
+    const buffer = Buffer.from(content);
+    const base64String = buffer.toString('utf-8');
+    content = Buffer.from(base64String, 'base64');
+  }
+
+  const cacheFile = `${CACHE_DIR}/${did}/${site}${dirSuffix}/${filePath}`;
   const fileDir = cacheFile.substring(0, cacheFile.lastIndexOf('/'));
 
   if (fileDir && !existsSync(fileDir)) {
@@ -203,7 +257,15 @@ async function cacheFileBlob(
   }
 
   await writeFile(cacheFile, content);
-  console.log('Cached file', filePath, content.length, 'bytes');
+
+  // Store metadata if file is compressed
+  if (encoding === 'gzip' && mimeType) {
+    const metaFile = `${cacheFile}.meta`;
+    await writeFile(metaFile, JSON.stringify({ encoding, mimeType }));
+    console.log('Cached file', filePath, content.length, 'bytes (gzipped,', mimeType + ')');
+  } else {
+    console.log('Cached file', filePath, content.length, 'bytes');
+  }
 }
 
 /**
@@ -238,7 +300,7 @@ export function isCached(did: string, site: string): boolean {
   return existsSync(`${CACHE_DIR}/${did}/${site}`);
 }
 
-async function saveCacheMetadata(did: string, rkey: string, recordCid: string): Promise<void> {
+async function saveCacheMetadata(did: string, rkey: string, recordCid: string, dirSuffix: string = ''): Promise<void> {
   const metadata: CacheMetadata = {
     recordCid,
     cachedAt: Date.now(),
@@ -246,7 +308,7 @@ async function saveCacheMetadata(did: string, rkey: string, recordCid: string): 
     rkey
   };
 
-  const metadataPath = `${CACHE_DIR}/${did}/${rkey}/.metadata.json`;
+  const metadataPath = `${CACHE_DIR}/${did}/${rkey}${dirSuffix}/.metadata.json`;
   const metadataDir = metadataPath.substring(0, metadataPath.lastIndexOf('/'));
 
   if (!existsSync(metadataDir)) {
