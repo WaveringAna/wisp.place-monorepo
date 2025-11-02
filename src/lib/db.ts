@@ -527,3 +527,13 @@ export const upsertSite = async (did: string, rkey: string, displayName?: string
         return { success: false, error: err };
     }
 };
+
+export const deleteSite = async (did: string, rkey: string) => {
+    try {
+        await db`DELETE FROM sites WHERE did = ${did} AND rkey = ${rkey}`;
+        return { success: true };
+    } catch (err) {
+        console.error('Failed to delete site', err);
+        return { success: false, error: err };
+    }
+};

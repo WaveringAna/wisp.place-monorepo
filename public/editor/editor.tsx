@@ -88,9 +88,12 @@ function Dashboard() {
 	const [configuringSite, setConfiguringSite] = useState<Site | null>(null)
 	const [selectedDomain, setSelectedDomain] = useState<string>('')
 	const [isSavingConfig, setIsSavingConfig] = useState(false)
+	const [isDeletingSite, setIsDeletingSite] = useState(false)
 
 	// Upload state
-	const [siteName, setSiteName] = useState('')
+	const [siteMode, setSiteMode] = useState<'existing' | 'new'>('existing')
+	const [selectedSiteRkey, setSelectedSiteRkey] = useState<string>('')
+	const [newSiteName, setNewSiteName] = useState('')
 	const [selectedFiles, setSelectedFiles] = useState<FileList | null>(null)
 	const [isUploading, setIsUploading] = useState(false)
 	const [uploadProgress, setUploadProgress] = useState('')
@@ -106,12 +109,27 @@ function Dashboard() {
 	}>({})
 	const [viewDomainDNS, setViewDomainDNS] = useState<string | null>(null)
 
+	// Wisp domain claim state
+	const [wispHandle, setWispHandle] = useState('')
+	const [isClaimingWisp, setIsClaimingWisp] = useState(false)
+	const [wispAvailability, setWispAvailability] = useState<{
+		available: boolean | null
+		checking: boolean
+	}>({ available: null, checking: false })
+
 	// Fetch user info on mount
 	useEffect(() => {
 		fetchUserInfo()
 		fetchSites()
 		fetchDomains()
 	}, [])
+
+	// Auto-switch to 'new' mode if no sites exist
+	useEffect(() => {
+		if (!sitesLoading && sites.length === 0 && siteMode === 'existing') {
+			setSiteMode('new')
+		}
+	}, [sites, sitesLoading, siteMode])
 
 	const fetchUserInfo = async () => {
 		try {
@@ -207,8 +225,10 @@ function Dashboard() {
 	}
 
 	const handleUpload = async () => {
+		const siteName = siteMode === 'existing' ? selectedSiteRkey : newSiteName
+
 		if (!siteName) {
-			alert('Please enter a site name')
+			alert(siteMode === 'existing' ? 'Please select a site' : 'Please enter a site name')
 			return
 		}
 
@@ -236,7 +256,8 @@ function Dashboard() {
 				setUploadProgress('Upload complete!')
 				setSkippedFiles(data.skippedFiles || [])
 				setUploadedCount(data.uploadedCount || data.fileCount || 0)
-				setSiteName('')
+				setSelectedSiteRkey('')
+				setNewSiteName('')
 				setSelectedFiles(null)
 
 				// Refresh sites list
@@ -430,6 +451,96 @@ function Dashboard() {
 		}
 	}
 
+	const handleDeleteSite = async () => {
+		if (!configuringSite) return
+
+		if (!confirm(`Are you sure you want to delete "${configuringSite.display_name || configuringSite.rkey}"? This action cannot be undone.`)) {
+			return
+		}
+
+		setIsDeletingSite(true)
+		try {
+			const response = await fetch(`/api/site/${configuringSite.rkey}`, {
+				method: 'DELETE'
+			})
+
+			const data = await response.json()
+			if (data.success) {
+				// Refresh sites list
+				await fetchSites()
+				// Refresh domains in case this site was mapped
+				await fetchDomains()
+				setConfiguringSite(null)
+			} else {
+				throw new Error(data.error || 'Failed to delete site')
+			}
+		} catch (err) {
+			console.error('Delete site error:', err)
+			alert(
+				`Failed to delete site: ${err instanceof Error ? err.message : 'Unknown error'}`
+			)
+		} finally {
+			setIsDeletingSite(false)
+		}
+	}
+
+	const checkWispAvailability = async (handle: string) => {
+		const trimmedHandle = handle.trim().toLowerCase()
+		if (!trimmedHandle) {
+			setWispAvailability({ available: null, checking: false })
+			return
+		}
+
+		setWispAvailability({ available: null, checking: true })
+		try {
+			const response = await fetch(`/api/domain/check?handle=${encodeURIComponent(trimmedHandle)}`)
+			const data = await response.json()
+			setWispAvailability({ available: data.available, checking: false })
+		} catch (err) {
+			console.error('Check availability error:', err)
+			setWispAvailability({ available: false, checking: false })
+		}
+	}
+
+	const handleClaimWispDomain = async () => {
+		const trimmedHandle = wispHandle.trim().toLowerCase()
+		if (!trimmedHandle) {
+			alert('Please enter a handle')
+			return
+		}
+
+		setIsClaimingWisp(true)
+		try {
+			const response = await fetch('/api/domain/claim', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ handle: trimmedHandle })
+			})
+
+			const data = await response.json()
+			if (data.success) {
+				setWispHandle('')
+				setWispAvailability({ available: null, checking: false })
+				await fetchDomains()
+			} else {
+				throw new Error(data.error || 'Failed to claim domain')
+			}
+		} catch (err) {
+			console.error('Claim domain error:', err)
+			const errorMessage = err instanceof Error ? err.message : 'Unknown error'
+
+			// Handle "Already claimed" error more gracefully
+			if (errorMessage.includes('Already claimed')) {
+				alert('You have already claimed a wisp.place subdomain. Please refresh the page.')
+				await fetchDomains()
+			} else {
+				alert(`Failed to claim domain: ${errorMessage}`)
+			}
+		} finally {
+			setIsClaimingWisp(false)
+		}
+	}
+
 	if (loading) {
 		return (
 			<div className="w-full min-h-screen bg-background flex items-center justify-center">
@@ -586,11 +697,71 @@ function Dashboard() {
 										</p>
 									</>
 								) : (
-									<div className="text-center py-4 text-muted-foreground">
-										<p>No wisp.place subdomain claimed yet.</p>
-										<p className="text-sm mt-1">
-											You should have claimed one during onboarding!
-										</p>
+									<div className="space-y-4">
+										<div className="p-4 bg-muted/30 rounded-lg">
+											<p className="text-sm text-muted-foreground mb-4">
+												Claim your free wisp.place subdomain
+											</p>
+											<div className="space-y-3">
+												<div className="space-y-2">
+													<Label htmlFor="wisp-handle">Choose your handle</Label>
+													<div className="flex gap-2">
+														<div className="flex-1 relative">
+															<Input
+																id="wisp-handle"
+																placeholder="mysite"
+																value={wispHandle}
+																onChange={(e) => {
+																	setWispHandle(e.target.value)
+																	if (e.target.value.trim()) {
+																		checkWispAvailability(e.target.value)
+																	} else {
+																		setWispAvailability({ available: null, checking: false })
+																	}
+																}}
+																disabled={isClaimingWisp}
+																className="pr-24"
+															/>
+															<span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
+																.wisp.place
+															</span>
+														</div>
+													</div>
+													{wispAvailability.checking && (
+														<p className="text-xs text-muted-foreground flex items-center gap-1">
+															<Loader2 className="w-3 h-3 animate-spin" />
+															Checking availability...
+														</p>
+													)}
+													{!wispAvailability.checking && wispAvailability.available === true && (
+														<p className="text-xs text-green-600 flex items-center gap-1">
+															<CheckCircle2 className="w-3 h-3" />
+															Available
+														</p>
+													)}
+													{!wispAvailability.checking && wispAvailability.available === false && (
+														<p className="text-xs text-red-600 flex items-center gap-1">
+															<XCircle className="w-3 h-3" />
+															Not available
+														</p>
+													)}
+												</div>
+												<Button
+													onClick={handleClaimWispDomain}
+													disabled={!wispHandle.trim() || isClaimingWisp || wispAvailability.available !== true}
+													className="w-full"
+												>
+													{isClaimingWisp ? (
+														<>
+															<Loader2 className="w-4 h-4 mr-2 animate-spin" />
+															Claiming...
+														</>
+													) : (
+														'Claim Subdomain'
+													)}
+												</Button>
+											</div>
+										</div>
 									</div>
 								)}
 							</CardContent>
@@ -712,15 +883,67 @@ function Dashboard() {
 								</CardDescription>
 							</CardHeader>
 							<CardContent className="space-y-6">
-								<div className="space-y-2">
-									<Label htmlFor="site-name">Site Name</Label>
-									<Input
-										id="site-name"
-										placeholder="my-awesome-site"
-										value={siteName}
-										onChange={(e) => setSiteName(e.target.value)}
+								<div className="space-y-4">
+									<RadioGroup
+										value={siteMode}
+										onValueChange={(value) => setSiteMode(value as 'existing' | 'new')}
 										disabled={isUploading}
-									/>
+									>
+										<div className="flex items-center space-x-2">
+											<RadioGroupItem value="existing" id="existing" />
+											<Label htmlFor="existing" className="cursor-pointer">
+												Update existing site
+											</Label>
+										</div>
+										<div className="flex items-center space-x-2">
+											<RadioGroupItem value="new" id="new" />
+											<Label htmlFor="new" className="cursor-pointer">
+												Create new site
+											</Label>
+										</div>
+									</RadioGroup>
+
+									{siteMode === 'existing' ? (
+										<div className="space-y-2">
+											<Label htmlFor="site-select">Select Site</Label>
+											{sitesLoading ? (
+												<div className="flex items-center justify-center py-4">
+													<Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+												</div>
+											) : sites.length === 0 ? (
+												<div className="p-4 border border-dashed rounded-lg text-center text-sm text-muted-foreground">
+													No sites available. Create a new site instead.
+												</div>
+											) : (
+												<select
+													id="site-select"
+													className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+													value={selectedSiteRkey}
+													onChange={(e) => setSelectedSiteRkey(e.target.value)}
+													disabled={isUploading}
+												>
+													<option value="">Select a site...</option>
+													{sites.map((site) => (
+														<option key={site.rkey} value={site.rkey}>
+															{site.display_name || site.rkey}
+														</option>
+													))}
+												</select>
+											)}
+										</div>
+									) : (
+										<div className="space-y-2">
+											<Label htmlFor="new-site-name">New Site Name</Label>
+											<Input
+												id="new-site-name"
+												placeholder="my-awesome-site"
+												value={newSiteName}
+												onChange={(e) => setNewSiteName(e.target.value)}
+												disabled={isUploading}
+											/>
+										</div>
+									)}
+
 									<p className="text-xs text-muted-foreground">
 										File limits: 100MB per file, 300MB total
 									</p>
@@ -828,7 +1051,11 @@ function Dashboard() {
 								<Button
 									onClick={handleUpload}
 									className="w-full"
-									disabled={!siteName || isUploading}
+									disabled={
+										(siteMode === 'existing' ? !selectedSiteRkey : !newSiteName) ||
+										isUploading ||
+										(siteMode === 'existing' && (!selectedFiles || selectedFiles.length === 0))
+									}
 								>
 									{isUploading ? (
 										<>
@@ -837,9 +1064,13 @@ function Dashboard() {
 										</>
 									) : (
 										<>
-											{selectedFiles && selectedFiles.length > 0
-												? 'Upload & Deploy'
-												: 'Create Empty Site'}
+											{siteMode === 'existing' ? (
+												'Update Site'
+											) : (
+												selectedFiles && selectedFiles.length > 0
+													? 'Upload & Deploy'
+													: 'Create Empty Site'
+											)}
 										</>
 									)}
 								</Button>
@@ -994,27 +1225,49 @@ function Dashboard() {
 							</RadioGroup>
 						</div>
 					)}
-					<DialogFooter>
+					<DialogFooter className="flex flex-col sm:flex-row sm:justify-between gap-2">
 						<Button
-							variant="outline"
-							onClick={() => setConfiguringSite(null)}
-							disabled={isSavingConfig}
+							variant="destructive"
+							onClick={handleDeleteSite}
+							disabled={isSavingConfig || isDeletingSite}
+							className="sm:mr-auto"
 						>
-							Cancel
-						</Button>
-						<Button
-							onClick={handleSaveSiteConfig}
-							disabled={isSavingConfig}
-						>
-							{isSavingConfig ? (
+							{isDeletingSite ? (
 								<>
 									<Loader2 className="w-4 h-4 mr-2 animate-spin" />
-									Saving...
+									Deleting...
 								</>
 							) : (
-								'Save'
+								<>
+									<Trash2 className="w-4 h-4 mr-2" />
+									Delete Site
+								</>
 							)}
 						</Button>
+						<div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+							<Button
+								variant="outline"
+								onClick={() => setConfiguringSite(null)}
+								disabled={isSavingConfig || isDeletingSite}
+								className="w-full sm:w-auto"
+							>
+								Cancel
+							</Button>
+							<Button
+								onClick={handleSaveSiteConfig}
+								disabled={isSavingConfig || isDeletingSite}
+								className="w-full sm:w-auto"
+							>
+								{isSavingConfig ? (
+									<>
+										<Loader2 className="w-4 h-4 mr-2 animate-spin" />
+										Saving...
+									</>
+								) : (
+									'Save'
+								)}
+							</Button>
+						</div>
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>

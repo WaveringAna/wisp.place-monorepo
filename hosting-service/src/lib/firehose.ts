@@ -1,6 +1,6 @@
 import { existsSync, rmSync } from 'fs';
 import { getPdsForDid, downloadAndCacheSite, extractBlobCid, fetchSiteRecord } from './utils';
-import { upsertSite } from './db';
+import { upsertSite, tryAcquireLock, releaseLock } from './db';
 import { safeFetch } from './safe-fetch';
 import { isRecord, validateRecord } from '../lexicon/types/place/wisp/fs';
 import { Firehose } from '@atproto/sync';
@@ -158,17 +158,33 @@ export class FirehoseWorker {
     }
 
     // Cache the record with verified CID (uses atomic swap internally)
+    // All instances cache locally for edge serving
     await downloadAndCacheSite(did, site, fsRecord, pdsEndpoint, verifiedCid);
 
-    // Upsert site to database
-    await upsertSite(did, site, fsRecord.site);
+    // Acquire distributed lock only for database write to prevent duplicate writes
+    const lockKey = `db:upsert:${did}:${site}`;
+    const lockAcquired = await tryAcquireLock(lockKey);
 
-    this.log('Successfully processed create/update', { did, site });
+    if (!lockAcquired) {
+      this.log('Another instance is writing to DB, skipping upsert', { did, site });
+      this.log('Successfully processed create/update (cached locally)', { did, site });
+      return;
+    }
+
+    try {
+      // Upsert site to database (only one instance does this)
+      await upsertSite(did, site, fsRecord.site);
+      this.log('Successfully processed create/update (cached + DB updated)', { did, site });
+    } finally {
+      // Always release lock, even if DB write fails
+      await releaseLock(lockKey);
+    }
   }
 
   private async handleDelete(did: string, site: string) {
     this.log('Processing delete', { did, site });
 
+    // All instances should delete their local cache (no lock needed)
     const pdsEndpoint = await getPdsForDid(did);
     if (!pdsEndpoint) {
       this.log('Could not resolve PDS for DID', { did });

@@ -1,5 +1,5 @@
 import { AtpAgent } from '@atproto/api';
-import type { WispFsRecord, Directory, Entry, File } from './types';
+import type { Record as WispFsRecord, Directory, Entry, File } from '../lexicon/types/place/wisp/fs';
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'fs';
 import { writeFile, readFile, rename } from 'fs/promises';
 import { safeFetchJson, safeFetchBlob } from './safe-fetch';
@@ -206,16 +206,43 @@ async function cacheFiles(
   pathPrefix: string,
   dirSuffix: string = ''
 ): Promise<void> {
-  for (const entry of entries) {
-    const currentPath = pathPrefix ? `${pathPrefix}/${entry.name}` : entry.name;
-    const node = entry.node;
+  // Collect all file blob download tasks first
+  const downloadTasks: Array<() => Promise<void>> = [];
+  
+  function collectFileTasks(
+    entries: Entry[],
+    currentPathPrefix: string
+  ) {
+    for (const entry of entries) {
+      const currentPath = currentPathPrefix ? `${currentPathPrefix}/${entry.name}` : entry.name;
+      const node = entry.node;
 
-    if ('type' in node && node.type === 'directory' && 'entries' in node) {
-      await cacheFiles(did, site, node.entries, pdsEndpoint, currentPath, dirSuffix);
-    } else if ('type' in node && node.type === 'file' && 'blob' in node) {
-      const fileNode = node as File;
-      await cacheFileBlob(did, site, currentPath, fileNode.blob, pdsEndpoint, fileNode.encoding, fileNode.mimeType, fileNode.base64, dirSuffix);
+      if ('type' in node && node.type === 'directory' && 'entries' in node) {
+        collectFileTasks(node.entries, currentPath);
+      } else if ('type' in node && node.type === 'file' && 'blob' in node) {
+        const fileNode = node as File;
+        downloadTasks.push(() => cacheFileBlob(
+          did,
+          site,
+          currentPath,
+          fileNode.blob,
+          pdsEndpoint,
+          fileNode.encoding,
+          fileNode.mimeType,
+          fileNode.base64,
+          dirSuffix
+        ));
+      }
     }
+  }
+
+  collectFileTasks(entries, pathPrefix);
+
+  // Execute downloads concurrently with a limit of 3 at a time
+  const concurrencyLimit = 3;
+  for (let i = 0; i < downloadTasks.length; i += concurrencyLimit) {
+    const batch = downloadTasks.slice(i, i + concurrencyLimit);
+    await Promise.all(batch.map(task => task()));
   }
 }
 

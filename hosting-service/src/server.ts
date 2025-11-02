@@ -6,6 +6,7 @@ import { resolveDid, getPdsForDid, fetchSiteRecord, downloadAndCacheSite, getCac
 import { rewriteHtmlPaths, isHtmlContent } from './lib/html-rewriter';
 import { existsSync, readFileSync } from 'fs';
 import { lookup } from 'mime-types';
+import { logger, observabilityMiddleware, logCollector, errorTracker, metricsCollector } from './lib/observability';
 
 const BASE_HOST = process.env.BASE_HOST || 'wisp.place';
 
@@ -200,27 +201,31 @@ async function ensureSiteCached(did: string, rkey: string): Promise<boolean> {
   // Fetch and cache the site
   const siteData = await fetchSiteRecord(did, rkey);
   if (!siteData) {
-    console.error('Site record not found', did, rkey);
+    logger.error('Site record not found', null, { did, rkey });
     return false;
   }
 
   const pdsEndpoint = await getPdsForDid(did);
   if (!pdsEndpoint) {
-    console.error('PDS not found for DID', did);
+    logger.error('PDS not found for DID', null, { did });
     return false;
   }
 
   try {
     await downloadAndCacheSite(did, rkey, siteData.record, pdsEndpoint, siteData.cid);
+    logger.info('Site cached successfully', { did, rkey });
     return true;
   } catch (err) {
-    console.error('Failed to cache site', did, rkey, err);
+    logger.error('Failed to cache site', err, { did, rkey });
     return false;
   }
 }
 
 const app = new Elysia({ adapter: node() })
   .use(opentelemetry())
+  .onBeforeHandle(observabilityMiddleware('hosting-service').beforeHandle)
+  .onAfterHandle(observabilityMiddleware('hosting-service').afterHandle)
+  .onError(observabilityMiddleware('hosting-service').onError)
   .get('/*', async ({ request, set }) => {
     const url = new URL(request.url);
     const hostname = request.headers.get('host') || '';
@@ -351,6 +356,27 @@ const app = new Elysia({ adapter: node() })
     }
 
     return serveFromCache(customDomain.did, rkey, path);
+  })
+  // Internal observability endpoints (for admin panel)
+  .get('/__internal__/observability/logs', ({ query }) => {
+    const filter: any = {};
+    if (query.level) filter.level = query.level;
+    if (query.service) filter.service = query.service;
+    if (query.search) filter.search = query.search;
+    if (query.eventType) filter.eventType = query.eventType;
+    if (query.limit) filter.limit = parseInt(query.limit as string);
+    return { logs: logCollector.getLogs(filter) };
+  })
+  .get('/__internal__/observability/errors', ({ query }) => {
+    const filter: any = {};
+    if (query.service) filter.service = query.service;
+    if (query.limit) filter.limit = parseInt(query.limit as string);
+    return { errors: errorTracker.getErrors(filter) };
+  })
+  .get('/__internal__/observability/metrics', ({ query }) => {
+    const timeWindow = query.timeWindow ? parseInt(query.timeWindow as string) : 3600000;
+    const stats = metricsCollector.getStats('hosting-service', timeWindow);
+    return { stats, timeWindow };
   });
 
 export default app;
