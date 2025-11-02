@@ -158,4 +158,47 @@ export async function upsertSite(did: string, rkey: string, displayName?: string
   }
 }
 
+/**
+ * Generate a numeric lock ID from a string key
+ * PostgreSQL advisory locks use bigint (64-bit signed integer)
+ */
+function stringToLockId(key: string): bigint {
+  let hash = 0n;
+  for (let i = 0; i < key.length; i++) {
+    const char = BigInt(key.charCodeAt(i));
+    hash = ((hash << 5n) - hash + char) & 0x7FFFFFFFFFFFFFFFn; // Keep within signed int64 range
+  }
+  return hash;
+}
+
+/**
+ * Acquire a distributed lock using PostgreSQL advisory locks
+ * Returns true if lock was acquired, false if already held by another instance
+ * Lock is automatically released when the transaction ends or connection closes
+ */
+export async function tryAcquireLock(key: string): Promise<boolean> {
+  const lockId = stringToLockId(key);
+
+  try {
+    const result = await sql`SELECT pg_try_advisory_lock(${lockId}) as acquired`;
+    return result[0]?.acquired === true;
+  } catch (err) {
+    console.error('Failed to acquire lock', { key, error: err });
+    return false;
+  }
+}
+
+/**
+ * Release a distributed lock
+ */
+export async function releaseLock(key: string): Promise<void> {
+  const lockId = stringToLockId(key);
+
+  try {
+    await sql`SELECT pg_advisory_unlock(${lockId})`;
+  } catch (err) {
+    console.error('Failed to release lock', { key, error: err });
+  }
+}
+
 export { sql };

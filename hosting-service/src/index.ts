@@ -1,5 +1,6 @@
 import app from './server';
 import { FirehoseWorker } from './lib/firehose';
+import { logger } from './lib/observability';
 import { mkdirSync, existsSync } from 'fs';
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3001;
@@ -11,9 +12,9 @@ if (!existsSync(CACHE_DIR)) {
   console.log('Created cache directory:', CACHE_DIR);
 }
 
-// Start firehose worker
+// Start firehose worker with observability logger
 const firehose = new FirehoseWorker((msg, data) => {
-  console.log(msg, data);
+  logger.info(msg, data);
 });
 
 firehose.start();

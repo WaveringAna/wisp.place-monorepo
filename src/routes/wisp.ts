@@ -12,8 +12,9 @@ import {
 	compressFile
 } from '../lib/wisp-utils'
 import { upsertSite } from '../lib/db'
-import { logger } from '../lib/logger'
+import { logger } from '../lib/observability'
 import { validateRecord } from '../lexicon/types/place/wisp/fs'
+import { MAX_SITE_SIZE, MAX_FILE_SIZE, MAX_FILE_COUNT } from '../lib/constants'
 
 function isValidSiteName(siteName: string): boolean {
 	if (!siteName || typeof siteName !== 'string') return false;
@@ -112,51 +113,13 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 					const uploadedFiles: UploadedFile[] = [];
 					const skippedFiles: Array<{ name: string; reason: string }> = [];
 
-					// Define allowed file extensions for static site hosting
-					const allowedExtensions = new Set([
-						// HTML
-						'.html', '.htm',
-						// CSS
-						'.css',
-						// JavaScript
-						'.js', '.mjs', '.jsx', '.ts', '.tsx',
-						// Images
-						'.jpg', '.jpeg', '.png', '.gif', '.svg', '.webp', '.ico', '.avif',
-						// Fonts
-						'.woff', '.woff2', '.ttf', '.otf', '.eot',
-						// Documents
-						'.pdf', '.txt',
-						// JSON (for config files, but not .map files)
-						'.json',
-						// Audio/Video
-						'.mp3', '.mp4', '.webm', '.ogg', '.wav',
-						// Other web assets
-						'.xml', '.rss', '.atom'
-					]);
 
-					// Files to explicitly exclude
-					const excludedFiles = new Set([
-						'.map', '.DS_Store', 'Thumbs.db'
-					]);
 
 					for (let i = 0; i < fileArray.length; i++) {
 						const file = fileArray[i];
-						const fileExtension = '.' + file.name.split('.').pop()?.toLowerCase();
-
-						// Skip excluded files
-						if (excludedFiles.has(fileExtension)) {
-							skippedFiles.push({ name: file.name, reason: 'excluded file type' });
-							continue;
-						}
-
-						// Skip files that aren't in allowed extensions
-						if (!allowedExtensions.has(fileExtension)) {
-							skippedFiles.push({ name: file.name, reason: 'unsupported file type' });
-							continue;
-						}
 
 						// Skip files that are too large (limit to 100MB per file)
-						const maxSize = 100 * 1024 * 1024; // 100MB
+						const maxSize = MAX_FILE_SIZE; // 100MB
 						if (file.size > maxSize) {
 							skippedFiles.push({
 								name: file.name,
@@ -169,41 +132,34 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 						const originalContent = Buffer.from(arrayBuffer);
 						const originalMimeType = file.type || 'application/octet-stream';
 
-						// Determine if we should compress this file
-						const shouldCompress = shouldCompressFile(originalMimeType);
+						// Compress and base64 encode ALL files
+						const compressedContent = compressFile(originalContent);
+						// Base64 encode the gzipped content to prevent PDS content sniffing
+						const base64Content = Buffer.from(compressedContent.toString('base64'), 'utf-8');
+						const compressionRatio = (compressedContent.length / originalContent.length * 100).toFixed(1);
+						logger.info(`Compressing ${file.name}: ${originalContent.length} -> ${compressedContent.length} bytes (${compressionRatio}%), base64: ${base64Content.length} bytes`);
 
-						if (shouldCompress) {
-							const compressedContent = compressFile(originalContent);
-							// Base64 encode the gzipped content to prevent PDS content sniffing
-							const base64Content = Buffer.from(compressedContent.toString('base64'), 'utf-8');
-							const compressionRatio = (compressedContent.length / originalContent.length * 100).toFixed(1);
-							logger.info(`[Wisp] Compressing ${file.name}: ${originalContent.length} -> ${compressedContent.length} bytes (${compressionRatio}%), base64: ${base64Content.length} bytes`);
-
-							uploadedFiles.push({
-								name: file.name,
-								content: base64Content,
-								mimeType: originalMimeType,
-								size: base64Content.length,
-								compressed: true,
-								originalMimeType
-							});
-						} else {
-							uploadedFiles.push({
-								name: file.name,
-								content: originalContent,
-								mimeType: originalMimeType,
-								size: file.size,
-								compressed: false
-							});
-						}
+						uploadedFiles.push({
+							name: file.name,
+							content: base64Content,
+							mimeType: originalMimeType,
+							size: base64Content.length,
+							compressed: true,
+							originalMimeType
+						});
 					}
 
 					// Check total size limit (300MB)
 					const totalSize = uploadedFiles.reduce((sum, file) => sum + file.size, 0);
-					const maxTotalSize = 300 * 1024 * 1024; // 300MB
+					const maxTotalSize = MAX_SITE_SIZE; // 300MB
 
 					if (totalSize > maxTotalSize) {
 						throw new Error(`Total upload size ${(totalSize / 1024 / 1024).toFixed(2)}MB exceeds 300MB limit`);
+					}
+
+					// Check file count limit (2000 files)
+					if (uploadedFiles.length > MAX_FILE_COUNT) {
+						throw new Error(`File count ${uploadedFiles.length} exceeds ${MAX_FILE_COUNT} files limit`);
 					}
 
 					if (uploadedFiles.length === 0) {
@@ -264,7 +220,7 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 								: file.mimeType;
 
 							const compressionInfo = file.compressed ? ' (gzipped)' : '';
-							logger.info(`[Wisp] Uploading file: ${file.name} (original: ${file.mimeType}, sending as: ${uploadMimeType}, ${file.size} bytes${compressionInfo})`);
+							logger.info(`[File Upload] Uploading file: ${file.name} (original: ${file.mimeType}, sending as: ${uploadMimeType}, ${file.size} bytes${compressionInfo})`);
 
 							const uploadResult = await agent.com.atproto.repo.uploadBlob(
 								file.content,
@@ -291,7 +247,7 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 								returnedMimeType: returnedBlobRef.mimeType
 							};
 						} catch (uploadError) {
-							logger.error('[Wisp] Upload failed for file', uploadError);
+							logger.error('Upload failed for file', uploadError);
 							throw uploadError;
 						}
 					});
@@ -321,8 +277,7 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 							record: manifest
 						});
 					} catch (putRecordError: any) {
-						logger.error('[Wisp] Failed to create record on PDS');
-						logger.error('[Wisp] Record creation error', putRecordError);
+						logger.error('Failed to create record on PDS', putRecordError);
 
 						throw putRecordError;
 					}
@@ -342,11 +297,10 @@ export const wispRoutes = (client: NodeOAuthClient) =>
 
 					return result;
 				} catch (error) {
-					logger.error('[Wisp] Upload error', error);
-					logger.errorWithContext('[Wisp] Upload error details', {
+					logger.error('Upload error', error, {
 						message: error instanceof Error ? error.message : 'Unknown error',
 						name: error instanceof Error ? error.name : undefined
-					}, error);
+					});
 					throw new Error(`Failed to upload files: ${error instanceof Error ? error.message : 'Unknown error'}`);
 				}
 			}

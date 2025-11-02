@@ -75,11 +75,19 @@ function Onboarding() {
 				setClaimedDomain(data.domain)
 				setStep('upload')
 			} else {
-				alert('Failed to claim domain. Please try again.')
+				throw new Error(data.error || 'Failed to claim domain')
 			}
 		} catch (err) {
 			console.error('Error claiming domain:', err)
-			alert('Failed to claim domain. Please try again.')
+			const errorMessage = err instanceof Error ? err.message : 'Unknown error'
+
+			// Handle "Already claimed" error - redirect to editor
+			if (errorMessage.includes('Already claimed')) {
+				alert('You have already claimed a wisp.place subdomain. Redirecting to editor...')
+				window.location.href = '/editor'
+			} else {
+				alert(`Failed to claim domain: ${errorMessage}`)
+			}
 		} finally {
 			setIsClaimingDomain(false)
 		}

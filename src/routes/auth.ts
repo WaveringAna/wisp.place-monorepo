@@ -3,18 +3,23 @@ import { NodeOAuthClient } from '@atproto/oauth-client-node'
 import { getSitesByDid, getDomainByDid } from '../lib/db'
 import { syncSitesFromPDS } from '../lib/sync-sites'
 import { authenticateRequest } from '../lib/wisp-auth'
-import { logger } from '../lib/logger'
+import { logger } from '../lib/observability'
 
 export const authRoutes = (client: NodeOAuthClient) => new Elysia()
 	.post('/api/auth/signin', async (c) => {
+		let handle = 'unknown'
 		try {
-			const { handle } = await c.request.json()
+			const body = c.body as { handle: string }
+			handle = body.handle
+			logger.info('Sign-in attempt', { handle })
 			const state = crypto.randomUUID()
 			const url = await client.authorize(handle, { state })
+			logger.info('Authorization URL generated', { handle })
 			return { url: url.toString() }
 		} catch (err) {
-			logger.error('[Auth] Signin error', err)
-			return  { error: 'Authentication failed' }
+			logger.error('Signin error', err, { handle })
+			console.error('[Auth] Full error:', err)
+			return  { error: 'Authentication failed', details: err instanceof Error ? err.message : String(err) }
 		}
 	})
 	.get('/api/auth/callback', async (c) => {

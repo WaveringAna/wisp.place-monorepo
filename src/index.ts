@@ -1,5 +1,6 @@
 import { Elysia } from 'elysia'
 import { cors } from '@elysiajs/cors'
+import { openapi, fromTypes } from '@elysiajs/openapi'
 import { staticPlugin } from '@elysiajs/static'
 
 import type { Config } from './lib/types'
@@ -15,14 +16,20 @@ import { authRoutes } from './routes/auth'
 import { wispRoutes } from './routes/wisp'
 import { domainRoutes } from './routes/domain'
 import { userRoutes } from './routes/user'
+import { siteRoutes } from './routes/site'
 import { csrfProtection } from './lib/csrf'
 import { DNSVerificationWorker } from './lib/dns-verification-worker'
-import { logger } from './lib/logger'
+import { logger, logCollector, observabilityMiddleware } from './lib/observability'
+import { promptAdminSetup } from './lib/admin-auth'
+import { adminRoutes } from './routes/admin'
 
 const config: Config = {
 	domain: (Bun.env.DOMAIN ?? `https://${BASE_HOST}`) as `https://${string}`,
 	clientName: Bun.env.CLIENT_NAME ?? 'PDS-View'
 }
+
+// Initialize admin setup (prompt if no admin exists)
+await promptAdminSetup()
 
 const client = await getOAuthClient(config)
 
@@ -40,20 +47,27 @@ runMaintenance()
 // Schedule maintenance to run every hour
 setInterval(runMaintenance, 60 * 60 * 1000)
 
-// Start DNS verification worker (runs every hour)
+// Start DNS verification worker (runs every 10 minutes)
 const dnsVerifier = new DNSVerificationWorker(
-	60 * 60 * 1000, // 1 hour
+	10 * 60 * 1000, // 10 minutes
 	(msg, data) => {
-		logger.info('[DNS Verifier]', msg, data || '')
+		logCollector.info(`[DNS Verifier] ${msg}`, 'main-app', data ? { data } : undefined)
 	}
 )
 
 dnsVerifier.start()
-logger.info('[DNS Verifier] Started - checking custom domains every hour')
+logger.info('DNS Verifier Started - checking custom domains every 10 minutes')
 
 export const app = new Elysia()
-	// Security headers middleware
-	.onAfterHandle(({ set }) => {
+	.use(openapi({
+		references: fromTypes()
+	}))
+	// Observability middleware
+	.onBeforeHandle(observabilityMiddleware('main-app').beforeHandle)
+	.onAfterHandle((ctx) => {
+		observabilityMiddleware('main-app').afterHandle(ctx)
+		// Security headers middleware
+		const { set } = ctx
 		// Prevent clickjacking attacks
 		set.headers['X-Frame-Options'] = 'DENY'
 		// Prevent MIME type sniffing
@@ -77,16 +91,19 @@ export const app = new Elysia()
 		set.headers['X-XSS-Protection'] = '1; mode=block'
 		set.headers['Permissions-Policy'] = 'geolocation=(), microphone=(), camera=()'
 	})
-	.use(
-		await staticPlugin({
-			prefix: '/'
-		})
-	)
+	.onError(observabilityMiddleware('main-app').onError)
 	.use(csrfProtection())
 	.use(authRoutes(client))
 	.use(wispRoutes(client))
 	.use(domainRoutes(client))
 	.use(userRoutes(client))
+	.use(siteRoutes(client))
+	.use(adminRoutes())
+	.use(
+		await staticPlugin({
+			prefix: '/'
+		})
+	)
 	.get('/client-metadata.json', (c) => {
 		return createClientMetadata(config)
 	})
@@ -109,6 +126,9 @@ export const app = new Elysia()
 			timestamp: new Date().toISOString(),
 			dnsVerifier: dnsVerifierHealth
 		}
+	})
+	.get('/api/admin/test', () => {
+		return { message: 'Admin routes test works!' }
 	})
 	.post('/api/admin/verify-dns', async () => {
 		try {
