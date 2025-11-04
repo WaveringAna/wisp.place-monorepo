@@ -296,7 +296,12 @@ const app = new Elysia({ adapter: node() })
         return 'Custom domain not found or not verified';
       }
 
-      const rkey = customDomain.rkey || 'self';
+      if (!customDomain.rkey) {
+        set.status = 404;
+        return 'Domain not mapped to a site';
+      }
+
+      const rkey = customDomain.rkey;
       if (!isValidRkey(rkey)) {
         set.status = 500;
         return 'Invalid site configuration';
@@ -321,7 +326,12 @@ const app = new Elysia({ adapter: node() })
         return 'Subdomain not registered';
       }
 
-      const rkey = domainInfo.rkey || 'self';
+      if (!domainInfo.rkey) {
+        set.status = 404;
+        return 'Domain not mapped to a site';
+      }
+
+      const rkey = domainInfo.rkey;
       if (!isValidRkey(rkey)) {
         set.status = 500;
         return 'Invalid site configuration';
@@ -343,7 +353,12 @@ const app = new Elysia({ adapter: node() })
       return 'Custom domain not found or not verified';
     }
 
-    const rkey = customDomain.rkey || 'self';
+    if (!customDomain.rkey) {
+      set.status = 404;
+      return 'Domain not mapped to a site';
+    }
+
+    const rkey = customDomain.rkey;
     if (!isValidRkey(rkey)) {
       set.status = 500;
       return 'Invalid site configuration';

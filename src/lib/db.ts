@@ -77,12 +77,24 @@ await db`
         id TEXT PRIMARY KEY,
         domain TEXT UNIQUE NOT NULL,
         did TEXT NOT NULL,
-        rkey TEXT NOT NULL DEFAULT 'self',
+        rkey TEXT,
         verified BOOLEAN DEFAULT false,
         last_verified_at BIGINT,
         created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())
     )
 `;
+
+// Migrate existing tables to make rkey nullable and remove default
+try {
+    await db`ALTER TABLE custom_domains ALTER COLUMN rkey DROP NOT NULL`;
+} catch (err) {
+    // Column might already be nullable, ignore
+}
+try {
+    await db`ALTER TABLE custom_domains ALTER COLUMN rkey DROP DEFAULT`;
+} catch (err) {
+    // Default might already be removed, ignore
+}
 
 // Sites table - cache of place.wisp.fs records from PDS
 await db`
@@ -462,7 +474,7 @@ export const getCustomDomainById = async (id: string) => {
     return rows[0] ?? null;
 };
 
-export const claimCustomDomain = async (did: string, domain: string, hash: string, rkey: string = 'self') => {
+export const claimCustomDomain = async (did: string, domain: string, hash: string, rkey: string | null = null) => {
     const domainLower = domain.toLowerCase();
     try {
         await db`
@@ -476,7 +488,7 @@ export const claimCustomDomain = async (did: string, domain: string, hash: strin
     }
 };
 
-export const updateCustomDomainRkey = async (id: string, rkey: string) => {
+export const updateCustomDomainRkey = async (id: string, rkey: string | null) => {
     const rows = await db`
         UPDATE custom_domains
         SET rkey = ${rkey}

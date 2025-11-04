@@ -17,7 +17,7 @@ export interface CustomDomainLookup {
   id: string;
   domain: string;
   did: string;
-  rkey: string;
+  rkey: string | null;
   verified: boolean;
 }
 
