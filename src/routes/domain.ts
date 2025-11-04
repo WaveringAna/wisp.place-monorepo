@@ -336,7 +336,7 @@ export const domainRoutes = (client: NodeOAuthClient) =>
 				}
 
 				// Update custom domain to point to this site
-				await updateCustomDomainRkey(id, siteRkey || 'self');
+				await updateCustomDomainRkey(id, siteRkey);
 
 				return { success: true };
 			} catch (err) {
