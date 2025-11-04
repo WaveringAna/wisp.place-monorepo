@@ -1,0 +1,30 @@
+[package]
+name = "wisp-cli"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = ["place_wisp"]
+place_wisp = []
+
+[dependencies]
+jacquard = { path = "jacquard/crates/jacquard", features = ["loopback"] }
+jacquard-oauth = { path = "jacquard/crates/jacquard-oauth" }
+jacquard-api = { path = "jacquard/crates/jacquard-api" }
+jacquard-common = { path = "jacquard/crates/jacquard-common" }
+jacquard-identity = { path = "jacquard/crates/jacquard-identity", features = ["dns"] }
+jacquard-derive = { path = "jacquard/crates/jacquard-derive" }
+jacquard-lexicon = { path = "jacquard/crates/jacquard-lexicon" }
+clap = { version = "4.5.51", features = ["derive"] }
+tokio = { version = "1.48", features = ["full"] }
+miette = { version = "7.6.0", features = ["fancy"] }
+serde_json = "1.0.145"
+serde = { version = "1.0", features = ["derive"] }
+shellexpand = "3.1.1"
+reqwest = "0.12"
+rustversion = "1.0"
+flate2 = "1.0"
+base64 = "0.22"
+walkdir = "2.5"
+mime_guess = "2.0"
+bytes = "1.10"
