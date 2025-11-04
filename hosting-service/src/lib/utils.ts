@@ -265,8 +265,8 @@ async function cacheFileBlob(
 
   const blobUrl = `${pdsEndpoint}/xrpc/com.atproto.sync.getBlob?did=${encodeURIComponent(did)}&cid=${encodeURIComponent(cid)}`;
 
-  // Allow up to 100MB per file blob
-  let content = await safeFetchBlob(blobUrl, { maxSize: 100 * 1024 * 1024 });
+  // Allow up to 100MB per file blob, with 2 minute timeout
+  let content = await safeFetchBlob(blobUrl, { maxSize: 100 * 1024 * 1024, timeout: 120000 });
 
   // If content is base64-encoded, decode it back to gzipped binary
   if (base64 && encoding === 'gzip') {
