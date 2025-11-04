@@ -1,6 +1,4 @@
 // DIY Observability - Logs, Metrics, and Error Tracking
-import type { Context } from 'elysia'
-
 // Types
 export interface LogEntry {
 	id: string

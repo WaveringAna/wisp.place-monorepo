@@ -1,5 +1,3 @@
-import type { BlobRef } from "@atproto/api";
-
 /**
  * Configuration for the Wisp client
  * @typeParam Config

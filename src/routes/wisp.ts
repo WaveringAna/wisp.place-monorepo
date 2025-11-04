@@ -13,7 +13,7 @@ import {
 } from '../lib/wisp-utils'
 import { upsertSite } from '../lib/db'
 import { logger } from '../lib/observability'
-import { validateRecord } from '../lexicon/types/place/wisp/fs'
+import { validateRecord } from '../lexicons/types/place/wisp/fs'
 import { MAX_SITE_SIZE, MAX_FILE_SIZE, MAX_FILE_COUNT } from '../lib/constants'
 
 function isValidSiteName(siteName: string): boolean {

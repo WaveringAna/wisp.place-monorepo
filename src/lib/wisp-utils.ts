@@ -1,6 +1,6 @@
 import type { BlobRef } from "@atproto/api";
-import type { Record, Directory, File, Entry } from "../lexicon/types/place/wisp/fs";
-import { validateRecord } from "../lexicon/types/place/wisp/fs";
+import type { Record, Directory, File, Entry } from "../lexicons/types/place/wisp/fs";
+import { validateRecord } from "../lexicons/types/place/wisp/fs";
 import { gzipSync } from 'zlib';
 
 export interface UploadedFile {
