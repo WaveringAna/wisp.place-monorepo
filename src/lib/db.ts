@@ -337,25 +337,54 @@ export const cleanupExpiredSessions = async () => {
     }
 };
 
-export const createClientMetadata = (config: { domain: `https://${string}`, clientName: string }): ClientMetadata => ({
-    client_id: `${config.domain}/client-metadata.json`,
-    client_name: config.clientName,
-    client_uri: config.domain,
-    logo_uri: `${config.domain}/logo.png`,
-    tos_uri: `${config.domain}/tos`,
-    policy_uri: `${config.domain}/policy`,
-    redirect_uris: [`${config.domain}/api/auth/callback`],
-    grant_types: ['authorization_code', 'refresh_token'],
-    response_types: ['code'],
-    application_type: 'web',
-    token_endpoint_auth_method: 'private_key_jwt',
-    token_endpoint_auth_signing_alg: "ES256",
-    scope: "atproto transition:generic",
-    dpop_bound_access_tokens: true,
-    jwks_uri: `${config.domain}/jwks.json`,
-    subject_type: 'public',
-    authorization_signed_response_alg: 'ES256'
-});
+export const createClientMetadata = (config: { domain: `http://${string}` | `https://${string}`, clientName: string }): ClientMetadata => {
+    const isLocalDev = process.env.LOCAL_DEV === 'true';
+
+    if (isLocalDev) {
+        // Loopback client for local development
+        // For loopback, scopes and redirect_uri must be in client_id query string
+        const redirectUri = 'http://127.0.0.1:8000/api/auth/callback';
+        const scope = 'atproto transition:generic';
+        const params = new URLSearchParams();
+        params.append('redirect_uri', redirectUri);
+        params.append('scope', scope);
+
+        return {
+            client_id: `http://localhost?${params.toString()}`,
+            client_name: config.clientName,
+            client_uri: config.domain,
+            redirect_uris: [redirectUri],
+            grant_types: ['authorization_code', 'refresh_token'],
+            response_types: ['code'],
+            application_type: 'web',
+            token_endpoint_auth_method: 'none',
+            scope: scope,
+            dpop_bound_access_tokens: false,
+            subject_type: 'public'
+        };
+    }
+
+    // Production client with private_key_jwt
+    return {
+        client_id: `${config.domain}/client-metadata.json`,
+        client_name: config.clientName,
+        client_uri: config.domain,
+        logo_uri: `${config.domain}/logo.png`,
+        tos_uri: `${config.domain}/tos`,
+        policy_uri: `${config.domain}/policy`,
+        redirect_uris: [`${config.domain}/api/auth/callback`],
+        grant_types: ['authorization_code', 'refresh_token'],
+        response_types: ['code'],
+        application_type: 'web',
+        token_endpoint_auth_method: 'private_key_jwt',
+        token_endpoint_auth_signing_alg: "ES256",
+        scope: "atproto transition:generic",
+        dpop_bound_access_tokens: true,
+        jwks_uri: `${config.domain}/jwks.json`,
+        subject_type: 'public',
+        authorization_signed_response_alg: 'ES256'
+    };
+};
 
 const persistKey = async (key: JoseKey) => {
     const priv = key.privateJwk;
@@ -443,7 +472,7 @@ export const rotateKeysIfNeeded = async (): Promise<boolean> => {
     }
 };
 
-export const getOAuthClient = async (config: { domain: `https://${string}`, clientName: string }) => {
+export const getOAuthClient = async (config: { domain: `http://${string}` | `https://${string}`, clientName: string }) => {
     const keys = await ensureKeys();
 
     return new NodeOAuthClient({

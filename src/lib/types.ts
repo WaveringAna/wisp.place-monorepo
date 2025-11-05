@@ -3,8 +3,8 @@
  * @typeParam Config
  */
 export type Config = {
-    /** The base domain URL with HTTPS protocol */
-    domain: `https://${string}`,
+    /** The base domain URL with HTTP or HTTPS protocol */
+    domain: `http://${string}` | `https://${string}`,
     /** Name of the client application */
     clientName: string
 };

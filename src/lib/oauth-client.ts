@@ -103,12 +103,38 @@ export const cleanupExpiredSessions = async () => {
     }
 };
 
-export const createClientMetadata = (config: { domain: `https://${string}`, clientName: string }): ClientMetadata => {
-    // Use editor.wisp.place for OAuth endpoints since that's where the API routes live
+export const createClientMetadata = (config: { domain: `http://${string}` | `https://${string}`, clientName: string }): ClientMetadata => {
+    const isLocalDev = Bun.env.LOCAL_DEV === 'true';
+
+    if (isLocalDev) {
+        // Loopback client for local development
+        // For loopback, scopes and redirect_uri must be in client_id query string
+        const redirectUri = 'http://127.0.0.1:8000/api/auth/callback';
+        const scope = 'atproto transition:generic';
+        const params = new URLSearchParams();
+        params.append('redirect_uri', redirectUri);
+        params.append('scope', scope);
+
+        return {
+            client_id: `http://localhost?${params.toString()}`,
+            client_name: config.clientName,
+            client_uri: `https://wisp.place`,
+            redirect_uris: [redirectUri],
+            grant_types: ['authorization_code', 'refresh_token'],
+            response_types: ['code'],
+            application_type: 'web',
+            token_endpoint_auth_method: 'none',
+            scope: scope,
+            dpop_bound_access_tokens: false,
+            subject_type: 'public'
+        };
+    }
+
+    // Production client with private_key_jwt
     return {
         client_id: `${config.domain}/client-metadata.json`,
         client_name: config.clientName,
-		client_uri: `https://wisp.place`,
+        client_uri: `https://wisp.place`,
         logo_uri: `${config.domain}/logo.png`,
         tos_uri: `${config.domain}/tos`,
         policy_uri: `${config.domain}/policy`,
@@ -212,7 +238,7 @@ export const rotateKeysIfNeeded = async (): Promise<boolean> => {
     }
 };
 
-export const getOAuthClient = async (config: { domain: `https://${string}`, clientName: string }) => {
+export const getOAuthClient = async (config: { domain: `http://${string}` | `https://${string}`, clientName: string }) => {
     const keys = await ensureKeys();
 
     return new NodeOAuthClient({

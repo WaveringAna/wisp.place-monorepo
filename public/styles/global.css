@@ -4,36 +4,37 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  /* #F2E7C9 - parchment background */
-  --background: oklch(0.93 0.03 85);
-  /* #413C58 - violet for text */
-  --foreground: oklch(0.32 0.04 285);
+  /* Warm beige background inspired by Sunset design #E9DDD8 */
+  --background: oklch(0.90 0.012 35);
+  /* Very dark brown text for strong contrast #2A2420 */
+  --foreground: oklch(0.18 0.01 30);
 
-  --card: oklch(0.98 0.01 85);
-  --card-foreground: oklch(0.32 0.04 285);
+  /* Slightly lighter card background */
+  --card: oklch(0.93 0.01 35);
+  --card-foreground: oklch(0.18 0.01 30);
 
-  --popover: oklch(0.98 0.01 85);
-  --popover-foreground: oklch(0.32 0.04 285);
+  --popover: oklch(0.93 0.01 35);
+  --popover-foreground: oklch(0.18 0.01 30);
 
-  /* #413C58 - violet primary */
-  --primary: oklch(0.32 0.04 285);
-  --primary-foreground: oklch(0.98 0.01 85);
+  /* Dark brown primary inspired by #645343 */
+  --primary: oklch(0.35 0.02 35);
+  --primary-foreground: oklch(0.95 0.01 35);
 
-  /* #FFAAD2 - pink accent */
+  /* Bright pink accent for links #FFAAD2 */
   --accent: oklch(0.78 0.15 345);
-  --accent-foreground: oklch(0.32 0.04 285);
+  --accent-foreground: oklch(0.18 0.01 30);
 
-  /* #348AA7 - blue secondary */
-  --secondary: oklch(0.56 0.08 220);
-  --secondary-foreground: oklch(0.98 0.01 85);
+  /* Medium taupe secondary inspired by #867D76 */
+  --secondary: oklch(0.52 0.015 30);
+  --secondary-foreground: oklch(0.95 0.01 35);
 
-  /* #CCD7C5 - ash muted */
-  --muted: oklch(0.85 0.02 130);
-  --muted-foreground: oklch(0.45 0.03 285);
+  /* Light warm muted background */
+  --muted: oklch(0.88 0.01 35);
+  --muted-foreground: oklch(0.42 0.015 30);
 
-  --border: oklch(0.75 0.02 285);
-  --input: oklch(0.75 0.02 285);
-  --ring: oklch(0.78 0.15 345);
+  --border: oklch(0.75 0.015 30);
+  --input: oklch(0.92 0.01 35);
+  --ring: oklch(0.72 0.08 15);
 
   --destructive: oklch(0.577 0.245 27.325);
   --destructive-foreground: oklch(0.985 0 0);
@@ -149,4 +150,17 @@
   body {
     @apply bg-background text-foreground;
   }
+}
+
+@keyframes arrow-bounce {
+  0%, 100% {
+    transform: translateX(0);
+  }
+  50% {
+    transform: translateX(4px);
+  }
+}
+
+.arrow-animate {
+  animation: arrow-bounce 1.5s ease-in-out infinite;
 }
