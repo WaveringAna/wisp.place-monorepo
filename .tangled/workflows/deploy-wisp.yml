@@ -42,11 +42,9 @@ steps:
 
     - name: 'Deploy to Wisp.place'
       command: |
+          echo
           ./cli/target/release/wisp-cli \
             "$WISP_HANDLE" \
             --path "$SITE_PATH" \
             --site "$SITE_NAME" \
             --password "$WISP_APP_PASSWORD"
-      environment:
-          WISP_HANDLE: '${{ secrets.WISP_HANDLE }}'
-          WISP_APP_PASSWORD: '${{ secrets.WISP_APP_PASSWORD }}'
