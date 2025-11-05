@@ -1,0 +1,3 @@
+[submodule "cli/jacquard"]
+	path = cli/jacquard
+	url = https://tangled.org/@nonbinary.computer/jacquard

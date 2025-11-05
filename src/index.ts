@@ -24,7 +24,7 @@ import { promptAdminSetup } from './lib/admin-auth'
 import { adminRoutes } from './routes/admin'
 
 const config: Config = {
-	domain: (Bun.env.DOMAIN ?? `https://${BASE_HOST}`) as `https://${string}`,
+	domain: (Bun.env.DOMAIN ?? `https://${BASE_HOST}`) as Config['domain'],
 	clientName: Bun.env.CLIENT_NAME ?? 'PDS-View'
 }
 
