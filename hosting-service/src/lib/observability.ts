@@ -1,5 +1,5 @@
 // DIY Observability for Hosting Service
-import type { Context } from 'elysia'
+import type { Context } from 'hono'
 
 // Types
 export interface LogEntry {
@@ -175,7 +175,9 @@ export const errorTracker = {
 			// Rotate if needed
 			if (errors.size > MAX_ERRORS) {
 				const oldest = Array.from(errors.keys())[0]
-				errors.delete(oldest)
+				if (oldest !== undefined) {
+					errors.delete(oldest)
+				}
 			}
 		}
 	},
@@ -262,9 +264,9 @@ export const metricsCollector = {
 		return {
 			totalRequests: filtered.length,
 			avgDuration: Math.round(totalDuration / filtered.length),
-			p50Duration: Math.round(p50),
-			p95Duration: Math.round(p95),
-			p99Duration: Math.round(p99),
+			p50Duration: Math.round(p50 ?? 0),
+			p95Duration: Math.round(p95 ?? 0),
+			p99Duration: Math.round(p99 ?? 0),
 			errorRate: (errors / filtered.length) * 100,
 			requestsPerMinute: Math.round(filtered.length / timeWindowMinutes)
 		}
@@ -275,43 +277,39 @@ export const metricsCollector = {
 	}
 }
 
-// Elysia middleware for request timing
+// Hono middleware for request timing
 export function observabilityMiddleware(service: string) {
-	return {
-		beforeHandle: ({ request }: any) => {
-			(request as any).__startTime = Date.now()
-		},
-		afterHandle: ({ request, set }: any) => {
-			const duration = Date.now() - ((request as any).__startTime || Date.now())
-			const url = new URL(request.url)
+	return async (c: Context, next: () => Promise<void>) => {
+		const startTime = Date.now()
+		
+		await next()
+		
+		const duration = Date.now() - startTime
+		const { pathname } = new URL(c.req.url)
 
-			metricsCollector.recordRequest(
-				url.pathname,
-				request.method,
-				set.status || 200,
-				duration,
-				service
-			)
-		},
-		onError: ({ request, error, set }: any) => {
-			const duration = Date.now() - ((request as any).__startTime || Date.now())
-			const url = new URL(request.url)
+		metricsCollector.recordRequest(
+			pathname,
+			c.req.method,
+			c.res.status,
+			duration,
+			service
+		)
+	}
+}
 
-			metricsCollector.recordRequest(
-				url.pathname,
-				request.method,
-				set.status || 500,
-				duration,
-				service
-			)
+// Hono error handler
+export function observabilityErrorHandler(service: string) {
+	return (err: Error, c: Context) => {
+		const { pathname } = new URL(c.req.url)
+		
+		logCollector.error(
+			`Request failed: ${c.req.method} ${pathname}`,
+			service,
+			err,
+			{ statusCode: c.res.status || 500 }
+		)
 
-			logCollector.error(
-				`Request failed: ${request.method} ${url.pathname}`,
-				service,
-				error,
-				{ statusCode: set.status || 500 }
-			)
-		}
+		return c.text('Internal Server Error', 500)
 	}
 }
 
