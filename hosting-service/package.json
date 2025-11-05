@@ -4,16 +4,17 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "start": "node --loader tsx src/index.ts"
+    "build": "tsc",
+    "start": "tsx src/index.ts"
   },
   "dependencies": {
     "@atproto/api": "^0.17.4",
     "@atproto/identity": "^0.4.9",
     "@atproto/lexicon": "^0.5.1",
-    "@atproto/sync": "^0.1.35",
+    "@atproto/sync": "^0.1.36",
     "@atproto/xrpc": "^0.7.5",
-    "@elysiajs/opentelemetry": "latest",
-    "elysia": "latest",
+    "@hono/node-server": "^1.19.6",
+    "hono": "^4.10.4",
     "mime-types": "^2.1.35",
     "multiformats": "^13.4.1",
     "postgres": "^3.4.5"

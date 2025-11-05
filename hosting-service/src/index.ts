@@ -1,4 +1,5 @@
 import app from './server';
+import { serve } from '@hono/node-server';
 import { FirehoseWorker } from './lib/firehose';
 import { logger } from './lib/observability';
 import { mkdirSync, existsSync } from 'fs';
@@ -20,17 +21,21 @@ const firehose = new FirehoseWorker((msg, data) => {
 firehose.start();
 
 // Add health check endpoint
-app.get('/health', () => {
+app.get('/health', (c) => {
   const firehoseHealth = firehose.getHealth();
-  return {
+  return c.json({
     status: 'ok',
     firehose: firehoseHealth,
-  };
+  });
 });
 
-// Start HTTP server
-app.listen(PORT, () => {
-  console.log(`
+// Start HTTP server with Node.js adapter
+const server = serve({
+  fetch: app.fetch,
+  port: PORT,
+});
+
+console.log(`
 Wisp Hosting Service
 
 Server:       http://localhost:${PORT}
@@ -38,19 +43,18 @@ Health:       http://localhost:${PORT}/health
 Cache:        ${CACHE_DIR}
 Firehose:     Connected to Firehose
 `);
-});
 
 // Graceful shutdown
 process.on('SIGINT', async () => {
   console.log('\n🛑 Shutting down...');
   firehose.stop();
-  app.stop();
+  server.close();
   process.exit(0);
 });
 
 process.on('SIGTERM', async () => {
   console.log('\n🛑 Shutting down...');
   firehose.stop();
-  app.stop();
+  server.close();
   process.exit(0);
 });

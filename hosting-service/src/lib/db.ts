@@ -1,4 +1,5 @@
 import postgres from 'postgres';
+import { createHash } from 'crypto';
 
 const sql = postgres(
   process.env.DATABASE_URL || 'postgres://postgres:postgres@localhost:5432/wisp',
@@ -21,67 +22,10 @@ export interface CustomDomainLookup {
   verified: boolean;
 }
 
-// In-memory cache with TTL
-interface CacheEntry<T> {
-  data: T;
-  expiry: number;
-}
 
-const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
-
-class SimpleCache<T> {
-  private cache = new Map<string, CacheEntry<T>>();
-
-  get(key: string): T | null {
-    const entry = this.cache.get(key);
-    if (!entry) return null;
-
-    if (Date.now() > entry.expiry) {
-      this.cache.delete(key);
-      return null;
-    }
-
-    return entry.data;
-  }
-
-  set(key: string, data: T): void {
-    this.cache.set(key, {
-      data,
-      expiry: Date.now() + CACHE_TTL_MS,
-    });
-  }
-
-  // Periodic cleanup to prevent memory leaks
-  cleanup(): void {
-    const now = Date.now();
-    for (const [key, entry] of this.cache.entries()) {
-      if (now > entry.expiry) {
-        this.cache.delete(key);
-      }
-    }
-  }
-}
-
-// Create cache instances
-const wispDomainCache = new SimpleCache<DomainLookup | null>();
-const customDomainCache = new SimpleCache<CustomDomainLookup | null>();
-const customDomainHashCache = new SimpleCache<CustomDomainLookup | null>();
-
-// Run cleanup every 5 minutes
-setInterval(() => {
-  wispDomainCache.cleanup();
-  customDomainCache.cleanup();
-  customDomainHashCache.cleanup();
-}, 5 * 60 * 1000);
 
 export async function getWispDomain(domain: string): Promise<DomainLookup | null> {
   const key = domain.toLowerCase();
-
-  // Check cache first
-  const cached = wispDomainCache.get(key);
-  if (cached !== null) {
-    return cached;
-  }
 
   // Query database
   const result = await sql<DomainLookup[]>`
@@ -89,20 +33,11 @@ export async function getWispDomain(domain: string): Promise<DomainLookup | null
   `;
   const data = result[0] || null;
 
-  // Store in cache
-  wispDomainCache.set(key, data);
-
   return data;
 }
 
 export async function getCustomDomain(domain: string): Promise<CustomDomainLookup | null> {
   const key = domain.toLowerCase();
-
-  // Check cache first
-  const cached = customDomainCache.get(key);
-  if (cached !== null) {
-    return cached;
-  }
 
   // Query database
   const result = await sql<CustomDomainLookup[]>`
@@ -111,28 +46,16 @@ export async function getCustomDomain(domain: string): Promise<CustomDomainLooku
   `;
   const data = result[0] || null;
 
-  // Store in cache
-  customDomainCache.set(key, data);
-
   return data;
 }
 
 export async function getCustomDomainByHash(hash: string): Promise<CustomDomainLookup | null> {
-  // Check cache first
-  const cached = customDomainHashCache.get(hash);
-  if (cached !== null) {
-    return cached;
-  }
-
   // Query database
   const result = await sql<CustomDomainLookup[]>`
     SELECT id, domain, did, rkey, verified FROM custom_domains
     WHERE id = ${hash} AND verified = true LIMIT 1
   `;
   const data = result[0] || null;
-
-  // Store in cache
-  customDomainHashCache.set(hash, data);
 
   return data;
 }
@@ -163,12 +86,11 @@ export async function upsertSite(did: string, rkey: string, displayName?: string
  * PostgreSQL advisory locks use bigint (64-bit signed integer)
  */
 function stringToLockId(key: string): bigint {
-  let hash = 0n;
-  for (let i = 0; i < key.length; i++) {
-    const char = BigInt(key.charCodeAt(i));
-    hash = ((hash << 5n) - hash + char) & 0x7FFFFFFFFFFFFFFFn; // Keep within signed int64 range
-  }
-  return hash;
+  const hash = createHash('sha256').update(key).digest('hex');
+  // Take first 16 hex characters (64 bits) and convert to bigint
+  const hashNum = BigInt('0x' + hash.substring(0, 16));
+  // Keep within signed int64 range
+  return hashNum & 0x7FFFFFFFFFFFFFFFn;
 }
 
 /**
@@ -180,7 +102,7 @@ export async function tryAcquireLock(key: string): Promise<boolean> {
   const lockId = stringToLockId(key);
 
   try {
-    const result = await sql`SELECT pg_try_advisory_lock(${lockId}) as acquired`;
+    const result = await sql`SELECT pg_try_advisory_lock(${Number(lockId)}) as acquired`;
     return result[0]?.acquired === true;
   } catch (err) {
     console.error('Failed to acquire lock', { key, error: err });
@@ -195,7 +117,7 @@ export async function releaseLock(key: string): Promise<void> {
   const lockId = stringToLockId(key);
 
   try {
-    await sql`SELECT pg_advisory_unlock(${lockId})`;
+    await sql`SELECT pg_advisory_unlock(${Number(lockId)})`;
   } catch (err) {
     console.error('Failed to release lock', { key, error: err });
   }

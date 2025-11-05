@@ -49,7 +49,7 @@ export class FirehoseWorker {
       idResolver: this.idResolver,
       service: 'wss://bsky.network',
       filterCollections: ['place.wisp.fs'],
-      handleEvent: async (evt) => {
+      handleEvent: async (evt: any) => {
         this.lastEventTime = Date.now();
 
         // Watch for write events
@@ -96,7 +96,7 @@ export class FirehoseWorker {
           }
         }
       },
-      onError: (err) => {
+      onError: (err: any) => {
         this.log('Firehose error', {
           error: err instanceof Error ? err.message : String(err),
           stack: err instanceof Error ? err.stack : undefined,
