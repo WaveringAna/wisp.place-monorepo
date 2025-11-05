@@ -21,7 +21,7 @@ const BLOCKED_HOSTS = [
   '169.254.169.254',
 ];
 
-const FETCH_TIMEOUT = 5000; // 5 seconds
+const FETCH_TIMEOUT = 120000; // 120 seconds
 const FETCH_TIMEOUT_BLOB = 120000; // 2 minutes for blob downloads
 const MAX_RESPONSE_SIZE = 10 * 1024 * 1024; // 10MB
 
