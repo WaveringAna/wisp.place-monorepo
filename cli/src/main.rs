@@ -3,7 +3,7 @@ mod place_wisp;
 
 use clap::Parser;
 use jacquard::CowStr;
-use jacquard::client::{Agent, FileAuthStore, AgentSessionExt};
+use jacquard::client::{Agent, FileAuthStore, AgentSessionExt, MemoryCredentialSession};
 use jacquard::oauth::client::OAuthClient;
 use jacquard::oauth::loopback::LoopbackConfig;
 use jacquard::prelude::IdentityResolver;
@@ -15,6 +15,7 @@ use flate2::Compression;
 use flate2::write::GzEncoder;
 use std::io::Write;
 use base64::Engine;
+use futures::stream::{self, StreamExt};
 
 use place_wisp::fs::*;
 
@@ -32,30 +33,72 @@ struct Args {
     #[arg(short, long)]
     site: Option<String>,
 
-    /// Path to auth store file (will be created if missing)
+    /// Path to auth store file (will be created if missing, only used with OAuth)
     #[arg(long, default_value = "/tmp/wisp-oauth-session.json")]
     store: String,
+
+    /// App Password for authentication (alternative to OAuth)
+    #[arg(long)]
+    password: Option<CowStr<'static>>,
 }
 
 #[tokio::main]
 async fn main() -> miette::Result<()> {
     let args = Args::parse();
 
-    let oauth = OAuthClient::with_default_config(FileAuthStore::new(&args.store));
+    // Dispatch to appropriate authentication method
+    if let Some(password) = args.password {
+        run_with_app_password(args.input, password, args.path, args.site).await
+    } else {
+        run_with_oauth(args.input, args.store, args.path, args.site).await
+    }
+}
+
+/// Run deployment with app password authentication
+async fn run_with_app_password(
+    input: CowStr<'static>,
+    password: CowStr<'static>,
+    path: PathBuf,
+    site: Option<String>,
+) -> miette::Result<()> {
+    let (session, auth) =
+        MemoryCredentialSession::authenticated(input, password, None).await?;
+    println!("Signed in as {}", auth.handle);
+
+    let agent: Agent<_> = Agent::from(session);
+    deploy_site(&agent, path, site).await
+}
+
+/// Run deployment with OAuth authentication
+async fn run_with_oauth(
+    input: CowStr<'static>,
+    store: String,
+    path: PathBuf,
+    site: Option<String>,
+) -> miette::Result<()> {
+    let oauth = OAuthClient::with_default_config(FileAuthStore::new(&store));
     let session = oauth
-        .login_with_local_server(args.input, Default::default(), LoopbackConfig::default())
+        .login_with_local_server(input, Default::default(), LoopbackConfig::default())
         .await?;
 
     let agent: Agent<_> = Agent::from(session);
+    deploy_site(&agent, path, site).await
+}
 
+/// Deploy the site using the provided agent
+async fn deploy_site(
+    agent: &Agent<impl jacquard::client::AgentSession + IdentityResolver>,
+    path: PathBuf,
+    site: Option<String>,
+) -> miette::Result<()> {
     // Verify the path exists
-    if !args.path.exists() {
-        return Err(miette::miette!("Path does not exist: {}", args.path.display()));
+    if !path.exists() {
+        return Err(miette::miette!("Path does not exist: {}", path.display()));
     }
 
     // Get site name
-    let site_name = args.site.unwrap_or_else(|| {
-        args.path
+    let site_name = site.unwrap_or_else(|| {
+        path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("site")
@@ -65,7 +108,7 @@ async fn main() -> miette::Result<()> {
     println!("Deploying site '{}'...", site_name);
 
     // Build directory tree
-    let root_dir = build_directory(&agent, &args.path).await?;
+    let root_dir = build_directory(agent, &path).await?;
 
     // Count total files
     let file_count = count_files(&root_dir);
@@ -102,14 +145,22 @@ fn build_directory<'a>(
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = miette::Result<Directory<'static>>> + 'a>>
 {
     Box::pin(async move {
-    let mut entries = Vec::new();
+    // Collect all directory entries first
+    let dir_entries: Vec<_> = std::fs::read_dir(dir_path)
+        .into_diagnostic()?
+        .collect::<Result<Vec<_>, _>>()
+        .into_diagnostic()?;
 
-    for entry in std::fs::read_dir(dir_path).into_diagnostic()? {
-        let entry = entry.into_diagnostic()?;
+    // Separate files and directories
+    let mut file_tasks = Vec::new();
+    let mut dir_tasks = Vec::new();
+
+    for entry in dir_entries {
         let path = entry.path();
         let name = entry.file_name();
         let name_str = name.to_str()
-            .ok_or_else(|| miette::miette!("Invalid filename: {:?}", name))?;
+            .ok_or_else(|| miette::miette!("Invalid filename: {:?}", name))?
+            .to_string();
 
         // Skip hidden files
         if name_str.starts_with('.') {
@@ -119,19 +170,40 @@ fn build_directory<'a>(
         let metadata = entry.metadata().into_diagnostic()?;
 
         if metadata.is_file() {
-            let file_node = process_file(agent, &path).await?;
-            entries.push(Entry::new()
-                .name(CowStr::from(name_str.to_string()))
-                .node(EntryNode::File(Box::new(file_node)))
-                .build());
+            file_tasks.push((name_str, path));
         } else if metadata.is_dir() {
-            let subdir = build_directory(agent, &path).await?;
-            entries.push(Entry::new()
-                .name(CowStr::from(name_str.to_string()))
-                .node(EntryNode::Directory(Box::new(subdir)))
-                .build());
+            dir_tasks.push((name_str, path));
         }
     }
+
+    // Process files concurrently with a limit of 5
+    let file_entries: Vec<Entry> = stream::iter(file_tasks)
+        .map(|(name, path)| async move {
+            let file_node = process_file(agent, &path).await?;
+            Ok::<_, miette::Report>(Entry::new()
+                .name(CowStr::from(name))
+                .node(EntryNode::File(Box::new(file_node)))
+                .build())
+        })
+        .buffer_unordered(5)
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<miette::Result<Vec<_>>>()?;
+
+    // Process directories recursively (sequentially to avoid too much nesting)
+    let mut dir_entries = Vec::new();
+    for (name, path) in dir_tasks {
+        let subdir = build_directory(agent, &path).await?;
+        dir_entries.push(Entry::new()
+            .name(CowStr::from(name))
+            .node(EntryNode::Directory(Box::new(subdir)))
+            .build());
+    }
+
+    // Combine file and directory entries
+    let mut entries = file_entries;
+    entries.extend(dir_entries);
 
     Ok(Directory::new()
         .r#type(CowStr::from("directory"))
