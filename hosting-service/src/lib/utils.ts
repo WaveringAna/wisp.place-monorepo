@@ -15,6 +15,53 @@ interface CacheMetadata {
   rkey: string;
 }
 
+/**
+ * Determines if a MIME type should benefit from gzip compression.
+ * Returns true for text-based web assets (HTML, CSS, JS, JSON, XML, SVG).
+ * Returns false for already-compressed formats (images, video, audio, PDFs).
+ * 
+ */
+export function shouldCompressMimeType(mimeType: string | undefined): boolean {
+  if (!mimeType) return false;
+  
+  const mime = mimeType.toLowerCase();
+  
+  // Text-based web assets that benefit from compression
+  const compressibleTypes = [
+    'text/html',
+    'text/css',
+    'text/javascript',
+    'application/javascript',
+    'application/x-javascript',
+    'text/xml',
+    'application/xml',
+    'application/json',
+    'text/plain',
+    'image/svg+xml',
+  ];
+  
+  if (compressibleTypes.some(type => mime === type || mime.startsWith(type))) {
+    return true;
+  }
+  
+  // Already-compressed formats that should NOT be double-compressed
+  const alreadyCompressedPrefixes = [
+    'video/',
+    'audio/',
+    'image/',
+    'application/pdf',
+    'application/zip',
+    'application/gzip',
+  ];
+  
+  if (alreadyCompressedPrefixes.some(prefix => mime.startsWith(prefix))) {
+    return false;
+  }
+  
+  // Default to not compressing for unknown types
+  return false;
+}
+
 interface IpldLink {
   $link: string;
 }
@@ -270,22 +317,20 @@ async function cacheFileBlob(
 
   console.log(`[DEBUG] ${filePath}: fetched ${content.length} bytes, base64=${base64}, encoding=${encoding}, mimeType=${mimeType}`);
 
-  // If content is base64-encoded, decode it back to binary (gzipped or not)
+  // If content is base64-encoded, decode it back to raw binary (gzipped or not)
   if (base64) {
     const originalSize = content.length;
-    // The content from the blob is base64 text, decode it directly to binary
-    const buffer = Buffer.from(content);
-    const base64String = buffer.toString('ascii');  // Use ascii for base64 text, not utf-8
-    console.log(`[DEBUG] ${filePath}: base64 string first 100 chars: ${base64String.substring(0, 100)}`);
+    // Decode base64 directly from raw bytes - no string conversion
+    // The blob contains base64-encoded text as raw bytes, decode it in-place
+    const textDecoder = new TextDecoder();
+    const base64String = textDecoder.decode(content);
     content = Buffer.from(base64String, 'base64');
-    console.log(`[DEBUG] ${filePath}: decoded from ${originalSize} bytes to ${content.length} bytes`);
+    console.log(`[DEBUG] ${filePath}: decoded base64 from ${originalSize} bytes to ${content.length} bytes`);
     
     // Check if it's actually gzipped by looking at magic bytes
     if (content.length >= 2) {
-      const magic = content[0] === 0x1f && content[1] === 0x8b;
-      const byte0 = content[0];
-      const byte1 = content[1];
-      console.log(`[DEBUG] ${filePath}: has gzip magic bytes: ${magic} (0x${byte0?.toString(16)}, 0x${byte1?.toString(16)})`);
+      const hasGzipMagic = content[0] === 0x1f && content[1] === 0x8b;
+      console.log(`[DEBUG] ${filePath}: has gzip magic bytes: ${hasGzipMagic}`);
     }
   }
 
@@ -296,20 +341,13 @@ async function cacheFileBlob(
     mkdirSync(fileDir, { recursive: true });
   }
 
-  // Determine if this is a web asset that should remain compressed
-  const webAssetTypes = [
-    'text/html', 'text/css', 'application/javascript', 'text/javascript',
-    'application/json', 'text/xml', 'application/xml'
-  ];
-  
-  const isWebAsset = mimeType && webAssetTypes.some(type => 
-    mimeType.toLowerCase().startsWith(type) || mimeType.toLowerCase() === type
-  );
+  // Use the shared function to determine if this should remain compressed
+  const shouldStayCompressed = shouldCompressMimeType(mimeType);
 
-  // Decompress non-web assets that are gzipped
-  if (encoding === 'gzip' && !isWebAsset && content.length >= 2 && 
+  // Decompress files that shouldn't be stored compressed
+  if (encoding === 'gzip' && !shouldStayCompressed && content.length >= 2 && 
       content[0] === 0x1f && content[1] === 0x8b) {
-    console.log(`[DEBUG] ${filePath}: decompressing non-web asset (${mimeType}) before caching`);
+    console.log(`[DEBUG] ${filePath}: decompressing non-compressible type (${mimeType}) before caching`);
     try {
       const { gunzipSync } = await import('zlib');
       const decompressed = gunzipSync(content);
@@ -318,19 +356,19 @@ async function cacheFileBlob(
       // Clear the encoding flag since we're storing decompressed
       encoding = undefined;
     } catch (error) {
-      console.log(`[DEBUG] ${filePath}: failed to decompress, storing original gzipped content`);
+      console.log(`[DEBUG] ${filePath}: failed to decompress, storing original gzipped content. Error:`, error);
     }
   }
 
   await writeFile(cacheFile, content);
 
-  // Store metadata only if file is still compressed (web assets)
+  // Store metadata only if file is still compressed
   if (encoding === 'gzip' && mimeType) {
     const metaFile = `${cacheFile}.meta`;
     await writeFile(metaFile, JSON.stringify({ encoding, mimeType }));
     console.log('Cached file', filePath, content.length, 'bytes (gzipped,', mimeType + ')');
   } else {
-    console.log('Cached file', filePath, content.length, 'bytes (decompressed)');
+    console.log('Cached file', filePath, content.length, 'bytes');
   }
 }
 
