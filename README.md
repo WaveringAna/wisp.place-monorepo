@@ -1,15 +1,8 @@
-# Elysia with Bun runtime
+# Wisp.place
+A static site hosting service built on the AT Protocol.
 
-## Getting Started
-To get started with this template, simply paste this command into your terminal:
-```bash
-bun create elysia ./elysia-example
-```
+/src is the main backend
+/hosting-service is the microservice that serves on-disk caches of sites pulled from the firehose and pdses
+/cli is the wisp-cli, a way to upload sites directly to the pds
 
-## Development
-To start the development server run:
-```bash
-bun run dev
-```
-
-Open http://localhost:3000/ with your browser to see the result.
+full readme soon
