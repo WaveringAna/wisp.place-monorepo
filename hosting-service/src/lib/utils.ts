@@ -268,12 +268,25 @@ async function cacheFileBlob(
   // Allow up to 100MB per file blob, with 2 minute timeout
   let content = await safeFetchBlob(blobUrl, { maxSize: 100 * 1024 * 1024, timeout: 120000 });
 
+  console.log(`[DEBUG] ${filePath}: fetched ${content.length} bytes, base64=${base64}, encoding=${encoding}, mimeType=${mimeType}`);
+
   // If content is base64-encoded, decode it back to binary (gzipped or not)
   if (base64) {
+    const originalSize = content.length;
     // The content from the blob is base64 text, decode it directly to binary
     const buffer = Buffer.from(content);
     const base64String = buffer.toString('ascii');  // Use ascii for base64 text, not utf-8
+    console.log(`[DEBUG] ${filePath}: base64 string first 100 chars: ${base64String.substring(0, 100)}`);
     content = Buffer.from(base64String, 'base64');
+    console.log(`[DEBUG] ${filePath}: decoded from ${originalSize} bytes to ${content.length} bytes`);
+    
+    // Check if it's actually gzipped by looking at magic bytes
+    if (content.length >= 2) {
+      const magic = content[0] === 0x1f && content[1] === 0x8b;
+      const byte0 = content[0];
+      const byte1 = content[1];
+      console.log(`[DEBUG] ${filePath}: has gzip magic bytes: ${magic} (0x${byte0?.toString(16)}, 0x${byte1?.toString(16)})`);
+    }
   }
 
   const cacheFile = `${CACHE_DIR}/${did}/${site}${dirSuffix}/${filePath}`;

@@ -35,11 +35,24 @@ async function serveFromCache(did: string, rkey: string, filePath: string) {
     const content = readFileSync(cachedFile);
     const metaFile = `${cachedFile}.meta`;
 
+    console.log(`[DEBUG SERVE] ${requestPath}: file size=${content.length} bytes, metaFile exists=${existsSync(metaFile)}`);
+
     // Check if file has compression metadata
     if (existsSync(metaFile)) {
       const meta = JSON.parse(readFileSync(metaFile, 'utf-8'));
+      console.log(`[DEBUG SERVE] ${requestPath}: meta=${JSON.stringify(meta)}`);
+      
+      // Check actual content for gzip magic bytes
+      if (content.length >= 2) {
+        const hasGzipMagic = content[0] === 0x1f && content[1] === 0x8b;
+        const byte0 = content[0];
+        const byte1 = content[1];
+        console.log(`[DEBUG SERVE] ${requestPath}: has gzip magic bytes=${hasGzipMagic} (0x${byte0?.toString(16)}, 0x${byte1?.toString(16)})`);
+      }
+      
       if (meta.encoding === 'gzip' && meta.mimeType) {
         // Serve gzipped content with proper headers
+        console.log(`[DEBUG SERVE] ${requestPath}: serving as gzipped with Content-Encoding header`);
         return new Response(content, {
           headers: {
             'Content-Type': meta.mimeType,
