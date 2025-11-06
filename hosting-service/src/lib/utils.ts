@@ -268,11 +268,11 @@ async function cacheFileBlob(
   // Allow up to 100MB per file blob, with 2 minute timeout
   let content = await safeFetchBlob(blobUrl, { maxSize: 100 * 1024 * 1024, timeout: 120000 });
 
-  // If content is base64-encoded, decode it back to gzipped binary
-  if (base64 && encoding === 'gzip') {
-    // Convert Uint8Array to Buffer for proper string conversion
+  // If content is base64-encoded, decode it back to binary (gzipped or not)
+  if (base64) {
+    // The content from the blob is base64 text, decode it directly to binary
     const buffer = Buffer.from(content);
-    const base64String = buffer.toString('utf-8');
+    const base64String = buffer.toString('ascii');  // Use ascii for base64 text, not utf-8
     content = Buffer.from(base64String, 'base64');
   }
 
