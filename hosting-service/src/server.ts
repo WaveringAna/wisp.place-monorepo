@@ -51,7 +51,32 @@ async function serveFromCache(did: string, rkey: string, filePath: string) {
       }
       
       if (meta.encoding === 'gzip' && meta.mimeType) {
-        // Serve gzipped content with proper headers
+        // Don't serve already-compressed media formats with Content-Encoding: gzip
+        // These formats (video, audio, images) are already compressed and the browser
+        // can't decode them if we add another layer of compression
+        const alreadyCompressedTypes = [
+          'video/', 'audio/', 'image/jpeg', 'image/jpg', 'image/png', 
+          'image/gif', 'image/webp', 'application/pdf'
+        ];
+        
+        const isAlreadyCompressed = alreadyCompressedTypes.some(type => 
+          meta.mimeType.toLowerCase().startsWith(type)
+        );
+        
+        if (isAlreadyCompressed) {
+          // Decompress the file before serving
+          console.log(`[DEBUG SERVE] ${requestPath}: decompressing already-compressed media type`);
+          const { gunzipSync } = await import('zlib');
+          const decompressed = gunzipSync(content);
+          console.log(`[DEBUG SERVE] ${requestPath}: decompressed from ${content.length} to ${decompressed.length} bytes`);
+          return new Response(decompressed, {
+            headers: {
+              'Content-Type': meta.mimeType,
+            },
+          });
+        }
+        
+        // Serve gzipped content with proper headers (for HTML, CSS, JS, etc.)
         console.log(`[DEBUG SERVE] ${requestPath}: serving as gzipped with Content-Encoding header`);
         return new Response(content, {
           headers: {
@@ -154,6 +179,27 @@ async function serveFromCacheWithRewrite(
     // Non-HTML files: serve gzipped content as-is with proper headers
     const content = readFileSync(cachedFile);
     if (isGzipped) {
+      // Don't serve already-compressed media formats with Content-Encoding: gzip
+      const alreadyCompressedTypes = [
+        'video/', 'audio/', 'image/jpeg', 'image/jpg', 'image/png', 
+        'image/gif', 'image/webp', 'application/pdf'
+      ];
+      
+      const isAlreadyCompressed = alreadyCompressedTypes.some(type => 
+        mimeType.toLowerCase().startsWith(type)
+      );
+      
+      if (isAlreadyCompressed) {
+        // Decompress the file before serving
+        const { gunzipSync } = await import('zlib');
+        const decompressed = gunzipSync(content);
+        return new Response(decompressed, {
+          headers: {
+            'Content-Type': mimeType,
+          },
+        });
+      }
+      
       return new Response(content, {
         headers: {
           'Content-Type': mimeType,
