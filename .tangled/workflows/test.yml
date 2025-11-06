@@ -1,0 +1,22 @@
+when:
+  - event: ["push", "pull_request"]
+    branch: main
+
+engine: nixery
+
+dependencies:
+  nixpkgs:
+    - git
+  github:NixOS/nixpkgs/nixpkgs-unstable:
+    - bun
+
+steps:
+  - name: install dependencies
+    command: |
+      export PATH="$HOME/.nix-profile/bin:$PATH"
+      bun install
+
+  - name: run all tests
+    command: |
+      export PATH="$HOME/.nix-profile/bin:$PATH"
+      bun test

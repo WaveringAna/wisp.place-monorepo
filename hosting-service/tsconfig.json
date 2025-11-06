@@ -23,6 +23,6 @@
 		"sourceMap": true,
 
 		/* Code doesn't run in DOM */
-		"lib": ["es2022"]
+		"lib": ["es2022"],
 	}
 }
