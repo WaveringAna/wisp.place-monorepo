@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { getWispDomain, getCustomDomain, getCustomDomainByHash } from './lib/db';
-import { resolveDid, getPdsForDid, fetchSiteRecord, downloadAndCacheSite, getCachedFilePath, isCached, sanitizePath } from './lib/utils';
+import { resolveDid, getPdsForDid, fetchSiteRecord, downloadAndCacheSite, getCachedFilePath, isCached, sanitizePath, shouldCompressMimeType } from './lib/utils';
 import { rewriteHtmlPaths, isHtmlContent } from './lib/html-rewriter';
 import { existsSync, readFileSync } from 'fs';
 import { lookup } from 'mime-types';
@@ -45,27 +45,16 @@ async function serveFromCache(did: string, rkey: string, filePath: string) {
       // Check actual content for gzip magic bytes
       if (content.length >= 2) {
         const hasGzipMagic = content[0] === 0x1f && content[1] === 0x8b;
-        const byte0 = content[0];
-        const byte1 = content[1];
-        console.log(`[DEBUG SERVE] ${requestPath}: has gzip magic bytes=${hasGzipMagic} (0x${byte0?.toString(16)}, 0x${byte1?.toString(16)})`);
+        console.log(`[DEBUG SERVE] ${requestPath}: has gzip magic bytes=${hasGzipMagic}`);
       }
       
       if (meta.encoding === 'gzip' && meta.mimeType) {
-        // Don't serve already-compressed media formats with Content-Encoding: gzip
-        // These formats (video, audio, images) are already compressed and the browser
-        // can't decode them if we add another layer of compression
-        const alreadyCompressedTypes = [
-          'video/', 'audio/', 'image/jpeg', 'image/jpg', 'image/png', 
-          'image/gif', 'image/webp', 'application/pdf'
-        ];
+        // Use shared function to determine if this should be served compressed
+        const shouldServeCompressed = shouldCompressMimeType(meta.mimeType);
         
-        const isAlreadyCompressed = alreadyCompressedTypes.some(type => 
-          meta.mimeType.toLowerCase().startsWith(type)
-        );
-        
-        if (isAlreadyCompressed) {
-          // Decompress the file before serving
-          console.log(`[DEBUG SERVE] ${requestPath}: decompressing already-compressed media type`);
+        if (!shouldServeCompressed) {
+          // This shouldn't happen if caching is working correctly, but handle it gracefully
+          console.log(`[DEBUG SERVE] ${requestPath}: decompressing file that shouldn't be compressed (${meta.mimeType})`);
           const { gunzipSync } = await import('zlib');
           const decompressed = gunzipSync(content);
           console.log(`[DEBUG SERVE] ${requestPath}: decompressed from ${content.length} to ${decompressed.length} bytes`);
@@ -157,8 +146,7 @@ async function serveFromCacheWithRewrite(
     }
 
     // Check if this is HTML content that needs rewriting
-    // Note: For gzipped HTML with path rewriting, we need to decompress, rewrite, and serve uncompressed
-    // This is a trade-off for the sites.wisp.place domain which needs path rewriting
+    // We decompress, rewrite paths, then recompress for efficient delivery
     if (isHtmlContent(requestPath, mimeType)) {
       let content: string;
       if (isGzipped) {
@@ -169,9 +157,15 @@ async function serveFromCacheWithRewrite(
         content = readFileSync(cachedFile, 'utf-8');
       }
       const rewritten = rewriteHtmlPaths(content, basePath);
-      return new Response(rewritten, {
+      
+      // Recompress the HTML for efficient delivery
+      const { gzipSync } = await import('zlib');
+      const recompressed = gzipSync(Buffer.from(rewritten, 'utf-8'));
+      
+      return new Response(recompressed, {
         headers: {
           'Content-Type': 'text/html; charset=utf-8',
+          'Content-Encoding': 'gzip',
         },
       });
     }
@@ -179,18 +173,11 @@ async function serveFromCacheWithRewrite(
     // Non-HTML files: serve gzipped content as-is with proper headers
     const content = readFileSync(cachedFile);
     if (isGzipped) {
-      // Don't serve already-compressed media formats with Content-Encoding: gzip
-      const alreadyCompressedTypes = [
-        'video/', 'audio/', 'image/jpeg', 'image/jpg', 'image/png', 
-        'image/gif', 'image/webp', 'application/pdf'
-      ];
+      // Use shared function to determine if this should be served compressed
+      const shouldServeCompressed = shouldCompressMimeType(mimeType);
       
-      const isAlreadyCompressed = alreadyCompressedTypes.some(type => 
-        mimeType.toLowerCase().startsWith(type)
-      );
-      
-      if (isAlreadyCompressed) {
-        // Decompress the file before serving
+      if (!shouldServeCompressed) {
+        // This shouldn't happen if caching is working correctly, but handle it gracefully
         const { gunzipSync } = await import('zlib');
         const decompressed = gunzipSync(content);
         return new Response(decompressed, {
@@ -228,7 +215,7 @@ async function serveFromCacheWithRewrite(
         }
       }
 
-      // HTML needs path rewriting, so decompress if needed
+      // HTML needs path rewriting, decompress, rewrite, then recompress
       let content: string;
       if (isGzipped) {
         const { gunzipSync } = await import('zlib');
@@ -238,9 +225,15 @@ async function serveFromCacheWithRewrite(
         content = readFileSync(indexFile, 'utf-8');
       }
       const rewritten = rewriteHtmlPaths(content, basePath);
-      return new Response(rewritten, {
+      
+      // Recompress the HTML for efficient delivery
+      const { gzipSync } = await import('zlib');
+      const recompressed = gzipSync(Buffer.from(rewritten, 'utf-8'));
+      
+      return new Response(recompressed, {
         headers: {
           'Content-Type': 'text/html; charset=utf-8',
+          'Content-Encoding': 'gzip',
         },
       });
     }
