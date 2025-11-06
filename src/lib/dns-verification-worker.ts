@@ -71,23 +71,30 @@ export class DNSVerificationWorker {
     };
 
     try {
-      // Get all verified custom domains
-      const domains = await db`
-        SELECT id, domain, did FROM custom_domains WHERE verified = true
+      // Get all custom domains (both verified and pending)
+      const domains = await db<Array<{
+        id: string;
+        domain: string;
+        did: string;
+        verified: boolean;
+      }>>`
+        SELECT id, domain, did, verified FROM custom_domains
       `;
 
       if (!domains || domains.length === 0) {
-        this.log('No verified custom domains to check');
+        this.log('No custom domains to check');
         this.lastRunTime = Date.now();
         return;
       }
 
-      this.log(`Checking ${domains.length} verified custom domains`);
+      const verifiedCount = domains.filter(d => d.verified).length;
+      const pendingCount = domains.filter(d => !d.verified).length;
+      this.log(`Checking ${domains.length} custom domains (${verifiedCount} verified, ${pendingCount} pending)`);
 
       // Verify each domain
       for (const row of domains) {
         runStats.totalChecked++;
-        const { id, domain, did } = row;
+        const { id, domain, did, verified: wasVerified } = row;
 
         try {
           // Extract hash from id (SHA256 of did:domain)
@@ -97,16 +104,21 @@ export class DNSVerificationWorker {
           const result = await verifyCustomDomain(domain, did, expectedHash);
 
           if (result.verified) {
-            // Update last_verified_at timestamp
+            // Update verified status and last_verified_at timestamp
             await db`
               UPDATE custom_domains
-              SET last_verified_at = EXTRACT(EPOCH FROM NOW())
+              SET verified = true,
+                  last_verified_at = EXTRACT(EPOCH FROM NOW())
               WHERE id = ${id}
             `;
             runStats.verified++;
-            this.log(`Domain verified: ${domain}`, { did });
+            if (!wasVerified) {
+              this.log(`Domain newly verified: ${domain}`, { did });
+            } else {
+              this.log(`Domain re-verified: ${domain}`, { did });
+            }
           } else {
-            // Mark domain as unverified
+            // Mark domain as unverified or keep it pending
             await db`
               UPDATE custom_domains
               SET verified = false,
@@ -114,11 +126,19 @@ export class DNSVerificationWorker {
               WHERE id = ${id}
             `;
             runStats.failed++;
-            this.log(`Domain verification failed: ${domain}`, {
-              did,
-              error: result.error,
-              found: result.found,
-            });
+            if (wasVerified) {
+              this.log(`Domain verification failed (was verified): ${domain}`, {
+                did,
+                error: result.error,
+                found: result.found,
+              });
+            } else {
+              this.log(`Domain still pending: ${domain}`, {
+                did,
+                error: result.error,
+                found: result.found,
+              });
+            }
           }
         } catch (error) {
           runStats.errors++;
