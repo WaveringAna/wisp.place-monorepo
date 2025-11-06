@@ -29,10 +29,13 @@ function shouldRewritePath(path: string): boolean {
     return false;
   }
 
-  // Don't rewrite pure anchors
-  if (path.startsWith('#')) return false;
+  // Don't rewrite pure anchors or paths that start with /#
+  if (path.startsWith('#') || path.startsWith('/#')) return false;
 
-  // Rewrite absolute paths (/) and relative paths (./ or ../ or plain filenames)
+  // Don't rewrite relative paths (./ or ../)
+  if (path.startsWith('./') || path.startsWith('../')) return false;
+
+  // Rewrite absolute paths (/)
   return true;
 }
 
@@ -49,17 +52,9 @@ function rewritePath(path: string, basePath: string): string {
     return basePath + path.slice(1);
   }
 
-  // Handle relative paths: ./file.js or ../file.js or file.js -> /base/file.js
-  // Strip leading ./ or ../ and just use the base path
-  let cleanPath = path;
-  if (cleanPath.startsWith('./')) {
-    cleanPath = cleanPath.slice(2);
-  } else if (cleanPath.startsWith('../')) {
-    // For sites.wisp.place, we can't go up from the site root, so just use base path
-    cleanPath = cleanPath.replace(/^(\.\.\/)+/, '');
-  }
-
-  return basePath + cleanPath;
+  // At this point, only plain filenames without ./ or ../ prefix should reach here
+  // But since we're filtering those in shouldRewritePath, this shouldn't happen
+  return path;
 }
 
 /**

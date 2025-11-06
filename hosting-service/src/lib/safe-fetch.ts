@@ -24,6 +24,9 @@ const BLOCKED_HOSTS = [
 const FETCH_TIMEOUT = 120000; // 120 seconds
 const FETCH_TIMEOUT_BLOB = 120000; // 2 minutes for blob downloads
 const MAX_RESPONSE_SIZE = 10 * 1024 * 1024; // 10MB
+const MAX_JSON_SIZE = 1024 * 1024; // 1MB
+const MAX_BLOB_SIZE = 100 * 1024 * 1024; // 100MB
+const MAX_REDIRECTS = 10;
 
 function isBlockedHost(hostname: string): boolean {
   const lowerHost = hostname.toLowerCase();
@@ -72,6 +75,7 @@ export async function safeFetch(
     const response = await fetch(url, {
       ...options,
       signal: controller.signal,
+      redirect: 'follow',
     });
 
     const contentLength = response.headers.get('content-length');
@@ -94,7 +98,7 @@ export async function safeFetchJson<T = any>(
   url: string,
   options?: RequestInit & { maxSize?: number; timeout?: number }
 ): Promise<T> {
-  const maxJsonSize = options?.maxSize ?? 1024 * 1024; // 1MB default for JSON
+  const maxJsonSize = options?.maxSize ?? MAX_JSON_SIZE;
   const response = await safeFetch(url, { ...options, maxSize: maxJsonSize });
 
   if (!response.ok) {
@@ -140,8 +144,9 @@ export async function safeFetchBlob(
   url: string,
   options?: RequestInit & { maxSize?: number; timeout?: number }
 ): Promise<Uint8Array> {
-  const maxBlobSize = options?.maxSize ?? MAX_RESPONSE_SIZE;
-  const response = await safeFetch(url, { ...options, maxSize: maxBlobSize });
+  const maxBlobSize = options?.maxSize ?? MAX_BLOB_SIZE;
+  const timeoutMs = options?.timeout ?? FETCH_TIMEOUT_BLOB;
+  const response = await safeFetch(url, { ...options, maxSize: maxBlobSize, timeout: timeoutMs });
 
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}: ${response.statusText}`);

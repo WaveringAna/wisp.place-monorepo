@@ -2,7 +2,7 @@
   "name": "elysia-static",
   "version": "1.0.50",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "bun test",
     "dev": "bun run --watch src/index.ts",
     "start": "bun run src/index.ts",
     "build": "bun build --compile --target bun --outfile server src/index.ts"
