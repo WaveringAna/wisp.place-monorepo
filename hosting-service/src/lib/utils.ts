@@ -296,15 +296,41 @@ async function cacheFileBlob(
     mkdirSync(fileDir, { recursive: true });
   }
 
+  // Determine if this is a web asset that should remain compressed
+  const webAssetTypes = [
+    'text/html', 'text/css', 'application/javascript', 'text/javascript',
+    'application/json', 'text/xml', 'application/xml'
+  ];
+  
+  const isWebAsset = mimeType && webAssetTypes.some(type => 
+    mimeType.toLowerCase().startsWith(type) || mimeType.toLowerCase() === type
+  );
+
+  // Decompress non-web assets that are gzipped
+  if (encoding === 'gzip' && !isWebAsset && content.length >= 2 && 
+      content[0] === 0x1f && content[1] === 0x8b) {
+    console.log(`[DEBUG] ${filePath}: decompressing non-web asset (${mimeType}) before caching`);
+    try {
+      const { gunzipSync } = await import('zlib');
+      const decompressed = gunzipSync(content);
+      console.log(`[DEBUG] ${filePath}: decompressed from ${content.length} to ${decompressed.length} bytes`);
+      content = decompressed;
+      // Clear the encoding flag since we're storing decompressed
+      encoding = undefined;
+    } catch (error) {
+      console.log(`[DEBUG] ${filePath}: failed to decompress, storing original gzipped content`);
+    }
+  }
+
   await writeFile(cacheFile, content);
 
-  // Store metadata if file is compressed
+  // Store metadata only if file is still compressed (web assets)
   if (encoding === 'gzip' && mimeType) {
     const metaFile = `${cacheFile}.meta`;
     await writeFile(metaFile, JSON.stringify({ encoding, mimeType }));
     console.log('Cached file', filePath, content.length, 'bytes (gzipped,', mimeType + ')');
   } else {
-    console.log('Cached file', filePath, content.length, 'bytes');
+    console.log('Cached file', filePath, content.length, 'bytes (decompressed)');
   }
 }
 
