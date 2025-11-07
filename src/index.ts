@@ -147,6 +147,11 @@ export const app = new Elysia({
 			}
 		}
 	})
+	.get('/.well-known/atproto-did', ({ set }) => {
+		// Return plain text DID for AT Protocol domain verification
+		set.headers['Content-Type'] = 'text/plain'
+		return 'did:plc:7puq73yz2hkvbcpdhnsze2qw'
+	})
 	.use(cors({
 		origin: config.domain,
 		credentials: true,
