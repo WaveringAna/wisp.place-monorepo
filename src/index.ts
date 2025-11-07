@@ -58,12 +58,10 @@ const dnsVerifier = new DNSVerificationWorker(
 dnsVerifier.start()
 logger.info('DNS Verifier Started - checking custom domains every 10 minutes')
 
-export const app = new Elysia()
-	.server({
-		development: Bun.env.NODE_ENV !== 'production',
-	})
-	.serve({
-		hmr: Bun.env.NODE_ENV !== 'production'
+export const app = new Elysia({
+		serve: {
+			maxPayloadLength: 1024 * 1024 * 128 * 3,
+		}
 	})
 	// Observability middleware
 	.onBeforeHandle(observabilityMiddleware('main-app').beforeHandle)
