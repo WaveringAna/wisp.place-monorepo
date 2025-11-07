@@ -1,6 +1,6 @@
 import { Elysia } from 'elysia'
+import type { Context } from 'elysia'
 import { cors } from '@elysiajs/cors'
-import { openapi, fromTypes } from '@elysiajs/openapi'
 import { staticPlugin } from '@elysiajs/static'
 
 import type { Config } from './lib/types'
@@ -22,6 +22,7 @@ import { DNSVerificationWorker } from './lib/dns-verification-worker'
 import { logger, logCollector, observabilityMiddleware } from './lib/observability'
 import { promptAdminSetup } from './lib/admin-auth'
 import { adminRoutes } from './routes/admin'
+import { previewRoutes } from './routes/preview'
 
 const config: Config = {
 	domain: (Bun.env.DOMAIN ?? `https://${BASE_HOST}`) as Config['domain'],
@@ -59,12 +60,15 @@ dnsVerifier.start()
 logger.info('DNS Verifier Started - checking custom domains every 10 minutes')
 
 export const app = new Elysia()
-	.use(openapi({
-		references: fromTypes()
-	}))
+	.server({
+		development: Bun.env.NODE_ENV !== 'production',
+	})
+	.serve({
+		hmr: Bun.env.NODE_ENV !== 'production'
+	})
 	// Observability middleware
 	.onBeforeHandle(observabilityMiddleware('main-app').beforeHandle)
-	.onAfterHandle((ctx) => {
+	.onAfterHandle((ctx: Context) => {
 		observabilityMiddleware('main-app').afterHandle(ctx)
 		// Security headers middleware
 		const { set } = ctx
@@ -99,15 +103,16 @@ export const app = new Elysia()
 	.use(userRoutes(client))
 	.use(siteRoutes(client))
 	.use(adminRoutes())
+	.use(previewRoutes)
 	.use(
 		await staticPlugin({
 			prefix: '/'
 		})
 	)
-	.get('/client-metadata.json', (c) => {
+	.get('/client-metadata.json', () => {
 		return createClientMetadata(config)
 	})
-	.get('/jwks.json', async (c) => {
+	.get('/jwks.json', async () => {
 		const keys = await getCurrentKeys()
 		if (!keys.length) return { keys: [] }
 
