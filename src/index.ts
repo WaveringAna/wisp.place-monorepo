@@ -22,7 +22,6 @@ import { DNSVerificationWorker } from './lib/dns-verification-worker'
 import { logger, logCollector, observabilityMiddleware } from './lib/observability'
 import { promptAdminSetup } from './lib/admin-auth'
 import { adminRoutes } from './routes/admin'
-import { previewRoutes } from './routes/preview'
 
 const config: Config = {
 	domain: (Bun.env.DOMAIN ?? `https://${BASE_HOST}`) as Config['domain'],
@@ -103,7 +102,6 @@ export const app = new Elysia()
 	.use(userRoutes(client))
 	.use(siteRoutes(client))
 	.use(adminRoutes())
-	.use(previewRoutes)
 	.use(
 		await staticPlugin({
 			prefix: '/'
