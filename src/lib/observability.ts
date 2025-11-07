@@ -312,12 +312,16 @@ export function observabilityMiddleware(service: string) {
 				service
 			)
 
-			logCollector.error(
-				`Request failed: ${request.method} ${url.pathname}`,
-				service,
-				error,
-				{ statusCode: set.status || 500 }
-			)
+			// Don't log 404 errors
+			const statusCode = set.status || 500
+			if (statusCode !== 404) {
+				logCollector.error(
+					`Request failed: ${request.method} ${url.pathname}`,
+					service,
+					error,
+					{ statusCode }
+				)
+			}
 		}
 	}
 }

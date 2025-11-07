@@ -61,6 +61,8 @@ logger.info('DNS Verifier Started - checking custom domains every 10 minutes')
 export const app = new Elysia({
 		serve: {
 			maxPayloadLength: 1024 * 1024 * 128 * 3,
+			development: Bun.env.NODE_ENV !== 'production' ? true : false,
+			id: Bun.env.NODE_ENV !== 'production' ? undefined : null,
 		}
 	})
 	// Observability middleware
