@@ -1267,14 +1267,12 @@ environment:
 steps:
   - name: build site
     command: |
+      # necessary to ensure bun is in PATH
       export PATH="$HOME/.nix-profile/bin:$PATH"
 
-      # regenerate lockfile
-      rm package-lock.json bun.lock
-      bun install @rolldown/binding-linux-arm64-gnu --save-optional
-      bun install
+      bun install --frozen-lockfile
 
-      # build with vite
+      # build with vite, run directly to get around env issues
       bun node_modules/.bin/vite build
 
   - name: deploy to wisp
