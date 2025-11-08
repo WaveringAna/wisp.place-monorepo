@@ -5,7 +5,7 @@ import { writeFile, readFile, rename } from 'fs/promises';
 import { safeFetchJson, safeFetchBlob } from './safe-fetch';
 import { CID } from 'multiformats';
 
-const CACHE_DIR = './cache/sites';
+const CACHE_DIR = process.env.CACHE_DIR || './cache/sites';
 const CACHE_TTL = 14 * 24 * 60 * 60 * 1000; // 14 days cache TTL
 
 interface CacheMetadata {
