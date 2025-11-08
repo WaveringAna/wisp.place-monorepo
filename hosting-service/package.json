@@ -3,9 +3,10 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "tsx --env-file=.env watch src/index.ts",
     "build": "tsc",
-    "start": "tsx src/index.ts"
+    "start": "tsx --env-file=.env src/index.ts",
+    "backfill": "tsx --env-file=.env src/index.ts --backfill"
   },
   "dependencies": {
     "@atproto/api": "^0.17.4",

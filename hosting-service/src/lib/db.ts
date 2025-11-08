@@ -81,6 +81,25 @@ export async function upsertSite(did: string, rkey: string, displayName?: string
   }
 }
 
+export interface SiteRecord {
+  did: string;
+  rkey: string;
+  display_name?: string;
+}
+
+export async function getAllSites(): Promise<SiteRecord[]> {
+  try {
+    const result = await sql<SiteRecord[]>`
+      SELECT did, rkey, display_name FROM sites
+      ORDER BY created_at DESC
+    `;
+    return result;
+  } catch (err) {
+    console.error('Failed to get all sites', err);
+    return [];
+  }
+}
+
 /**
  * Generate a numeric lock ID from a string key
  * PostgreSQL advisory locks use bigint (64-bit signed integer)
