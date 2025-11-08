@@ -8,13 +8,13 @@ default = ["place_wisp"]
 place_wisp = []
 
 [dependencies]
-jacquard = { path = "jacquard/crates/jacquard", features = ["loopback"] }
-jacquard-oauth = { path = "jacquard/crates/jacquard-oauth" }
-jacquard-api = { path = "jacquard/crates/jacquard-api" }
-jacquard-common = { path = "jacquard/crates/jacquard-common" }
-jacquard-identity = { path = "jacquard/crates/jacquard-identity", features = ["dns"] }
-jacquard-derive = { path = "jacquard/crates/jacquard-derive" }
-jacquard-lexicon = { path = "jacquard/crates/jacquard-lexicon" }
+jacquard = { git = "https://tangled.org/@nonbinary.computer/jacquard", features = ["loopback"] }
+jacquard-oauth = { git = "https://tangled.org/@nonbinary.computer/jacquard" }
+jacquard-api = { git = "https://tangled.org/@nonbinary.computer/jacquard" }
+jacquard-common = { git = "https://tangled.org/@nonbinary.computer/jacquard"  }
+jacquard-identity = { git = "https://tangled.org/@nonbinary.computer/jacquard", features = ["dns"] }
+jacquard-derive = { git = "https://tangled.org/@nonbinary.computer/jacquard"  }
+jacquard-lexicon = { git = "https://tangled.org/@nonbinary.computer/jacquard"  }
 clap = { version = "4.5.51", features = ["derive"] }
 tokio = { version = "1.48", features = ["full"] }
 miette = { version = "7.6.0", features = ["fancy"] }

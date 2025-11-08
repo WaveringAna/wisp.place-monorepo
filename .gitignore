@@ -16,6 +16,7 @@ target/
 
 # production
 /build
+/result
 
 # misc
 .DS_Store
