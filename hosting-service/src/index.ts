@@ -3,9 +3,15 @@ import { serve } from '@hono/node-server';
 import { FirehoseWorker } from './lib/firehose';
 import { logger } from './lib/observability';
 import { mkdirSync, existsSync } from 'fs';
+import { backfillCache } from './lib/backfill';
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3001;
 const CACHE_DIR = process.env.CACHE_DIR || './cache/sites';
+
+// Parse CLI arguments
+const args = process.argv.slice(2);
+const hasBackfillFlag = args.includes('--backfill');
+const backfillOnStartup = hasBackfillFlag || process.env.BACKFILL_ON_STARTUP === 'true';
 
 // Ensure cache directory exists
 if (!existsSync(CACHE_DIR)) {
@@ -19,6 +25,19 @@ const firehose = new FirehoseWorker((msg, data) => {
 });
 
 firehose.start();
+
+// Run backfill if requested
+if (backfillOnStartup) {
+  console.log('🔄 Backfill requested, starting cache backfill...');
+  backfillCache({
+    skipExisting: true,
+    concurrency: 3,
+  }).then((stats) => {
+    console.log('✅ Cache backfill completed');
+  }).catch((err) => {
+    console.error('❌ Cache backfill error:', err);
+  });
+}
 
 // Add health check endpoint
 app.get('/health', (c) => {
