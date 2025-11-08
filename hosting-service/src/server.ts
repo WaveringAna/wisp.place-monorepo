@@ -156,7 +156,7 @@ async function serveFromCacheWithRewrite(
       } else {
         content = readFileSync(cachedFile, 'utf-8');
       }
-      const rewritten = rewriteHtmlPaths(content, basePath);
+      const rewritten = rewriteHtmlPaths(content, basePath, requestPath);
       
       // Recompress the HTML for efficient delivery
       const { gzipSync } = await import('zlib');
@@ -224,7 +224,8 @@ async function serveFromCacheWithRewrite(
       } else {
         content = readFileSync(indexFile, 'utf-8');
       }
-      const rewritten = rewriteHtmlPaths(content, basePath);
+      const indexPath = `${requestPath}/index.html`;
+      const rewritten = rewriteHtmlPaths(content, basePath, indexPath);
       
       // Recompress the HTML for efficient delivery
       const { gzipSync } = await import('zlib');
