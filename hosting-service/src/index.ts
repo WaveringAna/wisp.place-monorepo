@@ -5,7 +5,7 @@ import { logger } from './lib/observability';
 import { mkdirSync, existsSync } from 'fs';
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3001;
-const CACHE_DIR = './cache/sites';
+const CACHE_DIR = process.env.CACHE_DIR || './cache/sites';
 
 // Ensure cache directory exists
 if (!existsSync(CACHE_DIR)) {
