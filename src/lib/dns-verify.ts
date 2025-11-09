@@ -135,22 +135,38 @@ export const verifyCNAME = async (
 }
 
 /**
- * Verify both TXT and CNAME records for a custom domain
+ * Verify custom domain using TXT record as authoritative proof
+ * CNAME check is optional/advisory - TXT record is sufficient for verification
+ *
+ * This approach works with CNAME flattening (e.g., Cloudflare) where the CNAME
+ * is resolved to A/AAAA records and won't be visible in DNS queries.
  */
 export const verifyCustomDomain = async (
 	domain: string,
 	expectedDid: string,
 	expectedHash: string
 ): Promise<VerificationResult> => {
+	// TXT record is authoritative - it proves ownership
 	const txtResult = await verifyDomainOwnership(domain, expectedDid)
 	if (!txtResult.verified) {
 		return txtResult
 	}
 
+	// CNAME check is advisory only - we still check it for logging/debugging
+	// but don't fail verification if it's missing (could be flattened)
 	const cnameResult = await verifyCNAME(domain, expectedHash)
+
+	// Log CNAME status for debugging, but don't fail on it
 	if (!cnameResult.verified) {
-		return cnameResult
+		console.log(`[DNS Verify] ⚠️  CNAME verification failed (may be flattened):`, cnameResult.error)
 	}
 
-	return { verified: true }
+	// TXT verification is sufficient
+	return {
+		verified: true,
+		found: {
+			txt: txtResult.found?.txt,
+			cname: cnameResult.found?.cname
+		}
+	}
 }

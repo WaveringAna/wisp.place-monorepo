@@ -661,6 +661,20 @@ function Dashboard() {
 								)}
 							</CardContent>
 						</Card>
+
+						<div className="p-4 bg-muted/30 rounded-lg border-l-4 border-yellow-500/50">
+							<div className="flex items-start gap-2">
+								<AlertCircle className="w-4 h-4 text-yellow-600 dark:text-yellow-400 mt-0.5 flex-shrink-0" />
+								<div className="flex-1 space-y-1">
+									<p className="text-xs font-semibold text-yellow-600 dark:text-yellow-400">
+										Note about sites.wisp.place URLs
+									</p>
+									<p className="text-xs text-muted-foreground">
+										Complex sites hosted on <code className="px-1 py-0.5 bg-background rounded text-xs">sites.wisp.place</code> may have broken assets if they use absolute paths (e.g., <code className="px-1 py-0.5 bg-background rounded text-xs">/folder/script.js</code>) in CSS or JavaScript files. While HTML paths are automatically rewritten, CSS and JS files are served as-is. For best results, use a wisp.place subdomain or custom domain, or ensure your site uses relative paths.
+									</p>
+								</div>
+							</div>
+						</div>
 					</TabsContent>
 
 					{/* Domains Tab */}
@@ -1604,7 +1618,7 @@ steps:
 													</div>
 												</div>
 												<p className="text-xs text-muted-foreground mt-2">
-													Some DNS providers may require you to use @ or leave it blank for the root domain
+													Note: Some DNS providers (like Cloudflare) flatten CNAMEs to A records - this is fine and won't affect verification.
 												</p>
 											</div>
 										</div>
