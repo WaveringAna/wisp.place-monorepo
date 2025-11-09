@@ -578,3 +578,61 @@ export const deleteSite = async (did: string, rkey: string) => {
         return { success: false, error: err };
     }
 };
+
+// Get all domains (wisp + custom) mapped to a specific site
+export const getDomainsBySite = async (did: string, rkey: string) => {
+    const domains: Array<{
+        type: 'wisp' | 'custom';
+        domain: string;
+        verified?: boolean;
+        id?: string;
+    }> = [];
+
+    // Check wisp domain
+    const wispDomain = await db`
+        SELECT domain, rkey FROM domains
+        WHERE did = ${did} AND rkey = ${rkey}
+    `;
+    if (wispDomain.length > 0) {
+        domains.push({
+            type: 'wisp',
+            domain: wispDomain[0].domain,
+        });
+    }
+
+    // Check custom domains
+    const customDomains = await db`
+        SELECT id, domain, verified FROM custom_domains
+        WHERE did = ${did} AND rkey = ${rkey}
+        ORDER BY created_at DESC
+    `;
+    for (const cd of customDomains) {
+        domains.push({
+            type: 'custom',
+            domain: cd.domain,
+            verified: cd.verified,
+            id: cd.id,
+        });
+    }
+
+    return domains;
+};
+
+// Get count of domains mapped to a specific site
+export const getDomainCountBySite = async (did: string, rkey: string) => {
+    const wispCount = await db`
+        SELECT COUNT(*) as count FROM domains
+        WHERE did = ${did} AND rkey = ${rkey}
+    `;
+
+    const customCount = await db`
+        SELECT COUNT(*) as count FROM custom_domains
+        WHERE did = ${did} AND rkey = ${rkey}
+    `;
+
+    return {
+        wisp: Number(wispCount[0]?.count || 0),
+        custom: Number(customCount[0]?.count || 0),
+        total: Number(wispCount[0]?.count || 0) + Number(customCount[0]?.count || 0),
+    };
+};
