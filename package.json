@@ -46,6 +46,8 @@
   },
   "module": "src/index.js",
   "trustedDependencies": [
+    "bun",
+    "cbor-extract",
     "core-js",
     "protobufjs"
   ]
