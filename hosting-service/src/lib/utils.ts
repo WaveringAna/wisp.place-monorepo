@@ -13,6 +13,8 @@ interface CacheMetadata {
   cachedAt: number;
   did: string;
   rkey: string;
+  // Map of file path to blob CID for incremental updates
+  fileCids?: Record<string, string>;
 }
 
 /**
@@ -200,15 +202,23 @@ export async function downloadAndCacheSite(did: string, rkey: string, record: Wi
     throw new Error('Invalid record structure: root missing entries array');
   }
 
+  // Get existing cache metadata to check for incremental updates
+  const existingMetadata = await getCacheMetadata(did, rkey);
+  const existingFileCids = existingMetadata?.fileCids || {};
+
   // Use a temporary directory with timestamp to avoid collisions
   const tempSuffix = `.tmp-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
   const tempDir = `${CACHE_DIR}/${did}/${rkey}${tempSuffix}`;
   const finalDir = `${CACHE_DIR}/${did}/${rkey}`;
 
   try {
-    // Download to temporary directory
-    await cacheFiles(did, rkey, record.root.entries, pdsEndpoint, '', tempSuffix);
-    await saveCacheMetadata(did, rkey, recordCid, tempSuffix);
+    // Collect file CIDs from the new record
+    const newFileCids: Record<string, string> = {};
+    collectFileCidsFromEntries(record.root.entries, '', newFileCids);
+
+    // Download/copy files to temporary directory (with incremental logic)
+    await cacheFiles(did, rkey, record.root.entries, pdsEndpoint, '', tempSuffix, existingFileCids, finalDir);
+    await saveCacheMetadata(did, rkey, recordCid, tempSuffix, newFileCids);
 
     // Atomically replace old cache with new cache
     // On POSIX systems (Linux/macOS), rename is atomic
@@ -245,17 +255,40 @@ export async function downloadAndCacheSite(did: string, rkey: string, record: Wi
   }
 }
 
+/**
+ * Recursively collect file CIDs from entries for incremental update tracking
+ */
+function collectFileCidsFromEntries(entries: Entry[], pathPrefix: string, fileCids: Record<string, string>): void {
+  for (const entry of entries) {
+    const currentPath = pathPrefix ? `${pathPrefix}/${entry.name}` : entry.name;
+    const node = entry.node;
+
+    if ('type' in node && node.type === 'directory' && 'entries' in node) {
+      collectFileCidsFromEntries(node.entries, currentPath, fileCids);
+    } else if ('type' in node && node.type === 'file' && 'blob' in node) {
+      const fileNode = node as File;
+      const cid = extractBlobCid(fileNode.blob);
+      if (cid) {
+        fileCids[currentPath] = cid;
+      }
+    }
+  }
+}
+
 async function cacheFiles(
   did: string,
   site: string,
   entries: Entry[],
   pdsEndpoint: string,
   pathPrefix: string,
-  dirSuffix: string = ''
+  dirSuffix: string = '',
+  existingFileCids: Record<string, string> = {},
+  existingCacheDir?: string
 ): Promise<void> {
-  // Collect all file blob download tasks first
+  // Collect file tasks, separating unchanged files from new/changed files
   const downloadTasks: Array<() => Promise<void>> = [];
-  
+  const copyTasks: Array<() => Promise<void>> = [];
+
   function collectFileTasks(
     entries: Entry[],
     currentPathPrefix: string
@@ -268,28 +301,91 @@ async function cacheFiles(
         collectFileTasks(node.entries, currentPath);
       } else if ('type' in node && node.type === 'file' && 'blob' in node) {
         const fileNode = node as File;
-        downloadTasks.push(() => cacheFileBlob(
-          did,
-          site,
-          currentPath,
-          fileNode.blob,
-          pdsEndpoint,
-          fileNode.encoding,
-          fileNode.mimeType,
-          fileNode.base64,
-          dirSuffix
-        ));
+        const cid = extractBlobCid(fileNode.blob);
+
+        // Check if file is unchanged (same CID as existing cache)
+        if (cid && existingFileCids[currentPath] === cid && existingCacheDir) {
+          // File unchanged - copy from existing cache instead of downloading
+          copyTasks.push(() => copyExistingFile(
+            did,
+            site,
+            currentPath,
+            dirSuffix,
+            existingCacheDir
+          ));
+        } else {
+          // File new or changed - download it
+          downloadTasks.push(() => cacheFileBlob(
+            did,
+            site,
+            currentPath,
+            fileNode.blob,
+            pdsEndpoint,
+            fileNode.encoding,
+            fileNode.mimeType,
+            fileNode.base64,
+            dirSuffix
+          ));
+        }
       }
     }
   }
 
   collectFileTasks(entries, pathPrefix);
 
-  // Execute downloads concurrently with a limit of 3 at a time
-  const concurrencyLimit = 3;
-  for (let i = 0; i < downloadTasks.length; i += concurrencyLimit) {
-    const batch = downloadTasks.slice(i, i + concurrencyLimit);
+  console.log(`[Incremental Update] Files to copy: ${copyTasks.length}, Files to download: ${downloadTasks.length}`);
+
+  // Copy unchanged files in parallel (fast local operations)
+  const copyLimit = 10;
+  for (let i = 0; i < copyTasks.length; i += copyLimit) {
+    const batch = copyTasks.slice(i, i + copyLimit);
     await Promise.all(batch.map(task => task()));
+  }
+
+  // Download new/changed files concurrently with a limit of 3 at a time
+  const downloadLimit = 3;
+  for (let i = 0; i < downloadTasks.length; i += downloadLimit) {
+    const batch = downloadTasks.slice(i, i + downloadLimit);
+    await Promise.all(batch.map(task => task()));
+  }
+}
+
+/**
+ * Copy an unchanged file from existing cache to new cache location
+ */
+async function copyExistingFile(
+  did: string,
+  site: string,
+  filePath: string,
+  dirSuffix: string,
+  existingCacheDir: string
+): Promise<void> {
+  const { copyFile } = await import('fs/promises');
+
+  const sourceFile = `${existingCacheDir}/${filePath}`;
+  const destFile = `${CACHE_DIR}/${did}/${site}${dirSuffix}/${filePath}`;
+  const destDir = destFile.substring(0, destFile.lastIndexOf('/'));
+
+  // Create destination directory if needed
+  if (destDir && !existsSync(destDir)) {
+    mkdirSync(destDir, { recursive: true });
+  }
+
+  try {
+    // Copy the file
+    await copyFile(sourceFile, destFile);
+
+    // Copy metadata file if it exists
+    const sourceMetaFile = `${sourceFile}.meta`;
+    const destMetaFile = `${destFile}.meta`;
+    if (existsSync(sourceMetaFile)) {
+      await copyFile(sourceMetaFile, destMetaFile);
+    }
+
+    console.log(`[Incremental] Copied unchanged file: ${filePath}`);
+  } catch (err) {
+    console.error(`[Incremental] Failed to copy file ${filePath}, will attempt download:`, err);
+    throw err;
   }
 }
 
@@ -404,12 +500,13 @@ export function isCached(did: string, site: string): boolean {
   return existsSync(`${CACHE_DIR}/${did}/${site}`);
 }
 
-async function saveCacheMetadata(did: string, rkey: string, recordCid: string, dirSuffix: string = ''): Promise<void> {
+async function saveCacheMetadata(did: string, rkey: string, recordCid: string, dirSuffix: string = '', fileCids?: Record<string, string>): Promise<void> {
   const metadata: CacheMetadata = {
     recordCid,
     cachedAt: Date.now(),
     did,
-    rkey
+    rkey,
+    fileCids
   };
 
   const metadataPath = `${CACHE_DIR}/${did}/${rkey}${dirSuffix}/.metadata.json`;

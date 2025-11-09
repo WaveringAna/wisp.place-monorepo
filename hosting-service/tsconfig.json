@@ -24,5 +24,7 @@
 
 		/* Code doesn't run in DOM */
 		"lib": ["es2022"],
-	}
+	},
+	"include": ["src/**/*"],
+	"exclude": ["node_modules", "cache", "dist"]
 }
