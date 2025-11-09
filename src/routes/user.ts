@@ -2,7 +2,7 @@ import { Elysia } from 'elysia'
 import { requireAuth } from '../lib/wisp-auth'
 import { NodeOAuthClient } from '@atproto/oauth-client-node'
 import { Agent } from '@atproto/api'
-import { getSitesByDid, getDomainByDid, getCustomDomainsByDid, getWispDomainInfo } from '../lib/db'
+import { getSitesByDid, getDomainByDid, getCustomDomainsByDid, getWispDomainInfo, getDomainsBySite } from '../lib/db'
 import { syncSitesFromPDS } from '../lib/sync-sites'
 import { logger } from '../lib/logger'
 
@@ -96,5 +96,19 @@ export const userRoutes = (client: NodeOAuthClient) =>
 			} catch (err) {
 				logger.error('[User] Sync error', err)
 				throw new Error('Failed to sync sites')
+			}
+		})
+		.get('/site/:rkey/domains', async ({ auth, params }) => {
+			try {
+				const { rkey } = params
+				const domains = await getDomainsBySite(auth.did, rkey)
+
+				return {
+					rkey,
+					domains
+				}
+			} catch (err) {
+				logger.error('[User] Site domains error', err)
+				throw new Error('Failed to get domains for site')
 			}
 		})

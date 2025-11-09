@@ -38,6 +38,7 @@ import {
 	Settings
 } from 'lucide-react'
 import { RadioGroup, RadioGroupItem } from '@public/components/ui/radio-group'
+import { Checkbox } from '@public/components/ui/checkbox'
 import { CodeBlock } from '@public/components/ui/code-block'
 
 import Layout from '@public/layouts'
@@ -53,6 +54,17 @@ interface Site {
 	display_name: string | null
 	created_at: number
 	updated_at: number
+}
+
+interface DomainInfo {
+	type: 'wisp' | 'custom'
+	domain: string
+	verified?: boolean
+	id?: string
+}
+
+interface SiteWithDomains extends Site {
+	domains?: DomainInfo[]
 }
 
 interface CustomDomain {
@@ -76,7 +88,7 @@ function Dashboard() {
 	const [loading, setLoading] = useState(true)
 
 	// Sites state
-	const [sites, setSites] = useState<Site[]>([])
+	const [sites, setSites] = useState<SiteWithDomains[]>([])
 	const [sitesLoading, setSitesLoading] = useState(true)
 	const [isSyncing, setIsSyncing] = useState(false)
 
@@ -86,8 +98,8 @@ function Dashboard() {
 	const [domainsLoading, setDomainsLoading] = useState(true)
 
 	// Site configuration state
-	const [configuringSite, setConfiguringSite] = useState<Site | null>(null)
-	const [selectedDomain, setSelectedDomain] = useState<string>('')
+	const [configuringSite, setConfiguringSite] = useState<SiteWithDomains | null>(null)
+	const [selectedDomains, setSelectedDomains] = useState<Set<string>>(new Set())
 	const [isSavingConfig, setIsSavingConfig] = useState(false)
 	const [isDeletingSite, setIsDeletingSite] = useState(false)
 
@@ -148,7 +160,29 @@ function Dashboard() {
 		try {
 			const response = await fetch('/api/user/sites')
 			const data = await response.json()
-			setSites(data.sites || [])
+			const sitesData: Site[] = data.sites || []
+
+			// Fetch domain info for each site
+			const sitesWithDomains = await Promise.all(
+				sitesData.map(async (site) => {
+					try {
+						const domainsResponse = await fetch(`/api/user/site/${site.rkey}/domains`)
+						const domainsData = await domainsResponse.json()
+						return {
+							...site,
+							domains: domainsData.domains || []
+						}
+					} catch (err) {
+						console.error(`Failed to fetch domains for site ${site.rkey}:`, err)
+						return {
+							...site,
+							domains: []
+						}
+					}
+				})
+			)
+
+			setSites(sitesWithDomains)
 		} catch (err) {
 			console.error('Failed to fetch sites:', err)
 		} finally {
@@ -189,34 +223,26 @@ function Dashboard() {
 		}
 	}
 
-	const getSiteUrl = (site: Site) => {
-		// Check if this site is mapped to the wisp.place domain
-		if (wispDomain && wispDomain.rkey === site.rkey) {
-			return `https://${wispDomain.domain}`
+	const getSiteUrl = (site: SiteWithDomains) => {
+		// Use the first mapped domain if available
+		if (site.domains && site.domains.length > 0) {
+			return `https://${site.domains[0].domain}`
 		}
 
-		// Check if this site is mapped to any custom domain
-		const customDomain = customDomains.find((d) => d.rkey === site.rkey)
-		if (customDomain) {
-			return `https://${customDomain.domain}`
-		}
-
-		// Default fallback URL
+		// Default fallback URL - use handle instead of DID
 		if (!userInfo) return '#'
-		return `https://sites.wisp.place/${site.did}/${site.rkey}`
+		return `https://sites.wisp.place/${userInfo.handle}/${site.rkey}`
 	}
 
-	const getSiteDomainName = (site: Site) => {
-		if (wispDomain && wispDomain.rkey === site.rkey) {
-			return wispDomain.domain
+	const getSiteDomainName = (site: SiteWithDomains) => {
+		// Return the first domain if available
+		if (site.domains && site.domains.length > 0) {
+			return site.domains[0].domain
 		}
 
-		const customDomain = customDomains.find((d) => d.rkey === site.rkey)
-		if (customDomain) {
-			return customDomain.domain
-		}
-
-		return `sites.wisp.place/${site.did}/${site.rkey}`
+		// Use handle instead of DID for display
+		if (!userInfo) return `sites.wisp.place/.../${site.rkey}`
+		return `sites.wisp.place/${userInfo.handle}/${site.rkey}`
 	}
 
 	const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -373,20 +399,23 @@ function Dashboard() {
 		}
 	}
 
-	const handleConfigureSite = (site: Site) => {
+	const handleConfigureSite = (site: SiteWithDomains) => {
 		setConfiguringSite(site)
 
-		// Determine current domain mapping
-		if (wispDomain && wispDomain.rkey === site.rkey) {
-			setSelectedDomain('wisp')
-		} else {
-			const customDomain = customDomains.find((d) => d.rkey === site.rkey)
-			if (customDomain) {
-				setSelectedDomain(customDomain.id)
-			} else {
-				setSelectedDomain('none')
-			}
+		// Build set of currently mapped domains
+		const mappedDomains = new Set<string>()
+
+		if (site.domains) {
+			site.domains.forEach(domainInfo => {
+				if (domainInfo.type === 'wisp') {
+					mappedDomains.add('wisp')
+				} else if (domainInfo.id) {
+					mappedDomains.add(domainInfo.id)
+				}
+			})
 		}
+
+		setSelectedDomains(mappedDomains)
 	}
 
 	const handleSaveSiteConfig = async () => {
@@ -394,53 +423,63 @@ function Dashboard() {
 
 		setIsSavingConfig(true)
 		try {
-			if (selectedDomain === 'wisp') {
-				// Map to wisp.place domain
+			// Determine which domains should be mapped/unmapped
+			const shouldMapWisp = selectedDomains.has('wisp')
+			const isCurrentlyMappedToWisp = wispDomain && wispDomain.rkey === configuringSite.rkey
+
+			// Handle wisp domain mapping
+			if (shouldMapWisp && !isCurrentlyMappedToWisp) {
+				// Map to wisp domain
 				const response = await fetch('/api/domain/wisp/map-site', {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
 					body: JSON.stringify({ siteRkey: configuringSite.rkey })
 				})
 				const data = await response.json()
-				if (!data.success) throw new Error('Failed to map site')
-			} else if (selectedDomain === 'none') {
-				// Unmap from all domains
-				// Unmap wisp domain if this site was mapped to it
-				if (wispDomain && wispDomain.rkey === configuringSite.rkey) {
-					await fetch('/api/domain/wisp/map-site', {
-						method: 'POST',
-						headers: { 'Content-Type': 'application/json' },
-						body: JSON.stringify({ siteRkey: null })
-					})
-				}
+				if (!data.success) throw new Error('Failed to map wisp domain')
+			} else if (!shouldMapWisp && isCurrentlyMappedToWisp) {
+				// Unmap from wisp domain
+				await fetch('/api/domain/wisp/map-site', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ siteRkey: null })
+				})
+			}
 
-				// Unmap from custom domains
-				const mappedCustom = customDomains.find(
-					(d) => d.rkey === configuringSite.rkey
-				)
-				if (mappedCustom) {
-					await fetch(`/api/domain/custom/${mappedCustom.id}/map-site`, {
+			// Handle custom domain mappings
+			const selectedCustomDomainIds = Array.from(selectedDomains).filter(id => id !== 'wisp')
+			const currentlyMappedCustomDomains = customDomains.filter(
+				d => d.rkey === configuringSite.rkey
+			)
+
+			// Unmap domains that are no longer selected
+			for (const domain of currentlyMappedCustomDomains) {
+				if (!selectedCustomDomainIds.includes(domain.id)) {
+					await fetch(`/api/domain/custom/${domain.id}/map-site`, {
 						method: 'POST',
 						headers: { 'Content-Type': 'application/json' },
 						body: JSON.stringify({ siteRkey: null })
 					})
 				}
-			} else {
-				// Map to a custom domain
-				const response = await fetch(
-					`/api/domain/custom/${selectedDomain}/map-site`,
-					{
+			}
+
+			// Map newly selected domains
+			for (const domainId of selectedCustomDomainIds) {
+				const isAlreadyMapped = currentlyMappedCustomDomains.some(d => d.id === domainId)
+				if (!isAlreadyMapped) {
+					const response = await fetch(`/api/domain/custom/${domainId}/map-site`, {
 						method: 'POST',
 						headers: { 'Content-Type': 'application/json' },
 						body: JSON.stringify({ siteRkey: configuringSite.rkey })
-					}
-				)
-				const data = await response.json()
-				if (!data.success) throw new Error('Failed to map site')
+					})
+					const data = await response.json()
+					if (!data.success) throw new Error(`Failed to map custom domain ${domainId}`)
+				}
 			}
 
-			// Refresh domains to get updated mappings
+			// Refresh both domains and sites to get updated mappings
 			await fetchDomains()
+			await fetchSites()
 			setConfiguringSite(null)
 		} catch (err) {
 			console.error('Save config error:', err)
@@ -638,15 +677,60 @@ function Dashboard() {
 														active
 													</Badge>
 												</div>
-												<a
-													href={getSiteUrl(site)}
-													target="_blank"
-													rel="noopener noreferrer"
-													className="text-sm text-accent hover:text-accent/80 flex items-center gap-1"
-												>
-													{getSiteDomainName(site)}
-													<ExternalLink className="w-3 h-3" />
-												</a>
+
+												{/* Display all mapped domains */}
+												{site.domains && site.domains.length > 0 ? (
+													<div className="space-y-1">
+														{site.domains.map((domainInfo, idx) => (
+															<div key={`${domainInfo.domain}-${idx}`} className="flex items-center gap-2">
+																<a
+																	href={`https://${domainInfo.domain}`}
+																	target="_blank"
+																	rel="noopener noreferrer"
+																	className="text-sm text-accent hover:text-accent/80 flex items-center gap-1"
+																>
+																	<Globe className="w-3 h-3" />
+																	{domainInfo.domain}
+																	<ExternalLink className="w-3 h-3" />
+																</a>
+																<Badge
+																	variant={domainInfo.type === 'wisp' ? 'default' : 'outline'}
+																	className="text-xs"
+																>
+																	{domainInfo.type}
+																</Badge>
+																{domainInfo.type === 'custom' && (
+																	<Badge
+																		variant={domainInfo.verified ? 'default' : 'secondary'}
+																		className="text-xs"
+																	>
+																		{domainInfo.verified ? (
+																			<>
+																				<CheckCircle2 className="w-3 h-3 mr-1" />
+																				verified
+																			</>
+																		) : (
+																			<>
+																				<AlertCircle className="w-3 h-3 mr-1" />
+																				pending
+																			</>
+																		)}
+																	</Badge>
+																)}
+															</div>
+														))}
+													</div>
+												) : (
+													<a
+														href={getSiteUrl(site)}
+														target="_blank"
+														rel="noopener noreferrer"
+														className="text-sm text-muted-foreground hover:text-accent flex items-center gap-1"
+													>
+														{getSiteDomainName(site)}
+														<ExternalLink className="w-3 h-3" />
+													</a>
+												)}
 											</div>
 											<Button
 												variant="outline"
@@ -1405,9 +1489,9 @@ steps:
 			>
 				<DialogContent className="sm:max-w-lg">
 					<DialogHeader>
-						<DialogTitle>Configure Site Domain</DialogTitle>
+						<DialogTitle>Configure Site Domains</DialogTitle>
 						<DialogDescription>
-							Choose which domain this site should use
+							Select which domains should be mapped to this site. You can select multiple domains.
 						</DialogDescription>
 					</DialogHeader>
 					{configuringSite && (
@@ -1420,13 +1504,24 @@ steps:
 								</p>
 							</div>
 
-							<RadioGroup
-								value={selectedDomain}
-								onValueChange={setSelectedDomain}
-							>
+							<div className="space-y-3">
+								<p className="text-sm font-medium">Available Domains:</p>
+
 								{wispDomain && (
-									<div className="flex items-center space-x-2">
-										<RadioGroupItem value="wisp" id="wisp" />
+									<div className="flex items-center space-x-3 p-3 border rounded-lg hover:bg-muted/30">
+										<Checkbox
+											id="wisp"
+											checked={selectedDomains.has('wisp')}
+											onCheckedChange={(checked) => {
+												const newSelected = new Set(selectedDomains)
+												if (checked) {
+													newSelected.add('wisp')
+												} else {
+													newSelected.delete('wisp')
+												}
+												setSelectedDomains(newSelected)
+											}}
+										/>
 										<Label
 											htmlFor="wisp"
 											className="flex-1 cursor-pointer"
@@ -1436,7 +1531,7 @@ steps:
 													{wispDomain.domain}
 												</span>
 												<Badge variant="secondary" className="text-xs ml-2">
-													Free
+													Wisp
 												</Badge>
 											</div>
 										</Label>
@@ -1448,11 +1543,20 @@ steps:
 									.map((domain) => (
 										<div
 											key={domain.id}
-											className="flex items-center space-x-2"
+											className="flex items-center space-x-3 p-3 border rounded-lg hover:bg-muted/30"
 										>
-											<RadioGroupItem
-												value={domain.id}
+											<Checkbox
 												id={domain.id}
+												checked={selectedDomains.has(domain.id)}
+												onCheckedChange={(checked) => {
+													const newSelected = new Set(selectedDomains)
+													if (checked) {
+														newSelected.add(domain.id)
+													} else {
+														newSelected.delete(domain.id)
+													}
+													setSelectedDomains(newSelected)
+												}}
 											/>
 											<Label
 												htmlFor={domain.id}
@@ -1473,19 +1577,21 @@ steps:
 										</div>
 									))}
 
-								<div className="flex items-center space-x-2">
-									<RadioGroupItem value="none" id="none" />
-									<Label htmlFor="none" className="flex-1 cursor-pointer">
-										<div className="flex flex-col">
-											<span className="text-sm">Default URL</span>
-											<span className="text-xs text-muted-foreground font-mono break-all">
-												sites.wisp.place/{configuringSite.did}/
-												{configuringSite.rkey}
-											</span>
-										</div>
-									</Label>
-								</div>
-							</RadioGroup>
+								{customDomains.filter(d => d.verified).length === 0 && !wispDomain && (
+									<p className="text-sm text-muted-foreground py-4 text-center">
+										No domains available. Add a custom domain or claim your wisp.place subdomain.
+									</p>
+								)}
+							</div>
+
+							<div className="p-3 bg-muted/20 rounded-lg border-l-4 border-blue-500/50">
+								<p className="text-xs text-muted-foreground">
+									<strong>Note:</strong> If no domains are selected, the site will be accessible at:{' '}
+									<span className="font-mono">
+										sites.wisp.place/{userInfo?.handle || '...'}/{configuringSite.rkey}
+									</span>
+								</p>
+							</div>
 						</div>
 					)}
 					<DialogFooter className="flex flex-col sm:flex-row sm:justify-between gap-2">
