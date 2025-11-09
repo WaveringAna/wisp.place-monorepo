@@ -748,7 +748,7 @@ function Dashboard() {
 
 						<div className="p-4 bg-muted/30 rounded-lg border-l-4 border-yellow-500/50">
 							<div className="flex items-start gap-2">
-								<AlertCircle className="w-4 h-4 text-yellow-600 dark:text-yellow-400 mt-0.5 flex-shrink-0" />
+								<AlertCircle className="w-4 h-4 text-yellow-600 dark:text-yellow-400 mt-0.5 shrink-0" />
 								<div className="flex-1 space-y-1">
 									<p className="text-xs font-semibold text-yellow-600 dark:text-yellow-400">
 										Note about sites.wisp.place URLs
@@ -1120,7 +1120,7 @@ function Dashboard() {
 										{skippedFiles.length > 0 && (
 											<div className="p-4 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
 												<div className="flex items-start gap-2 text-yellow-600 dark:text-yellow-400 mb-2">
-													<AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+													<AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
 													<div className="flex-1">
 														<span className="font-medium">
 															{skippedFiles.length} file{skippedFiles.length > 1 ? 's' : ''} skipped

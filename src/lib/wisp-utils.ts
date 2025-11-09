@@ -2,6 +2,11 @@ import type { BlobRef } from "@atproto/api";
 import type { Record, Directory, File, Entry } from "../lexicons/types/place/wisp/fs";
 import { validateRecord } from "../lexicons/types/place/wisp/fs";
 import { gzipSync } from 'zlib';
+import { CID } from 'multiformats/cid';
+import { sha256 } from 'multiformats/hashes/sha2';
+import * as raw from 'multiformats/codecs/raw';
+import { createHash } from 'crypto';
+import * as mf from 'multiformats';
 
 export interface UploadedFile {
 	name: string;
@@ -48,10 +53,14 @@ export function shouldCompressFile(mimeType: string): boolean {
 }
 
 /**
- * Compress a file using gzip
+ * Compress a file using gzip with deterministic output
+ * Sets mtime to 0 to ensure identical content produces identical compressed output
  */
 export function compressFile(content: Buffer): Buffer {
-	return gzipSync(content, { level: 9 });
+	return gzipSync(content, {
+		level: 9,
+		mtime: 0  // Fixed timestamp for deterministic compression
+	});
 }
 
 /**
@@ -65,6 +74,12 @@ export function processUploadedFiles(files: UploadedFile[]): ProcessedDirectory 
 	const directoryMap = new Map<string, UploadedFile[]>();
 
 	for (const file of files) {
+		// Skip undefined/null files (defensive)
+		if (!file || !file.name) {
+			console.error('Skipping undefined or invalid file in processUploadedFiles');
+			continue;
+		}
+
 		// Remove any base folder name from the path
 		const normalizedPath = file.name.replace(/^[^\/]*\//, '');
 		const parts = normalizedPath.split('/');
@@ -238,4 +253,52 @@ export function updateFileBlobs(
 	};
 
 	return result;
+}
+
+/**
+ * Compute CID (Content Identifier) for blob content
+ * Uses the same algorithm as AT Protocol: CIDv1 with raw codec and SHA-256
+ * Based on @atproto/common/src/ipld.ts sha256RawToCid implementation
+ */
+export function computeCID(content: Buffer): string {
+	// Use node crypto to compute sha256 hash (same as AT Protocol)
+	const hash = createHash('sha256').update(content).digest();
+	// Create digest object from hash bytes
+	const digest = mf.digest.create(sha256.code, hash);
+	// Create CIDv1 with raw codec
+	const cid = CID.createV1(raw.code, digest);
+	return cid.toString();
+}
+
+/**
+ * Extract blob information from a directory tree
+ * Returns a map of file paths to their blob refs and CIDs
+ */
+export function extractBlobMap(
+	directory: Directory,
+	currentPath: string = ''
+): Map<string, { blobRef: BlobRef; cid: string }> {
+	const blobMap = new Map<string, { blobRef: BlobRef; cid: string }>();
+
+	for (const entry of directory.entries) {
+		const fullPath = currentPath ? `${currentPath}/${entry.name}` : entry.name;
+
+		if ('type' in entry.node && entry.node.type === 'file') {
+			const fileNode = entry.node as File;
+			// AT Protocol SDK returns BlobRef class instances, not plain objects
+			// The ref is a CID instance that can be converted to string
+			if (fileNode.blob && fileNode.blob.ref) {
+				const cidString = fileNode.blob.ref.toString();
+				blobMap.set(fullPath, {
+					blobRef: fileNode.blob,
+					cid: cidString
+				});
+			}
+		} else if ('type' in entry.node && entry.node.type === 'directory') {
+			const subMap = extractBlobMap(entry.node as Directory, fullPath);
+			subMap.forEach((value, key) => blobMap.set(key, value));
+		}
+	}
+
+	return blobMap;
 }
