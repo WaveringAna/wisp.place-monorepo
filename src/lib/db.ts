@@ -108,6 +108,65 @@ await db`
     )
 `;
 
+// Create indexes for common query patterns
+await Promise.all([
+    // oauth_states cleanup queries
+    db`CREATE INDEX IF NOT EXISTS idx_oauth_states_expires_at ON oauth_states(expires_at)`.catch(err => {
+        if (!err.message?.includes('already exists')) {
+            console.error('Failed to create idx_oauth_states_expires_at:', err);
+        }
+    }),
+
+    // oauth_sessions cleanup queries
+    db`CREATE INDEX IF NOT EXISTS idx_oauth_sessions_expires_at ON oauth_sessions(expires_at)`.catch(err => {
+        if (!err.message?.includes('already exists')) {
+            console.error('Failed to create idx_oauth_sessions_expires_at:', err);
+        }
+    }),
+
+    // oauth_keys key rotation queries
+    db`CREATE INDEX IF NOT EXISTS idx_oauth_keys_created_at ON oauth_keys(created_at)`.catch(err => {
+        if (!err.message?.includes('already exists')) {
+            console.error('Failed to create idx_oauth_keys_created_at:', err);
+        }
+    }),
+
+    // domains queries by (did, rkey)
+    db`CREATE INDEX IF NOT EXISTS idx_domains_did_rkey ON domains(did, rkey)`.catch(err => {
+        if (!err.message?.includes('already exists')) {
+            console.error('Failed to create idx_domains_did_rkey:', err);
+        }
+    }),
+
+    // custom_domains queries by did
+    db`CREATE INDEX IF NOT EXISTS idx_custom_domains_did ON custom_domains(did)`.catch(err => {
+        if (!err.message?.includes('already exists')) {
+            console.error('Failed to create idx_custom_domains_did:', err);
+        }
+    }),
+
+    // custom_domains queries by (did, rkey)
+    db`CREATE INDEX IF NOT EXISTS idx_custom_domains_did_rkey ON custom_domains(did, rkey)`.catch(err => {
+        if (!err.message?.includes('already exists')) {
+            console.error('Failed to create idx_custom_domains_did_rkey:', err);
+        }
+    }),
+
+    // custom_domains DNS verification worker queries
+    db`CREATE INDEX IF NOT EXISTS idx_custom_domains_verified ON custom_domains(verified)`.catch(err => {
+        if (!err.message?.includes('already exists')) {
+            console.error('Failed to create idx_custom_domains_verified:', err);
+        }
+    }),
+
+    // sites queries by did
+    db`CREATE INDEX IF NOT EXISTS idx_sites_did ON sites(did)`.catch(err => {
+        if (!err.message?.includes('already exists')) {
+            console.error('Failed to create idx_sites_did:', err);
+        }
+    })
+]);
+
 const RESERVED_HANDLES = new Set([
     "www",
     "api",
