@@ -54,12 +54,10 @@ export function shouldCompressFile(mimeType: string): boolean {
 
 /**
  * Compress a file using gzip with deterministic output
- * Sets mtime to 0 to ensure identical content produces identical compressed output
  */
 export function compressFile(content: Buffer): Buffer {
 	return gzipSync(content, {
-		level: 9,
-		mtime: 0  // Fixed timestamp for deterministic compression
+		level: 9
 	});
 }
 
