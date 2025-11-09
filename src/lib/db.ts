@@ -244,7 +244,6 @@ const STATE_TIMEOUT = 60 * 60; // 3600 seconds
 
 const stateStore = {
     async set(key: string, data: any) {
-        console.debug('[stateStore] set', key)
         const expiresAt = Math.floor(Date.now() / 1000) + STATE_TIMEOUT;
         await db`
             INSERT INTO oauth_states (key, data, created_at, expires_at)
@@ -253,7 +252,6 @@ const stateStore = {
         `;
     },
     async get(key: string) {
-        console.debug('[stateStore] get', key)
         const now = Math.floor(Date.now() / 1000);
         const result = await db`
             SELECT data, expires_at
@@ -265,7 +263,6 @@ const stateStore = {
         // Check if expired
         const expiresAt = Number(result[0].expires_at);
         if (expiresAt && now > expiresAt) {
-            console.debug('[stateStore] State expired, deleting', key);
             await db`DELETE FROM oauth_states WHERE key = ${key}`;
             return undefined;
         }
@@ -273,14 +270,12 @@ const stateStore = {
         return JSON.parse(result[0].data);
     },
     async del(key: string) {
-        console.debug('[stateStore] del', key)
         await db`DELETE FROM oauth_states WHERE key = ${key}`;
     }
 };
 
 const sessionStore = {
     async set(sub: string, data: any) {
-        console.debug('[sessionStore] set', sub)
         const expiresAt = Math.floor(Date.now() / 1000) + SESSION_TIMEOUT;
         await db`
             INSERT INTO oauth_sessions (sub, data, updated_at, expires_at)
@@ -292,7 +287,6 @@ const sessionStore = {
         `;
     },
     async get(sub: string) {
-        console.debug('[sessionStore] get', sub)
         const now = Math.floor(Date.now() / 1000);
         const result = await db`
             SELECT data, expires_at
@@ -312,7 +306,6 @@ const sessionStore = {
         return JSON.parse(result[0].data);
     },
     async del(sub: string) {
-        console.debug('[sessionStore] del', sub)
         await db`DELETE FROM oauth_sessions WHERE sub = ${sub}`;
     }
 };

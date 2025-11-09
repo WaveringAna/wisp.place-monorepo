@@ -58,7 +58,6 @@ const sessionStore = {
         `;
     },
     async get(sub: string) {
-        console.debug('[sessionStore] get', sub)
         const now = Math.floor(Date.now() / 1000);
         const result = await db`
             SELECT data, expires_at
