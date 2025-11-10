@@ -417,6 +417,30 @@ function App() {
 								>
 									@nekomimi.pet
 								</a>
+								{' • '}
+								Contact:{' '}
+								<a
+									href="mailto:contact@wisp.place"
+									className="text-accent hover:text-accent/80 transition-colors font-medium"
+								>
+									contact@wisp.place
+								</a>
+								{' • '}
+								Legal/DMCA:{' '}
+								<a
+									href="mailto:legal@wisp.place"
+									className="text-accent hover:text-accent/80 transition-colors font-medium"
+								>
+									legal@wisp.place
+								</a>
+							</p>
+							<p className="mt-2">
+								<a
+									href="/acceptable-use"
+									className="text-accent hover:text-accent/80 transition-colors font-medium"
+								>
+									Acceptable Use Policy
+								</a>
 							</p>
 						</div>
 					</div>
