@@ -9,11 +9,9 @@ dist
 *.log
 .vscode
 .idea
-server
 .prettierrc
 testDeploy
 .tangled
 .crush
 .claude
-server
 hosting-service
