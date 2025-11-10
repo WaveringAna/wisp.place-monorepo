@@ -13,6 +13,22 @@ import {
 import Layout from '@public/layouts'
 import { Button } from '@public/components/ui/button'
 import { Card } from '@public/components/ui/card'
+import { BlueskyPostList, BlueskyProfile, BlueskyPost, AtProtoProvider, useLatestRecord, type AtProtoStyles, type FeedPostRecord } from 'atproto-ui'
+import 'atproto-ui/styles.css'
+
+const LatestPostWithPrefetch: React.FC<{ did: string }> = ({ did }) => {
+	// Fetch once with the hook
+	const { record, rkey, loading } = useLatestRecord<FeedPostRecord>(
+		did,
+		'app.bsky.feed.post'
+	)
+
+	if (loading) return <span>Loading…</span>
+	if (!record || !rkey) return <span>No posts yet.</span>
+
+	// Pass prefetched record—BlueskyPost won't re-fetch it
+	return <BlueskyPost did={did} rkey={rkey} record={record} showParent={true} />
+}
 
 function App() {
 	const [showForm, setShowForm] = useState(false)
@@ -63,9 +79,7 @@ function App() {
 				<header className="border-b border-border/40 bg-background/80 backdrop-blur-sm sticky top-0 z-50">
 					<div className="container mx-auto px-4 py-4 flex items-center justify-between">
 						<div className="flex items-center gap-2">
-							<div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
-								<Globe className="w-5 h-5 text-primary-foreground" />
-							</div>
+							<img src="/transparent-full-size-ico.png" alt="wisp.place" className="w-8 h-8" />
 							<span className="text-xl font-semibold text-foreground">
 								wisp.place
 							</span>
@@ -81,6 +95,7 @@ function App() {
 							<Button
 								size="sm"
 								className="bg-accent text-accent-foreground hover:bg-accent/90"
+								onClick={() => setShowForm(true)}
 							>
 								Get Started
 							</Button>
@@ -318,6 +333,57 @@ function App() {
 
 				{/* CTA Section */}
 				<section className="container mx-auto px-4 py-20">
+					<div className="max-w-6xl mx-auto">
+						<div className="text-center mb-12">
+							<h2 className="text-3xl md:text-4xl font-bold">
+								Follow on Bluesky for updates
+							</h2>
+						</div>
+						<div className="grid md:grid-cols-2 gap-8 items-center">
+							<Card
+								className="shadow-lg border-2 border-border overflow-hidden !py-3"
+								style={{
+									'--atproto-color-bg': 'var(--card)',
+									'--atproto-color-bg-elevated': 'hsl(var(--muted) / 0.3)',
+									'--atproto-color-text': 'hsl(var(--foreground))',
+									'--atproto-color-text-secondary': 'hsl(var(--muted-foreground))',
+									'--atproto-color-link': 'hsl(var(--accent))',
+									'--atproto-color-link-hover': 'hsl(var(--accent))',
+									'--atproto-color-border': 'transparent',
+								} as AtProtoStyles}
+							>
+								<BlueskyPostList did="wisp.place" />
+							</Card>
+							<div className="space-y-6 w-full max-w-md mx-auto">
+								<Card
+									className="shadow-lg border-2 overflow-hidden relative !py-3"
+									style={{
+										'--atproto-color-bg': 'var(--card)',
+										'--atproto-color-bg-elevated': 'hsl(var(--muted) / 0.3)',
+										'--atproto-color-text': 'hsl(var(--foreground))',
+										'--atproto-color-text-secondary': 'hsl(var(--muted-foreground))',
+									} as AtProtoStyles}
+								>
+									<BlueskyProfile did="wisp.place" />
+								</Card>
+								<Card
+									className="shadow-lg border-2 overflow-hidden relative !py-3"
+									style={{
+										'--atproto-color-bg': 'var(--card)',
+										'--atproto-color-bg-elevated': 'hsl(var(--muted) / 0.3)',
+										'--atproto-color-text': 'hsl(var(--foreground))',
+										'--atproto-color-text-secondary': 'hsl(var(--muted-foreground))',
+									} as AtProtoStyles}
+								>
+									<LatestPostWithPrefetch did="wisp.place" />
+								</Card>
+							</div>
+						</div>
+					</div>
+				</section>
+
+				{/* Ready to Deploy CTA */}
+				<section className="container mx-auto px-4 py-20">
 					<div className="max-w-3xl mx-auto text-center bg-accent/5 border border-accent/20 rounded-2xl p-12">
 						<h2 className="text-3xl md:text-4xl font-bold mb-4">
 							Ready to deploy?
@@ -362,7 +428,9 @@ function App() {
 
 const root = createRoot(document.getElementById('elysia')!)
 root.render(
-	<Layout className="gap-6">
-		<App />
-	</Layout>
+	<AtProtoProvider>
+		<Layout className="gap-6">
+			<App />
+		</Layout>
+	</AtProtoProvider>
 )
