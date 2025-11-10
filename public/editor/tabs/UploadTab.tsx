@@ -25,18 +25,6 @@ interface UploadTabProps {
 	onUploadComplete: () => Promise<void>
 }
 
-// Batching configuration
-const BATCH_SIZE = 15 // files per batch
-const CONCURRENT_BATCHES = 3 // parallel batches
-const MAX_RETRIES = 2 // retry attempts per file
-
-interface BatchProgress {
-	total: number
-	uploaded: number
-	failed: number
-	current: number
-}
-
 export function UploadTab({
 	sites,
 	sitesLoading,
@@ -51,7 +39,6 @@ export function UploadTab({
 	const [uploadProgress, setUploadProgress] = useState('')
 	const [skippedFiles, setSkippedFiles] = useState<Array<{ name: string; reason: string }>>([])
 	const [uploadedCount, setUploadedCount] = useState(0)
-	const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null)
 
 	// Auto-switch to 'new' mode if no sites exist
 	useEffect(() => {
@@ -66,89 +53,6 @@ export function UploadTab({
 		}
 	}
 
-	// Split files into batches
-	const createBatches = (files: FileList): File[][] => {
-		const batches: File[][] = []
-		const fileArray = Array.from(files)
-
-		for (let i = 0; i < fileArray.length; i += BATCH_SIZE) {
-			batches.push(fileArray.slice(i, i + BATCH_SIZE))
-		}
-
-		return batches
-	}
-
-	// Upload a single file with retry logic
-	const uploadFileWithRetry = async (
-		file: File,
-		retries: number = MAX_RETRIES
-	): Promise<{ success: boolean; error?: string }> => {
-		for (let attempt = 0; attempt <= retries; attempt++) {
-			try {
-				// Simulate file validation (would normally happen on server)
-				// Return success (actual upload happens in batch)
-				return { success: true }
-			} catch (err) {
-				// Check if error is retryable
-				const error = err as any
-				const statusCode = error?.response?.status
-
-				// Don't retry for client errors (4xx except timeouts)
-				if (statusCode === 413 || statusCode === 400) {
-					return {
-						success: false,
-						error: statusCode === 413 ? 'File too large' : 'Validation error'
-					}
-				}
-
-				// If this was the last attempt, fail
-				if (attempt === retries) {
-					return {
-						success: false,
-						error: err instanceof Error ? err.message : 'Upload failed'
-					}
-				}
-
-				// Wait before retry (exponential backoff)
-				await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)))
-			}
-		}
-
-		return { success: false, error: 'Max retries exceeded' }
-	}
-
-	// Process a single batch
-	const processBatch = async (
-		batch: File[],
-		batchIndex: number,
-		totalBatches: number,
-		formData: FormData
-	): Promise<{ succeeded: File[]; failed: Array<{ file: File; reason: string }> }> => {
-		const succeeded: File[] = []
-		const failed: Array<{ file: File; reason: string }> = []
-
-		setUploadProgress(`Processing batch ${batchIndex + 1}/${totalBatches} (files ${batchIndex * BATCH_SIZE + 1}-${Math.min((batchIndex + 1) * BATCH_SIZE, formData.getAll('files').length)})...`)
-
-		// Process files in batch with retry logic
-		const results = await Promise.allSettled(
-			batch.map(file => uploadFileWithRetry(file))
-		)
-
-		results.forEach((result, idx) => {
-			if (result.status === 'fulfilled' && result.value.success) {
-				succeeded.push(batch[idx])
-			} else {
-				const reason = result.status === 'rejected'
-					? 'Upload failed'
-					: result.value.error || 'Unknown error'
-				failed.push({ file: batch[idx], reason })
-			}
-		})
-
-		return { succeeded, failed }
-	}
-
-	// Main upload handler with batching
 	const handleUpload = async () => {
 		const siteName = siteMode === 'existing' ? selectedSiteRkey : newSiteName
 
@@ -157,73 +61,20 @@ export function UploadTab({
 			return
 		}
 
-		if (!selectedFiles || selectedFiles.length === 0) {
-			alert('Please select files to upload')
-			return
-		}
-
 		setIsUploading(true)
 		setUploadProgress('Preparing files...')
-		setSkippedFiles([])
-		setUploadedCount(0)
 
 		try {
 			const formData = new FormData()
 			formData.append('siteName', siteName)
 
-			// Add all files to FormData
-			for (let i = 0; i < selectedFiles.length; i++) {
-				formData.append('files', selectedFiles[i])
+			if (selectedFiles) {
+				for (let i = 0; i < selectedFiles.length; i++) {
+					formData.append('files', selectedFiles[i])
+				}
 			}
 
-			const totalFiles = selectedFiles.length
-			const batches = createBatches(selectedFiles)
-			const totalBatches = batches.length
-
-			console.log(`Uploading ${totalFiles} files in ${totalBatches} batches (${BATCH_SIZE} files per batch, ${CONCURRENT_BATCHES} concurrent)`)
-
-			// Initialize batch progress
-			setBatchProgress({
-				total: totalFiles,
-				uploaded: 0,
-				failed: 0,
-				current: 0
-			})
-
-			// Process batches with concurrency limit
-			const allSkipped: Array<{ name: string; reason: string }> = []
-			let totalUploaded = 0
-
-			for (let i = 0; i < batches.length; i += CONCURRENT_BATCHES) {
-				const batchSlice = batches.slice(i, i + CONCURRENT_BATCHES)
-				const batchPromises = batchSlice.map((batch, idx) =>
-					processBatch(batch, i + idx, totalBatches, formData)
-				)
-
-				const results = await Promise.all(batchPromises)
-
-				// Aggregate results
-				results.forEach(result => {
-					totalUploaded += result.succeeded.length
-					result.failed.forEach(({ file, reason }) => {
-						allSkipped.push({ name: file.name, reason })
-					})
-				})
-
-				// Update progress
-				setBatchProgress({
-					total: totalFiles,
-					uploaded: totalUploaded,
-					failed: allSkipped.length,
-					current: Math.min((i + CONCURRENT_BATCHES) * BATCH_SIZE, totalFiles)
-				})
-			}
-
-			// Now send the actual upload request to the server
-			// (In a real implementation, you'd send batches to the server,
-			// but for compatibility with the existing API, we send all at once)
-			setUploadProgress('Finalizing upload to AT Protocol...')
-
+			setUploadProgress('Uploading to AT Protocol...')
 			const response = await fetch('/wisp/upload-files', {
 				method: 'POST',
 				body: formData
@@ -232,8 +83,8 @@ export function UploadTab({
 			const data = await response.json()
 			if (data.success) {
 				setUploadProgress('Upload complete!')
-				setSkippedFiles(data.skippedFiles || allSkipped)
-				setUploadedCount(data.uploadedCount || data.fileCount || totalUploaded)
+				setSkippedFiles(data.skippedFiles || [])
+				setUploadedCount(data.uploadedCount || data.fileCount || 0)
 				setSelectedSiteRkey('')
 				setNewSiteName('')
 				setSelectedFiles(null)
@@ -242,12 +93,11 @@ export function UploadTab({
 				await onUploadComplete()
 
 				// Reset form - give more time if there are skipped files
-				const resetDelay = (data.skippedFiles && data.skippedFiles.length > 0) || allSkipped.length > 0 ? 4000 : 1500
+				const resetDelay = data.skippedFiles && data.skippedFiles.length > 0 ? 4000 : 1500
 				setTimeout(() => {
 					setUploadProgress('')
 					setSkippedFiles([])
 					setUploadedCount(0)
-					setBatchProgress(null)
 					setIsUploading(false)
 				}, resetDelay)
 			} else {
@@ -260,7 +110,6 @@ export function UploadTab({
 			)
 			setIsUploading(false)
 			setUploadProgress('')
-			setBatchProgress(null)
 		}
 	}
 
@@ -402,30 +251,10 @@ export function UploadTab({
 					{uploadProgress && (
 						<div className="space-y-3">
 							<div className="p-4 bg-muted rounded-lg">
-								<div className="flex items-center gap-2 mb-2">
+								<div className="flex items-center gap-2">
 									<Loader2 className="w-4 h-4 animate-spin" />
 									<span className="text-sm">{uploadProgress}</span>
 								</div>
-								{batchProgress && (
-									<div className="mt-2 space-y-1">
-										<div className="flex items-center justify-between text-xs text-muted-foreground">
-											<span>
-												Uploaded: {batchProgress.uploaded}/{batchProgress.total}
-											</span>
-											<span>
-												Failed: {batchProgress.failed}
-											</span>
-										</div>
-										<div className="w-full bg-muted-foreground/20 rounded-full h-2">
-											<div
-												className="bg-accent h-2 rounded-full transition-all duration-300"
-												style={{
-													width: `${(batchProgress.uploaded / batchProgress.total) * 100}%`
-												}}
-											/>
-										</div>
-									</div>
-								)}
 							</div>
 
 							{skippedFiles.length > 0 && (
