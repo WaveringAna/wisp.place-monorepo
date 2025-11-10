@@ -1,0 +1,21 @@
+# robots.txt for wisp.place
+
+User-agent: *
+
+# Allow indexing of landing page
+Allow: /$
+
+# Disallow application pages
+Disallow: /editor
+Disallow: /admin
+Disallow: /onboarding
+
+# Disallow API routes
+Disallow: /api/
+Disallow: /wisp/
+
+# Allow static assets
+Allow: /favicon.ico
+Allow: /favicon-*.png
+Allow: /apple-touch-icon.png
+Allow: /site.webmanifest
