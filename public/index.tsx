@@ -16,13 +16,45 @@ import { Card } from '@public/components/ui/card'
 
 function App() {
 	const [showForm, setShowForm] = useState(false)
+	const [checkingAuth, setCheckingAuth] = useState(true)
 	const inputRef = useRef<HTMLInputElement>(null)
+
+	useEffect(() => {
+		// Check authentication status on mount
+		const checkAuth = async () => {
+			try {
+				const response = await fetch('/api/auth/status', {
+					credentials: 'include'
+				})
+				const data = await response.json()
+				if (data.authenticated) {
+					// User is already authenticated, redirect to editor
+					window.location.href = '/editor'
+					return
+				}
+			} catch (error) {
+				console.error('Auth check failed:', error)
+			} finally {
+				setCheckingAuth(false)
+			}
+		}
+
+		checkAuth()
+	}, [])
 
 	useEffect(() => {
 		if (showForm) {
 			setTimeout(() => inputRef.current?.focus(), 500)
 		}
 	}, [showForm])
+
+	if (checkingAuth) {
+		return (
+			<div className="min-h-screen bg-background flex items-center justify-center">
+				<div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
+			</div>
+		)
+	}
 
 	return (
 		<>
@@ -61,7 +93,7 @@ function App() {
 					<div className="max-w-4xl mx-auto text-center">
 						<div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-accent/10 border border-accent/20 mb-8">
 							<span className="w-2 h-2 bg-accent rounded-full animate-pulse"></span>
-							<span className="text-sm text-accent-foreground">
+							<span className="text-sm text-foreground">
 								Built on AT Protocol
 							</span>
 						</div>

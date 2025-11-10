@@ -21,7 +21,8 @@ import { Badge } from '@public/components/ui/badge'
 import {
 	Globe,
 	Loader2,
-	Trash2
+	Trash2,
+	LogOut
 } from 'lucide-react'
 import Layout from '@public/layouts'
 import { useUserInfo } from './hooks/useUserInfo'
@@ -156,6 +157,24 @@ function Dashboard() {
 		await fetchSites()
 	}
 
+	const handleLogout = async () => {
+		try {
+			const response = await fetch('/api/auth/logout', {
+				method: 'POST',
+				credentials: 'include'
+			})
+			const result = await response.json()
+			if (result.success) {
+				// Redirect to home page after successful logout
+				window.location.href = '/'
+			} else {
+				alert('Logout failed: ' + (result.error || 'Unknown error'))
+			}
+		} catch (err) {
+			alert('Logout failed: ' + (err instanceof Error ? err.message : 'Unknown error'))
+		}
+	}
+
 	if (loading) {
 		return (
 			<div className="w-full min-h-screen bg-background flex items-center justify-center">
@@ -181,6 +200,14 @@ function Dashboard() {
 						<span className="text-sm text-muted-foreground">
 							{userInfo?.handle || 'Loading...'}
 						</span>
+						<Button
+							variant="ghost"
+							size="sm"
+							onClick={handleLogout}
+							className="h-8 px-2"
+						>
+							<LogOut className="w-4 h-4" />
+						</Button>
 					</div>
 				</div>
 			</header>
