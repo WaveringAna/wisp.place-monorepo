@@ -14,23 +14,9 @@ RUN bun install --frozen-lockfile
 COPY src ./src
 COPY public ./public
 
-# Build the application (if needed)
-RUN bun build \
-	--compile \
-	--minify \
-	--outfile server \
-	src/index.ts
-
-FROM scratch AS runtime
-WORKDIR /app
-COPY --from=base /app/server /app/server
-
-# Set environment variables (can be overridden at runtime)
 ENV PORT=3000
 ENV NODE_ENV=production
 
-# Expose the application port
 EXPOSE 3000
 
-# Start the application
-CMD ["./server"]
+CMD ["bun", "start"]

@@ -1,14 +1,14 @@
-# Use official Bun image
-FROM oven/bun:1.3 AS base
+# Use official Node.js Alpine image
+FROM node:alpine AS base
 
 # Set working directory
 WORKDIR /app
 
 # Copy package files
-COPY package.json bun.lock ./
+COPY package.json ./
 
 # Install dependencies
-RUN bun install --frozen-lockfile --production
+RUN npm install
 
 # Copy source code
 COPY src ./src
@@ -25,7 +25,7 @@ EXPOSE 3001
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD bun -e "fetch('http://localhost:3001/health').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"
+  CMD node -e "fetch('http://localhost:3001/health').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"
 
-# Start the application
-CMD ["bun", "src/index.ts"]
+# Start the application (can override with 'npm run backfill' in compose)
+CMD ["npm", "run", "start"]
