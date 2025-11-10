@@ -10,6 +10,7 @@ import { safeFetch } from './safe-fetch'
 import { isRecord, validateRecord } from '../lexicon/types/place/wisp/fs'
 import { Firehose } from '@atproto/sync'
 import { IdResolver } from '@atproto/identity'
+import { invalidateSiteCache } from './cache'
 
 const CACHE_DIR = './cache/sites'
 
@@ -182,6 +183,9 @@ export class FirehoseWorker {
 			return
 		}
 
+		// Invalidate in-memory caches before updating
+		invalidateSiteCache(did, site)
+
 		// Cache the record with verified CID (uses atomic swap internally)
 		// All instances cache locally for edge serving
 		await downloadAndCacheSite(
@@ -257,7 +261,10 @@ export class FirehoseWorker {
 			})
 		}
 
-		// Delete cache
+		// Invalidate in-memory caches
+		invalidateSiteCache(did, site)
+
+		// Delete disk cache
 		this.deleteCache(did, site)
 
 		this.log('Successfully processed delete', { did, site })

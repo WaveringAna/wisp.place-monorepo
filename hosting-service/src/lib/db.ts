@@ -9,6 +9,46 @@ const sql = postgres(
   }
 );
 
+// Domain lookup cache with TTL
+const DOMAIN_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+interface CachedDomain<T> {
+  value: T;
+  timestamp: number;
+}
+
+const domainCache = new Map<string, CachedDomain<DomainLookup | null>>();
+const customDomainCache = new Map<string, CachedDomain<CustomDomainLookup | null>>();
+
+let cleanupInterval: NodeJS.Timeout | null = null;
+
+export function startDomainCacheCleanup() {
+  if (cleanupInterval) return;
+
+  cleanupInterval = setInterval(() => {
+    const now = Date.now();
+
+    for (const [key, entry] of domainCache.entries()) {
+      if (now - entry.timestamp > DOMAIN_CACHE_TTL) {
+        domainCache.delete(key);
+      }
+    }
+
+    for (const [key, entry] of customDomainCache.entries()) {
+      if (now - entry.timestamp > DOMAIN_CACHE_TTL) {
+        customDomainCache.delete(key);
+      }
+    }
+  }, 30 * 60 * 1000); // Run every 30 minutes
+}
+
+export function stopDomainCacheCleanup() {
+  if (cleanupInterval) {
+    clearInterval(cleanupInterval);
+    cleanupInterval = null;
+  }
+}
+
 export interface DomainLookup {
   did: string;
   rkey: string | null;
@@ -27,17 +67,32 @@ export interface CustomDomainLookup {
 export async function getWispDomain(domain: string): Promise<DomainLookup | null> {
   const key = domain.toLowerCase();
 
+  // Check cache first
+  const cached = domainCache.get(key);
+  if (cached && Date.now() - cached.timestamp < DOMAIN_CACHE_TTL) {
+    return cached.value;
+  }
+
   // Query database
   const result = await sql<DomainLookup[]>`
     SELECT did, rkey FROM domains WHERE domain = ${key} LIMIT 1
   `;
   const data = result[0] || null;
 
+  // Cache the result
+  domainCache.set(key, { value: data, timestamp: Date.now() });
+
   return data;
 }
 
 export async function getCustomDomain(domain: string): Promise<CustomDomainLookup | null> {
   const key = domain.toLowerCase();
+
+  // Check cache first
+  const cached = customDomainCache.get(key);
+  if (cached && Date.now() - cached.timestamp < DOMAIN_CACHE_TTL) {
+    return cached.value;
+  }
 
   // Query database
   const result = await sql<CustomDomainLookup[]>`
@@ -46,16 +101,30 @@ export async function getCustomDomain(domain: string): Promise<CustomDomainLooku
   `;
   const data = result[0] || null;
 
+  // Cache the result
+  customDomainCache.set(key, { value: data, timestamp: Date.now() });
+
   return data;
 }
 
 export async function getCustomDomainByHash(hash: string): Promise<CustomDomainLookup | null> {
+  const key = `hash:${hash}`;
+
+  // Check cache first
+  const cached = customDomainCache.get(key);
+  if (cached && Date.now() - cached.timestamp < DOMAIN_CACHE_TTL) {
+    return cached.value;
+  }
+
   // Query database
   const result = await sql<CustomDomainLookup[]>`
     SELECT id, domain, did, rkey, verified FROM custom_domains
     WHERE id = ${hash} AND verified = true LIMIT 1
   `;
   const data = result[0] || null;
+
+  // Cache the result
+  customDomainCache.set(key, { value: data, timestamp: Date.now() });
 
   return data;
 }

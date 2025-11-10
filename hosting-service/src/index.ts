@@ -4,6 +4,7 @@ import { FirehoseWorker } from './lib/firehose';
 import { logger } from './lib/observability';
 import { mkdirSync, existsSync } from 'fs';
 import { backfillCache } from './lib/backfill';
+import { startDomainCacheCleanup, stopDomainCacheCleanup } from './lib/db';
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3001;
 const CACHE_DIR = process.env.CACHE_DIR || './cache/sites';
@@ -18,6 +19,9 @@ if (!existsSync(CACHE_DIR)) {
   mkdirSync(CACHE_DIR, { recursive: true });
   console.log('Created cache directory:', CACHE_DIR);
 }
+
+// Start domain cache cleanup
+startDomainCacheCleanup();
 
 // Start firehose worker with observability logger
 const firehose = new FirehoseWorker((msg, data) => {
@@ -67,6 +71,7 @@ Firehose:     Connected to Firehose
 process.on('SIGINT', async () => {
   console.log('\n🛑 Shutting down...');
   firehose.stop();
+  stopDomainCacheCleanup();
   server.close();
   process.exit(0);
 });
@@ -74,6 +79,7 @@ process.on('SIGINT', async () => {
 process.on('SIGTERM', async () => {
   console.log('\n🛑 Shutting down...');
   firehose.stop();
+  stopDomainCacheCleanup();
   server.close();
   process.exit(0);
 });

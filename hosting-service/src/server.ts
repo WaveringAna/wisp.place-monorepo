@@ -2,9 +2,11 @@ import { Hono } from 'hono';
 import { getWispDomain, getCustomDomain, getCustomDomainByHash } from './lib/db';
 import { resolveDid, getPdsForDid, fetchSiteRecord, downloadAndCacheSite, getCachedFilePath, isCached, sanitizePath, shouldCompressMimeType } from './lib/utils';
 import { rewriteHtmlPaths, isHtmlContent } from './lib/html-rewriter';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync } from 'fs';
+import { readFile, access } from 'fs/promises';
 import { lookup } from 'mime-types';
 import { logger, observabilityMiddleware, observabilityErrorHandler, logCollector, errorTracker, metricsCollector } from './lib/observability';
+import { fileCache, metadataCache, rewrittenHtmlCache, getCacheKey, type FileMetadata } from './lib/cache';
 
 const BASE_HOST = process.env.BASE_HOST || 'wisp.place';
 
@@ -21,6 +23,18 @@ function isValidRkey(rkey: string): boolean {
   return validRkeyPattern.test(rkey);
 }
 
+/**
+ * Async file existence check
+ */
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Helper to serve files from cache
 async function serveFromCache(did: string, rkey: string, filePath: string) {
   // Default to index.html if path is empty or ends with /
@@ -29,87 +43,90 @@ async function serveFromCache(did: string, rkey: string, filePath: string) {
     requestPath += 'index.html';
   }
 
+  const cacheKey = getCacheKey(did, rkey, requestPath);
   const cachedFile = getCachedFilePath(did, rkey, requestPath);
 
-  if (existsSync(cachedFile)) {
-    const content = readFileSync(cachedFile);
+  // Check in-memory cache first
+  let content = fileCache.get(cacheKey);
+  let meta = metadataCache.get(cacheKey);
+
+  if (!content && await fileExists(cachedFile)) {
+    // Read from disk and cache
+    content = await readFile(cachedFile);
+    fileCache.set(cacheKey, content, content.length);
+
     const metaFile = `${cachedFile}.meta`;
+    if (await fileExists(metaFile)) {
+      const metaJson = await readFile(metaFile, 'utf-8');
+      meta = JSON.parse(metaJson);
+      metadataCache.set(cacheKey, meta!, JSON.stringify(meta).length);
+    }
+  }
 
-    console.log(`[DEBUG SERVE] ${requestPath}: file size=${content.length} bytes, metaFile exists=${existsSync(metaFile)}`);
+  if (content) {
+    // Build headers with caching
+    const headers: Record<string, string> = {};
 
-    // Check if file has compression metadata
-    if (existsSync(metaFile)) {
-      const meta = JSON.parse(readFileSync(metaFile, 'utf-8'));
-      console.log(`[DEBUG SERVE] ${requestPath}: meta=${JSON.stringify(meta)}`);
-      
-      // Check actual content for gzip magic bytes
-      if (content.length >= 2) {
-        const hasGzipMagic = content[0] === 0x1f && content[1] === 0x8b;
-        console.log(`[DEBUG SERVE] ${requestPath}: has gzip magic bytes=${hasGzipMagic}`);
+    if (meta && meta.encoding === 'gzip' && meta.mimeType) {
+      const shouldServeCompressed = shouldCompressMimeType(meta.mimeType);
+
+      if (!shouldServeCompressed) {
+        const { gunzipSync } = await import('zlib');
+        const decompressed = gunzipSync(content);
+        headers['Content-Type'] = meta.mimeType;
+        headers['Cache-Control'] = 'public, max-age=31536000, immutable';
+        return new Response(decompressed, { headers });
       }
-      
-      if (meta.encoding === 'gzip' && meta.mimeType) {
-        // Use shared function to determine if this should be served compressed
-        const shouldServeCompressed = shouldCompressMimeType(meta.mimeType);
-        
-        if (!shouldServeCompressed) {
-          // This shouldn't happen if caching is working correctly, but handle it gracefully
-          console.log(`[DEBUG SERVE] ${requestPath}: decompressing file that shouldn't be compressed (${meta.mimeType})`);
-          const { gunzipSync } = await import('zlib');
-          const decompressed = gunzipSync(content);
-          console.log(`[DEBUG SERVE] ${requestPath}: decompressed from ${content.length} to ${decompressed.length} bytes`);
-          return new Response(decompressed, {
-            headers: {
-              'Content-Type': meta.mimeType,
-            },
-          });
-        }
-        
-        // Serve gzipped content with proper headers (for HTML, CSS, JS, etc.)
-        console.log(`[DEBUG SERVE] ${requestPath}: serving as gzipped with Content-Encoding header`);
-        return new Response(content, {
-          headers: {
-            'Content-Type': meta.mimeType,
-            'Content-Encoding': 'gzip',
-          },
-        });
-      }
+
+      headers['Content-Type'] = meta.mimeType;
+      headers['Content-Encoding'] = 'gzip';
+      headers['Cache-Control'] = meta.mimeType.startsWith('text/html')
+        ? 'public, max-age=300'
+        : 'public, max-age=31536000, immutable';
+      return new Response(content, { headers });
     }
 
-    // Serve non-compressed files normally
+    // Non-compressed files
     const mimeType = lookup(cachedFile) || 'application/octet-stream';
-    return new Response(content, {
-      headers: {
-        'Content-Type': mimeType,
-      },
-    });
+    headers['Content-Type'] = mimeType;
+    headers['Cache-Control'] = mimeType.startsWith('text/html')
+      ? 'public, max-age=300'
+      : 'public, max-age=31536000, immutable';
+    return new Response(content, { headers });
   }
 
   // Try index.html for directory-like paths
   if (!requestPath.includes('.')) {
-    const indexFile = getCachedFilePath(did, rkey, `${requestPath}/index.html`);
-    if (existsSync(indexFile)) {
-      const content = readFileSync(indexFile);
-      const metaFile = `${indexFile}.meta`;
+    const indexPath = `${requestPath}/index.html`;
+    const indexCacheKey = getCacheKey(did, rkey, indexPath);
+    const indexFile = getCachedFilePath(did, rkey, indexPath);
 
-      // Check if file has compression metadata
-      if (existsSync(metaFile)) {
-        const meta = JSON.parse(readFileSync(metaFile, 'utf-8'));
-        if (meta.encoding === 'gzip' && meta.mimeType) {
-          return new Response(content, {
-            headers: {
-              'Content-Type': meta.mimeType,
-              'Content-Encoding': 'gzip',
-            },
-          });
-        }
+    let indexContent = fileCache.get(indexCacheKey);
+    let indexMeta = metadataCache.get(indexCacheKey);
+
+    if (!indexContent && await fileExists(indexFile)) {
+      indexContent = await readFile(indexFile);
+      fileCache.set(indexCacheKey, indexContent, indexContent.length);
+
+      const indexMetaFile = `${indexFile}.meta`;
+      if (await fileExists(indexMetaFile)) {
+        const metaJson = await readFile(indexMetaFile, 'utf-8');
+        indexMeta = JSON.parse(metaJson);
+        metadataCache.set(indexCacheKey, indexMeta!, JSON.stringify(indexMeta).length);
+      }
+    }
+
+    if (indexContent) {
+      const headers: Record<string, string> = {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'public, max-age=300',
+      };
+
+      if (indexMeta && indexMeta.encoding === 'gzip') {
+        headers['Content-Encoding'] = 'gzip';
       }
 
-      return new Response(content, {
-        headers: {
-          'Content-Type': 'text/html; charset=utf-8',
-        },
-      });
+      return new Response(indexContent, { headers });
     }
   }
 
@@ -129,112 +146,148 @@ async function serveFromCacheWithRewrite(
     requestPath += 'index.html';
   }
 
+  const cacheKey = getCacheKey(did, rkey, requestPath);
   const cachedFile = getCachedFilePath(did, rkey, requestPath);
 
-  if (existsSync(cachedFile)) {
-    const metaFile = `${cachedFile}.meta`;
-    let mimeType = lookup(cachedFile) || 'application/octet-stream';
-    let isGzipped = false;
-
-    // Check if file has compression metadata
-    if (existsSync(metaFile)) {
-      const meta = JSON.parse(readFileSync(metaFile, 'utf-8'));
-      if (meta.encoding === 'gzip' && meta.mimeType) {
-        mimeType = meta.mimeType;
-        isGzipped = true;
-      }
+  // Check for rewritten HTML in cache first (if it's HTML)
+  const mimeTypeGuess = lookup(requestPath) || 'application/octet-stream';
+  if (isHtmlContent(requestPath, mimeTypeGuess)) {
+    const rewrittenKey = getCacheKey(did, rkey, requestPath, `rewritten:${basePath}`);
+    const rewrittenContent = rewrittenHtmlCache.get(rewrittenKey);
+    if (rewrittenContent) {
+      return new Response(rewrittenContent, {
+        headers: {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Content-Encoding': 'gzip',
+          'Cache-Control': 'public, max-age=300',
+        },
+      });
     }
+  }
+
+  // Check in-memory file cache
+  let content = fileCache.get(cacheKey);
+  let meta = metadataCache.get(cacheKey);
+
+  if (!content && await fileExists(cachedFile)) {
+    // Read from disk and cache
+    content = await readFile(cachedFile);
+    fileCache.set(cacheKey, content, content.length);
+
+    const metaFile = `${cachedFile}.meta`;
+    if (await fileExists(metaFile)) {
+      const metaJson = await readFile(metaFile, 'utf-8');
+      meta = JSON.parse(metaJson);
+      metadataCache.set(cacheKey, meta!, JSON.stringify(meta).length);
+    }
+  }
+
+  if (content) {
+    const mimeType = meta?.mimeType || lookup(cachedFile) || 'application/octet-stream';
+    const isGzipped = meta?.encoding === 'gzip';
 
     // Check if this is HTML content that needs rewriting
-    // We decompress, rewrite paths, then recompress for efficient delivery
     if (isHtmlContent(requestPath, mimeType)) {
-      let content: string;
+      let htmlContent: string;
       if (isGzipped) {
         const { gunzipSync } = await import('zlib');
-        const compressed = readFileSync(cachedFile);
-        content = gunzipSync(compressed).toString('utf-8');
+        htmlContent = gunzipSync(content).toString('utf-8');
       } else {
-        content = readFileSync(cachedFile, 'utf-8');
+        htmlContent = content.toString('utf-8');
       }
-      const rewritten = rewriteHtmlPaths(content, basePath, requestPath);
-      
-      // Recompress the HTML for efficient delivery
+      const rewritten = rewriteHtmlPaths(htmlContent, basePath, requestPath);
+
+      // Recompress and cache the rewritten HTML
       const { gzipSync } = await import('zlib');
       const recompressed = gzipSync(Buffer.from(rewritten, 'utf-8'));
-      
+
+      const rewrittenKey = getCacheKey(did, rkey, requestPath, `rewritten:${basePath}`);
+      rewrittenHtmlCache.set(rewrittenKey, recompressed, recompressed.length);
+
       return new Response(recompressed, {
         headers: {
           'Content-Type': 'text/html; charset=utf-8',
           'Content-Encoding': 'gzip',
+          'Cache-Control': 'public, max-age=300',
         },
       });
     }
 
-    // Non-HTML files: serve gzipped content as-is with proper headers
-    const content = readFileSync(cachedFile);
+    // Non-HTML files: serve as-is
+    const headers: Record<string, string> = {
+      'Content-Type': mimeType,
+      'Cache-Control': 'public, max-age=31536000, immutable',
+    };
+
     if (isGzipped) {
-      // Use shared function to determine if this should be served compressed
       const shouldServeCompressed = shouldCompressMimeType(mimeType);
-      
       if (!shouldServeCompressed) {
-        // This shouldn't happen if caching is working correctly, but handle it gracefully
         const { gunzipSync } = await import('zlib');
         const decompressed = gunzipSync(content);
-        return new Response(decompressed, {
-          headers: {
-            'Content-Type': mimeType,
-          },
-        });
+        return new Response(decompressed, { headers });
       }
-      
-      return new Response(content, {
-        headers: {
-          'Content-Type': mimeType,
-          'Content-Encoding': 'gzip',
-        },
-      });
+      headers['Content-Encoding'] = 'gzip';
     }
-    return new Response(content, {
-      headers: {
-        'Content-Type': mimeType,
-      },
-    });
+
+    return new Response(content, { headers });
   }
 
   // Try index.html for directory-like paths
   if (!requestPath.includes('.')) {
-    const indexFile = getCachedFilePath(did, rkey, `${requestPath}/index.html`);
-    if (existsSync(indexFile)) {
-      const metaFile = `${indexFile}.meta`;
-      let isGzipped = false;
+    const indexPath = `${requestPath}/index.html`;
+    const indexCacheKey = getCacheKey(did, rkey, indexPath);
+    const indexFile = getCachedFilePath(did, rkey, indexPath);
 
-      if (existsSync(metaFile)) {
-        const meta = JSON.parse(readFileSync(metaFile, 'utf-8'));
-        if (meta.encoding === 'gzip') {
-          isGzipped = true;
-        }
+    // Check for rewritten index.html in cache
+    const rewrittenKey = getCacheKey(did, rkey, indexPath, `rewritten:${basePath}`);
+    const rewrittenContent = rewrittenHtmlCache.get(rewrittenKey);
+    if (rewrittenContent) {
+      return new Response(rewrittenContent, {
+        headers: {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Content-Encoding': 'gzip',
+          'Cache-Control': 'public, max-age=300',
+        },
+      });
+    }
+
+    let indexContent = fileCache.get(indexCacheKey);
+    let indexMeta = metadataCache.get(indexCacheKey);
+
+    if (!indexContent && await fileExists(indexFile)) {
+      indexContent = await readFile(indexFile);
+      fileCache.set(indexCacheKey, indexContent, indexContent.length);
+
+      const indexMetaFile = `${indexFile}.meta`;
+      if (await fileExists(indexMetaFile)) {
+        const metaJson = await readFile(indexMetaFile, 'utf-8');
+        indexMeta = JSON.parse(metaJson);
+        metadataCache.set(indexCacheKey, indexMeta!, JSON.stringify(indexMeta).length);
       }
+    }
 
-      // HTML needs path rewriting, decompress, rewrite, then recompress
-      let content: string;
+    if (indexContent) {
+      const isGzipped = indexMeta?.encoding === 'gzip';
+
+      let htmlContent: string;
       if (isGzipped) {
         const { gunzipSync } = await import('zlib');
-        const compressed = readFileSync(indexFile);
-        content = gunzipSync(compressed).toString('utf-8');
+        htmlContent = gunzipSync(indexContent).toString('utf-8');
       } else {
-        content = readFileSync(indexFile, 'utf-8');
+        htmlContent = indexContent.toString('utf-8');
       }
-      const indexPath = `${requestPath}/index.html`;
-      const rewritten = rewriteHtmlPaths(content, basePath, indexPath);
-      
-      // Recompress the HTML for efficient delivery
+      const rewritten = rewriteHtmlPaths(htmlContent, basePath, indexPath);
+
       const { gzipSync } = await import('zlib');
       const recompressed = gzipSync(Buffer.from(rewritten, 'utf-8'));
-      
+
+      rewrittenHtmlCache.set(rewrittenKey, recompressed, recompressed.length);
+
       return new Response(recompressed, {
         headers: {
           'Content-Type': 'text/html; charset=utf-8',
           'Content-Encoding': 'gzip',
+          'Cache-Control': 'public, max-age=300',
         },
       });
     }
@@ -442,6 +495,12 @@ app.get('/__internal__/observability/metrics', (c) => {
   const timeWindow = query.timeWindow ? parseInt(query.timeWindow as string) : 3600000;
   const stats = metricsCollector.getStats('hosting-service', timeWindow);
   return c.json({ stats, timeWindow });
+});
+
+app.get('/__internal__/observability/cache', async (c) => {
+  const { getCacheStats } = await import('./lib/cache');
+  const stats = getCacheStats();
+  return c.json({ cache: stats });
 });
 
 export default app;
