@@ -42,7 +42,6 @@ steps:
 
     - name: 'Deploy to Wisp.place'
       command: |
-          echo
           ./cli/target/release/wisp-cli \
             "$WISP_HANDLE" \
             --path "$SITE_PATH" \

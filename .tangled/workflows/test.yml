@@ -17,6 +17,7 @@ steps:
 
       # have to regenerate otherwise it wont install necessary dependencies to run
       rm -rf bun.lock package-lock.json
+      bun install @oven/bun-linux-aarch64
       bun install
 
   - name: run all tests
