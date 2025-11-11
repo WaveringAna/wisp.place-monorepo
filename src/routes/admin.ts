@@ -4,7 +4,7 @@ import { adminAuth, requireAdmin } from '../lib/admin-auth'
 import { logCollector, errorTracker, metricsCollector } from '../lib/observability'
 import { db } from '../lib/db'
 
-export const adminRoutes = () =>
+export const adminRoutes = (cookieSecret: string) =>
 	new Elysia({ prefix: '/api/admin' })
 		// Login
 		.post(
@@ -35,6 +35,12 @@ export const adminRoutes = () =>
 				body: t.Object({
 					username: t.String(),
 					password: t.String()
+				}),
+				cookie: t.Cookie({
+					admin_session: t.String()
+				}, {
+					secrets: cookieSecret,
+					sign: ['admin_session']
 				})
 			}
 		)
@@ -47,6 +53,13 @@ export const adminRoutes = () =>
 			}
 			cookie.admin_session.remove()
 			return { success: true }
+		}, {
+			cookie: t.Cookie({
+				admin_session: t.Optional(t.String())
+			}, {
+				secrets: cookieSecret,
+				sign: ['admin_session']
+			})
 		})
 
 		// Check auth status
@@ -65,6 +78,13 @@ export const adminRoutes = () =>
 				authenticated: true,
 				username: session.username
 			}
+		}, {
+			cookie: t.Cookie({
+				admin_session: t.Optional(t.String())
+			}, {
+				secrets: cookieSecret,
+				sign: ['admin_session']
+			})
 		})
 
 		// Get logs (protected)
@@ -109,6 +129,13 @@ export const adminRoutes = () =>
 			)
 
 			return { logs: allLogs.slice(0, filter.limit || 100) }
+		}, {
+			cookie: t.Cookie({
+				admin_session: t.Optional(t.String())
+			}, {
+				secrets: cookieSecret,
+				sign: ['admin_session']
+			})
 		})
 
 		// Get errors (protected)
@@ -147,6 +174,13 @@ export const adminRoutes = () =>
 			)
 
 			return { errors: allErrors.slice(0, filter.limit || 100) }
+		}, {
+			cookie: t.Cookie({
+				admin_session: t.Optional(t.String())
+			}, {
+				secrets: cookieSecret,
+				sign: ['admin_session']
+			})
 		})
 
 		// Get metrics (protected)
@@ -189,6 +223,13 @@ export const adminRoutes = () =>
 				hostingService: hostingServiceStats,
 				timeWindow
 			}
+		}, {
+			cookie: t.Cookie({
+				admin_session: t.Optional(t.String())
+			}, {
+				secrets: cookieSecret,
+				sign: ['admin_session']
+			})
 		})
 
 		// Get database stats (protected)
@@ -204,7 +245,7 @@ export const adminRoutes = () =>
 
 				// Get recent sites (including those without domains)
 				const recentSites = await db`
-					SELECT 
+					SELECT
 						s.did,
 						s.rkey,
 						s.display_name,
@@ -235,6 +276,13 @@ export const adminRoutes = () =>
 					message: error instanceof Error ? error.message : String(error)
 				}
 			}
+		}, {
+			cookie: t.Cookie({
+				admin_session: t.Optional(t.String())
+			}, {
+				secrets: cookieSecret,
+				sign: ['admin_session']
+			})
 		})
 
 		// Get sites listing (protected)
@@ -247,7 +295,7 @@ export const adminRoutes = () =>
 
 			try {
 				const sites = await db`
-					SELECT 
+					SELECT
 						s.did,
 						s.rkey,
 						s.display_name,
@@ -282,6 +330,13 @@ export const adminRoutes = () =>
 					message: error instanceof Error ? error.message : String(error)
 				}
 			}
+		}, {
+			cookie: t.Cookie({
+				admin_session: t.Optional(t.String())
+			}, {
+				secrets: cookieSecret,
+				sign: ['admin_session']
+			})
 		})
 
 		// Get system health (protected)
@@ -301,5 +356,12 @@ export const adminRoutes = () =>
 				},
 				timestamp: new Date().toISOString()
 			}
+		}, {
+			cookie: t.Cookie({
+				admin_session: t.Optional(t.String())
+			}, {
+				secrets: cookieSecret,
+				sign: ['admin_session']
+			})
 		})
 

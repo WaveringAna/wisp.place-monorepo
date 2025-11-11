@@ -13,7 +13,6 @@ import Layout from '@public/layouts'
 import { Button } from '@public/components/ui/button'
 import { Card } from '@public/components/ui/card'
 import { BlueskyPostList, BlueskyProfile, BlueskyPost, AtProtoProvider, useLatestRecord, type AtProtoStyles, type FeedPostRecord } from 'atproto-ui'
-import 'atproto-ui/styles.css'
 
 //Credit to https://tangled.org/@jakelazaroff.com/actor-typeahead
 interface Actor {
@@ -212,11 +211,11 @@ const ActorTypeahead: React.FC<ActorTypeaheadProps> = ({
 						width: '100%',
 						listStyle: 'none',
 						overflow: 'hidden',
-						backgroundColor: 'rgba(255, 255, 255, 0.7)',
+						backgroundColor: 'rgba(255, 255, 255, 0.8)',
 						backgroundClip: 'padding-box',
 						backdropFilter: 'blur(12px)',
 						WebkitBackdropFilter: 'blur(12px)',
-						border: '1px solid hsl(var(--border))',
+						border: '1px solid rgba(0, 0, 0, 0.1)',
 						borderRadius: '8px',
 						boxShadow: '0 6px 6px -4px rgba(0, 0, 0, 0.2)',
 						padding: '4px',
@@ -278,7 +277,7 @@ const ActorTypeahead: React.FC<ActorTypeaheadProps> = ({
 										whiteSpace: 'nowrap',
 										overflow: 'hidden',
 										textOverflow: 'ellipsis',
-										color: 'hsl(var(--foreground))'
+										color: '#000000'
 									}}
 								>
 									{actor.handle}

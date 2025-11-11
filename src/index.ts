@@ -12,6 +12,7 @@ import {
 	cleanupExpiredSessions,
 	rotateKeysIfNeeded
 } from './lib/oauth-client'
+import { getCookieSecret } from './lib/db'
 import { authRoutes } from './routes/auth'
 import { wispRoutes } from './routes/wisp'
 import { domainRoutes } from './routes/domain'
@@ -30,6 +31,9 @@ const config: Config = {
 
 // Initialize admin setup (prompt if no admin exists)
 await promptAdminSetup()
+
+// Get or generate cookie signing secret
+const cookieSecret = await getCookieSecret()
 
 const client = await getOAuthClient(config)
 
@@ -63,6 +67,10 @@ export const app = new Elysia({
 			maxRequestBodySize: 1024 * 1024 * 128 * 3,
 			development: Bun.env.NODE_ENV !== 'production' ? true : false,
 			id: Bun.env.NODE_ENV !== 'production' ? undefined : null,
+		},
+		cookie: {
+			secrets: cookieSecret,
+			sign: true
 		}
 	})
 	// Observability middleware
@@ -96,12 +104,12 @@ export const app = new Elysia({
 	})
 	.onError(observabilityMiddleware('main-app').onError)
 	.use(csrfProtection())
-	.use(authRoutes(client))
+	.use(authRoutes(client, cookieSecret))
 	.use(wispRoutes(client))
 	.use(domainRoutes(client))
 	.use(userRoutes(client))
 	.use(siteRoutes(client))
-	.use(adminRoutes())
+	.use(adminRoutes(cookieSecret))
 	.use(
 		await staticPlugin({
 			prefix: '/'

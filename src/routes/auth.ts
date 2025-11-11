@@ -1,11 +1,11 @@
-import { Elysia } from 'elysia'
+import { Elysia, t } from 'elysia'
 import { NodeOAuthClient } from '@atproto/oauth-client-node'
-import { getSitesByDid, getDomainByDid } from '../lib/db'
+import { getSitesByDid, getDomainByDid, getCookieSecret } from '../lib/db'
 import { syncSitesFromPDS } from '../lib/sync-sites'
 import { authenticateRequest } from '../lib/wisp-auth'
 import { logger } from '../lib/observability'
 
-export const authRoutes = (client: NodeOAuthClient) => new Elysia()
+export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) => new Elysia()
 	.post('/api/auth/signin', async (c) => {
 		let handle = 'unknown'
 		try {
@@ -36,7 +36,13 @@ export const authRoutes = (client: NodeOAuthClient) => new Elysia()
 			}
 
 			const cookieSession = c.cookie
-			cookieSession.did.value = session.did
+			cookieSession.did.set({
+				value: session.did,
+				httpOnly: true,
+				secure: process.env.NODE_ENV === 'production',
+				sameSite: 'lax',
+				maxAge: 30 * 24 * 60 * 60 // 30 days
+			})
 
 			// Sync sites from PDS to database cache
 			logger.debug('[Auth] Syncing sites from PDS for', session.did)
@@ -66,6 +72,13 @@ export const authRoutes = (client: NodeOAuthClient) => new Elysia()
 			logger.error('[Auth] OAuth callback error', err)
 			return c.redirect('/?error=auth_failed')
 		}
+	}, {
+		cookie: t.Cookie({
+			did: t.Optional(t.String())
+		}, {
+			secrets: cookieSecret,
+			sign: ['did']
+		})
 	})
 	.post('/api/auth/logout', async (c) => {
 		try {
@@ -73,8 +86,7 @@ export const authRoutes = (client: NodeOAuthClient) => new Elysia()
 			const did = cookieSession.did?.value
 
 			// Clear the session cookie
-			cookieSession.did.value = ''
-			cookieSession.did.maxAge = 0
+			cookieSession.did.remove()
 
 			// If we have a DID, try to revoke the OAuth session
 			if (did && typeof did === 'string') {
@@ -92,6 +104,13 @@ export const authRoutes = (client: NodeOAuthClient) => new Elysia()
 			logger.error('[Auth] Logout error', err)
 			return { error: 'Logout failed' }
 		}
+	}, {
+		cookie: t.Cookie({
+			did: t.Optional(t.String())
+		}, {
+			secrets: cookieSecret,
+			sign: ['did']
+		})
 	})
 	.get('/api/auth/status', async (c) => {
 		try {
@@ -109,4 +128,11 @@ export const authRoutes = (client: NodeOAuthClient) => new Elysia()
 			logger.error('[Auth] Status check error', err)
 			return { authenticated: false }
 		}
+	}, {
+		cookie: t.Cookie({
+			did: t.Optional(t.String())
+		}, {
+			secrets: cookieSecret,
+			sign: ['did']
+		})
 	})

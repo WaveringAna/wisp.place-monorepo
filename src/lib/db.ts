@@ -36,6 +36,15 @@ await db`
     )
 `;
 
+// Cookie secrets table for signed cookies
+await db`
+    CREATE TABLE IF NOT EXISTS cookie_secrets (
+        id TEXT PRIMARY KEY DEFAULT 'default',
+        secret TEXT NOT NULL,
+        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())
+    )
+`;
+
 // Domains table maps subdomain -> DID (now supports up to 3 domains per user)
 await db`
     CREATE TABLE IF NOT EXISTS domains (
@@ -715,4 +724,24 @@ export const getDomainCountBySite = async (did: string, rkey: string) => {
         custom: Number(customCount[0]?.count || 0),
         total: Number(wispCount[0]?.count || 0) + Number(customCount[0]?.count || 0),
     };
+};
+
+// Cookie secret management - ensure we have a secret for signing cookies
+export const getCookieSecret = async (): Promise<string> => {
+    // Check if secret already exists
+    const rows = await db`SELECT secret FROM cookie_secrets WHERE id = 'default' LIMIT 1`;
+
+    if (rows.length > 0) {
+        return rows[0].secret as string;
+    }
+
+    // Generate new secret if none exists
+    const secret = crypto.randomUUID() + crypto.randomUUID(); // 72 character random string
+    await db`
+        INSERT INTO cookie_secrets (id, secret, created_at)
+        VALUES ('default', ${secret}, EXTRACT(EPOCH FROM NOW()))
+    `;
+
+    console.log('[CookieSecret] Generated new cookie signing secret');
+    return secret;
 };
