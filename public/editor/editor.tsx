@@ -37,7 +37,7 @@ function Dashboard() {
 	const { userInfo, loading, fetchUserInfo } = useUserInfo()
 	const { sites, sitesLoading, isSyncing, fetchSites, syncSites, deleteSite } = useSiteData()
 	const {
-		wispDomain,
+		wispDomains,
 		customDomains,
 		domainsLoading,
 		verificationStatus,
@@ -46,6 +46,7 @@ function Dashboard() {
 		verifyDomain,
 		deleteCustomDomain,
 		mapWispDomain,
+		deleteWispDomain,
 		mapCustomDomain,
 		claimWispDomain,
 		checkWispAvailability
@@ -74,7 +75,8 @@ function Dashboard() {
 		if (site.domains) {
 			site.domains.forEach(domainInfo => {
 				if (domainInfo.type === 'wisp') {
-					mappedDomains.add('wisp')
+					// For wisp domains, use the domain itself as the identifier
+					mappedDomains.add(`wisp:${domainInfo.domain}`)
 				} else if (domainInfo.id) {
 					mappedDomains.add(domainInfo.id)
 				}
@@ -89,19 +91,32 @@ function Dashboard() {
 
 		setIsSavingConfig(true)
 		try {
-			// Determine which domains should be mapped/unmapped
-			const shouldMapWisp = selectedDomains.has('wisp')
-			const isCurrentlyMappedToWisp = wispDomain && wispDomain.rkey === configuringSite.rkey
+			// Handle wisp domain mappings
+			const selectedWispDomainIds = Array.from(selectedDomains).filter(id => id.startsWith('wisp:'))
+			const selectedWispDomains = selectedWispDomainIds.map(id => id.replace('wisp:', ''))
 
-			// Handle wisp domain mapping
-			if (shouldMapWisp && !isCurrentlyMappedToWisp) {
-				await mapWispDomain(configuringSite.rkey)
-			} else if (!shouldMapWisp && isCurrentlyMappedToWisp) {
-				await mapWispDomain(null)
+			// Get currently mapped wisp domains
+			const currentlyMappedWispDomains = wispDomains.filter(
+				d => d.rkey === configuringSite.rkey
+			)
+
+			// Unmap wisp domains that are no longer selected
+			for (const domain of currentlyMappedWispDomains) {
+				if (!selectedWispDomains.includes(domain.domain)) {
+					await mapWispDomain(domain.domain, null)
+				}
+			}
+
+			// Map newly selected wisp domains
+			for (const domainName of selectedWispDomains) {
+				const isAlreadyMapped = currentlyMappedWispDomains.some(d => d.domain === domainName)
+				if (!isAlreadyMapped) {
+					await mapWispDomain(domainName, configuringSite.rkey)
+				}
 			}
 
 			// Handle custom domain mappings
-			const selectedCustomDomainIds = Array.from(selectedDomains).filter(id => id !== 'wisp')
+			const selectedCustomDomainIds = Array.from(selectedDomains).filter(id => !id.startsWith('wisp:'))
 			const currentlyMappedCustomDomains = customDomains.filter(
 				d => d.rkey === configuringSite.rkey
 			)
@@ -240,7 +255,7 @@ function Dashboard() {
 					{/* Domains Tab */}
 					<TabsContent value="domains">
 						<DomainsTab
-							wispDomain={wispDomain}
+							wispDomains={wispDomains}
 							customDomains={customDomains}
 							domainsLoading={domainsLoading}
 							verificationStatus={verificationStatus}
@@ -248,6 +263,7 @@ function Dashboard() {
 							onAddCustomDomain={addCustomDomain}
 							onVerifyDomain={verifyDomain}
 							onDeleteCustomDomain={deleteCustomDomain}
+							onDeleteWispDomain={deleteWispDomain}
 							onClaimWispDomain={claimWispDomain}
 							onCheckWispAvailability={checkWispAvailability}
 						/>
@@ -337,36 +353,39 @@ function Dashboard() {
 							<div className="space-y-3">
 								<p className="text-sm font-medium">Available Domains:</p>
 
-								{wispDomain && (
-									<div className="flex items-center space-x-3 p-3 border rounded-lg hover:bg-muted/30">
-										<Checkbox
-											id="wisp"
-											checked={selectedDomains.has('wisp')}
-											onCheckedChange={(checked) => {
-												const newSelected = new Set(selectedDomains)
-												if (checked) {
-													newSelected.add('wisp')
-												} else {
-													newSelected.delete('wisp')
-												}
-												setSelectedDomains(newSelected)
-											}}
-										/>
-										<Label
-											htmlFor="wisp"
-											className="flex-1 cursor-pointer"
-										>
-											<div className="flex items-center justify-between">
-												<span className="font-mono text-sm">
-													{wispDomain.domain}
-												</span>
-												<Badge variant="secondary" className="text-xs ml-2">
-													Wisp
-												</Badge>
-											</div>
-										</Label>
-									</div>
-								)}
+								{wispDomains.map((wispDomain) => {
+									const domainId = `wisp:${wispDomain.domain}`
+									return (
+										<div key={domainId} className="flex items-center space-x-3 p-3 border rounded-lg hover:bg-muted/30">
+											<Checkbox
+												id={domainId}
+												checked={selectedDomains.has(domainId)}
+												onCheckedChange={(checked) => {
+													const newSelected = new Set(selectedDomains)
+													if (checked) {
+														newSelected.add(domainId)
+													} else {
+														newSelected.delete(domainId)
+													}
+													setSelectedDomains(newSelected)
+												}}
+											/>
+											<Label
+												htmlFor={domainId}
+												className="flex-1 cursor-pointer"
+											>
+												<div className="flex items-center justify-between">
+													<span className="font-mono text-sm">
+														{wispDomain.domain}
+													</span>
+													<Badge variant="secondary" className="text-xs ml-2">
+														Wisp
+													</Badge>
+												</div>
+											</Label>
+										</div>
+									)
+								})}
 
 								{customDomains
 									.filter((d) => d.verified)
@@ -407,9 +426,9 @@ function Dashboard() {
 										</div>
 									))}
 
-								{customDomains.filter(d => d.verified).length === 0 && !wispDomain && (
+								{customDomains.filter(d => d.verified).length === 0 && wispDomains.length === 0 && (
 									<p className="text-sm text-muted-foreground py-4 text-center">
-										No domains available. Add a custom domain or claim your wisp.place subdomain.
+										No domains available. Add a custom domain or claim a wisp.place subdomain.
 									</p>
 								)}
 							</div>

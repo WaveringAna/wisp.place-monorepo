@@ -25,7 +25,7 @@ const FETCH_TIMEOUT = 120000; // 120 seconds
 const FETCH_TIMEOUT_BLOB = 120000; // 2 minutes for blob downloads
 const MAX_RESPONSE_SIZE = 10 * 1024 * 1024; // 10MB
 const MAX_JSON_SIZE = 1024 * 1024; // 1MB
-const MAX_BLOB_SIZE = 100 * 1024 * 1024; // 100MB
+const MAX_BLOB_SIZE = 500 * 1024 * 1024; // 500MB
 const MAX_REDIRECTS = 10;
 
 function isBlockedHost(hostname: string): boolean {

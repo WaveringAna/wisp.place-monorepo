@@ -2,7 +2,7 @@ import { Elysia } from 'elysia'
 import { requireAuth } from '../lib/wisp-auth'
 import { NodeOAuthClient } from '@atproto/oauth-client-node'
 import { Agent } from '@atproto/api'
-import { getSitesByDid, getDomainByDid, getCustomDomainsByDid, getWispDomainInfo, getDomainsBySite } from '../lib/db'
+import { getSitesByDid, getDomainByDid, getCustomDomainsByDid, getWispDomainInfo, getDomainsBySite, getAllWispDomains } from '../lib/db'
 import { syncSitesFromPDS } from '../lib/sync-sites'
 import { logger } from '../lib/logger'
 
@@ -65,17 +65,17 @@ export const userRoutes = (client: NodeOAuthClient) =>
 		})
 		.get('/domains', async ({ auth }) => {
 			try {
-				// Get wisp.place subdomain with mapping
-				const wispDomainInfo = await getWispDomainInfo(auth.did)
+				// Get all wisp.place subdomains with mappings (up to 3)
+				const wispDomains = await getAllWispDomains(auth.did)
 
 				// Get custom domains
 				const customDomains = await getCustomDomainsByDid(auth.did)
 
 				return {
-					wispDomain: wispDomainInfo ? {
-						domain: wispDomainInfo.domain,
-						rkey: wispDomainInfo.rkey || null
-					} : null,
+					wispDomains: wispDomains.map(d => ({
+						domain: d.domain,
+						rkey: d.rkey || null
+					})),
 					customDomains
 				}
 			} catch (err) {

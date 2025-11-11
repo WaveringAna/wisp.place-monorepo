@@ -18,7 +18,7 @@ export interface WispDomain {
 type VerificationStatus = 'idle' | 'verifying' | 'success' | 'error'
 
 export function useDomainData() {
-	const [wispDomain, setWispDomain] = useState<WispDomain | null>(null)
+	const [wispDomains, setWispDomains] = useState<WispDomain[]>([])
 	const [customDomains, setCustomDomains] = useState<CustomDomain[]>([])
 	const [domainsLoading, setDomainsLoading] = useState(true)
 	const [verificationStatus, setVerificationStatus] = useState<{
@@ -29,7 +29,7 @@ export function useDomainData() {
 		try {
 			const response = await fetch('/api/user/domains')
 			const data = await response.json()
-			setWispDomain(data.wispDomain)
+			setWispDomains(data.wispDomains || [])
 			setCustomDomains(data.customDomains || [])
 		} catch (err) {
 			console.error('Failed to fetch domains:', err)
@@ -117,12 +117,12 @@ export function useDomainData() {
 		}
 	}
 
-	const mapWispDomain = async (siteRkey: string | null) => {
+	const mapWispDomain = async (domain: string, siteRkey: string | null) => {
 		try {
 			const response = await fetch('/api/domain/wisp/map-site', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ siteRkey })
+				body: JSON.stringify({ domain, siteRkey })
 			})
 			const data = await response.json()
 			if (!data.success) throw new Error('Failed to map wisp domain')
@@ -130,6 +130,32 @@ export function useDomainData() {
 		} catch (err) {
 			console.error('Map wisp domain error:', err)
 			throw err
+		}
+	}
+
+	const deleteWispDomain = async (domain: string) => {
+		if (!confirm('Are you sure you want to remove this wisp.place domain?')) {
+			return false
+		}
+
+		try {
+			const response = await fetch(`/api/domain/wisp/${encodeURIComponent(domain)}`, {
+				method: 'DELETE'
+			})
+
+			const data = await response.json()
+			if (data.success) {
+				await fetchDomains()
+				return true
+			} else {
+				throw new Error('Failed to delete domain')
+			}
+		} catch (err) {
+			console.error('Delete wisp domain error:', err)
+			alert(
+				`Failed to delete domain: ${err instanceof Error ? err.message : 'Unknown error'}`
+			)
+			return false
 		}
 	}
 
@@ -168,9 +194,9 @@ export function useDomainData() {
 			console.error('Claim domain error:', err)
 			const errorMessage = err instanceof Error ? err.message : 'Unknown error'
 
-			// Handle "Already claimed" error more gracefully
-			if (errorMessage.includes('Already claimed')) {
-				alert('You have already claimed a wisp.place subdomain. Please refresh the page.')
+			// Handle domain limit error more gracefully
+			if (errorMessage.includes('Domain limit reached')) {
+				alert('You have already claimed 3 wisp.place subdomains (maximum limit).')
 				await fetchDomains()
 			} else {
 				alert(`Failed to claim domain: ${errorMessage}`)
@@ -196,7 +222,7 @@ export function useDomainData() {
 	}
 
 	return {
-		wispDomain,
+		wispDomains,
 		customDomains,
 		domainsLoading,
 		verificationStatus,
@@ -205,6 +231,7 @@ export function useDomainData() {
 		verifyDomain,
 		deleteCustomDomain,
 		mapWispDomain,
+		deleteWispDomain,
 		mapCustomDomain,
 		claimWispDomain,
 		checkWispAvailability

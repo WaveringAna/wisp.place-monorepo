@@ -28,7 +28,7 @@ import type { WispDomain, CustomDomain } from '../hooks/useDomainData'
 import type { UserInfo } from '../hooks/useUserInfo'
 
 interface DomainsTabProps {
-	wispDomain: WispDomain | null
+	wispDomains: WispDomain[]
 	customDomains: CustomDomain[]
 	domainsLoading: boolean
 	verificationStatus: { [id: string]: 'idle' | 'verifying' | 'success' | 'error' }
@@ -36,12 +36,13 @@ interface DomainsTabProps {
 	onAddCustomDomain: (domain: string) => Promise<{ success: boolean; id?: string }>
 	onVerifyDomain: (id: string) => Promise<void>
 	onDeleteCustomDomain: (id: string) => Promise<boolean>
+	onDeleteWispDomain: (domain: string) => Promise<boolean>
 	onClaimWispDomain: (handle: string) => Promise<{ success: boolean; error?: string }>
 	onCheckWispAvailability: (handle: string) => Promise<{ available: boolean | null }>
 }
 
 export function DomainsTab({
-	wispDomain,
+	wispDomains,
 	customDomains,
 	domainsLoading,
 	verificationStatus,
@@ -49,6 +50,7 @@ export function DomainsTab({
 	onAddCustomDomain,
 	onVerifyDomain,
 	onDeleteCustomDomain,
+	onDeleteWispDomain,
 	onClaimWispDomain,
 	onCheckWispAvailability
 }: DomainsTabProps) {
@@ -119,9 +121,9 @@ export function DomainsTab({
 			<div className="space-y-4 min-h-[400px]">
 				<Card>
 					<CardHeader>
-						<CardTitle>wisp.place Subdomain</CardTitle>
+						<CardTitle>wisp.place Subdomains</CardTitle>
 						<CardDescription>
-							Your free subdomain on the wisp.place network
+							Your free subdomains on the wisp.place network (up to 3)
 						</CardDescription>
 					</CardHeader>
 					<CardContent>
@@ -129,93 +131,116 @@ export function DomainsTab({
 							<div className="flex items-center justify-center py-4">
 								<Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
 							</div>
-						) : wispDomain ? (
-							<>
-								<div className="flex flex-col gap-2 p-4 bg-muted/50 rounded-lg">
-									<div className="flex items-center gap-2">
-										<CheckCircle2 className="w-5 h-5 text-green-500" />
-										<span className="font-mono text-lg">
-											{wispDomain.domain}
-										</span>
-									</div>
-									{wispDomain.rkey && (
-										<p className="text-xs text-muted-foreground ml-7">
-											→ Mapped to site: {wispDomain.rkey}
-										</p>
-									)}
-								</div>
-								<p className="text-sm text-muted-foreground mt-3">
-									{wispDomain.rkey
-										? 'This domain is mapped to a specific site'
-										: 'This domain is not mapped to any site yet. Configure it from the Sites tab.'}
-								</p>
-							</>
 						) : (
 							<div className="space-y-4">
-								<div className="p-4 bg-muted/30 rounded-lg">
-									<p className="text-sm text-muted-foreground mb-4">
-										Claim your free wisp.place subdomain
-									</p>
-									<div className="space-y-3">
-										<div className="space-y-2">
-											<Label htmlFor="wisp-handle">Choose your handle</Label>
-											<div className="flex gap-2">
-												<div className="flex-1 relative">
-													<Input
-														id="wisp-handle"
-														placeholder="mysite"
-														value={wispHandle}
-														onChange={(e) => {
-															setWispHandle(e.target.value)
-															if (e.target.value.trim()) {
-																checkWispAvailability(e.target.value)
-															} else {
-																setWispAvailability({ available: null, checking: false })
-															}
-														}}
-														disabled={isClaimingWisp}
-														className="pr-24"
-													/>
-													<span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-														.wisp.place
-													</span>
+								{wispDomains.length > 0 && (
+									<div className="space-y-2">
+										{wispDomains.map((domain) => (
+											<div
+												key={domain.domain}
+												className="flex items-center justify-between p-3 border border-border rounded-lg"
+											>
+												<div className="flex flex-col gap-1 flex-1">
+													<div className="flex items-center gap-2">
+														<CheckCircle2 className="w-4 h-4 text-green-500" />
+														<span className="font-mono">
+															{domain.domain}
+														</span>
+													</div>
+													{domain.rkey && (
+														<p className="text-xs text-muted-foreground ml-6">
+															→ Mapped to site: {domain.rkey}
+														</p>
+													)}
 												</div>
+												<Button
+													variant="ghost"
+													size="sm"
+													onClick={() => onDeleteWispDomain(domain.domain)}
+												>
+													<Trash2 className="w-4 h-4" />
+												</Button>
 											</div>
-											{wispAvailability.checking && (
-												<p className="text-xs text-muted-foreground flex items-center gap-1">
-													<Loader2 className="w-3 h-3 animate-spin" />
-													Checking availability...
-												</p>
-											)}
-											{!wispAvailability.checking && wispAvailability.available === true && (
-												<p className="text-xs text-green-600 flex items-center gap-1">
-													<CheckCircle2 className="w-3 h-3" />
-													Available
-												</p>
-											)}
-											{!wispAvailability.checking && wispAvailability.available === false && (
-												<p className="text-xs text-red-600 flex items-center gap-1">
-													<XCircle className="w-3 h-3" />
-													Not available
-												</p>
-											)}
-										</div>
-										<Button
-											onClick={handleClaimWispDomain}
-											disabled={!wispHandle.trim() || isClaimingWisp || wispAvailability.available !== true}
-											className="w-full"
-										>
-											{isClaimingWisp ? (
-												<>
-													<Loader2 className="w-4 h-4 mr-2 animate-spin" />
-													Claiming...
-												</>
-											) : (
-												'Claim Subdomain'
-											)}
-										</Button>
+										))}
 									</div>
-								</div>
+								)}
+
+								{wispDomains.length < 3 && (
+									<div className="p-4 bg-muted/30 rounded-lg">
+										<p className="text-sm text-muted-foreground mb-4">
+											{wispDomains.length === 0
+												? 'Claim your free wisp.place subdomain'
+												: `Claim another wisp.place subdomain (${wispDomains.length}/3)`}
+										</p>
+										<div className="space-y-3">
+											<div className="space-y-2">
+												<Label htmlFor="wisp-handle">Choose your handle</Label>
+												<div className="flex gap-2">
+													<div className="flex-1 relative">
+														<Input
+															id="wisp-handle"
+															placeholder="mysite"
+															value={wispHandle}
+															onChange={(e) => {
+																setWispHandle(e.target.value)
+																if (e.target.value.trim()) {
+																	checkWispAvailability(e.target.value)
+																} else {
+																	setWispAvailability({ available: null, checking: false })
+																}
+															}}
+															disabled={isClaimingWisp}
+															className="pr-24"
+														/>
+														<span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
+															.wisp.place
+														</span>
+													</div>
+												</div>
+												{wispAvailability.checking && (
+													<p className="text-xs text-muted-foreground flex items-center gap-1">
+														<Loader2 className="w-3 h-3 animate-spin" />
+														Checking availability...
+													</p>
+												)}
+												{!wispAvailability.checking && wispAvailability.available === true && (
+													<p className="text-xs text-green-600 flex items-center gap-1">
+														<CheckCircle2 className="w-3 h-3" />
+														Available
+													</p>
+												)}
+												{!wispAvailability.checking && wispAvailability.available === false && (
+													<p className="text-xs text-red-600 flex items-center gap-1">
+														<XCircle className="w-3 h-3" />
+														Not available
+													</p>
+												)}
+											</div>
+											<Button
+												onClick={handleClaimWispDomain}
+												disabled={!wispHandle.trim() || isClaimingWisp || wispAvailability.available !== true}
+												className="w-full"
+											>
+												{isClaimingWisp ? (
+													<>
+														<Loader2 className="w-4 h-4 mr-2 animate-spin" />
+														Claiming...
+													</>
+												) : (
+													'Claim Subdomain'
+												)}
+											</Button>
+										</div>
+									</div>
+								)}
+
+								{wispDomains.length === 3 && (
+									<div className="p-3 bg-muted/30 rounded-lg text-center">
+										<p className="text-sm text-muted-foreground">
+											You have claimed the maximum of 3 wisp.place subdomains
+										</p>
+									</div>
+								)}
 							</div>
 						)}
 					</CardContent>

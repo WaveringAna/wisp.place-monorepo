@@ -10,6 +10,8 @@ import {
 	isValidHandle,
 	toDomain,
 	updateDomain,
+	countWispDomains,
+	deleteWispDomain,
 	getCustomDomainInfo,
 	getCustomDomainById,
 	claimCustomDomain,
@@ -84,31 +86,31 @@ export const domainRoutes = (client: NodeOAuthClient) =>
 			try {
 				const { handle } = body as { handle?: string };
 				const normalizedHandle = (handle || "").trim().toLowerCase();
-				
+
 				if (!isValidHandle(normalizedHandle)) {
 					throw new Error("Invalid handle");
 				}
 
-				// ensure user hasn't already claimed
-				const existing = await getDomainByDid(auth.did);
-				if (existing) {
-					throw new Error("Already claimed");
-				}
-
+				// Check if user already has 3 domains (handled in claimDomain)
 				// claim in DB
 				let domain: string;
 				try {
 					domain = await claimDomain(auth.did, normalizedHandle);
 				} catch (err) {
-					throw new Error("Handle taken");
+					const message = err instanceof Error ? err.message : 'Unknown error';
+					if (message === 'domain_limit_reached') {
+						throw new Error("Domain limit reached: You can only claim up to 3 wisp.place domains");
+					}
+					throw new Error("Handle taken or error claiming domain");
 				}
 
-				// write place.wisp.domain record rkey = self
+				// write place.wisp.domain record with unique rkey
 				const agent = new Agent((url, init) => auth.session.fetchHandler(url, init));
+				const rkey = normalizedHandle; // Use handle as rkey for uniqueness
 				await agent.com.atproto.repo.putRecord({
 					repo: auth.did,
 					collection: "place.wisp.domain",
-					rkey: "self",
+					rkey,
 					record: {
 						$type: "place.wisp.domain",
 						domain,
@@ -309,15 +311,58 @@ export const domainRoutes = (client: NodeOAuthClient) =>
 		})
 		.post('/wisp/map-site', async ({ body, auth }) => {
 			try {
-				const { siteRkey } = body as { siteRkey: string | null };
+				const { domain, siteRkey } = body as { domain: string; siteRkey: string | null };
+
+				if (!domain) {
+					throw new Error('Domain parameter required');
+				}
 
 				// Update wisp.place domain to point to this site
-				await updateWispDomainSite(auth.did, siteRkey);
+				await updateWispDomainSite(domain, siteRkey);
 
 				return { success: true };
 			} catch (err) {
 				logger.error('[Domain] Wisp domain map error', err);
 				throw new Error(`Failed to map site: ${err instanceof Error ? err.message : 'Unknown error'}`);
+			}
+		})
+		.delete('/wisp/:domain', async ({ params, auth }) => {
+			try {
+				const { domain } = params;
+
+				// Verify domain belongs to user
+				const domainLower = domain.toLowerCase().trim();
+				const info = await isDomainRegistered(domainLower);
+
+				if (!info.registered || info.type !== 'wisp') {
+					throw new Error('Domain not found');
+				}
+
+				if (info.did !== auth.did) {
+					throw new Error('Unauthorized: You do not own this domain');
+				}
+
+				// Delete from database
+				await deleteWispDomain(domainLower);
+
+				// Delete from PDS
+				const agent = new Agent((url, init) => auth.session.fetchHandler(url, init));
+				const handle = domainLower.replace(`.${process.env.BASE_DOMAIN || 'wisp.place'}`, '');
+				try {
+					await agent.com.atproto.repo.deleteRecord({
+						repo: auth.did,
+						collection: "place.wisp.domain",
+						rkey: handle,
+					});
+				} catch (err) {
+					// Record might not exist in PDS, continue anyway
+					logger.warn('[Domain] Could not delete wisp domain from PDS', err);
+				}
+
+				return { success: true };
+			} catch (err) {
+				logger.error('[Domain] Wisp domain delete error', err);
+				throw new Error(`Failed to delete domain: ${err instanceof Error ? err.message : 'Unknown error'}`);
 			}
 		})
 		.post('/custom/:id/map-site', async ({ params, body, auth }) => {
