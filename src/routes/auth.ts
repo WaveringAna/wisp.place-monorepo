@@ -32,6 +32,7 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) => new
 
 			if (!session) {
 				logger.error('[Auth] OAuth callback failed: no session returned')
+				c.cookie.did.remove()
 				return c.redirect('/?error=auth_failed')
 			}
 
@@ -70,6 +71,7 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) => new
 		} catch (err) {
 			// This catches state validation failures and other OAuth errors
 			logger.error('[Auth] OAuth callback error', err)
+			c.cookie.did.remove()
 			return c.redirect('/?error=auth_failed')
 		}
 	}, {
@@ -117,6 +119,7 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) => new
 			const auth = await authenticateRequest(client, c.cookie)
 
 			if (!auth) {
+				c.cookie.did.remove()
 				return { authenticated: false }
 			}
 
@@ -126,6 +129,7 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) => new
 			}
 		} catch (err) {
 			logger.error('[Auth] Status check error', err)
+			c.cookie.did.remove()
 			return { authenticated: false }
 		}
 	}, {
