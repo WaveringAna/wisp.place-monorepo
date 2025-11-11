@@ -1,6 +1,16 @@
 import postgres from 'postgres';
 import { createHash } from 'crypto';
 
+// Global cache-only mode flag (set by index.ts)
+let cacheOnlyMode = false;
+
+export function setCacheOnlyMode(enabled: boolean) {
+  cacheOnlyMode = enabled;
+  if (enabled) {
+    console.log('[DB] Cache-only mode enabled - database writes will be skipped');
+  }
+}
+
 const sql = postgres(
   process.env.DATABASE_URL || 'postgres://postgres:postgres@localhost:5432/wisp',
   {
@@ -130,6 +140,12 @@ export async function getCustomDomainByHash(hash: string): Promise<CustomDomainL
 }
 
 export async function upsertSite(did: string, rkey: string, displayName?: string) {
+  // Skip database writes in cache-only mode
+  if (cacheOnlyMode) {
+    console.log('[DB] Skipping upsertSite (cache-only mode)', { did, rkey });
+    return;
+  }
+
   try {
     // Only set display_name if provided (not undefined/null/empty)
     const cleanDisplayName = displayName && displayName.trim() ? displayName.trim() : null;

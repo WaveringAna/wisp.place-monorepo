@@ -4,7 +4,7 @@ import { FirehoseWorker } from './lib/firehose';
 import { logger } from './lib/observability';
 import { mkdirSync, existsSync } from 'fs';
 import { backfillCache } from './lib/backfill';
-import { startDomainCacheCleanup, stopDomainCacheCleanup } from './lib/db';
+import { startDomainCacheCleanup, stopDomainCacheCleanup, setCacheOnlyMode } from './lib/db';
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3001;
 const CACHE_DIR = process.env.CACHE_DIR || './cache/sites';
@@ -13,6 +13,15 @@ const CACHE_DIR = process.env.CACHE_DIR || './cache/sites';
 const args = process.argv.slice(2);
 const hasBackfillFlag = args.includes('--backfill');
 const backfillOnStartup = hasBackfillFlag || process.env.BACKFILL_ON_STARTUP === 'true';
+
+// Cache-only mode: service will only cache files locally, no DB writes
+const hasCacheOnlyFlag = args.includes('--cache-only');
+export const CACHE_ONLY_MODE = hasCacheOnlyFlag || process.env.CACHE_ONLY_MODE === 'true';
+
+// Configure cache-only mode in database module
+if (CACHE_ONLY_MODE) {
+  setCacheOnlyMode(true);
+}
 
 // Ensure cache directory exists
 if (!existsSync(CACHE_DIR)) {
@@ -65,6 +74,7 @@ Server:       http://localhost:${PORT}
 Health:       http://localhost:${PORT}/health
 Cache:        ${CACHE_DIR}
 Firehose:     Connected to Firehose
+Cache-Only:   ${CACHE_ONLY_MODE ? 'ENABLED (no DB writes)' : 'DISABLED'}
 `);
 
 // Graceful shutdown

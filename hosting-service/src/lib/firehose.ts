@@ -197,6 +197,7 @@ export class FirehoseWorker {
 		)
 
 		// Acquire distributed lock only for database write to prevent duplicate writes
+		// Note: upsertSite will check cache-only mode internally and skip if needed
 		const lockKey = `db:upsert:${did}:${site}`
 		const lockAcquired = await tryAcquireLock(lockKey)
 
@@ -214,6 +215,7 @@ export class FirehoseWorker {
 
 		try {
 			// Upsert site to database (only one instance does this)
+			// In cache-only mode, this will be a no-op
 			await upsertSite(did, site, fsRecord.site)
 			this.log(
 				'Successfully processed create/update (cached + DB updated)',
