@@ -110,7 +110,12 @@ export const app = new Elysia({
 	.get('/client-metadata.json', () => {
 		return createClientMetadata(config)
 	})
-	.get('/jwks.json', async () => {
+	.get('/jwks.json', async ({ set }) => {
+		// Prevent caching to ensure clients always get fresh keys after rotation
+		set.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+		set.headers['Pragma'] = 'no-cache'
+		set.headers['Expires'] = '0'
+
 		const keys = await getCurrentKeys()
 		if (!keys.length) return { keys: [] }
 

@@ -36,11 +36,11 @@ await db`
     )
 `;
 
-// Domains table maps subdomain -> DID
+// Domains table maps subdomain -> DID (now supports up to 3 domains per user)
 await db`
     CREATE TABLE IF NOT EXISTS domains (
         domain TEXT PRIMARY KEY,
-        did TEXT UNIQUE NOT NULL,
+        did TEXT NOT NULL,
         rkey TEXT,
         created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())
     )
@@ -69,6 +69,13 @@ try {
     await db`ALTER TABLE oauth_states ADD COLUMN IF NOT EXISTS expires_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) + 3600`;
 } catch (err) {
     // Column might already exist, ignore
+}
+
+// Remove the unique constraint on domains.did to allow multiple domains per user
+try {
+    await db`ALTER TABLE domains DROP CONSTRAINT IF EXISTS domains_did_key`;
+} catch (err) {
+    // Constraint might already be removed, ignore
 }
 
 // Custom domains table for BYOD (bring your own domain)
@@ -189,13 +196,23 @@ export const isValidHandle = (handle: string): boolean => {
 export const toDomain = (handle: string): string => `${handle.toLowerCase()}.${BASE_HOST}`;
 
 export const getDomainByDid = async (did: string): Promise<string | null> => {
-    const rows = await db`SELECT domain FROM domains WHERE did = ${did}`;
+    const rows = await db`SELECT domain FROM domains WHERE did = ${did} ORDER BY created_at ASC LIMIT 1`;
     return rows[0]?.domain ?? null;
 };
 
 export const getWispDomainInfo = async (did: string) => {
-    const rows = await db`SELECT domain, rkey FROM domains WHERE did = ${did}`;
+    const rows = await db`SELECT domain, rkey FROM domains WHERE did = ${did} ORDER BY created_at ASC LIMIT 1`;
     return rows[0] ?? null;
+};
+
+export const getAllWispDomains = async (did: string) => {
+    const rows = await db`SELECT domain, rkey FROM domains WHERE did = ${did} ORDER BY created_at ASC`;
+    return rows;
+};
+
+export const countWispDomains = async (did: string): Promise<number> => {
+    const rows = await db`SELECT COUNT(*) as count FROM domains WHERE did = ${did}`;
+    return Number(rows[0]?.count ?? 0);
 };
 
 export const getDidByDomain = async (domain: string): Promise<string | null> => {
@@ -251,6 +268,13 @@ export const isDomainRegistered = async (domain: string) => {
 export const claimDomain = async (did: string, handle: string): Promise<string> => {
     const h = handle.trim().toLowerCase();
     if (!isValidHandle(h)) throw new Error('invalid_handle');
+
+    // Check if user already has 3 domains
+    const existingCount = await countWispDomains(did);
+    if (existingCount >= 3) {
+        throw new Error('domain_limit_reached');
+    }
+
     const domain = toDomain(h);
     try {
         await db`
@@ -258,7 +282,7 @@ export const claimDomain = async (did: string, handle: string): Promise<string> 
             VALUES (${domain}, ${did})
         `;
     } catch (err) {
-        // Unique constraint violations -> already taken or DID already claimed
+        // Unique constraint violations -> already taken
         throw new Error('conflict');
     }
     return domain;
@@ -283,17 +307,21 @@ export const updateDomain = async (did: string, handle: string): Promise<string>
     }
 };
 
-export const updateWispDomainSite = async (did: string, siteRkey: string | null): Promise<void> => {
+export const updateWispDomainSite = async (domain: string, siteRkey: string | null): Promise<void> => {
     await db`
         UPDATE domains
         SET rkey = ${siteRkey}
-        WHERE did = ${did}
+        WHERE domain = ${domain}
     `;
 };
 
 export const getWispDomainSite = async (did: string): Promise<string | null> => {
-    const rows = await db`SELECT rkey FROM domains WHERE did = ${did}`;
+    const rows = await db`SELECT rkey FROM domains WHERE did = ${did} ORDER BY created_at ASC LIMIT 1`;
     return rows[0]?.rkey ?? null;
+};
+
+export const deleteWispDomain = async (domain: string): Promise<void> => {
+    await db`DELETE FROM domains WHERE domain = ${domain}`;
 };
 
 // Session timeout configuration (30 days in seconds)
