@@ -106,7 +106,7 @@ export const adminRoutes = (cookieSecret: string) =>
 			// Get logs from hosting service
 			let hostingLogs: any[] = []
 			try {
-				const hostingPort = process.env.HOSTING_PORT || '3001'
+				const hostingServiceUrl = process.env.HOSTING_SERVICE_URL || `http://localhost:${process.env.HOSTING_PORT || '3001'}`
 				const params = new URLSearchParams()
 				if (query.level) params.append('level', query.level as string)
 				if (query.service) params.append('service', query.service as string)
@@ -114,7 +114,7 @@ export const adminRoutes = (cookieSecret: string) =>
 				if (query.eventType) params.append('eventType', query.eventType as string)
 				params.append('limit', String(filter.limit || 100))
 
-				const response = await fetch(`http://localhost:${hostingPort}/__internal__/observability/logs?${params}`)
+				const response = await fetch(`${hostingServiceUrl}/__internal__/observability/logs?${params}`)
 				if (response.ok) {
 					const data = await response.json()
 					hostingLogs = data.logs
@@ -154,12 +154,12 @@ export const adminRoutes = (cookieSecret: string) =>
 			// Get errors from hosting service
 			let hostingErrors: any[] = []
 			try {
-				const hostingPort = process.env.HOSTING_PORT || '3001'
+				const hostingServiceUrl = process.env.HOSTING_SERVICE_URL || `http://localhost:${process.env.HOSTING_PORT || '3001'}`
 				const params = new URLSearchParams()
 				if (query.service) params.append('service', query.service as string)
 				params.append('limit', String(filter.limit || 100))
 
-				const response = await fetch(`http://localhost:${hostingPort}/__internal__/observability/errors?${params}`)
+				const response = await fetch(`${hostingServiceUrl}/__internal__/observability/errors?${params}`)
 				if (response.ok) {
 					const data = await response.json()
 					hostingErrors = data.errors
@@ -207,8 +207,8 @@ export const adminRoutes = (cookieSecret: string) =>
 			}
 
 			try {
-				const hostingPort = process.env.HOSTING_PORT || '3001'
-				const response = await fetch(`http://localhost:${hostingPort}/__internal__/observability/metrics?timeWindow=${timeWindow}`)
+				const hostingServiceUrl = process.env.HOSTING_SERVICE_URL || `http://localhost:${process.env.HOSTING_PORT || '3001'}`
+				const response = await fetch(`${hostingServiceUrl}/__internal__/observability/metrics?timeWindow=${timeWindow}`)
 				if (response.ok) {
 					const data = await response.json()
 					hostingServiceStats = data.stats
@@ -273,6 +273,41 @@ export const adminRoutes = (cookieSecret: string) =>
 				set.status = 500
 				return {
 					error: 'Failed to fetch database stats',
+					message: error instanceof Error ? error.message : String(error)
+				}
+			}
+		}, {
+			cookie: t.Cookie({
+				admin_session: t.Optional(t.String())
+			}, {
+				secrets: cookieSecret,
+				sign: ['admin_session']
+			})
+		})
+
+		// Get cache stats (protected)
+		.get('/cache', async ({ cookie, set }) => {
+			const check = requireAdmin({ cookie, set })
+			if (check) return check
+
+			try {
+				const hostingServiceUrl = process.env.HOSTING_SERVICE_URL || `http://localhost:${process.env.HOSTING_PORT || '3001'}`
+				const response = await fetch(`${hostingServiceUrl}/__internal__/observability/cache`)
+				
+				if (response.ok) {
+					const data = await response.json()
+					return data
+				} else {
+					set.status = 503
+					return {
+						error: 'Failed to fetch cache stats from hosting service',
+						message: 'Hosting service unavailable'
+					}
+				}
+			} catch (error) {
+				set.status = 500
+				return {
+					error: 'Failed to fetch cache stats',
 					message: error instanceof Error ? error.message : String(error)
 				}
 			}

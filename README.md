@@ -43,7 +43,7 @@ bun run src/index.ts
 
 # Hosting service
 cd hosting-service
-cargo run
+npm run start
 
 # CLI
 cd cli
@@ -60,7 +60,7 @@ cargo build
 
 - Backend: Bun + Elysia + PostgreSQL
 - Frontend: React 19 + Tailwind 4 + Radix UI
-- Hosting: Rust microservice
+- Hosting: Node microservice using Hono
 - CLI: Rust + Jacquard (AT Protocol library)
 - Protocol: AT Protocol OAuth + custom lexicons
 

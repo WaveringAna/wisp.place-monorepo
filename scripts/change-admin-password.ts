@@ -1,6 +1,6 @@
 // Change admin password
-import { adminAuth } from './src/lib/admin-auth'
-import { db } from './src/lib/db'
+import { adminAuth } from '../src/lib/admin-auth'
+import { db } from '../src/lib/db'
 import { randomBytes, createHash } from 'crypto'
 
 // Get username and new password from command line
