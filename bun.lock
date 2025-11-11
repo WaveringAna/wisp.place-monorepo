@@ -20,6 +20,7 @@
         "@radix-ui/react-slot": "^1.2.3",
         "@radix-ui/react-tabs": "^1.1.13",
         "@tanstack/react-query": "^5.90.2",
+        "actor-typeahead": "^0.1.1",
         "atproto-ui": "^0.11.1",
         "class-variance-authority": "^0.7.1",
         "clsx": "^2.1.1",
@@ -387,6 +388,8 @@
     "acorn": ["acorn@8.15.0", "", { "bin": { "acorn": "bin/acorn" } }, "sha512-NZyJarBfL7nWwIq+FDL6Zp/yHEhePMNnnJ0y3qfieCrmNvYct8uvtiV41UvlSe6apAfk0fY1FbWx+NwfmpvtTg=="],
 
     "acorn-import-attributes": ["acorn-import-attributes@1.9.5", "", { "peerDependencies": { "acorn": "^8" } }, "sha512-n02Vykv5uA3eHGM/Z2dQrcD56kL8TyDb2p1+0P83PClMnC/nc+anbQRhIOWnSq4Ke/KvDPrY3C9hDtC/A3eHnQ=="],
+
+    "actor-typeahead": ["actor-typeahead@0.1.1", "", {}, "sha512-ilsBwzplKwMSBiO6Tg6RdaZ5xxqgXds5jCQuHV+ib9Aq3ja9g0T7u2Y1PmihotmS7l5RxhpGI/tPm3ljoRDRwg=="],
 
     "ansi-regex": ["ansi-regex@5.0.1", "", {}, "sha512-quJQXlTSUGL2LH9SUXo8VwsY4soanhgo6LNSm84E1LBcE8s3O0wpdiRzyR9z/ZZJMlMWv37qOOb9pdJlMUEKFQ=="],
 

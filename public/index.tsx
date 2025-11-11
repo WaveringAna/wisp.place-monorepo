@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import React, { useState, useRef, useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
 	ArrowRight,
@@ -9,15 +9,290 @@ import {
 	Code,
 	Server
 } from 'lucide-react'
-
 import Layout from '@public/layouts'
 import { Button } from '@public/components/ui/button'
 import { Card } from '@public/components/ui/card'
 import { BlueskyPostList, BlueskyProfile, BlueskyPost, AtProtoProvider, useLatestRecord, type AtProtoStyles, type FeedPostRecord } from 'atproto-ui'
 import 'atproto-ui/styles.css'
 
+//Credit to https://tangled.org/@jakelazaroff.com/actor-typeahead
+interface Actor {
+	handle: string
+	avatar?: string
+	displayName?: string
+}
+
+interface ActorTypeaheadProps {
+	children: React.ReactElement<React.InputHTMLAttributes<HTMLInputElement>>
+	host?: string
+	rows?: number
+	onSelect?: (handle: string) => void
+	autoSubmit?: boolean
+}
+
+const ActorTypeahead: React.FC<ActorTypeaheadProps> = ({
+	children,
+	host = 'https://public.api.bsky.app',
+	rows = 5,
+	onSelect,
+	autoSubmit = false
+}) => {
+	const [actors, setActors] = useState<Actor[]>([])
+	const [index, setIndex] = useState(-1)
+	const [pressed, setPressed] = useState(false)
+	const [isOpen, setIsOpen] = useState(false)
+	const containerRef = useRef<HTMLDivElement>(null)
+	const inputRef = useRef<HTMLInputElement>(null)
+	const lastQueryRef = useRef<string>('')
+	const previousValueRef = useRef<string>('')
+	const preserveIndexRef = useRef(false)
+
+	const handleInput = async (e: React.FormEvent<HTMLInputElement>) => {
+		const query = e.currentTarget.value
+
+		// Check if the value actually changed (filter out arrow key events)
+		if (query === previousValueRef.current) {
+			return
+		}
+		previousValueRef.current = query
+
+		if (!query) {
+			setActors([])
+			setIndex(-1)
+			setIsOpen(false)
+			lastQueryRef.current = ''
+			return
+		}
+
+		// Store the query for this request
+		const currentQuery = query
+		lastQueryRef.current = currentQuery
+
+		try {
+			const url = new URL('xrpc/app.bsky.actor.searchActorsTypeahead', host)
+			url.searchParams.set('q', query)
+			url.searchParams.set('limit', `${rows}`)
+
+			const res = await fetch(url)
+			const json = await res.json()
+
+			// Only update if this is still the latest query
+			if (lastQueryRef.current === currentQuery) {
+				setActors(json.actors || [])
+				// Only reset index if we're not preserving it
+				if (!preserveIndexRef.current) {
+					setIndex(-1)
+				}
+				preserveIndexRef.current = false
+				setIsOpen(true)
+			}
+		} catch (error) {
+			console.error('Failed to fetch actors:', error)
+			if (lastQueryRef.current === currentQuery) {
+				setActors([])
+				setIsOpen(false)
+			}
+		}
+	}
+
+	const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+		const navigationKeys = ['ArrowDown', 'ArrowUp', 'PageDown', 'PageUp', 'Enter', 'Escape']
+		
+		// Mark that we should preserve the index for navigation keys
+		if (navigationKeys.includes(e.key)) {
+			preserveIndexRef.current = true
+		}
+
+		if (!isOpen || actors.length === 0) return
+
+		switch (e.key) {
+			case 'ArrowDown':
+				e.preventDefault()
+				setIndex((prev) => {
+					const newIndex = prev < 0 ? 0 : Math.min(prev + 1, actors.length - 1)
+					return newIndex
+				})
+				break
+			case 'PageDown':
+				e.preventDefault()
+				setIndex(actors.length - 1)
+				break
+			case 'ArrowUp':
+				e.preventDefault()
+				setIndex((prev) => {
+					const newIndex = prev < 0 ? 0 : Math.max(prev - 1, 0)
+					return newIndex
+				})
+				break
+			case 'PageUp':
+				e.preventDefault()
+				setIndex(0)
+				break
+			case 'Escape':
+				e.preventDefault()
+				setActors([])
+				setIndex(-1)
+				setIsOpen(false)
+				break
+			case 'Enter':
+				if (index >= 0 && index < actors.length) {
+					e.preventDefault()
+					selectActor(actors[index].handle)
+				}
+				break
+		}
+	}
+
+	const selectActor = (handle: string) => {
+		if (inputRef.current) {
+			inputRef.current.value = handle
+		}
+		setActors([])
+		setIndex(-1)
+		setIsOpen(false)
+		onSelect?.(handle)
+		
+		// Auto-submit the form if enabled
+		if (autoSubmit && inputRef.current) {
+			const form = inputRef.current.closest('form')
+			if (form) {
+				// Use setTimeout to ensure the value is set before submission
+				setTimeout(() => {
+					form.requestSubmit()
+				}, 0)
+			}
+		}
+	}
+
+	const handleFocusOut = (e: React.FocusEvent) => {
+		if (pressed) return
+		setActors([])
+		setIndex(-1)
+		setIsOpen(false)
+	}
+
+	// Clone the input element and add our event handlers
+	const input = React.cloneElement(children, {
+		ref: (el: HTMLInputElement) => {
+			inputRef.current = el
+			// Preserve the original ref if it exists
+			const originalRef = (children as any).ref
+			if (typeof originalRef === 'function') {
+				originalRef(el)
+			} else if (originalRef) {
+				originalRef.current = el
+			}
+		},
+		onInput: (e: React.FormEvent<HTMLInputElement>) => {
+			handleInput(e)
+			children.props.onInput?.(e)
+		},
+		onKeyDown: (e: React.KeyboardEvent<HTMLInputElement>) => {
+			handleKeyDown(e)
+			children.props.onKeyDown?.(e)
+		},
+		onBlur: (e: React.FocusEvent<HTMLInputElement>) => {
+			handleFocusOut(e)
+			children.props.onBlur?.(e)
+		},
+		autoComplete: 'off'
+	} as any)
+
+	return (
+		<div ref={containerRef} style={{ position: 'relative', display: 'block' }}>
+			{input}
+			{isOpen && actors.length > 0 && (
+				<ul
+					style={{
+						display: 'flex',
+						flexDirection: 'column',
+						position: 'absolute',
+						left: 0,
+						marginTop: '4px',
+						width: '100%',
+						listStyle: 'none',
+						overflow: 'hidden',
+						backgroundColor: 'rgba(255, 255, 255, 0.7)',
+						backgroundClip: 'padding-box',
+						backdropFilter: 'blur(12px)',
+						WebkitBackdropFilter: 'blur(12px)',
+						border: '1px solid hsl(var(--border))',
+						borderRadius: '8px',
+						boxShadow: '0 6px 6px -4px rgba(0, 0, 0, 0.2)',
+						padding: '4px',
+						margin: 0,
+						zIndex: 1000
+					}}
+					onMouseDown={() => setPressed(true)}
+					onMouseUp={() => {
+						setPressed(false)
+						inputRef.current?.focus()
+					}}
+				>
+					{actors.map((actor, i) => (
+						<li key={actor.handle}>
+							<button
+								type="button"
+								onClick={() => selectActor(actor.handle)}
+								style={{
+									all: 'unset',
+									boxSizing: 'border-box',
+									display: 'flex',
+									alignItems: 'center',
+									gap: '8px',
+									padding: '6px 8px',
+									width: '100%',
+									height: 'calc(1.5rem + 12px)',
+									borderRadius: '4px',
+									cursor: 'pointer',
+									backgroundColor: i === index ? 'hsl(var(--accent) / 0.5)' : 'transparent',
+									transition: 'background-color 0.1s'
+								}}
+								onMouseEnter={() => setIndex(i)}
+							>
+								<div
+									style={{
+										width: '1.5rem',
+										height: '1.5rem',
+										borderRadius: '50%',
+										backgroundColor: 'hsl(var(--muted))',
+										overflow: 'hidden',
+										flexShrink: 0
+									}}
+								>
+									{actor.avatar && (
+										<img
+											src={actor.avatar}
+											alt=""
+											style={{
+												display: 'block',
+												width: '100%',
+												height: '100%',
+												objectFit: 'cover'
+											}}
+										/>
+									)}
+								</div>
+								<span
+									style={{
+										whiteSpace: 'nowrap',
+										overflow: 'hidden',
+										textOverflow: 'ellipsis',
+										color: 'hsl(var(--foreground))'
+									}}
+								>
+									{actor.handle}
+								</span>
+							</button>
+						</li>
+					))}
+				</ul>
+			)}
+		</div>
+	)
+}
+
 const LatestPostWithPrefetch: React.FC<{ did: string }> = ({ did }) => {
-	// Fetch once with the hook
 	const { record, rkey, loading } = useLatestRecord<FeedPostRecord>(
 		did,
 		'app.bsky.feed.post'
@@ -26,7 +301,6 @@ const LatestPostWithPrefetch: React.FC<{ did: string }> = ({ did }) => {
 	if (loading) return <span>Loading…</span>
 	if (!record || !rkey) return <span>No posts yet.</span>
 
-	// Pass prefetched record—BlueskyPost won't re-fetch it
 	return <BlueskyPost did={did} rkey={rkey} record={record} showParent={true} />
 }
 
@@ -187,13 +461,22 @@ function App() {
 									}}
 									className="space-y-3"
 								>
-									<input
-										ref={inputRef}
-										type="text"
-										name="handle"
-										placeholder="Enter your handle (e.g., alice.bsky.social)"
-										className="w-full py-4 px-4 text-lg bg-input border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-accent"
-									/>
+									<ActorTypeahead
+										autoSubmit={true}
+										onSelect={(handle) => {
+											if (inputRef.current) {
+												inputRef.current.value = handle
+											}
+										}}
+									>
+										<input
+											ref={inputRef}
+											type="text"
+											name="handle"
+											placeholder="Enter your handle (e.g., alice.bsky.social)"
+											className="w-full py-4 px-4 text-lg bg-input border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-accent"
+										/>
+									</ActorTypeahead>
 									<button
 										type="submit"
 										className="w-full bg-accent hover:bg-accent/90 text-accent-foreground font-semibold py-4 px-6 text-lg rounded-lg inline-flex items-center justify-center transition-colors"
