@@ -321,8 +321,12 @@ function App() {
 					window.location.href = '/editor'
 					return
 				}
+				// If not authenticated, clear any stale cookies
+				document.cookie = 'did=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax'
 			} catch (error) {
 				console.error('Auth check failed:', error)
+				// Clear cookies on error as well
+				document.cookie = 'did=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax'
 			} finally {
 				setCheckingAuth(false)
 			}
@@ -455,6 +459,8 @@ function App() {
 												'Login failed:',
 												error
 											)
+											// Clear any invalid cookies
+											document.cookie = 'did=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax'
 											alert('Authentication failed')
 										}
 									}}
