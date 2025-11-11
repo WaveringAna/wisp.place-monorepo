@@ -37,7 +37,7 @@ export const adminRoutes = (cookieSecret: string) =>
 					password: t.String()
 				}),
 				cookie: t.Cookie({
-					admin_session: t.String()
+					admin_session: t.Optional(t.String())
 				}, {
 					secrets: cookieSecret,
 					sign: ['admin_session']
