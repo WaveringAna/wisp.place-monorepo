@@ -7,6 +7,7 @@ import { readFile, access } from 'fs/promises';
 import { lookup } from 'mime-types';
 import { logger, observabilityMiddleware, observabilityErrorHandler, logCollector, errorTracker, metricsCollector } from './lib/observability';
 import { fileCache, metadataCache, rewrittenHtmlCache, getCacheKey, type FileMetadata } from './lib/cache';
+import { loadRedirectRules, matchRedirectRule, parseCookies, parseQueryString, type RedirectRule } from './lib/redirects';
 
 const BASE_HOST = process.env.BASE_HOST || 'wisp.place';
 
@@ -35,8 +36,85 @@ async function fileExists(path: string): Promise<boolean> {
   }
 }
 
+// Cache for redirect rules (per site)
+const redirectRulesCache = new Map<string, RedirectRule[]>();
+
+/**
+ * Clear redirect rules cache for a specific site
+ * Should be called when a site is updated/recached
+ */
+export function clearRedirectRulesCache(did: string, rkey: string) {
+  const cacheKey = `${did}:${rkey}`;
+  redirectRulesCache.delete(cacheKey);
+}
+
 // Helper to serve files from cache
-async function serveFromCache(did: string, rkey: string, filePath: string) {
+async function serveFromCache(
+  did: string, 
+  rkey: string, 
+  filePath: string,
+  fullUrl?: string,
+  headers?: Record<string, string>
+) {
+  // Check for redirect rules first
+  const redirectCacheKey = `${did}:${rkey}`;
+  let redirectRules = redirectRulesCache.get(redirectCacheKey);
+  
+  if (redirectRules === undefined) {
+    // Load rules for the first time
+    redirectRules = await loadRedirectRules(did, rkey);
+    redirectRulesCache.set(redirectCacheKey, redirectRules);
+  }
+
+  // Apply redirect rules if any exist
+  if (redirectRules.length > 0) {
+    const requestPath = '/' + (filePath || '');
+    const queryParams = fullUrl ? parseQueryString(fullUrl) : {};
+    const cookies = parseCookies(headers?.['cookie']);
+    
+    const redirectMatch = matchRedirectRule(requestPath, redirectRules, {
+      queryParams,
+      headers,
+      cookies,
+    });
+
+    if (redirectMatch) {
+      const { targetPath, status } = redirectMatch;
+      
+      // Handle different status codes
+      if (status === 200) {
+        // Rewrite: serve different content but keep URL the same
+        // Remove leading slash for internal path resolution
+        const rewritePath = targetPath.startsWith('/') ? targetPath.slice(1) : targetPath;
+        return serveFileInternal(did, rkey, rewritePath);
+      } else if (status === 301 || status === 302) {
+        // External redirect: change the URL
+        return new Response(null, {
+          status,
+          headers: {
+            'Location': targetPath,
+            'Cache-Control': status === 301 ? 'public, max-age=31536000' : 'public, max-age=0',
+          },
+        });
+      } else if (status === 404) {
+        // Custom 404 page
+        const custom404Path = targetPath.startsWith('/') ? targetPath.slice(1) : targetPath;
+        const response = await serveFileInternal(did, rkey, custom404Path);
+        // Override status to 404
+        return new Response(response.body, {
+          status: 404,
+          headers: response.headers,
+        });
+      }
+    }
+  }
+
+  // No redirect matched, serve normally
+  return serveFileInternal(did, rkey, filePath);
+}
+
+// Internal function to serve a file (used by both normal serving and rewrites)
+async function serveFileInternal(did: string, rkey: string, filePath: string) {
   // Default to index.html if path is empty or ends with /
   let requestPath = filePath || 'index.html';
   if (requestPath.endsWith('/')) {
@@ -138,8 +216,74 @@ async function serveFromCacheWithRewrite(
   did: string,
   rkey: string,
   filePath: string,
-  basePath: string
+  basePath: string,
+  fullUrl?: string,
+  headers?: Record<string, string>
 ) {
+  // Check for redirect rules first
+  const redirectCacheKey = `${did}:${rkey}`;
+  let redirectRules = redirectRulesCache.get(redirectCacheKey);
+  
+  if (redirectRules === undefined) {
+    // Load rules for the first time
+    redirectRules = await loadRedirectRules(did, rkey);
+    redirectRulesCache.set(redirectCacheKey, redirectRules);
+  }
+
+  // Apply redirect rules if any exist
+  if (redirectRules.length > 0) {
+    const requestPath = '/' + (filePath || '');
+    const queryParams = fullUrl ? parseQueryString(fullUrl) : {};
+    const cookies = parseCookies(headers?.['cookie']);
+    
+    const redirectMatch = matchRedirectRule(requestPath, redirectRules, {
+      queryParams,
+      headers,
+      cookies,
+    });
+
+    if (redirectMatch) {
+      const { targetPath, status } = redirectMatch;
+      
+      // Handle different status codes
+      if (status === 200) {
+        // Rewrite: serve different content but keep URL the same
+        const rewritePath = targetPath.startsWith('/') ? targetPath.slice(1) : targetPath;
+        return serveFileInternalWithRewrite(did, rkey, rewritePath, basePath);
+      } else if (status === 301 || status === 302) {
+        // External redirect: change the URL
+        // For sites.wisp.place, we need to adjust the target path to include the base path
+        // unless it's an absolute URL
+        let redirectTarget = targetPath;
+        if (!targetPath.startsWith('http://') && !targetPath.startsWith('https://')) {
+          redirectTarget = basePath + (targetPath.startsWith('/') ? targetPath.slice(1) : targetPath);
+        }
+        return new Response(null, {
+          status,
+          headers: {
+            'Location': redirectTarget,
+            'Cache-Control': status === 301 ? 'public, max-age=31536000' : 'public, max-age=0',
+          },
+        });
+      } else if (status === 404) {
+        // Custom 404 page
+        const custom404Path = targetPath.startsWith('/') ? targetPath.slice(1) : targetPath;
+        const response = await serveFileInternalWithRewrite(did, rkey, custom404Path, basePath);
+        // Override status to 404
+        return new Response(response.body, {
+          status: 404,
+          headers: response.headers,
+        });
+      }
+    }
+  }
+
+  // No redirect matched, serve normally
+  return serveFileInternalWithRewrite(did, rkey, filePath, basePath);
+}
+
+// Internal function to serve a file with rewriting
+async function serveFileInternalWithRewrite(did: string, rkey: string, filePath: string, basePath: string) {
   // Default to index.html if path is empty or ends with /
   let requestPath = filePath || 'index.html';
   if (requestPath.endsWith('/')) {
@@ -317,6 +461,8 @@ async function ensureSiteCached(did: string, rkey: string): Promise<boolean> {
 
   try {
     await downloadAndCacheSite(did, rkey, siteData.record, pdsEndpoint, siteData.cid);
+    // Clear redirect rules cache since the site was updated
+    clearRedirectRulesCache(did, rkey);
     logger.info('Site cached successfully', { did, rkey });
     return true;
   } catch (err) {
@@ -384,7 +530,11 @@ app.get('/*', async (c) => {
 
     // Serve with HTML path rewriting to handle absolute paths
     const basePath = `/${identifier}/${site}/`;
-    return serveFromCacheWithRewrite(did, site, filePath, basePath);
+    const headers: Record<string, string> = {};
+    c.req.raw.headers.forEach((value, key) => {
+      headers[key.toLowerCase()] = value;
+    });
+    return serveFromCacheWithRewrite(did, site, filePath, basePath, c.req.url, headers);
   }
 
   // Check if this is a DNS hash subdomain
@@ -420,7 +570,11 @@ app.get('/*', async (c) => {
       return c.text('Site not found', 404);
     }
 
-    return serveFromCache(customDomain.did, rkey, path);
+    const headers: Record<string, string> = {};
+    c.req.raw.headers.forEach((value, key) => {
+      headers[key.toLowerCase()] = value;
+    });
+    return serveFromCache(customDomain.did, rkey, path, c.req.url, headers);
   }
 
   // Route 2: Registered subdomains - /*.wisp.place/*
@@ -444,7 +598,11 @@ app.get('/*', async (c) => {
       return c.text('Site not found', 404);
     }
 
-    return serveFromCache(domainInfo.did, rkey, path);
+    const headers: Record<string, string> = {};
+    c.req.raw.headers.forEach((value, key) => {
+      headers[key.toLowerCase()] = value;
+    });
+    return serveFromCache(domainInfo.did, rkey, path, c.req.url, headers);
   }
 
   // Route 1: Custom domains - /*
@@ -467,7 +625,11 @@ app.get('/*', async (c) => {
     return c.text('Site not found', 404);
   }
 
-  return serveFromCache(customDomain.did, rkey, path);
+  const headers: Record<string, string> = {};
+  c.req.raw.headers.forEach((value, key) => {
+    headers[key.toLowerCase()] = value;
+  });
+  return serveFromCache(customDomain.did, rkey, path, c.req.url, headers);
 });
 
 // Internal observability endpoints (for admin panel)

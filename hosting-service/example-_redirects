@@ -1,0 +1,134 @@
+# Example _redirects file for Wisp hosting
+# Place this file in the root directory of your site as "_redirects"
+# Lines starting with # are comments
+
+# ===================================
+# SIMPLE REDIRECTS
+# ===================================
+
+# Redirect home page
+# /home              /
+
+# Redirect old URLs to new ones
+# /old-blog          /blog
+# /about-us          /about
+
+# ===================================
+# SPLAT REDIRECTS (WILDCARDS)
+# ===================================
+
+# Redirect entire directories
+# /news/*            /blog/:splat
+# /old-site/*        /new-site/:splat
+
+# ===================================
+# PLACEHOLDER REDIRECTS
+# ===================================
+
+# Restructure blog URLs
+# /blog/:year/:month/:day/:slug    /posts/:year-:month-:day/:slug
+
+# Capture multiple parameters
+# /products/:category/:id          /shop/:category/item/:id
+
+# ===================================
+# STATUS CODES
+# ===================================
+
+# Permanent redirect (301) - default if not specified
+# /permanent-move    /new-location    301
+
+# Temporary redirect (302)
+# /temp-redirect     /temp-location   302
+
+# Rewrite (200) - serves different content, URL stays the same
+# /api/*             /functions/:splat    200
+
+# Custom 404 page
+# /shop/*            /shop-closed.html    404
+
+# ===================================
+# FORCE REDIRECTS
+# ===================================
+
+# Force redirect even if file exists (note the ! after status code)
+# /override-file     /other-file.html    200!
+
+# ===================================
+# CONDITIONAL REDIRECTS
+# ===================================
+
+# Country-based redirects (ISO 3166-1 alpha-2 codes)
+# /                  /us/         302  Country=us
+# /                  /uk/         302  Country=gb
+# /                  /anz/        302  Country=au,nz
+
+# Language-based redirects
+# /products          /en/products      301  Language=en
+# /products          /de/products      301  Language=de
+# /products          /fr/products      301  Language=fr
+
+# Cookie-based redirects (checks if cookie exists)
+# /*                 /legacy/:splat    200  Cookie=is_legacy
+
+# ===================================
+# QUERY PARAMETERS
+# ===================================
+
+# Match specific query parameters
+# /store id=:id      /blog/:id    301
+
+# Multiple parameters
+# /search q=:query category=:cat    /find/:cat/:query    301
+
+# ===================================
+# DOMAIN-LEVEL REDIRECTS
+# ===================================
+
+# Redirect to different domain (must include protocol)
+# /external          https://example.com/path
+
+# Redirect entire subdomain
+# http://blog.example.com/*     https://example.com/blog/:splat    301!
+# https://blog.example.com/*    https://example.com/blog/:splat    301!
+
+# ===================================
+# COMMON PATTERNS
+# ===================================
+
+# Remove .html extensions
+# /page.html         /page
+
+# Add trailing slash
+# /about             /about/
+
+# Single-page app fallback (serve index.html for all paths)
+# /*                 /index.html      200
+
+# API proxy
+# /api/*             https://api.example.com/:splat    200
+
+# ===================================
+# CUSTOM ERROR PAGES
+# ===================================
+
+# Language-specific 404 pages
+# /en/*              /en/404.html     404
+# /de/*              /de/404.html     404
+
+# Section-specific 404 pages
+# /shop/*            /shop/not-found.html    404
+# /blog/*            /blog/404.html          404
+
+# ===================================
+# NOTES
+# ===================================
+# 
+# - Rules are processed in order (first match wins)
+# - More specific rules should come before general ones
+# - Splats (*) can only be used at the end of a path
+# - Query parameters are automatically preserved for 200, 301, 302
+# - Trailing slashes are normalized (/ and no / are treated the same)
+# - Default status code is 301 if not specified
+#
+
