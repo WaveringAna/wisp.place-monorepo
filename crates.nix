@@ -19,6 +19,7 @@
           targets.x86_64-pc-windows-gnu.latest.rust-std
           targets.x86_64-unknown-linux-gnu.latest.rust-std
           targets.aarch64-apple-darwin.latest.rust-std
+          targets.aarch64-unknown-linux-gnu.latest.rust-std
         ];
     # configure crates
     nci.crates."wisp-cli" = {
@@ -26,8 +27,20 @@
         dev.runTests = false;
         release.runTests = false;
       };
-      targets."x86_64-unknown-linux-gnu" = {
+      targets."x86_64-unknown-linux-gnu" = let
+        targetPkgs = pkgs.pkgsCross.gnu64;
+        targetCC = targetPkgs.stdenv.cc;
+        targetCargoEnvVarTarget = targetPkgs.stdenv.hostPlatform.rust.cargoEnvVarTarget;
+      in rec {
         default = true;
+        depsDrvConfig.mkDerivation = {
+          nativeBuildInputs = [targetCC];
+        };
+        depsDrvConfig.env = rec {
+          TARGET_CC = "${targetCC.targetPrefix}cc";
+          "CARGO_TARGET_${targetCargoEnvVarTarget}_LINKER" = TARGET_CC;
+        };
+        drvConfig = depsDrvConfig;
       };
       targets."x86_64-pc-windows-gnu" = let
         targetPkgs = pkgs.pkgsCross.mingwW64;
@@ -46,6 +59,20 @@
       };
       targets."aarch64-apple-darwin" = let
         targetPkgs = pkgs.pkgsCross.aarch64-darwin;
+        targetCC = targetPkgs.stdenv.cc;
+        targetCargoEnvVarTarget = targetPkgs.stdenv.hostPlatform.rust.cargoEnvVarTarget;
+      in rec {
+        depsDrvConfig.mkDerivation = {
+          nativeBuildInputs = [targetCC];
+        };
+        depsDrvConfig.env = rec {
+          TARGET_CC = "${targetCC.targetPrefix}cc";
+          "CARGO_TARGET_${targetCargoEnvVarTarget}_LINKER" = TARGET_CC;
+        };
+        drvConfig = depsDrvConfig;
+      };
+      targets."aarch64-unknown-linux-gnu" = let
+        targetPkgs = pkgs.pkgsCross.aarch64-multiplatform;
         targetCC = targetPkgs.stdenv.cc;
         targetCargoEnvVarTarget = targetPkgs.stdenv.hostPlatform.rust.cargoEnvVarTarget;
       in rec {
