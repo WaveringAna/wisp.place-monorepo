@@ -178,6 +178,12 @@
   animation: arrow-bounce 1.5s ease-in-out infinite;
 }
 
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
 /* Shiki syntax highlighting styles */
 .shiki-wrapper {
   border-radius: 0.5rem;

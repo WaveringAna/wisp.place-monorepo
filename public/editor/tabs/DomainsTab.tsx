@@ -10,6 +10,7 @@ import { Button } from '@public/components/ui/button'
 import { Input } from '@public/components/ui/input'
 import { Label } from '@public/components/ui/label'
 import { Badge } from '@public/components/ui/badge'
+import { SkeletonShimmer } from '@public/components/ui/skeleton'
 import {
 	Dialog,
 	DialogContent,
@@ -128,8 +129,32 @@ export function DomainsTab({
 					</CardHeader>
 					<CardContent>
 						{domainsLoading ? (
-							<div className="flex items-center justify-center py-4">
-								<Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+							<div className="space-y-4">
+								<div className="space-y-2">
+									{[...Array(2)].map((_, i) => (
+										<div
+											key={i}
+											className="flex items-center justify-between p-3 border border-border rounded-lg"
+										>
+											<div className="flex flex-col gap-2 flex-1">
+												<div className="flex items-center gap-2">
+													<SkeletonShimmer className="h-4 w-4 rounded-full" />
+													<SkeletonShimmer className="h-4 w-40" />
+												</div>
+												<SkeletonShimmer className="h-3 w-32 ml-6" />
+											</div>
+											<SkeletonShimmer className="h-8 w-8" />
+										</div>
+									))}
+								</div>
+								<div className="p-4 bg-muted/30 rounded-lg space-y-3">
+									<SkeletonShimmer className="h-4 w-full" />
+									<div className="space-y-2">
+										<SkeletonShimmer className="h-4 w-24" />
+										<SkeletonShimmer className="h-10 w-full" />
+									</div>
+									<SkeletonShimmer className="h-10 w-full" />
+								</div>
 							</div>
 						) : (
 							<div className="space-y-4">
@@ -262,8 +287,26 @@ export function DomainsTab({
 						</Button>
 
 						{domainsLoading ? (
-							<div className="flex items-center justify-center py-4">
-								<Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+							<div className="space-y-2">
+								{[...Array(2)].map((_, i) => (
+									<div
+										key={i}
+										className="flex items-center justify-between p-3 border border-border rounded-lg"
+									>
+										<div className="flex flex-col gap-2 flex-1">
+											<div className="flex items-center gap-2">
+												<SkeletonShimmer className="h-4 w-4 rounded-full" />
+												<SkeletonShimmer className="h-4 w-48" />
+											</div>
+											<SkeletonShimmer className="h-3 w-36 ml-6" />
+										</div>
+										<div className="flex items-center gap-2">
+											<SkeletonShimmer className="h-8 w-20" />
+											<SkeletonShimmer className="h-8 w-20" />
+											<SkeletonShimmer className="h-8 w-8" />
+										</div>
+									</div>
+								))}
 							</div>
 						) : customDomains.length === 0 ? (
 							<div className="text-center py-4 text-muted-foreground text-sm">

@@ -7,6 +7,7 @@ import {
 } from '@public/components/ui/card'
 import { Button } from '@public/components/ui/button'
 import { Badge } from '@public/components/ui/badge'
+import { SkeletonShimmer } from '@public/components/ui/skeleton'
 import {
 	Globe,
 	ExternalLink,
@@ -84,8 +85,22 @@ export function SitesTab({
 				</CardHeader>
 				<CardContent className="space-y-4">
 					{sitesLoading ? (
-						<div className="flex items-center justify-center py-8">
-							<Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+						<div className="space-y-4">
+							{[...Array(3)].map((_, i) => (
+								<div
+									key={i}
+									className="flex items-center justify-between p-4 border border-border rounded-lg"
+								>
+									<div className="flex-1 space-y-3">
+										<div className="flex items-center gap-3">
+											<SkeletonShimmer className="h-6 w-48" />
+											<SkeletonShimmer className="h-5 w-16" />
+										</div>
+										<SkeletonShimmer className="h-4 w-64" />
+									</div>
+									<SkeletonShimmer className="h-9 w-28" />
+								</div>
+							))}
 						</div>
 					) : sites.length === 0 ? (
 						<div className="text-center py-8 text-muted-foreground">
