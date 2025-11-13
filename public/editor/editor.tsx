@@ -18,6 +18,7 @@ import {
 import { Checkbox } from '@public/components/ui/checkbox'
 import { Label } from '@public/components/ui/label'
 import { Badge } from '@public/components/ui/badge'
+import { SkeletonShimmer } from '@public/components/ui/skeleton'
 import {
 	Loader2,
 	Trash2,
@@ -191,8 +192,67 @@ function Dashboard() {
 
 	if (loading) {
 		return (
-			<div className="w-full min-h-screen bg-background flex items-center justify-center">
-				<Loader2 className="w-8 h-8 animate-spin text-primary" />
+			<div className="w-full min-h-screen bg-background">
+				{/* Header Skeleton */}
+				<header className="border-b border-border/40 bg-background/80 backdrop-blur-sm sticky top-0 z-50">
+					<div className="container mx-auto px-4 py-4 flex items-center justify-between">
+						<div className="flex items-center gap-2">
+							<img src="/transparent-full-size-ico.png" alt="wisp.place" className="w-8 h-8" />
+							<span className="text-xl font-semibold text-foreground">
+								wisp.place
+							</span>
+						</div>
+						<div className="flex items-center gap-3">
+							<SkeletonShimmer className="h-5 w-32" />
+							<SkeletonShimmer className="h-8 w-8 rounded" />
+						</div>
+					</div>
+				</header>
+
+				<div className="container mx-auto px-4 py-8 max-w-6xl w-full">
+					{/* Title Skeleton */}
+					<div className="mb-8 space-y-2">
+						<SkeletonShimmer className="h-9 w-48" />
+						<SkeletonShimmer className="h-5 w-64" />
+					</div>
+
+					{/* Tabs Skeleton */}
+					<div className="space-y-6 w-full">
+						<div className="inline-flex h-10 items-center justify-center rounded-md bg-muted p-1 text-muted-foreground w-full">
+							<SkeletonShimmer className="h-8 w-1/4 mx-1" />
+							<SkeletonShimmer className="h-8 w-1/4 mx-1" />
+							<SkeletonShimmer className="h-8 w-1/4 mx-1" />
+							<SkeletonShimmer className="h-8 w-1/4 mx-1" />
+						</div>
+
+						{/* Content Skeleton */}
+						<div className="space-y-4">
+							<div className="rounded-lg border border-border bg-card text-card-foreground shadow-sm">
+								<div className="flex flex-col space-y-1.5 p-6">
+									<SkeletonShimmer className="h-7 w-40" />
+									<SkeletonShimmer className="h-4 w-64" />
+								</div>
+								<div className="p-6 pt-0 space-y-4">
+									{[...Array(3)].map((_, i) => (
+										<div
+											key={i}
+											className="flex items-center justify-between p-4 border border-border rounded-lg"
+										>
+											<div className="flex-1 space-y-3">
+												<div className="flex items-center gap-3">
+													<SkeletonShimmer className="h-6 w-48" />
+													<SkeletonShimmer className="h-5 w-16" />
+												</div>
+												<SkeletonShimmer className="h-4 w-64" />
+											</div>
+											<SkeletonShimmer className="h-9 w-28" />
+										</div>
+									))}
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
 			</div>
 		)
 	}
