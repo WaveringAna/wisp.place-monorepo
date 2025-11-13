@@ -100,10 +100,29 @@ export class DNSVerificationWorker {
           // Extract hash from id (SHA256 of did:domain)
           const expectedHash = id.substring(0, 16);
 
-          // Verify DNS records
+          // Verify DNS records - this will only verify if TXT record matches this specific DID
           const result = await verifyCustomDomain(domain, did, expectedHash);
 
           if (result.verified) {
+            // Double-check: ensure this record is still the current owner in database
+            // This prevents race conditions where domain ownership changed during verification
+            const currentOwner = await db<Array<{ id: string; did: string; verified: boolean }>>`
+              SELECT id, did, verified FROM custom_domains WHERE domain = ${domain}
+            `;
+            
+            const isStillOwner = currentOwner.length > 0 && currentOwner[0].id === id;
+            
+            if (!isStillOwner) {
+              this.log(`⚠️  Domain ownership changed during verification: ${domain}`, {
+                expectedId: id,
+                expectedDid: did,
+                actualId: currentOwner[0]?.id,
+                actualDid: currentOwner[0]?.did
+              });
+              runStats.failed++;
+              continue;
+            }
+
             // Update verified status and last_verified_at timestamp
             await db`
               UPDATE custom_domains
