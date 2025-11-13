@@ -11,7 +11,7 @@ place_wisp = []
 jacquard = { git = "https://tangled.org/@nonbinary.computer/jacquard", features = ["loopback"] }
 jacquard-oauth = { git = "https://tangled.org/@nonbinary.computer/jacquard" }
 jacquard-api = { git = "https://tangled.org/@nonbinary.computer/jacquard" }
-jacquard-common = { git = "https://tangled.org/@nonbinary.computer/jacquard"  }
+jacquard-common = { git = "https://tangled.org/@nonbinary.computer/jacquard", features = ["websocket"] }
 jacquard-identity = { git = "https://tangled.org/@nonbinary.computer/jacquard", features = ["dns"] }
 jacquard-derive = { git = "https://tangled.org/@nonbinary.computer/jacquard"  }
 jacquard-lexicon = { git = "https://tangled.org/@nonbinary.computer/jacquard"  }
@@ -33,3 +33,9 @@ futures = "0.3.31"
 multihash = "0.19.3"
 multibase = "0.9"
 sha2 = "0.10"
+axum = "0.7"
+tower-http = { version = "0.5", features = ["fs", "compression-gzip"] }
+tower = "0.4"
+n0-future = "0.1"
+chrono = "0.4"
+url = "2.5"

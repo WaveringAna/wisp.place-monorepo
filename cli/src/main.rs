@@ -2,8 +2,12 @@ mod builder_types;
 mod place_wisp;
 mod cid;
 mod blob_map;
+mod metadata;
+mod download;
+mod pull;
+mod serve;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use jacquard::CowStr;
 use jacquard::client::{Agent, FileAuthStore, AgentSessionExt, MemoryCredentialSession, AgentSession};
 use jacquard::oauth::client::OAuthClient;
@@ -23,37 +27,126 @@ use futures::stream::{self, StreamExt};
 use place_wisp::fs::*;
 
 #[derive(Parser, Debug)]
-#[command(author, version, about = "Deploy a static site to wisp.place")]
+#[command(author, version, about = "wisp.place CLI tool")]
 struct Args {
+    #[command(subcommand)]
+    command: Option<Commands>,
+    
+    // Deploy arguments (when no subcommand is specified)
     /// Handle (e.g., alice.bsky.social), DID, or PDS URL
-    input: CowStr<'static>,
+    #[arg(global = true, conflicts_with = "command")]
+    input: Option<CowStr<'static>>,
 
     /// Path to the directory containing your static site
-    #[arg(short, long, default_value = ".")]
-    path: PathBuf,
+    #[arg(short, long, global = true, conflicts_with = "command")]
+    path: Option<PathBuf>,
 
     /// Site name (defaults to directory name)
-    #[arg(short, long)]
+    #[arg(short, long, global = true, conflicts_with = "command")]
     site: Option<String>,
 
-    /// Path to auth store file (will be created if missing, only used with OAuth)
-    #[arg(long, default_value = "/tmp/wisp-oauth-session.json")]
-    store: String,
+    /// Path to auth store file
+    #[arg(long, global = true, conflicts_with = "command")]
+    store: Option<String>,
 
-    /// App Password for authentication (alternative to OAuth)
-    #[arg(long)]
+    /// App Password for authentication
+    #[arg(long, global = true, conflicts_with = "command")]
     password: Option<CowStr<'static>>,
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Deploy a static site to wisp.place (default command)
+    Deploy {
+        /// Handle (e.g., alice.bsky.social), DID, or PDS URL
+        input: CowStr<'static>,
+
+        /// Path to the directory containing your static site
+        #[arg(short, long, default_value = ".")]
+        path: PathBuf,
+
+        /// Site name (defaults to directory name)
+        #[arg(short, long)]
+        site: Option<String>,
+
+        /// Path to auth store file (will be created if missing, only used with OAuth)
+        #[arg(long, default_value = "/tmp/wisp-oauth-session.json")]
+        store: String,
+
+        /// App Password for authentication (alternative to OAuth)
+        #[arg(long)]
+        password: Option<CowStr<'static>>,
+    },
+    /// Pull a site from the PDS to a local directory
+    Pull {
+        /// Handle (e.g., alice.bsky.social) or DID
+        input: CowStr<'static>,
+
+        /// Site name (record key)
+        #[arg(short, long)]
+        site: String,
+
+        /// Output directory for the downloaded site
+        #[arg(short, long, default_value = ".")]
+        output: PathBuf,
+    },
+    /// Serve a site locally with real-time firehose updates
+    Serve {
+        /// Handle (e.g., alice.bsky.social) or DID
+        input: CowStr<'static>,
+
+        /// Site name (record key)
+        #[arg(short, long)]
+        site: String,
+
+        /// Output directory for the site files
+        #[arg(short, long, default_value = ".")]
+        output: PathBuf,
+
+        /// Port to serve on
+        #[arg(short, long, default_value = "8080")]
+        port: u16,
+    },
 }
 
 #[tokio::main]
 async fn main() -> miette::Result<()> {
     let args = Args::parse();
 
-    // Dispatch to appropriate authentication method
-    if let Some(password) = args.password {
-        run_with_app_password(args.input, password, args.path, args.site).await
-    } else {
-        run_with_oauth(args.input, args.store, args.path, args.site).await
+    match args.command {
+        Some(Commands::Deploy { input, path, site, store, password }) => {
+            // Dispatch to appropriate authentication method
+            if let Some(password) = password {
+                run_with_app_password(input, password, path, site).await
+            } else {
+                run_with_oauth(input, store, path, site).await
+            }
+        }
+        Some(Commands::Pull { input, site, output }) => {
+            pull::pull_site(input, CowStr::from(site), output).await
+        }
+        Some(Commands::Serve { input, site, output, port }) => {
+            serve::serve_site(input, CowStr::from(site), output, port).await
+        }
+        None => {
+            // Legacy mode: if input is provided, assume deploy command
+            if let Some(input) = args.input {
+                let path = args.path.unwrap_or_else(|| PathBuf::from("."));
+                let store = args.store.unwrap_or_else(|| "/tmp/wisp-oauth-session.json".to_string());
+                
+                // Dispatch to appropriate authentication method
+                if let Some(password) = args.password {
+                    run_with_app_password(input, password, path, args.site).await
+                } else {
+                    run_with_oauth(input, store, path, args.site).await
+                }
+            } else {
+                // No command and no input, show help
+                use clap::CommandFactory;
+                Args::command().print_help().into_diagnostic()?;
+                Ok(())
+            }
+        }
     }
 }
 
