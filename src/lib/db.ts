@@ -595,10 +595,25 @@ export const getCustomDomainById = async (id: string) => {
 export const claimCustomDomain = async (did: string, domain: string, hash: string, rkey: string | null = null) => {
     const domainLower = domain.toLowerCase();
     try {
-        await db`
+        // Use UPSERT with ON CONFLICT to handle existing pending domains
+        const result = await db`
             INSERT INTO custom_domains (id, domain, did, rkey, verified, created_at)
             VALUES (${hash}, ${domainLower}, ${did}, ${rkey}, false, EXTRACT(EPOCH FROM NOW()))
+            ON CONFLICT (domain) DO UPDATE SET
+                id = EXCLUDED.id,
+                did = EXCLUDED.did,
+                rkey = EXCLUDED.rkey,
+                verified = EXCLUDED.verified,
+                created_at = EXCLUDED.created_at
+            WHERE custom_domains.verified = false
+            RETURNING *
         `;
+        
+        if (result.length === 0) {
+            // No rows were updated, meaning the domain exists and is verified
+            throw new Error('conflict');
+        }
+        
         return { success: true, hash };
     } catch (err) {
         console.error('Failed to claim custom domain', err);

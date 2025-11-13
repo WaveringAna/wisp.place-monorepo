@@ -241,10 +241,10 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 					}
 				}
 
-				// Check if already exists
+				// Check if already exists and is verified
 				const existing = await getCustomDomainInfo(domainLower);
-				if (existing) {
-					throw new Error('Domain already claimed');
+				if (existing && existing.verified) {
+					throw new Error('Domain already verified and claimed');
 				}
 
 				// Create hash for ID
