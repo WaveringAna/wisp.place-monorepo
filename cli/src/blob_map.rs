@@ -34,22 +34,11 @@ fn extract_blob_map_recursive(
                 let blob_ref = &file_node.blob;
                 let cid_string = blob_ref.blob().r#ref.to_string();
                 
-                // Store both normalized and full paths
-                // Normalize by removing base folder prefix (e.g., "cobblemon/index.html" -> "index.html")
-                let normalized_path = normalize_path(&full_path);
-                
+                // Store with full path (mirrors TypeScript implementation)
                 blob_map.insert(
-                    normalized_path.clone(),
-                    (blob_ref.clone().into_static(), cid_string.clone())
+                    full_path,
+                    (blob_ref.clone().into_static(), cid_string)
                 );
-                
-                // Also store the full path for matching
-                if normalized_path != full_path {
-                    blob_map.insert(
-                        full_path,
-                        (blob_ref.clone().into_static(), cid_string)
-                    );
-                }
             }
             EntryNode::Directory(subdir) => {
                 let sub_map = extract_blob_map_recursive(subdir, full_path);
@@ -67,7 +56,11 @@ fn extract_blob_map_recursive(
 /// Normalize file path by removing base folder prefix
 /// Example: "cobblemon/index.html" -> "index.html"
 /// 
-/// Mirrors TypeScript implementation at src/routes/wisp.ts line 291
+/// Note: This function is kept for reference but is no longer used in production code.
+/// The TypeScript server has a similar normalization (src/routes/wisp.ts line 291) to handle
+/// uploads that include a base folder prefix, but our CLI doesn't need this since we
+/// track full paths consistently.
+#[allow(dead_code)]
 pub fn normalize_path(path: &str) -> String {
     // Remove base folder prefix (everything before first /)
     if let Some(idx) = path.find('/') {

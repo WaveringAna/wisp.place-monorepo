@@ -152,7 +152,7 @@ async fn deploy_site(
     };
 
     // Build directory tree
-    let (root_dir, total_files, reused_count) = build_directory(agent, &path, &existing_blob_map).await?;
+    let (root_dir, total_files, reused_count) = build_directory(agent, &path, &existing_blob_map, String::new()).await?;
     let uploaded_count = total_files - reused_count;
 
     // Create the Fs record
@@ -182,10 +182,12 @@ async fn deploy_site(
 }
 
 /// Recursively build a Directory from a filesystem path
+/// current_path is the path from the root of the site (e.g., "" for root, "config" for config dir)
 fn build_directory<'a>(
     agent: &'a Agent<impl jacquard::client::AgentSession + IdentityResolver + 'a>,
     dir_path: &'a Path,
     existing_blobs: &'a HashMap<String, (jacquard_common::types::blob::BlobRef<'static>, String)>,
+    current_path: String,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = miette::Result<(Directory<'static>, usize, usize)>> + 'a>>
 {
     Box::pin(async move {
@@ -214,7 +216,13 @@ fn build_directory<'a>(
         let metadata = entry.metadata().into_diagnostic()?;
 
         if metadata.is_file() {
-            file_tasks.push((name_str, path));
+            // Construct full path for this file (for blob map lookup)
+            let full_path = if current_path.is_empty() {
+                name_str.clone()
+            } else {
+                format!("{}/{}", current_path, name_str)
+            };
+            file_tasks.push((name_str, path, full_path));
         } else if metadata.is_dir() {
             dir_tasks.push((name_str, path));
         }
@@ -222,8 +230,8 @@ fn build_directory<'a>(
 
     // Process files concurrently with a limit of 5
     let file_results: Vec<(Entry<'static>, bool)> = stream::iter(file_tasks)
-        .map(|(name, path)| async move {
-            let (file_node, reused) = process_file(agent, &path, &name, existing_blobs).await?;
+        .map(|(name, path, full_path)| async move {
+            let (file_node, reused) = process_file(agent, &path, &full_path, existing_blobs).await?;
             let entry = Entry::new()
                 .name(CowStr::from(name))
                 .node(EntryNode::File(Box::new(file_node)))
@@ -251,7 +259,13 @@ fn build_directory<'a>(
     // Process directories recursively (sequentially to avoid too much nesting)
     let mut dir_entries = Vec::new();
     for (name, path) in dir_tasks {
-        let (subdir, sub_total, sub_reused) = build_directory(agent, &path, existing_blobs).await?;
+        // Construct full path for subdirectory
+        let subdir_path = if current_path.is_empty() {
+            name.clone()
+        } else {
+            format!("{}/{}", current_path, name)
+        };
+        let (subdir, sub_total, sub_reused) = build_directory(agent, &path, existing_blobs, subdir_path).await?;
         dir_entries.push(Entry::new()
             .name(CowStr::from(name))
             .node(EntryNode::Directory(Box::new(subdir)))
@@ -275,10 +289,11 @@ fn build_directory<'a>(
 
 /// Process a single file: gzip -> base64 -> upload blob (or reuse existing)
 /// Returns (File, reused: bool)
+/// file_path_key is the full path from the site root (e.g., "config/file.json") for blob map lookup
 async fn process_file(
     agent: &Agent<impl jacquard::client::AgentSession + IdentityResolver>,
     file_path: &Path,
-    file_name: &str,
+    file_path_key: &str,
     existing_blobs: &HashMap<String, (jacquard_common::types::blob::BlobRef<'static>, String)>,
 ) -> miette::Result<(File<'static>, bool)>
 {
@@ -301,17 +316,13 @@ async fn process_file(
     // Compute CID for this file (CRITICAL: on base64-encoded gzipped content)
     let file_cid = cid::compute_cid(&base64_bytes);
     
-    // Normalize the file path for comparison
-    let normalized_path = blob_map::normalize_path(file_name);
-    
     // Check if we have an existing blob with the same CID
-    let existing_blob = existing_blobs.get(&normalized_path)
-        .or_else(|| existing_blobs.get(file_name));
+    let existing_blob = existing_blobs.get(file_path_key);
     
     if let Some((existing_blob_ref, existing_cid)) = existing_blob {
         if existing_cid == &file_cid {
             // CIDs match - reuse existing blob
-            println!("  ✓ Reusing blob for {} (CID: {})", file_name, file_cid);
+            println!("  ✓ Reusing blob for {} (CID: {})", file_path_key, file_cid);
             return Ok((
                 File::new()
                     .r#type(CowStr::from("file"))
@@ -326,7 +337,7 @@ async fn process_file(
     }
     
     // File is new or changed - upload it
-    println!("  ↑ Uploading {} ({} bytes, CID: {})", file_name, base64_bytes.len(), file_cid);
+    println!("  ↑ Uploading {} ({} bytes, CID: {})", file_path_key, base64_bytes.len(), file_cid);
     let blob = agent.upload_blob(
         base64_bytes,
         MimeType::new_static("application/octet-stream"),
