@@ -1,4 +1,4 @@
-import { Elysia } from 'elysia'
+import { Elysia, t } from 'elysia'
 import { requireAuth } from '../lib/wisp-auth'
 import { NodeOAuthClient } from '@atproto/oauth-client-node'
 import { Agent } from '@atproto/api'
@@ -6,8 +6,14 @@ import { getSitesByDid, getDomainByDid, getCustomDomainsByDid, getWispDomainInfo
 import { syncSitesFromPDS } from '../lib/sync-sites'
 import { logger } from '../lib/logger'
 
-export const userRoutes = (client: NodeOAuthClient) =>
-	new Elysia({ prefix: '/api/user' })
+export const userRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
+	new Elysia({
+		prefix: '/api/user',
+		cookie: {
+			secrets: cookieSecret,
+			sign: ['did']
+		}
+	})
 		.derive(async ({ cookie }) => {
 			const auth = await requireAuth(client, cookie)
 			return { auth }

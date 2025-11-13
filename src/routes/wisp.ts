@@ -37,8 +37,14 @@ function isValidSiteName(siteName: string): boolean {
 	return true;
 }
 
-export const wispRoutes = (client: NodeOAuthClient) =>
-	new Elysia({ prefix: '/wisp' })
+export const wispRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
+	new Elysia({
+		prefix: '/wisp',
+		cookie: {
+			secrets: cookieSecret,
+			sign: ['did']
+		}
+	})
 		.derive(async ({ cookie }) => {
 			const auth = await requireAuth(client, cookie)
 			return { auth }

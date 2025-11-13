@@ -5,8 +5,14 @@ import { Agent } from '@atproto/api'
 import { deleteSite } from '../lib/db'
 import { logger } from '../lib/logger'
 
-export const siteRoutes = (client: NodeOAuthClient) =>
-	new Elysia({ prefix: '/api/site' })
+export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
+	new Elysia({
+		prefix: '/api/site',
+		cookie: {
+			secrets: cookieSecret,
+			sign: ['did']
+		}
+	})
 		.derive(async ({ cookie }) => {
 			const auth = await requireAuth(client, cookie)
 			return { auth }

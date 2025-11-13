@@ -24,8 +24,14 @@ import { createHash } from 'crypto'
 import { verifyCustomDomain } from '../lib/dns-verify'
 import { logger } from '../lib/logger'
 
-export const domainRoutes = (client: NodeOAuthClient) =>
-	new Elysia({ prefix: '/api/domain' })
+export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
+	new Elysia({
+		prefix: '/api/domain',
+		cookie: {
+			secrets: cookieSecret,
+			sign: ['did']
+		}
+	})
 		// Public endpoints (no auth required)
 		.get('/check', async ({ query }) => {
 			try {

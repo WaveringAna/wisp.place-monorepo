@@ -70,7 +70,7 @@ export const app = new Elysia({
 		},
 		cookie: {
 			secrets: cookieSecret,
-			sign: true
+			sign: ['did']
 		}
 	})
 	// Observability middleware
@@ -105,10 +105,10 @@ export const app = new Elysia({
 	.onError(observabilityMiddleware('main-app').onError)
 	.use(csrfProtection())
 	.use(authRoutes(client, cookieSecret))
-	.use(wispRoutes(client))
-	.use(domainRoutes(client))
-	.use(userRoutes(client))
-	.use(siteRoutes(client))
+	.use(wispRoutes(client, cookieSecret))
+	.use(domainRoutes(client, cookieSecret))
+	.use(userRoutes(client, cookieSecret))
+	.use(siteRoutes(client, cookieSecret))
 	.use(adminRoutes(cookieSecret))
 	.use(
 		await staticPlugin({

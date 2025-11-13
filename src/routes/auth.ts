@@ -5,7 +5,12 @@ import { syncSitesFromPDS } from '../lib/sync-sites'
 import { authenticateRequest } from '../lib/wisp-auth'
 import { logger } from '../lib/observability'
 
-export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) => new Elysia()
+export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) => new Elysia({
+		cookie: {
+			secrets: cookieSecret,
+			sign: ['did']
+		}
+	})
 	.post('/api/auth/signin', async (c) => {
 		let handle = 'unknown'
 		try {
@@ -74,13 +79,6 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) => new
 			c.cookie.did.remove()
 			return c.redirect('/?error=auth_failed')
 		}
-	}, {
-		cookie: t.Cookie({
-			did: t.Optional(t.String())
-		}, {
-			secrets: cookieSecret,
-			sign: ['did']
-		})
 	})
 	.post('/api/auth/logout', async (c) => {
 		try {
@@ -106,13 +104,6 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) => new
 			logger.error('[Auth] Logout error', err)
 			return { error: 'Logout failed' }
 		}
-	}, {
-		cookie: t.Cookie({
-			did: t.Optional(t.String())
-		}, {
-			secrets: cookieSecret,
-			sign: ['did']
-		})
 	})
 	.get('/api/auth/status', async (c) => {
 		try {
@@ -132,11 +123,4 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) => new
 			c.cookie.did.remove()
 			return { authenticated: false }
 		}
-	}, {
-		cookie: t.Cookie({
-			did: t.Optional(t.String())
-		}, {
-			secrets: cookieSecret,
-			sign: ['did']
-		})
 	})

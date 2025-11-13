@@ -16,7 +16,7 @@ export function CLITab() {
 				<CardHeader>
 					<div className="flex items-center gap-2 mb-2">
 						<CardTitle>Wisp CLI Tool</CardTitle>
-						<Badge variant="secondary" className="text-xs">v0.1.0</Badge>
+						<Badge variant="secondary" className="text-xs">v0.2.0</Badge>
 						<Badge variant="outline" className="text-xs">Alpha</Badge>
 					</div>
 					<CardDescription>
@@ -32,11 +32,20 @@ export function CLITab() {
 					</div>
 
 					<div className="space-y-3">
-						<h3 className="text-sm font-semibold">Download CLI</h3>
+						<h3 className="text-sm font-semibold">Features</h3>
+						<ul className="text-sm text-muted-foreground space-y-2 list-disc list-inside">
+							<li><strong>Deploy:</strong> Push static sites directly from your terminal</li>
+							<li><strong>Pull:</strong> Download sites from the PDS for development or backup</li>
+							<li><strong>Serve:</strong> Run a local server with real-time firehose updates</li>
+						</ul>
+					</div>
+
+					<div className="space-y-3">
+						<h3 className="text-sm font-semibold">Download v0.2.0</h3>
 						<div className="grid gap-2">
 							<div className="p-3 bg-muted/50 hover:bg-muted rounded-lg transition-colors border border-border">
 								<a
-									href="https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-macos-arm64"
+									href="https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-aarch64-darwin"
 									target="_blank"
 									rel="noopener noreferrer"
 									className="flex items-center justify-between mb-2"
@@ -45,7 +54,7 @@ export function CLITab() {
 									<ExternalLink className="w-4 h-4 text-muted-foreground" />
 								</a>
 								<div className="text-xs text-muted-foreground">
-									<span className="font-mono">SHA256: 637e325d9668ca745e01493d80dfc72447ef0a889b313e28913ca65c94c7aaae</span>
+									<span className="font-mono">SHA-1: a8c27ea41c5e2672bfecb3476ece1c801741d759</span>
 								</div>
 							</div>
 							<div className="p-3 bg-muted/50 hover:bg-muted rounded-lg transition-colors border border-border">
@@ -59,7 +68,7 @@ export function CLITab() {
 									<ExternalLink className="w-4 h-4 text-muted-foreground" />
 								</a>
 								<div className="text-xs text-muted-foreground">
-									<span className="font-mono">SHA256: 01561656b64826f95b39f13c65c97da8bcc63ecd9f4d7e4e369c8ba8c903c22a</span>
+									<span className="font-mono">SHA-1: fd7ee689c7600fc953179ea755b0357c8481a622</span>
 								</div>
 							</div>
 							<div className="p-3 bg-muted/50 hover:bg-muted rounded-lg transition-colors border border-border">
@@ -73,26 +82,81 @@ export function CLITab() {
 									<ExternalLink className="w-4 h-4 text-muted-foreground" />
 								</a>
 								<div className="text-xs text-muted-foreground">
-									<span className="font-mono">SHA256: 1ff485b9bcf89bc5721a862863c4843cf4530cbcd2489cf200cb24a44f7865a2</span>
+									<span className="font-mono">SHA-1: 8bca6992559e19e1d29ab3d2fcc6d09b28e5a485</span>
+								</div>
+							</div>
+							<div className="p-3 bg-muted/50 hover:bg-muted rounded-lg transition-colors border border-border">
+								<a
+									href="https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-x86_64-windows.exe"
+									target="_blank"
+									rel="noopener noreferrer"
+									className="flex items-center justify-between mb-2"
+								>
+									<span className="font-mono text-sm">Windows (x86_64)</span>
+									<ExternalLink className="w-4 h-4 text-muted-foreground" />
+								</a>
+								<div className="text-xs text-muted-foreground">
+									<span className="font-mono">SHA-1: 90ea3987a06597fa6c42e1df9009e9758e92dd54</span>
 								</div>
 							</div>
 						</div>
 					</div>
 
 					<div className="space-y-3">
-						<h3 className="text-sm font-semibold">Basic Usage</h3>
+						<h3 className="text-sm font-semibold">Deploy a Site</h3>
 						<CodeBlock
 							code={`# Download and make executable
-curl -O https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-macos-arm64
-chmod +x wisp-cli-macos-arm64
+curl -O https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-aarch64-darwin
+chmod +x wisp-cli-aarch64-darwin
 
-# Deploy your site (will use OAuth)
-./wisp-cli-macos-arm64 your-handle.bsky.social \\
+# Deploy your site
+./wisp-cli-aarch64-darwin deploy your-handle.bsky.social \\
   --path ./dist \\
-  --site my-site
+  --site my-site \\
+  --password your-app-password
 
 # Your site will be available at:
 # https://sites.wisp.place/your-handle/my-site`}
+							language="bash"
+						/>
+					</div>
+
+					<div className="space-y-3">
+						<h3 className="text-sm font-semibold">Pull a Site from PDS</h3>
+						<p className="text-xs text-muted-foreground">
+							Download a site from the PDS to your local machine (uses OAuth authentication):
+						</p>
+						<CodeBlock
+							code={`# Pull a site to a specific directory
+wisp-cli pull your-handle.bsky.social \\
+  --site my-site \\
+  --output ./my-site
+
+# Pull to current directory
+wisp-cli pull your-handle.bsky.social \\
+  --site my-site
+
+# Opens browser for OAuth authentication on first run`}
+							language="bash"
+						/>
+					</div>
+
+					<div className="space-y-3">
+						<h3 className="text-sm font-semibold">Serve a Site Locally with Real-Time Updates</h3>
+						<p className="text-xs text-muted-foreground">
+							Run a local server that monitors the firehose for real-time updates (uses OAuth authentication):
+						</p>
+						<CodeBlock
+							code={`# Serve on http://localhost:8080 (default)
+wisp-cli serve your-handle.bsky.social \\
+  --site my-site
+
+# Serve on a custom port
+wisp-cli serve your-handle.bsky.social \\
+  --site my-site \\
+  --port 3000
+
+# Downloads site, serves it, and watches firehose for live updates!`}
 							language="bash"
 						/>
 					</div>
@@ -147,7 +211,7 @@ steps:
       chmod +x wisp-cli
 
       # Deploy to Wisp
-      ./wisp-cli \\
+      ./wisp-cli deploy \\
         "$WISP_HANDLE" \\
         --path "$SITE_PATH" \\
         --site "$SITE_NAME" \\
@@ -210,7 +274,7 @@ steps:
       chmod +x wisp-cli
 
       # Deploy to Wisp
-      ./wisp-cli \\
+      ./wisp-cli deploy \\
         "$WISP_HANDLE" \\
         --path "$SITE_PATH" \\
         --site "$SITE_NAME" \\
