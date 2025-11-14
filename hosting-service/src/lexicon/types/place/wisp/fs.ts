@@ -2,7 +2,7 @@
  * GENERATED CODE - DO NOT MODIFY
  */
 import { type ValidationResult, BlobRef } from '@atproto/lexicon'
-import { CID } from 'multiformats'
+import { CID } from 'multiformats/cid'
 import { validate as _validate } from '../../../lexicons'
 import { type $Typed, is$typed as _is$typed, type OmitKey } from '../../../util'
 
@@ -10,7 +10,7 @@ const is$typed = _is$typed,
   validate = _validate
 const id = 'place.wisp.fs'
 
-export interface Record {
+export interface Main {
   $type: 'place.wisp.fs'
   site: string
   root: Directory
@@ -19,14 +19,20 @@ export interface Record {
   [k: string]: unknown
 }
 
-const hashRecord = 'main'
+const hashMain = 'main'
 
-export function isRecord<V>(v: V) {
-  return is$typed(v, id, hashRecord)
+export function isMain<V>(v: V) {
+  return is$typed(v, id, hashMain)
 }
 
-export function validateRecord<V>(v: V) {
-  return validate<Record & V>(v, id, hashRecord, true)
+export function validateMain<V>(v: V) {
+  return validate<Main & V>(v, id, hashMain, true)
+}
+
+export {
+  type Main as Record,
+  isMain as isRecord,
+  validateMain as validateRecord,
 }
 
 export interface File {
@@ -71,7 +77,7 @@ export function validateDirectory<V>(v: V) {
 export interface Entry {
   $type?: 'place.wisp.fs#entry'
   name: string
-  node: $Typed<File> | $Typed<Directory> | { $type: string }
+  node: $Typed<File> | $Typed<Directory> | $Typed<Subfs> | { $type: string }
 }
 
 const hashEntry = 'entry'
@@ -82,4 +88,21 @@ export function isEntry<V>(v: V) {
 
 export function validateEntry<V>(v: V) {
   return validate<Entry & V>(v, id, hashEntry)
+}
+
+export interface Subfs {
+  $type?: 'place.wisp.fs#subfs'
+  type: 'subfs'
+  /** AT-URI pointing to a place.wisp.subfs record containing this subtree */
+  subject: string
+}
+
+const hashSubfs = 'subfs'
+
+export function isSubfs<V>(v: V) {
+  return is$typed(v, id, hashSubfs)
+}
+
+export function validateSubfs<V>(v: V) {
+  return validate<Subfs & V>(v, id, hashSubfs)
 }

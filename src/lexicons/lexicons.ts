@@ -51,8 +51,22 @@ export const schemaDict = {
           blob: {
             type: 'blob',
             accept: ['*/*'],
-            maxSize: 1000000,
+            maxSize: 1000000000,
             description: 'Content blob ref',
+          },
+          encoding: {
+            type: 'string',
+            enum: ['gzip'],
+            description: 'Content encoding (e.g., gzip for compressed files)',
+          },
+          mimeType: {
+            type: 'string',
+            description: 'Original MIME type before compression',
+          },
+          base64: {
+            type: 'boolean',
+            description:
+              'True if blob content is base64-encoded (used to bypass PDS content sniffing)',
           },
         },
       },
@@ -84,7 +98,139 @@ export const schemaDict = {
           },
           node: {
             type: 'union',
-            refs: ['lex:place.wisp.fs#file', 'lex:place.wisp.fs#directory'],
+            refs: [
+              'lex:place.wisp.fs#file',
+              'lex:place.wisp.fs#directory',
+              'lex:place.wisp.fs#subfs',
+            ],
+          },
+        },
+      },
+      subfs: {
+        type: 'object',
+        required: ['type', 'subject'],
+        properties: {
+          type: {
+            type: 'string',
+            const: 'subfs',
+          },
+          subject: {
+            type: 'string',
+            format: 'at-uri',
+            description:
+              'AT-URI pointing to a place.wisp.subfs record containing this subtree',
+          },
+        },
+      },
+    },
+  },
+  PlaceWispSubfs: {
+    lexicon: 1,
+    id: 'place.wisp.subfs',
+    defs: {
+      main: {
+        type: 'record',
+        description:
+          'Virtual filesystem manifest within a place.wisp.fs record',
+        record: {
+          type: 'object',
+          required: ['root', 'createdAt'],
+          properties: {
+            root: {
+              type: 'ref',
+              ref: 'lex:place.wisp.subfs#directory',
+            },
+            fileCount: {
+              type: 'integer',
+              minimum: 0,
+              maximum: 1000,
+            },
+            createdAt: {
+              type: 'string',
+              format: 'datetime',
+            },
+          },
+        },
+      },
+      file: {
+        type: 'object',
+        required: ['type', 'blob'],
+        properties: {
+          type: {
+            type: 'string',
+            const: 'file',
+          },
+          blob: {
+            type: 'blob',
+            accept: ['*/*'],
+            maxSize: 1000000000,
+            description: 'Content blob ref',
+          },
+          encoding: {
+            type: 'string',
+            enum: ['gzip'],
+            description: 'Content encoding (e.g., gzip for compressed files)',
+          },
+          mimeType: {
+            type: 'string',
+            description: 'Original MIME type before compression',
+          },
+          base64: {
+            type: 'boolean',
+            description:
+              'True if blob content is base64-encoded (used to bypass PDS content sniffing)',
+          },
+        },
+      },
+      directory: {
+        type: 'object',
+        required: ['type', 'entries'],
+        properties: {
+          type: {
+            type: 'string',
+            const: 'directory',
+          },
+          entries: {
+            type: 'array',
+            maxLength: 500,
+            items: {
+              type: 'ref',
+              ref: 'lex:place.wisp.subfs#entry',
+            },
+          },
+        },
+      },
+      entry: {
+        type: 'object',
+        required: ['name', 'node'],
+        properties: {
+          name: {
+            type: 'string',
+            maxLength: 255,
+          },
+          node: {
+            type: 'union',
+            refs: [
+              'lex:place.wisp.subfs#file',
+              'lex:place.wisp.subfs#directory',
+              'lex:place.wisp.subfs#subfs',
+            ],
+          },
+        },
+      },
+      subfs: {
+        type: 'object',
+        required: ['type', 'subject'],
+        properties: {
+          type: {
+            type: 'string',
+            const: 'subfs',
+          },
+          subject: {
+            type: 'string',
+            format: 'at-uri',
+            description:
+              'AT-URI pointing to another place.wisp.subfs record for nested subtrees',
           },
         },
       },
@@ -124,4 +270,5 @@ export function validate(
 
 export const ids = {
   PlaceWispFs: 'place.wisp.fs',
+  PlaceWispSubfs: 'place.wisp.subfs',
 } as const

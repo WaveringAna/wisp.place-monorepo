@@ -40,6 +40,12 @@ export interface File {
   type: 'file'
   /** Content blob ref */
   blob: BlobRef
+  /** Content encoding (e.g., gzip for compressed files) */
+  encoding?: 'gzip'
+  /** Original MIME type before compression */
+  mimeType?: string
+  /** True if blob content is base64-encoded (used to bypass PDS content sniffing) */
+  base64?: boolean
 }
 
 const hashFile = 'file'
@@ -71,7 +77,7 @@ export function validateDirectory<V>(v: V) {
 export interface Entry {
   $type?: 'place.wisp.fs#entry'
   name: string
-  node: $Typed<File> | $Typed<Directory> | { $type: string }
+  node: $Typed<File> | $Typed<Directory> | $Typed<Subfs> | { $type: string }
 }
 
 const hashEntry = 'entry'
@@ -82,4 +88,21 @@ export function isEntry<V>(v: V) {
 
 export function validateEntry<V>(v: V) {
   return validate<Entry & V>(v, id, hashEntry)
+}
+
+export interface Subfs {
+  $type?: 'place.wisp.fs#subfs'
+  type: 'subfs'
+  /** AT-URI pointing to a place.wisp.subfs record containing this subtree */
+  subject: string
+}
+
+const hashSubfs = 'subfs'
+
+export function isSubfs<V>(v: V) {
+  return is$typed(v, id, hashSubfs)
+}
+
+export function validateSubfs<V>(v: V) {
+  return validate<Subfs & V>(v, id, hashSubfs)
 }

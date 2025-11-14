@@ -21,11 +21,10 @@
       "required": ["type", "blob"],
       "properties": {
         "type": { "type": "string", "const": "file" },
-        "blob": { "type": "blob", "accept": ["*/*"], "maxSize": 1000000, "description": "Content blob ref" },
+        "blob": { "type": "blob", "accept": ["*/*"], "maxSize": 1000000000, "description": "Content blob ref" },
         "encoding": { "type": "string", "enum": ["gzip"], "description": "Content encoding (e.g., gzip for compressed files)" },
         "mimeType": { "type": "string", "description": "Original MIME type before compression" },
-        "base64": { "type": "boolean", "description": "True if blob content is base64-encoded (used to bypass PDS content sniffing)" }
-      }
+        "base64": { "type": "boolean", "description": "True if blob content is base64-encoded (used to bypass PDS content sniffing)" }      }
     },
     "directory": {
       "type": "object",
@@ -44,7 +43,15 @@
       "required": ["name", "node"],
       "properties": {
         "name": { "type": "string", "maxLength": 255 },
-        "node": { "type": "union", "refs": ["#file", "#directory"] }
+        "node": { "type": "union", "refs": ["#file", "#directory", "#subfs"] }
+      }
+    },
+    "subfs": {
+      "type": "object",
+      "required": ["type", "subject"],
+      "properties": {
+        "type": { "type": "string", "const": "subfs" },
+        "subject": { "type": "string", "format": "at-uri", "description": "AT-URI pointing to a place.wisp.subfs record containing this subtree" }
       }
     }
   }
