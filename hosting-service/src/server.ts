@@ -71,7 +71,7 @@ async function serveFromCache(
     const requestPath = '/' + (filePath || '');
     const queryParams = fullUrl ? parseQueryString(fullUrl) : {};
     const cookies = parseCookies(headers?.['cookie']);
-    
+
     const redirectMatch = matchRedirectRule(requestPath, redirectRules, {
       queryParams,
       headers,
@@ -79,8 +79,25 @@ async function serveFromCache(
     });
 
     if (redirectMatch) {
-      const { targetPath, status } = redirectMatch;
-      
+      const { rule, targetPath, status } = redirectMatch;
+
+      // If not forced, check if the requested file exists before redirecting
+      if (!rule.force) {
+        // Build the expected file path
+        let checkPath = filePath || 'index.html';
+        if (checkPath.endsWith('/')) {
+          checkPath += 'index.html';
+        }
+
+        const cachedFile = getCachedFilePath(did, rkey, checkPath);
+        const fileExistsOnDisk = await fileExists(cachedFile);
+
+        // If file exists and redirect is not forced, serve the file normally
+        if (fileExistsOnDisk) {
+          return serveFileInternal(did, rkey, filePath);
+        }
+      }
+
       // Handle different status codes
       if (status === 200) {
         // Rewrite: serve different content but keep URL the same
@@ -235,7 +252,7 @@ async function serveFromCacheWithRewrite(
     const requestPath = '/' + (filePath || '');
     const queryParams = fullUrl ? parseQueryString(fullUrl) : {};
     const cookies = parseCookies(headers?.['cookie']);
-    
+
     const redirectMatch = matchRedirectRule(requestPath, redirectRules, {
       queryParams,
       headers,
@@ -243,8 +260,25 @@ async function serveFromCacheWithRewrite(
     });
 
     if (redirectMatch) {
-      const { targetPath, status } = redirectMatch;
-      
+      const { rule, targetPath, status } = redirectMatch;
+
+      // If not forced, check if the requested file exists before redirecting
+      if (!rule.force) {
+        // Build the expected file path
+        let checkPath = filePath || 'index.html';
+        if (checkPath.endsWith('/')) {
+          checkPath += 'index.html';
+        }
+
+        const cachedFile = getCachedFilePath(did, rkey, checkPath);
+        const fileExistsOnDisk = await fileExists(cachedFile);
+
+        // If file exists and redirect is not forced, serve the file normally
+        if (fileExistsOnDisk) {
+          return serveFileInternalWithRewrite(did, rkey, filePath, basePath);
+        }
+      }
+
       // Handle different status codes
       if (status === 200) {
         // Rewrite: serve different content but keep URL the same
