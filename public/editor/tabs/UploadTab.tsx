@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import {
 	Card,
 	CardContent,
@@ -40,6 +40,10 @@ export function UploadTab({
 	const [skippedFiles, setSkippedFiles] = useState<Array<{ name: string; reason: string }>>([])
 	const [uploadedCount, setUploadedCount] = useState(0)
 
+	// Keep SSE connection alive across tab switches
+	const eventSourceRef = useRef<EventSource | null>(null)
+	const currentJobIdRef = useRef<string | null>(null)
+
 	// Auto-switch to 'new' mode if no sites exist
 	useEffect(() => {
 		if (!sitesLoading && sites.length === 0 && siteMode === 'existing') {
@@ -47,9 +51,108 @@ export function UploadTab({
 		}
 	}, [sites, sitesLoading, siteMode])
 
+	// Cleanup SSE connection on unmount
+	useEffect(() => {
+		return () => {
+			// Don't close the connection on unmount (tab switch)
+			// It will be reused when the component remounts
+		}
+	}, [])
+
 	const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
 		if (e.target.files && e.target.files.length > 0) {
 			setSelectedFiles(e.target.files)
+		}
+	}
+
+	const setupSSE = (jobId: string) => {
+		// Close existing connection if any
+		if (eventSourceRef.current) {
+			eventSourceRef.current.close()
+		}
+
+		currentJobIdRef.current = jobId
+		const eventSource = new EventSource(`/wisp/upload-progress/${jobId}`)
+		eventSourceRef.current = eventSource
+
+		eventSource.addEventListener('progress', (event) => {
+			const progressData = JSON.parse(event.data)
+			const { progress, status } = progressData
+
+			// Update progress message based on phase
+			let message = 'Processing...'
+			if (progress.phase === 'validating') {
+				message = 'Validating files...'
+			} else if (progress.phase === 'compressing') {
+				const current = progress.filesProcessed || 0
+				const total = progress.totalFiles || 0
+				message = `Compressing files (${current}/${total})...`
+				if (progress.currentFile) {
+					message += ` - ${progress.currentFile}`
+				}
+			} else if (progress.phase === 'uploading') {
+				const uploaded = progress.filesUploaded || 0
+				const reused = progress.filesReused || 0
+				const total = progress.totalFiles || 0
+				message = `Uploading to PDS (${uploaded + reused}/${total})...`
+			} else if (progress.phase === 'creating_manifest') {
+				message = 'Creating manifest...'
+			} else if (progress.phase === 'finalizing') {
+				message = 'Finalizing upload...'
+			}
+
+			setUploadProgress(message)
+		})
+
+		eventSource.addEventListener('done', (event) => {
+			const result = JSON.parse(event.data)
+			eventSource.close()
+			eventSourceRef.current = null
+			currentJobIdRef.current = null
+
+			setUploadProgress('Upload complete!')
+			setSkippedFiles(result.skippedFiles || [])
+			setUploadedCount(result.uploadedCount || result.fileCount || 0)
+			setSelectedSiteRkey('')
+			setNewSiteName('')
+			setSelectedFiles(null)
+
+			// Refresh sites list
+			onUploadComplete()
+
+			// Reset form
+			const resetDelay = result.skippedFiles && result.skippedFiles.length > 0 ? 4000 : 1500
+			setTimeout(() => {
+				setUploadProgress('')
+				setSkippedFiles([])
+				setUploadedCount(0)
+				setIsUploading(false)
+			}, resetDelay)
+		})
+
+		eventSource.addEventListener('error', (event) => {
+			const errorData = JSON.parse((event as any).data || '{}')
+			eventSource.close()
+			eventSourceRef.current = null
+			currentJobIdRef.current = null
+
+			console.error('Upload error:', errorData)
+			alert(
+				`Upload failed: ${errorData.error || 'Unknown error'}`
+			)
+			setIsUploading(false)
+			setUploadProgress('')
+		})
+
+		eventSource.onerror = () => {
+			eventSource.close()
+			eventSourceRef.current = null
+			currentJobIdRef.current = null
+
+			console.error('SSE connection error')
+			alert('Lost connection to upload progress. The upload may still be processing.')
+			setIsUploading(false)
+			setUploadProgress('')
 		}
 	}
 
@@ -74,35 +177,51 @@ export function UploadTab({
 				}
 			}
 
-			setUploadProgress('Uploading to AT Protocol...')
+			// If no files, handle synchronously (old behavior)
+			if (!selectedFiles || selectedFiles.length === 0) {
+				setUploadProgress('Creating empty site...')
+				const response = await fetch('/wisp/upload-files', {
+					method: 'POST',
+					body: formData
+				})
+
+				const data = await response.json()
+				if (data.success) {
+					setUploadProgress('Site created!')
+					setSelectedSiteRkey('')
+					setNewSiteName('')
+					setSelectedFiles(null)
+
+					await onUploadComplete()
+
+					setTimeout(() => {
+						setUploadProgress('')
+						setIsUploading(false)
+					}, 1500)
+				} else {
+					throw new Error(data.error || 'Upload failed')
+				}
+				return
+			}
+
+			// For file uploads, use SSE for progress
+			setUploadProgress('Starting upload...')
 			const response = await fetch('/wisp/upload-files', {
 				method: 'POST',
 				body: formData
 			})
 
 			const data = await response.json()
-			if (data.success) {
-				setUploadProgress('Upload complete!')
-				setSkippedFiles(data.skippedFiles || [])
-				setUploadedCount(data.uploadedCount || data.fileCount || 0)
-				setSelectedSiteRkey('')
-				setNewSiteName('')
-				setSelectedFiles(null)
-
-				// Refresh sites list
-				await onUploadComplete()
-
-				// Reset form - give more time if there are skipped files
-				const resetDelay = data.skippedFiles && data.skippedFiles.length > 0 ? 4000 : 1500
-				setTimeout(() => {
-					setUploadProgress('')
-					setSkippedFiles([])
-					setUploadedCount(0)
-					setIsUploading(false)
-				}, resetDelay)
-			} else {
-				throw new Error(data.error || 'Upload failed')
+			if (!data.success || !data.jobId) {
+				throw new Error(data.error || 'Failed to start upload')
 			}
+
+			const jobId = data.jobId
+			setUploadProgress('Connecting to progress stream...')
+
+			// Setup SSE connection (persists across tab switches via ref)
+			setupSSE(jobId)
+
 		} catch (err) {
 			console.error('Upload error:', err)
 			alert(
