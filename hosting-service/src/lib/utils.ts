@@ -1,5 +1,6 @@
 import { AtpAgent } from '@atproto/api';
 import type { Record as WispFsRecord, Directory, Entry, File } from '../lexicon/types/place/wisp/fs';
+import type { Record as SubfsRecord } from '../lexicon/types/place/wisp/subfs';
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'fs';
 import { writeFile, readFile, rename } from 'fs/promises';
 import { safeFetchJson, safeFetchBlob } from './safe-fetch';
@@ -189,6 +190,134 @@ export function extractBlobCid(blobRef: unknown): string | null {
   return null;
 }
 
+/**
+ * Extract all subfs URIs from a directory tree with their mount paths
+ */
+function extractSubfsUris(directory: Directory, currentPath: string = ''): Array<{ uri: string; path: string }> {
+  const uris: Array<{ uri: string; path: string }> = [];
+
+  for (const entry of directory.entries) {
+    const fullPath = currentPath ? `${currentPath}/${entry.name}` : entry.name;
+
+    if ('type' in entry.node) {
+      if (entry.node.type === 'subfs') {
+        // Subfs node with subject URI
+        const subfsNode = entry.node as any;
+        if (subfsNode.subject) {
+          uris.push({ uri: subfsNode.subject, path: fullPath });
+        }
+      } else if (entry.node.type === 'directory') {
+        // Recursively search subdirectories
+        const subUris = extractSubfsUris(entry.node as Directory, fullPath);
+        uris.push(...subUris);
+      }
+    }
+  }
+
+  return uris;
+}
+
+/**
+ * Fetch a subfs record from the PDS
+ */
+async function fetchSubfsRecord(uri: string, pdsEndpoint: string): Promise<SubfsRecord | null> {
+  try {
+    // Parse URI: at://did/collection/rkey
+    const parts = uri.replace('at://', '').split('/');
+    if (parts.length < 3) {
+      console.error('Invalid subfs URI:', uri);
+      return null;
+    }
+
+    const did = parts[0];
+    const collection = parts[1];
+    const rkey = parts[2];
+
+    // Fetch the record from PDS
+    const url = `${pdsEndpoint}/xrpc/com.atproto.repo.getRecord?repo=${encodeURIComponent(did)}&collection=${encodeURIComponent(collection)}&rkey=${encodeURIComponent(rkey)}`;
+    const response = await safeFetchJson(url);
+
+    if (!response || !response.value) {
+      console.error('Subfs record not found:', uri);
+      return null;
+    }
+
+    return response.value as SubfsRecord;
+  } catch (err) {
+    console.error('Failed to fetch subfs record:', uri, err);
+    return null;
+  }
+}
+
+/**
+ * Replace subfs nodes in a directory tree with their actual content
+ */
+async function expandSubfsNodes(directory: Directory, pdsEndpoint: string): Promise<Directory> {
+  // Extract all subfs URIs
+  const subfsUris = extractSubfsUris(directory);
+
+  if (subfsUris.length === 0) {
+    // No subfs nodes, return as-is
+    return directory;
+  }
+
+  console.log(`Found ${subfsUris.length} subfs records, fetching...`);
+
+  // Fetch all subfs records in parallel
+  const subfsRecords = await Promise.all(
+    subfsUris.map(async ({ uri, path }) => {
+      const record = await fetchSubfsRecord(uri, pdsEndpoint);
+      return { record, path };
+    })
+  );
+
+  // Build a map of path -> directory content
+  const subfsMap = new Map<string, Directory>();
+  for (const { record, path } of subfsRecords) {
+    if (record && record.root) {
+      subfsMap.set(path, record.root);
+    }
+  }
+
+  // Replace subfs nodes with their actual content
+  function replaceSubfsInEntries(entries: Entry[], currentPath: string = ''): Entry[] {
+    return entries.map(entry => {
+      const fullPath = currentPath ? `${currentPath}/${entry.name}` : entry.name;
+      const node = entry.node;
+
+      if ('type' in node && node.type === 'subfs') {
+        // Replace with actual directory content
+        const subfsDir = subfsMap.get(fullPath);
+        if (subfsDir) {
+          console.log(`Expanding subfs node at ${fullPath}`);
+          return {
+            ...entry,
+            node: subfsDir
+          };
+        }
+        // If fetch failed, keep the subfs node (will be skipped later)
+        return entry;
+      } else if ('type' in node && node.type === 'directory' && 'entries' in node) {
+        // Recursively process subdirectories
+        return {
+          ...entry,
+          node: {
+            ...node,
+            entries: replaceSubfsInEntries(node.entries, fullPath)
+          }
+        };
+      }
+
+      return entry;
+    });
+  }
+
+  return {
+    ...directory,
+    entries: replaceSubfsInEntries(directory.entries)
+  };
+}
+
 export async function downloadAndCacheSite(did: string, rkey: string, record: WispFsRecord, pdsEndpoint: string, recordCid: string): Promise<void> {
   console.log('Caching site', did, rkey);
 
@@ -202,6 +331,9 @@ export async function downloadAndCacheSite(did: string, rkey: string, record: Wi
     throw new Error('Invalid record structure: root missing entries array');
   }
 
+  // Expand subfs nodes before caching
+  const expandedRoot = await expandSubfsNodes(record.root, pdsEndpoint);
+
   // Get existing cache metadata to check for incremental updates
   const existingMetadata = await getCacheMetadata(did, rkey);
   const existingFileCids = existingMetadata?.fileCids || {};
@@ -212,12 +344,12 @@ export async function downloadAndCacheSite(did: string, rkey: string, record: Wi
   const finalDir = `${CACHE_DIR}/${did}/${rkey}`;
 
   try {
-    // Collect file CIDs from the new record
+    // Collect file CIDs from the new record (using expanded root)
     const newFileCids: Record<string, string> = {};
-    collectFileCidsFromEntries(record.root.entries, '', newFileCids);
+    collectFileCidsFromEntries(expandedRoot.entries, '', newFileCids);
 
-    // Download/copy files to temporary directory (with incremental logic)
-    await cacheFiles(did, rkey, record.root.entries, pdsEndpoint, '', tempSuffix, existingFileCids, finalDir);
+    // Download/copy files to temporary directory (with incremental logic, using expanded root)
+    await cacheFiles(did, rkey, expandedRoot.entries, pdsEndpoint, '', tempSuffix, existingFileCids, finalDir);
     await saveCacheMetadata(did, rkey, recordCid, tempSuffix, newFileCids);
 
     // Atomically replace old cache with new cache
