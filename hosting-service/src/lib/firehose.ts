@@ -148,6 +148,7 @@ export class FirehoseWorker {
 		this.log('Resolved PDS', { did, pdsEndpoint })
 
 		// Verify record exists on PDS and fetch its CID
+		this.log('Verifying record on PDS', { did, site })
 		let verifiedCid: string
 		try {
 			const result = await fetchSiteRecord(did, site)

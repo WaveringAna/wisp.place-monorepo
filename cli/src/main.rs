@@ -301,8 +301,8 @@ fn build_directory<'a>(
             .ok_or_else(|| miette::miette!("Invalid filename: {:?}", name))?
             .to_string();
 
-        // Skip hidden files
-        if name_str.starts_with('.') {
+        // Skip .git directories
+        if name_str == ".git" {
             continue;
         }
 

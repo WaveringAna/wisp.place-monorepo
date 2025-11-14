@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx --env-file=.env watch src/index.ts",
+    "dev": "tsx --env-file=.env  src/index.ts",
     "build": "tsc",
     "start": "tsx src/index.ts",
     "backfill": "tsx src/index.ts --backfill"
