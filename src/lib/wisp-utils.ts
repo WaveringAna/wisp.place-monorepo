@@ -80,6 +80,12 @@ export function processUploadedFiles(files: UploadedFile[]): ProcessedDirectory 
 
 		// Remove any base folder name from the path
 		const normalizedPath = file.name.replace(/^[^\/]*\//, '');
+
+		// Skip files in .git directories
+		if (normalizedPath.startsWith('.git/') || normalizedPath === '.git') {
+			continue;
+		}
+
 		const parts = normalizedPath.split('/');
 
 		if (parts.length === 1) {
@@ -296,7 +302,146 @@ export function extractBlobMap(
 			const subMap = extractBlobMap(entry.node as Directory, fullPath);
 			subMap.forEach((value, key) => blobMap.set(key, value));
 		}
+		// Skip subfs nodes - they don't contain blobs in the main tree
 	}
 
 	return blobMap;
+}
+
+/**
+ * Extract all subfs URIs from a directory tree with their mount paths
+ */
+export function extractSubfsUris(
+	directory: Directory,
+	currentPath: string = ''
+): Array<{ uri: string; path: string }> {
+	const uris: Array<{ uri: string; path: string }> = [];
+
+	for (const entry of directory.entries) {
+		const fullPath = currentPath ? `${currentPath}/${entry.name}` : entry.name;
+
+		if ('type' in entry.node) {
+			if (entry.node.type === 'subfs') {
+				// Subfs node with subject URI
+				const subfsNode = entry.node as any;
+				if (subfsNode.subject) {
+					uris.push({ uri: subfsNode.subject, path: fullPath });
+				}
+			} else if (entry.node.type === 'directory') {
+				// Recursively search subdirectories
+				const subUris = extractSubfsUris(entry.node as Directory, fullPath);
+				uris.push(...subUris);
+			}
+		}
+	}
+
+	return uris;
+}
+
+/**
+ * Estimate the JSON size of a directory tree
+ */
+export function estimateDirectorySize(directory: Directory): number {
+	return JSON.stringify(directory).length;
+}
+
+/**
+ * Count files in a directory tree
+ */
+export function countFilesInDirectory(directory: Directory): number {
+	let count = 0;
+	for (const entry of directory.entries) {
+		if ('type' in entry.node && entry.node.type === 'file') {
+			count++;
+		} else if ('type' in entry.node && entry.node.type === 'directory') {
+			count += countFilesInDirectory(entry.node as Directory);
+		}
+	}
+	return count;
+}
+
+/**
+ * Find all directories in a tree with their paths and sizes
+ */
+export function findLargeDirectories(directory: Directory, currentPath: string = ''): Array<{
+	path: string;
+	directory: Directory;
+	size: number;
+	fileCount: number;
+}> {
+	const result: Array<{ path: string; directory: Directory; size: number; fileCount: number }> = [];
+
+	for (const entry of directory.entries) {
+		if ('type' in entry.node && entry.node.type === 'directory') {
+			const dirPath = currentPath ? `${currentPath}/${entry.name}` : entry.name;
+			const dir = entry.node as Directory;
+			const size = estimateDirectorySize(dir);
+			const fileCount = countFilesInDirectory(dir);
+
+			result.push({ path: dirPath, directory: dir, size, fileCount });
+
+			// Recursively find subdirectories
+			const subdirs = findLargeDirectories(dir, dirPath);
+			result.push(...subdirs);
+		}
+	}
+
+	return result;
+}
+
+/**
+ * Replace a directory with a subfs node in the tree
+ */
+export function replaceDirectoryWithSubfs(
+	directory: Directory,
+	targetPath: string,
+	subfsUri: string
+): Directory {
+	const pathParts = targetPath.split('/');
+	const targetName = pathParts[pathParts.length - 1];
+	const parentPath = pathParts.slice(0, -1).join('/');
+
+	// If this is a root-level directory
+	if (pathParts.length === 1) {
+		const newEntries = directory.entries.map(entry => {
+			if (entry.name === targetName && 'type' in entry.node && entry.node.type === 'directory') {
+				return {
+					name: entry.name,
+					node: {
+						$type: 'place.wisp.fs#subfs' as const,
+						type: 'subfs' as const,
+						subject: subfsUri
+					}
+				};
+			}
+			return entry;
+		});
+
+		return {
+			$type: 'place.wisp.fs#directory' as const,
+			type: 'directory' as const,
+			entries: newEntries
+		};
+	}
+
+	// Recursively navigate to parent directory
+	const newEntries = directory.entries.map(entry => {
+		if ('type' in entry.node && entry.node.type === 'directory') {
+			const entryPath = entry.name;
+			if (parentPath.startsWith(entryPath) || parentPath === entry.name) {
+				const remainingPath = pathParts.slice(1).join('/');
+				return {
+					name: entry.name,
+					node: replaceDirectoryWithSubfs(entry.node as Directory, remainingPath, subfsUri)
+				};
+			}
+		}
+		return entry;
+	});
+
+	return {
+		$type: 'place.wisp.fs#directory' as const,
+		type: 'directory' as const,
+		entries: newEntries
+	};
 }
