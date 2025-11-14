@@ -2,6 +2,7 @@ import { NodeOAuthClient, type ClientMetadata } from "@atproto/oauth-client-node
 import { JoseKey } from "@atproto/jwk-jose";
 import { db } from "./db";
 import { logger } from "./logger";
+import { SlingshotHandleResolver } from "./slingshot-handle-resolver";
 
 // Session timeout configuration (30 days in seconds)
 const SESSION_TIMEOUT = 30 * 24 * 60 * 60; // 2592000 seconds
@@ -244,6 +245,7 @@ export const getOAuthClient = async (config: { domain: `http://${string}` | `htt
         clientMetadata: createClientMetadata(config),
         keyset: keys,
         stateStore,
-        sessionStore
+        sessionStore,
+        handleResolver: new SlingshotHandleResolver()
     });
 };
