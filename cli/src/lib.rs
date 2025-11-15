@@ -3,5 +3,7 @@
 // This file was automatically generated from Lexicon schemas.
 // Any manual changes will be overwritten on the next regeneration.
 
-pub mod fs;
-pub mod subfs;
+pub mod builder_types;
+
+#[cfg(feature = "place_wisp")]
+pub mod place_wisp;

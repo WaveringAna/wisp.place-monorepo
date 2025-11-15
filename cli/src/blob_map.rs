@@ -33,7 +33,7 @@ fn extract_blob_map_recursive(
                 // BlobRef is an enum with Blob variant, which has a ref field (CidLink)
                 let blob_ref = &file_node.blob;
                 let cid_string = blob_ref.blob().r#ref.to_string();
-                
+
                 // Store with full path (mirrors TypeScript implementation)
                 blob_map.insert(
                     full_path,
@@ -43,6 +43,10 @@ fn extract_blob_map_recursive(
             EntryNode::Directory(subdir) => {
                 let sub_map = extract_blob_map_recursive(subdir, full_path);
                 blob_map.extend(sub_map);
+            }
+            EntryNode::Subfs(_) => {
+                // Subfs nodes don't contain blobs directly - they reference other records
+                // Skip them in blob map extraction
             }
             EntryNode::Unknown(_) => {
                 // Skip unknown node types

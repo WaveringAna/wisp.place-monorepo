@@ -6,6 +6,7 @@ mod metadata;
 mod download;
 mod pull;
 mod serve;
+mod subfs_utils;
 
 use clap::{Parser, Subcommand};
 use jacquard::CowStr;
@@ -204,9 +205,9 @@ async fn deploy_site(
     println!("Deploying site '{}'...", site_name);
 
     // Try to fetch existing manifest for incremental updates
-    let existing_blob_map: HashMap<String, (jacquard_common::types::blob::BlobRef<'static>, String)> = {
+    let (existing_blob_map, old_subfs_uris): (HashMap<String, (jacquard_common::types::blob::BlobRef<'static>, String)>, Vec<(String, String)>) = {
         use jacquard_common::types::string::AtUri;
-        
+
         // Get the DID for this session
         let session_info = agent.session_info().await;
         if let Some((did, _)) = session_info {
@@ -218,29 +219,49 @@ async fn deploy_site(
                         match response.into_output() {
                             Ok(record_output) => {
                                 let existing_manifest = record_output.value;
-                                let blob_map = blob_map::extract_blob_map(&existing_manifest.root);
-                                println!("Found existing manifest with {} files, checking for changes...", blob_map.len());
-                                blob_map
+                                let mut blob_map = blob_map::extract_blob_map(&existing_manifest.root);
+                                println!("Found existing manifest with {} files in main record", blob_map.len());
+
+                                // Extract subfs URIs from main record
+                                let subfs_uris = subfs_utils::extract_subfs_uris(&existing_manifest.root, String::new());
+
+                                if !subfs_uris.is_empty() {
+                                    println!("Found {} subfs records, fetching for blob reuse...", subfs_uris.len());
+
+                                    // Merge blob maps from all subfs records
+                                    match subfs_utils::merge_subfs_blob_maps(agent, subfs_uris.clone(), &mut blob_map).await {
+                                        Ok(merged_count) => {
+                                            println!("Total blob map: {} files (main + {} from subfs)", blob_map.len(), merged_count);
+                                        }
+                                        Err(e) => {
+                                            eprintln!("⚠️  Failed to merge some subfs blob maps: {}", e);
+                                        }
+                                    }
+
+                                    (blob_map, subfs_uris)
+                                } else {
+                                    (blob_map, Vec::new())
+                                }
                             }
                             Err(_) => {
                                 println!("No existing manifest found, uploading all files...");
-                                HashMap::new()
+                                (HashMap::new(), Vec::new())
                             }
                         }
                     }
                     Err(_) => {
                         // Record doesn't exist yet - this is a new site
                         println!("No existing manifest found, uploading all files...");
-                        HashMap::new()
+                        (HashMap::new(), Vec::new())
                     }
                 }
             } else {
                 println!("No existing manifest found (invalid URI), uploading all files...");
-                HashMap::new()
+                (HashMap::new(), Vec::new())
             }
         } else {
             println!("No existing manifest found (could not get DID), uploading all files...");
-            HashMap::new()
+            (HashMap::new(), Vec::new())
         }
     };
 
@@ -248,11 +269,102 @@ async fn deploy_site(
     let (root_dir, total_files, reused_count) = build_directory(agent, &path, &existing_blob_map, String::new()).await?;
     let uploaded_count = total_files - reused_count;
 
-    // Create the Fs record
+    // Check if we need to split into subfs records
+    const MAX_MANIFEST_SIZE: usize = 140 * 1024; // 140KB (PDS limit is 150KB)
+    const FILE_COUNT_THRESHOLD: usize = 250; // Start splitting at this many files
+    const TARGET_FILE_COUNT: usize = 200; // Keep main manifest under this
+
+    let mut working_directory = root_dir;
+    let mut current_file_count = total_files;
+    let mut new_subfs_uris: Vec<(String, String)> = Vec::new();
+
+    // Estimate initial manifest size
+    let mut manifest_size = subfs_utils::estimate_directory_size(&working_directory);
+
+    if total_files >= FILE_COUNT_THRESHOLD || manifest_size > MAX_MANIFEST_SIZE {
+        println!("\n⚠️  Large site detected ({} files, {:.1}KB manifest), splitting into subfs records...",
+            total_files, manifest_size as f64 / 1024.0);
+
+        let mut attempts = 0;
+        const MAX_SPLIT_ATTEMPTS: usize = 50;
+
+        while (manifest_size > MAX_MANIFEST_SIZE || current_file_count > TARGET_FILE_COUNT) && attempts < MAX_SPLIT_ATTEMPTS {
+            attempts += 1;
+
+            // Find large directories to split
+            let directories = subfs_utils::find_large_directories(&working_directory, String::new());
+
+            if let Some(largest_dir) = directories.first() {
+                println!("  Split #{}: {} ({} files, {:.1}KB)",
+                    attempts, largest_dir.path, largest_dir.file_count, largest_dir.size as f64 / 1024.0);
+
+                // Create a subfs record for this directory
+                use jacquard_common::types::string::Tid;
+                let subfs_tid = Tid::now_0();
+                let subfs_rkey = subfs_tid.to_string();
+
+                let subfs_manifest = crate::place_wisp::subfs::SubfsRecord::new()
+                    .root(convert_fs_dir_to_subfs_dir(largest_dir.directory.clone()))
+                    .file_count(Some(largest_dir.file_count as i64))
+                    .created_at(Datetime::now())
+                    .build();
+
+                // Upload subfs record
+                let subfs_output = agent.put_record(
+                    RecordKey::from(Rkey::new(&subfs_rkey).into_diagnostic()?),
+                    subfs_manifest
+                ).await.into_diagnostic()?;
+
+                let subfs_uri = subfs_output.uri.to_string();
+                println!("  ✅ Created subfs: {}", subfs_uri);
+
+                // Replace directory with subfs node (flat: false to preserve structure)
+                working_directory = subfs_utils::replace_directory_with_subfs(
+                    working_directory,
+                    &largest_dir.path,
+                    &subfs_uri,
+                    false // Preserve directory structure
+                )?;
+
+                new_subfs_uris.push((subfs_uri, largest_dir.path.clone()));
+                current_file_count -= largest_dir.file_count;
+
+                // Recalculate manifest size
+                manifest_size = subfs_utils::estimate_directory_size(&working_directory);
+                println!("  → Manifest now {:.1}KB with {} files ({} subfs total)",
+                    manifest_size as f64 / 1024.0, current_file_count, new_subfs_uris.len());
+
+                if manifest_size <= MAX_MANIFEST_SIZE && current_file_count <= TARGET_FILE_COUNT {
+                    println!("✅ Manifest now fits within limits");
+                    break;
+                }
+            } else {
+                println!("  No more subdirectories to split - stopping");
+                break;
+            }
+        }
+
+        if attempts >= MAX_SPLIT_ATTEMPTS {
+            return Err(miette::miette!(
+                "Exceeded maximum split attempts ({}). Manifest still too large: {:.1}KB with {} files",
+                MAX_SPLIT_ATTEMPTS,
+                manifest_size as f64 / 1024.0,
+                current_file_count
+            ));
+        }
+
+        println!("✅ Split complete: {} subfs records, {} files in main manifest, {:.1}KB",
+            new_subfs_uris.len(), current_file_count, manifest_size as f64 / 1024.0);
+    } else {
+        println!("Manifest created ({} files, {:.1}KB) - no splitting needed",
+            total_files, manifest_size as f64 / 1024.0);
+    }
+
+    // Create the final Fs record
     let fs_record = Fs::new()
         .site(CowStr::from(site_name.clone()))
-        .root(root_dir)
-        .file_count(total_files as i64)
+        .root(working_directory)
+        .file_count(current_file_count as i64)
         .created_at(Datetime::now())
         .build();
 
@@ -270,6 +382,33 @@ async fn deploy_site(
     println!("\n✓ Deployed site '{}': {}", site_name, output.uri);
     println!("  Total files: {} ({} reused, {} uploaded)", total_files, reused_count, uploaded_count);
     println!("  Available at: https://sites.wisp.place/{}/{}", did, site_name);
+
+    // Clean up old subfs records
+    if !old_subfs_uris.is_empty() {
+        println!("\nCleaning up {} old subfs records...", old_subfs_uris.len());
+
+        let mut deleted_count = 0;
+        let mut failed_count = 0;
+
+        for (uri, _path) in old_subfs_uris {
+            match subfs_utils::delete_subfs_record(agent, &uri).await {
+                Ok(_) => {
+                    deleted_count += 1;
+                    println!("  🗑️  Deleted old subfs: {}", uri);
+                }
+                Err(e) => {
+                    failed_count += 1;
+                    eprintln!("  ⚠️  Failed to delete {}: {}", uri, e);
+                }
+            }
+        }
+
+        if failed_count > 0 {
+            eprintln!("⚠️  Cleanup completed with {} deleted, {} failed", deleted_count, failed_count);
+        } else {
+            println!("✅ Cleanup complete: {} old subfs records deleted", deleted_count);
+        }
+    }
 
     Ok(())
 }
@@ -446,5 +585,49 @@ async fn process_file(
             .build(),
         false
     ))
+}
+
+/// Convert fs::Directory to subfs::Directory
+/// They have the same structure, but different types
+fn convert_fs_dir_to_subfs_dir(fs_dir: place_wisp::fs::Directory<'static>) -> place_wisp::subfs::Directory<'static> {
+    use place_wisp::subfs::{Directory as SubfsDirectory, Entry as SubfsEntry, EntryNode as SubfsEntryNode, File as SubfsFile};
+
+    let subfs_entries: Vec<SubfsEntry> = fs_dir.entries.into_iter().map(|entry| {
+        let node = match entry.node {
+            place_wisp::fs::EntryNode::File(file) => {
+                SubfsEntryNode::File(Box::new(SubfsFile::new()
+                    .r#type(file.r#type)
+                    .blob(file.blob)
+                    .encoding(file.encoding)
+                    .mime_type(file.mime_type)
+                    .base64(file.base64)
+                    .build()))
+            }
+            place_wisp::fs::EntryNode::Directory(dir) => {
+                SubfsEntryNode::Directory(Box::new(convert_fs_dir_to_subfs_dir(*dir)))
+            }
+            place_wisp::fs::EntryNode::Subfs(subfs) => {
+                // Nested subfs in the directory we're converting
+                // Note: subfs::Subfs doesn't have the 'flat' field - that's only in fs::Subfs
+                SubfsEntryNode::Subfs(Box::new(place_wisp::subfs::Subfs::new()
+                    .r#type(subfs.r#type)
+                    .subject(subfs.subject)
+                    .build()))
+            }
+            place_wisp::fs::EntryNode::Unknown(unknown) => {
+                SubfsEntryNode::Unknown(unknown)
+            }
+        };
+
+        SubfsEntry::new()
+            .name(entry.name)
+            .node(node)
+            .build()
+    }).collect();
+
+    SubfsDirectory::new()
+        .r#type(fs_dir.r#type)
+        .entries(subfs_entries)
+        .build()
 }
 

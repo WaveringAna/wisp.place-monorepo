@@ -1,6 +1,6 @@
 [package]
 name = "wisp-cli"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 
 [features]
@@ -33,9 +33,9 @@ futures = "0.3.31"
 multihash = "0.19.3"
 multibase = "0.9"
 sha2 = "0.10"
-axum = "0.7"
-tower-http = { version = "0.5", features = ["fs", "compression-gzip"] }
-tower = "0.4"
-n0-future = "0.1"
+axum = "0.8.7"
+tower-http = { version = "0.6.6", features = ["fs", "compression-gzip"] }
+tower = "0.5.2"
+n0-future = "0.3.1"
 chrono = "0.4"
 url = "2.5"
