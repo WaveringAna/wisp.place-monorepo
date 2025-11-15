@@ -7,7 +7,7 @@ import { existsSync } from 'fs';
 import { readFile, access } from 'fs/promises';
 import { lookup } from 'mime-types';
 import { logger, observabilityMiddleware, observabilityErrorHandler, logCollector, errorTracker, metricsCollector } from './lib/observability';
-import { fileCache, metadataCache, rewrittenHtmlCache, getCacheKey, type FileMetadata } from './lib/cache';
+import { fileCache, metadataCache, rewrittenHtmlCache, getCacheKey, type FileMetadata, markSiteAsBeingCached, unmarkSiteAsBeingCached, isSiteBeingCached } from './lib/cache';
 import { loadRedirectRules, matchRedirectRule, parseCookies, parseQueryString, type RedirectRule } from './lib/redirects';
 
 const BASE_HOST = process.env.BASE_HOST || 'wisp.place';
@@ -41,6 +41,95 @@ async function fileExists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * Return a response indicating the site is being updated
+ */
+function siteUpdatingResponse(): Response {
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Site Updating</title>
+  <style>
+    @media (prefers-color-scheme: light) {
+      :root {
+        --background: oklch(0.90 0.012 35);
+        --foreground: oklch(0.18 0.01 30);
+        --primary: oklch(0.35 0.02 35);
+        --accent: oklch(0.78 0.15 345);
+      }
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --background: oklch(0.23 0.015 285);
+        --foreground: oklch(0.90 0.005 285);
+        --primary: oklch(0.70 0.10 295);
+        --accent: oklch(0.85 0.08 5);
+      }
+    }
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+      background: var(--background);
+      color: var(--foreground);
+    }
+    .container {
+      text-align: center;
+      padding: 2rem;
+      max-width: 500px;
+    }
+    h1 {
+      font-size: 2.5rem;
+      margin-bottom: 1rem;
+      font-weight: 600;
+      color: var(--primary);
+    }
+    p {
+      font-size: 1.25rem;
+      opacity: 0.8;
+      margin-bottom: 2rem;
+      color: var(--foreground);
+    }
+    .spinner {
+      border: 4px solid var(--accent);
+      border-radius: 50%;
+      border-top: 4px solid var(--primary);
+      width: 40px;
+      height: 40px;
+      animation: spin 1s linear infinite;
+      margin: 0 auto;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+  </style>
+  <meta http-equiv="refresh" content="3">
+</head>
+<body>
+  <div class="container">
+    <h1>Site Updating</h1>
+    <p>This site is undergoing an update right now. Check back in a moment...</p>
+    <div class="spinner"></div>
+  </div>
+</body>
+</html>`;
+
+  return new Response(html, {
+    status: 503,
+    headers: {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store, no-cache, must-revalidate',
+      'Retry-After': '3',
+    },
+  });
 }
 
 // Cache for redirect rules (per site)
@@ -139,6 +228,11 @@ async function serveFromCache(
 
 // Internal function to serve a file (used by both normal serving and rewrites)
 async function serveFileInternal(did: string, rkey: string, filePath: string) {
+  // Check if site is currently being cached - if so, return updating response
+  if (isSiteBeingCached(did, rkey)) {
+    return siteUpdatingResponse();
+  }
+
   // Default to first index file if path is empty
   let requestPath = filePath || INDEX_FILES[0];
 
@@ -360,6 +454,11 @@ async function serveFromCacheWithRewrite(
 
 // Internal function to serve a file with rewriting
 async function serveFileInternalWithRewrite(did: string, rkey: string, filePath: string, basePath: string) {
+  // Check if site is currently being cached - if so, return updating response
+  if (isSiteBeingCached(did, rkey)) {
+    return siteUpdatingResponse();
+  }
+
   // Default to first index file if path is empty
   let requestPath = filePath || INDEX_FILES[0];
 
@@ -581,6 +680,9 @@ async function ensureSiteCached(did: string, rkey: string): Promise<boolean> {
     return false;
   }
 
+  // Mark site as being cached to prevent serving stale content during update
+  markSiteAsBeingCached(did, rkey);
+
   try {
     await downloadAndCacheSite(did, rkey, siteData.record, pdsEndpoint, siteData.cid);
     // Clear redirect rules cache since the site was updated
@@ -590,6 +692,9 @@ async function ensureSiteCached(did: string, rkey: string): Promise<boolean> {
   } catch (err) {
     logger.error('Failed to cache site', err, { did, rkey });
     return false;
+  } finally {
+    // Always unmark, even if caching fails
+    unmarkSiteAsBeingCached(did, rkey);
   }
 }
 
@@ -618,8 +723,9 @@ app.get('/*', async (c) => {
   const rawPath = url.pathname.replace(/^\//, '');
   const path = sanitizePath(rawPath);
 
-  // Check if this is sites.wisp.place subdomain
-  if (hostname === `sites.${BASE_HOST}` || hostname === `sites.${BASE_HOST}:${process.env.PORT || 3000}`) {
+  // Check if this is sites.wisp.place subdomain (strip port for comparison)
+  const hostnameWithoutPort = hostname.split(':')[0];
+  if (hostnameWithoutPort === `sites.${BASE_HOST}`) {
     // Sanitize the path FIRST to prevent path traversal
     const sanitizedFullPath = sanitizePath(rawPath);
 
@@ -652,6 +758,11 @@ app.get('/*', async (c) => {
     const did = await resolveDid(identifier);
     if (!did) {
       return c.text('Invalid identifier', 400);
+    }
+
+    // Check if site is currently being cached - return updating response early
+    if (isSiteBeingCached(did, site)) {
+      return siteUpdatingResponse();
     }
 
     // Ensure site is cached
@@ -697,6 +808,11 @@ app.get('/*', async (c) => {
       return c.text('Invalid site configuration', 500);
     }
 
+    // Check if site is currently being cached - return updating response early
+    if (isSiteBeingCached(customDomain.did, rkey)) {
+      return siteUpdatingResponse();
+    }
+
     const cached = await ensureSiteCached(customDomain.did, rkey);
     if (!cached) {
       return c.text('Site not found', 404);
@@ -725,6 +841,11 @@ app.get('/*', async (c) => {
       return c.text('Invalid site configuration', 500);
     }
 
+    // Check if site is currently being cached - return updating response early
+    if (isSiteBeingCached(domainInfo.did, rkey)) {
+      return siteUpdatingResponse();
+    }
+
     const cached = await ensureSiteCached(domainInfo.did, rkey);
     if (!cached) {
       return c.text('Site not found', 404);
@@ -750,6 +871,11 @@ app.get('/*', async (c) => {
   const rkey = customDomain.rkey;
   if (!isValidRkey(rkey)) {
     return c.text('Invalid site configuration', 500);
+  }
+
+  // Check if site is currently being cached - return updating response early
+  if (isSiteBeingCached(customDomain.did, rkey)) {
+    return siteUpdatingResponse();
   }
 
   const cached = await ensureSiteCached(customDomain.did, rkey);

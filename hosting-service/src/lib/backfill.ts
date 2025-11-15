@@ -1,6 +1,7 @@
 import { getAllSites } from './db';
 import { fetchSiteRecord, getPdsForDid, downloadAndCacheSite, isCached } from './utils';
 import { logger } from './observability';
+import { markSiteAsBeingCached, unmarkSiteAsBeingCached } from './cache';
 
 export interface BackfillOptions {
   skipExisting?: boolean; // Skip sites already in cache
@@ -96,12 +97,20 @@ export async function backfillCache(options: BackfillOptions = {}): Promise<Back
               return;
             }
 
-            // Download and cache site
-            await downloadAndCacheSite(site.did, site.rkey, siteData.record, pdsEndpoint, siteData.cid);
-            stats.cached++;
-            processed++;
-            logger.info('Successfully cached site during backfill', { did: site.did, rkey: site.rkey });
-            console.log(`✅ [${processed}/${sites.length}] Cached: ${site.display_name || site.rkey}`);
+            // Mark site as being cached to prevent serving stale content during update
+            markSiteAsBeingCached(site.did, site.rkey);
+
+            try {
+              // Download and cache site
+              await downloadAndCacheSite(site.did, site.rkey, siteData.record, pdsEndpoint, siteData.cid);
+              stats.cached++;
+              processed++;
+              logger.info('Successfully cached site during backfill', { did: site.did, rkey: site.rkey });
+              console.log(`✅ [${processed}/${sites.length}] Cached: ${site.display_name || site.rkey}`);
+            } finally {
+              // Always unmark, even if caching fails
+              unmarkSiteAsBeingCached(site.did, site.rkey);
+            }
           } catch (err) {
             stats.failed++;
             processed++;

@@ -164,6 +164,24 @@ export function invalidateSiteCache(did: string, rkey: string): void {
   console.log(`[Cache] Invalidated site ${did}:${rkey} - ${fileCount} files, ${metaCount} metadata, ${htmlCount} HTML`);
 }
 
+// Track sites currently being cached (to prevent serving stale cache during updates)
+const sitesBeingCached = new Set<string>();
+
+export function markSiteAsBeingCached(did: string, rkey: string): void {
+  const key = `${did}:${rkey}`;
+  sitesBeingCached.add(key);
+}
+
+export function unmarkSiteAsBeingCached(did: string, rkey: string): void {
+  const key = `${did}:${rkey}`;
+  sitesBeingCached.delete(key);
+}
+
+export function isSiteBeingCached(did: string, rkey: string): boolean {
+  const key = `${did}:${rkey}`;
+  return sitesBeingCached.has(key);
+}
+
 // Get overall cache statistics
 export function getCacheStats() {
   return {
@@ -173,5 +191,6 @@ export function getCacheStats() {
     metadataHitRate: metadataCache.getHitRate(),
     rewrittenHtml: rewrittenHtmlCache.getStats(),
     rewrittenHtmlHitRate: rewrittenHtmlCache.getHitRate(),
+    sitesBeingCached: sitesBeingCached.size,
   };
 }

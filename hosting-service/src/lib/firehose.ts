@@ -10,7 +10,7 @@ import { safeFetch } from './safe-fetch'
 import { isRecord, validateRecord } from '../lexicon/types/place/wisp/fs'
 import { Firehose } from '@atproto/sync'
 import { IdResolver } from '@atproto/identity'
-import { invalidateSiteCache } from './cache'
+import { invalidateSiteCache, markSiteAsBeingCached, unmarkSiteAsBeingCached } from './cache'
 
 const CACHE_DIR = './cache/sites'
 
@@ -187,44 +187,52 @@ export class FirehoseWorker {
 		// Invalidate in-memory caches before updating
 		invalidateSiteCache(did, site)
 
-		// Cache the record with verified CID (uses atomic swap internally)
-		// All instances cache locally for edge serving
-		await downloadAndCacheSite(
-			did,
-			site,
-			fsRecord,
-			pdsEndpoint,
-			verifiedCid
-		)
-
-		// Acquire distributed lock only for database write to prevent duplicate writes
-		// Note: upsertSite will check cache-only mode internally and skip if needed
-		const lockKey = `db:upsert:${did}:${site}`
-		const lockAcquired = await tryAcquireLock(lockKey)
-
-		if (!lockAcquired) {
-			this.log('Another instance is writing to DB, skipping upsert', {
-				did,
-				site
-			})
-			this.log('Successfully processed create/update (cached locally)', {
-				did,
-				site
-			})
-			return
-		}
+		// Mark site as being cached to prevent serving stale content during update
+		markSiteAsBeingCached(did, site)
 
 		try {
-			// Upsert site to database (only one instance does this)
-			// In cache-only mode, this will be a no-op
-			await upsertSite(did, site, fsRecord.site)
-			this.log(
-				'Successfully processed create/update (cached + DB updated)',
-				{ did, site }
+			// Cache the record with verified CID (uses atomic swap internally)
+			// All instances cache locally for edge serving
+			await downloadAndCacheSite(
+				did,
+				site,
+				fsRecord,
+				pdsEndpoint,
+				verifiedCid
 			)
+
+			// Acquire distributed lock only for database write to prevent duplicate writes
+			// Note: upsertSite will check cache-only mode internally and skip if needed
+			const lockKey = `db:upsert:${did}:${site}`
+			const lockAcquired = await tryAcquireLock(lockKey)
+
+			if (!lockAcquired) {
+				this.log('Another instance is writing to DB, skipping upsert', {
+					did,
+					site
+				})
+				this.log('Successfully processed create/update (cached locally)', {
+					did,
+					site
+				})
+				return
+			}
+
+			try {
+				// Upsert site to database (only one instance does this)
+				// In cache-only mode, this will be a no-op
+				await upsertSite(did, site, fsRecord.site)
+				this.log(
+					'Successfully processed create/update (cached + DB updated)',
+					{ did, site }
+				)
+			} finally {
+				// Always release lock, even if DB write fails
+				await releaseLock(lockKey)
+			}
 		} finally {
-			// Always release lock, even if DB write fails
-			await releaseLock(lockKey)
+			// Always unmark, even if caching fails
+			unmarkSiteAsBeingCached(did, site)
 		}
 	}
 
