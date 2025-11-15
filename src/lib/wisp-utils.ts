@@ -446,7 +446,10 @@ export function replaceDirectoryWithSubfs(
 				const remainingPath = pathParts.slice(1).join('/');
 				return {
 					name: entry.name,
-					node: replaceDirectoryWithSubfs(entry.node as Directory, remainingPath, subfsUri)
+					node: {
+						...replaceDirectoryWithSubfs(entry.node as Directory, remainingPath, subfsUri),
+						$type: 'place.wisp.fs#directory' as const
+					}
 				};
 			}
 		}

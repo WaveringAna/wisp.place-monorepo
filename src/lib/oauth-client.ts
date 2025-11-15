@@ -126,8 +126,9 @@ export const createClientMetadata = (config: { domain: `http://${string}` | `htt
             token_endpoint_auth_method: 'none',
             scope: scope,
             dpop_bound_access_tokens: false,
-            subject_type: 'public'
-        };
+            subject_type: 'public',
+            authorization_signed_response_alg: 'ES256'
+        } as ClientMetadata;
     }
 
     // Production client with private_key_jwt
@@ -149,7 +150,7 @@ export const createClientMetadata = (config: { domain: `http://${string}` | `htt
         jwks_uri: `${config.domain}/jwks.json`,
         subject_type: 'public',
         authorization_signed_response_alg: 'ES256'
-    };
+    } as ClientMetadata;
 };
 
 const persistKey = async (key: JoseKey) => {

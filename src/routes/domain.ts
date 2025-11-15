@@ -362,7 +362,7 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 					});
 				} catch (err) {
 					// Record might not exist in PDS, continue anyway
-					logger.warn('[Domain] Could not delete wisp domain from PDS', err);
+					logger.warn('[Domain] Could not delete wisp domain from PDS', err as any);
 				}
 
 				return { success: true };

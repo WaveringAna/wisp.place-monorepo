@@ -51,7 +51,7 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) => new
 			})
 
 			// Sync sites from PDS to database cache
-			logger.debug('[Auth] Syncing sites from PDS for', session.did)
+			logger.debug('[Auth] Syncing sites from PDS for', session.did as any)
 			try {
 				const syncResult = await syncSitesFromPDS(session.did, session)
 				logger.debug(`[Auth] Sync complete: ${syncResult.synced} sites synced`)
@@ -92,7 +92,7 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) => new
 			if (did && typeof did === 'string') {
 				try {
 					await client.revoke(did)
-					logger.debug('[Auth] Revoked OAuth session for', did)
+					logger.debug('[Auth] Revoked OAuth session for', did as any)
 				} catch (err) {
 					logger.error('[Auth] Failed to revoke session', err)
 					// Continue with logout even if revoke fails

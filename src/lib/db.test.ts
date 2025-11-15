@@ -66,9 +66,9 @@ describe('custom domain claiming', () => {
 		// Now try to claim it with testDid1 - should fail
 		try {
 			await claimCustomDomain(testDid1, testDomain, hash3)
-			expect.fail('Should have thrown an error when trying to claim a verified domain')
+			expect('Should have thrown an error when trying to claim a verified domain').fail()
 		} catch (err) {
-			expect(err.message).toBe('conflict')
+			expect((err as Error).message).toBe('conflict')
 		}
 
 		// Verify the domain is still owned by testDid2 and verified

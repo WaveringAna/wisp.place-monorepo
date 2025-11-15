@@ -22,7 +22,7 @@ const TEST_CID_STRING = 'bafkreid7ybejd5s2vv2j7d4aajjlmdgazguemcnuliiyfn6coxpwp2
 function createMockBlobRef(mimeType: string, size: number): BlobRef {
 	// Create a properly formatted CID
 	const cid = CID.parse(TEST_CID_STRING)
-	return new BlobRef(cid, mimeType, size)
+	return new BlobRef(cid as any, mimeType, size)
 }
 
 describe('shouldCompressFile', () => {
@@ -727,7 +727,7 @@ describe('computeCID', () => {
 describe('extractBlobMap', () => {
 	test('should extract blob map from flat directory structure', () => {
 		const mockCid = CID.parse(TEST_CID_STRING)
-		const mockBlob = new BlobRef(mockCid, 'text/html', 100)
+		const mockBlob = new BlobRef(mockCid as any, 'text/html', 100)
 
 		const directory: Directory = {
 			$type: 'place.wisp.fs#directory',
@@ -758,8 +758,8 @@ describe('extractBlobMap', () => {
 		const mockCid1 = CID.parse(TEST_CID_STRING)
 		const mockCid2 = CID.parse('bafkreiabaduc3573q6snt2xgxzpglwuaojkzflocncrh2vj5j3jykdpqhi')
 
-		const mockBlob1 = new BlobRef(mockCid1, 'text/html', 100)
-		const mockBlob2 = new BlobRef(mockCid2, 'text/css', 50)
+		const mockBlob1 = new BlobRef(mockCid1 as any, 'text/html', 100)
+		const mockBlob2 = new BlobRef(mockCid2 as any, 'text/css', 50)
 
 		const directory: Directory = {
 			$type: 'place.wisp.fs#directory',
@@ -805,7 +805,7 @@ describe('extractBlobMap', () => {
 
 	test('should handle deeply nested directory structures', () => {
 		const mockCid = CID.parse(TEST_CID_STRING)
-		const mockBlob = new BlobRef(mockCid, 'text/javascript', 200)
+		const mockBlob = new BlobRef(mockCid as any, 'text/javascript', 200)
 
 		const directory: Directory = {
 			$type: 'place.wisp.fs#directory',
@@ -863,7 +863,7 @@ describe('extractBlobMap', () => {
 		// This test verifies the fix: AT Protocol SDK returns BlobRef instances,
 		// not plain objects with $type and $link properties
 		const mockCid = CID.parse(TEST_CID_STRING)
-		const mockBlob = new BlobRef(mockCid, 'application/octet-stream', 500)
+		const mockBlob = new BlobRef(mockCid as any, 'application/octet-stream', 500)
 
 		const directory: Directory = {
 			$type: 'place.wisp.fs#directory',
@@ -892,9 +892,9 @@ describe('extractBlobMap', () => {
 		const mockCid2 = CID.parse('bafkreiabaduc3573q6snt2xgxzpglwuaojkzflocncrh2vj5j3jykdpqhi')
 		const mockCid3 = CID.parse('bafkreieb3ixgchss44kw7xiavnkns47emdfsqbhcdfluo3p6n3o53fl3vq')
 
-		const mockBlob1 = new BlobRef(mockCid1, 'image/png', 1000)
-		const mockBlob2 = new BlobRef(mockCid2, 'image/png', 2000)
-		const mockBlob3 = new BlobRef(mockCid3, 'image/png', 3000)
+		const mockBlob1 = new BlobRef(mockCid1 as any, 'image/png', 1000)
+		const mockBlob2 = new BlobRef(mockCid2 as any, 'image/png', 2000)
+		const mockBlob3 = new BlobRef(mockCid3 as any, 'image/png', 3000)
 
 		const directory: Directory = {
 			$type: 'place.wisp.fs#directory',
@@ -958,7 +958,7 @@ describe('extractBlobMap', () => {
 					node: {
 						$type: 'place.wisp.fs#file',
 						type: 'file',
-						blob: new BlobRef(mockCid1, 'text/html', 100),
+						blob: new BlobRef(mockCid1 as any, 'text/html', 100),
 					},
 				},
 				{
@@ -972,7 +972,7 @@ describe('extractBlobMap', () => {
 								node: {
 									$type: 'place.wisp.fs#file',
 									type: 'file',
-									blob: new BlobRef(mockCid2, 'text/css', 50),
+									blob: new BlobRef(mockCid2 as any, 'text/css', 50),
 								},
 							},
 						],
@@ -983,7 +983,7 @@ describe('extractBlobMap', () => {
 					node: {
 						$type: 'place.wisp.fs#file',
 						type: 'file',
-						blob: new BlobRef(mockCid3, 'text/markdown', 200),
+						blob: new BlobRef(mockCid3 as any, 'text/markdown', 200),
 					},
 				},
 			],
