@@ -296,6 +296,15 @@ steps:
 						<h3 className="text-sm font-semibold">Learn More</h3>
 						<div className="grid gap-2">
 							<a
+								href="https://docs.wisp.place/cli"
+								target="_blank"
+								rel="noopener noreferrer"
+								className="flex items-center justify-between p-3 bg-muted/50 hover:bg-muted rounded-lg transition-colors border border-border"
+							>
+								<span className="text-sm">CLI Documentation</span>
+								<ExternalLink className="w-4 h-4 text-muted-foreground" />
+							</a>
+							<a
 								href="https://tangled.org/@nekomimi.pet/wisp.place-monorepo/tree/main/cli"
 								target="_blank"
 								rel="noopener noreferrer"

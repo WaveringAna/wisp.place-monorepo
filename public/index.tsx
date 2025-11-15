@@ -372,9 +372,11 @@ function App() {
 							<Button
 								size="sm"
 								className="bg-accent text-accent-foreground hover:bg-accent/90"
-								onClick={() => setShowForm(true)}
+								asChild
 							>
-								Get Started
+								<a href="https://docs.wisp.place" target="_blank" rel="noopener noreferrer">
+									Read the Docs
+								</a>
 							</Button>
 						</div>
 					</div>
@@ -728,6 +730,15 @@ function App() {
 									className="text-accent hover:text-accent/80 transition-colors font-medium"
 								>
 									Acceptable Use Policy
+								</a>
+								{' • '}
+								<a
+									href="https://docs.wisp.place"
+									target="_blank"
+									rel="noopener noreferrer"
+									className="text-accent hover:text-accent/80 transition-colors font-medium"
+								>
+									Documentation
 								</a>
 							</p>
 						</div>

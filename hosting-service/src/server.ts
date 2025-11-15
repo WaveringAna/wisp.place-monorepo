@@ -13,6 +13,12 @@ import { loadRedirectRules, matchRedirectRule, parseCookies, parseQueryString, t
 const BASE_HOST = process.env.BASE_HOST || 'wisp.place';
 
 /**
+ * Configurable index file names to check for directory requests
+ * Will be checked in order until one is found
+ */
+const INDEX_FILES = ['index.html', 'index.htm'];
+
+/**
  * Validate site name (rkey) to prevent injection attacks
  * Must match AT Protocol rkey format
  */
@@ -85,9 +91,9 @@ async function serveFromCache(
       // If not forced, check if the requested file exists before redirecting
       if (!rule.force) {
         // Build the expected file path
-        let checkPath = filePath || 'index.html';
+        let checkPath = filePath || INDEX_FILES[0];
         if (checkPath.endsWith('/')) {
-          checkPath += 'index.html';
+          checkPath += INDEX_FILES[0];
         }
 
         const cachedFile = getCachedFilePath(did, rkey, checkPath);
@@ -133,14 +139,37 @@ async function serveFromCache(
 
 // Internal function to serve a file (used by both normal serving and rewrites)
 async function serveFileInternal(did: string, rkey: string, filePath: string) {
-  // Default to index.html if path is empty or ends with /
-  let requestPath = filePath || 'index.html';
+  // Default to first index file if path is empty
+  let requestPath = filePath || INDEX_FILES[0];
+
+  // If path ends with /, append first index file
   if (requestPath.endsWith('/')) {
-    requestPath += 'index.html';
+    requestPath += INDEX_FILES[0];
   }
 
   const cacheKey = getCacheKey(did, rkey, requestPath);
   const cachedFile = getCachedFilePath(did, rkey, requestPath);
+
+  // Check if the cached file path is a directory
+  if (await fileExists(cachedFile)) {
+    const { stat } = await import('fs/promises');
+    try {
+      const stats = await stat(cachedFile);
+      if (stats.isDirectory()) {
+        // It's a directory, try each index file in order
+        for (const indexFile of INDEX_FILES) {
+          const indexPath = `${requestPath}/${indexFile}`;
+          const indexFilePath = getCachedFilePath(did, rkey, indexPath);
+          if (await fileExists(indexFilePath)) {
+            return serveFileInternal(did, rkey, indexPath);
+          }
+        }
+        // No index file found, fall through to 404
+      }
+    } catch (err) {
+      // If stat fails, continue with normal flow
+    }
+  }
 
   // Check in-memory cache first
   let content = fileCache.get(cacheKey);
@@ -201,38 +230,40 @@ async function serveFileInternal(did: string, rkey: string, filePath: string) {
     return new Response(content, { headers });
   }
 
-  // Try index.html for directory-like paths
+  // Try index files for directory-like paths
   if (!requestPath.includes('.')) {
-    const indexPath = `${requestPath}/index.html`;
-    const indexCacheKey = getCacheKey(did, rkey, indexPath);
-    const indexFile = getCachedFilePath(did, rkey, indexPath);
+    for (const indexFileName of INDEX_FILES) {
+      const indexPath = `${requestPath}/${indexFileName}`;
+      const indexCacheKey = getCacheKey(did, rkey, indexPath);
+      const indexFile = getCachedFilePath(did, rkey, indexPath);
 
-    let indexContent = fileCache.get(indexCacheKey);
-    let indexMeta = metadataCache.get(indexCacheKey);
+      let indexContent = fileCache.get(indexCacheKey);
+      let indexMeta = metadataCache.get(indexCacheKey);
 
-    if (!indexContent && await fileExists(indexFile)) {
-      indexContent = await readFile(indexFile);
-      fileCache.set(indexCacheKey, indexContent, indexContent.length);
+      if (!indexContent && await fileExists(indexFile)) {
+        indexContent = await readFile(indexFile);
+        fileCache.set(indexCacheKey, indexContent, indexContent.length);
 
-      const indexMetaFile = `${indexFile}.meta`;
-      if (await fileExists(indexMetaFile)) {
-        const metaJson = await readFile(indexMetaFile, 'utf-8');
-        indexMeta = JSON.parse(metaJson);
-        metadataCache.set(indexCacheKey, indexMeta!, JSON.stringify(indexMeta).length);
-      }
-    }
-
-    if (indexContent) {
-      const headers: Record<string, string> = {
-        'Content-Type': 'text/html; charset=utf-8',
-        'Cache-Control': 'public, max-age=300',
-      };
-
-      if (indexMeta && indexMeta.encoding === 'gzip') {
-        headers['Content-Encoding'] = 'gzip';
+        const indexMetaFile = `${indexFile}.meta`;
+        if (await fileExists(indexMetaFile)) {
+          const metaJson = await readFile(indexMetaFile, 'utf-8');
+          indexMeta = JSON.parse(metaJson);
+          metadataCache.set(indexCacheKey, indexMeta!, JSON.stringify(indexMeta).length);
+        }
       }
 
-      return new Response(indexContent, { headers });
+      if (indexContent) {
+        const headers: Record<string, string> = {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Cache-Control': 'public, max-age=300',
+        };
+
+        if (indexMeta && indexMeta.encoding === 'gzip') {
+          headers['Content-Encoding'] = 'gzip';
+        }
+
+        return new Response(indexContent, { headers });
+      }
     }
   }
 
@@ -276,9 +307,9 @@ async function serveFromCacheWithRewrite(
       // If not forced, check if the requested file exists before redirecting
       if (!rule.force) {
         // Build the expected file path
-        let checkPath = filePath || 'index.html';
+        let checkPath = filePath || INDEX_FILES[0];
         if (checkPath.endsWith('/')) {
-          checkPath += 'index.html';
+          checkPath += INDEX_FILES[0];
         }
 
         const cachedFile = getCachedFilePath(did, rkey, checkPath);
@@ -329,14 +360,37 @@ async function serveFromCacheWithRewrite(
 
 // Internal function to serve a file with rewriting
 async function serveFileInternalWithRewrite(did: string, rkey: string, filePath: string, basePath: string) {
-  // Default to index.html if path is empty or ends with /
-  let requestPath = filePath || 'index.html';
+  // Default to first index file if path is empty
+  let requestPath = filePath || INDEX_FILES[0];
+
+  // If path ends with /, append first index file
   if (requestPath.endsWith('/')) {
-    requestPath += 'index.html';
+    requestPath += INDEX_FILES[0];
   }
 
   const cacheKey = getCacheKey(did, rkey, requestPath);
   const cachedFile = getCachedFilePath(did, rkey, requestPath);
+
+  // Check if the cached file path is a directory
+  if (await fileExists(cachedFile)) {
+    const { stat } = await import('fs/promises');
+    try {
+      const stats = await stat(cachedFile);
+      if (stats.isDirectory()) {
+        // It's a directory, try each index file in order
+        for (const indexFile of INDEX_FILES) {
+          const indexPath = `${requestPath}/${indexFile}`;
+          const indexFilePath = getCachedFilePath(did, rkey, indexPath);
+          if (await fileExists(indexFilePath)) {
+            return serveFileInternalWithRewrite(did, rkey, indexPath, basePath);
+          }
+        }
+        // No index file found, fall through to 404
+      }
+    } catch (err) {
+      // If stat fails, continue with normal flow
+    }
+  }
 
   // Check for rewritten HTML in cache first (if it's HTML)
   const mimeTypeGuess = lookup(requestPath) || 'application/octet-stream';
@@ -435,71 +489,73 @@ async function serveFileInternalWithRewrite(did: string, rkey: string, filePath:
     return new Response(content, { headers });
   }
 
-  // Try index.html for directory-like paths
+  // Try index files for directory-like paths
   if (!requestPath.includes('.')) {
-    const indexPath = `${requestPath}/index.html`;
-    const indexCacheKey = getCacheKey(did, rkey, indexPath);
-    const indexFile = getCachedFilePath(did, rkey, indexPath);
+    for (const indexFileName of INDEX_FILES) {
+      const indexPath = `${requestPath}/${indexFileName}`;
+      const indexCacheKey = getCacheKey(did, rkey, indexPath);
+      const indexFile = getCachedFilePath(did, rkey, indexPath);
 
-    // Check for rewritten index.html in cache
-    const rewrittenKey = getCacheKey(did, rkey, indexPath, `rewritten:${basePath}`);
-    const rewrittenContent = rewrittenHtmlCache.get(rewrittenKey);
-    if (rewrittenContent) {
-      return new Response(rewrittenContent, {
-        headers: {
-          'Content-Type': 'text/html; charset=utf-8',
-          'Content-Encoding': 'gzip',
-          'Cache-Control': 'public, max-age=300',
-        },
-      });
-    }
-
-    let indexContent = fileCache.get(indexCacheKey);
-    let indexMeta = metadataCache.get(indexCacheKey);
-
-    if (!indexContent && await fileExists(indexFile)) {
-      indexContent = await readFile(indexFile);
-      fileCache.set(indexCacheKey, indexContent, indexContent.length);
-
-      const indexMetaFile = `${indexFile}.meta`;
-      if (await fileExists(indexMetaFile)) {
-        const metaJson = await readFile(indexMetaFile, 'utf-8');
-        indexMeta = JSON.parse(metaJson);
-        metadataCache.set(indexCacheKey, indexMeta!, JSON.stringify(indexMeta).length);
+      // Check for rewritten index file in cache
+      const rewrittenKey = getCacheKey(did, rkey, indexPath, `rewritten:${basePath}`);
+      const rewrittenContent = rewrittenHtmlCache.get(rewrittenKey);
+      if (rewrittenContent) {
+        return new Response(rewrittenContent, {
+          headers: {
+            'Content-Type': 'text/html; charset=utf-8',
+            'Content-Encoding': 'gzip',
+            'Cache-Control': 'public, max-age=300',
+          },
+        });
       }
-    }
 
-    if (indexContent) {
-      const isGzipped = indexMeta?.encoding === 'gzip';
+      let indexContent = fileCache.get(indexCacheKey);
+      let indexMeta = metadataCache.get(indexCacheKey);
 
-      let htmlContent: string;
-      if (isGzipped) {
-        // Verify content is actually gzipped
-        const hasGzipMagic = indexContent.length >= 2 && indexContent[0] === 0x1f && indexContent[1] === 0x8b;
-        if (hasGzipMagic) {
-          const { gunzipSync } = await import('zlib');
-          htmlContent = gunzipSync(indexContent).toString('utf-8');
+      if (!indexContent && await fileExists(indexFile)) {
+        indexContent = await readFile(indexFile);
+        fileCache.set(indexCacheKey, indexContent, indexContent.length);
+
+        const indexMetaFile = `${indexFile}.meta`;
+        if (await fileExists(indexMetaFile)) {
+          const metaJson = await readFile(indexMetaFile, 'utf-8');
+          indexMeta = JSON.parse(metaJson);
+          metadataCache.set(indexCacheKey, indexMeta!, JSON.stringify(indexMeta).length);
+        }
+      }
+
+      if (indexContent) {
+        const isGzipped = indexMeta?.encoding === 'gzip';
+
+        let htmlContent: string;
+        if (isGzipped) {
+          // Verify content is actually gzipped
+          const hasGzipMagic = indexContent.length >= 2 && indexContent[0] === 0x1f && indexContent[1] === 0x8b;
+          if (hasGzipMagic) {
+            const { gunzipSync } = await import('zlib');
+            htmlContent = gunzipSync(indexContent).toString('utf-8');
+          } else {
+            console.warn(`Index file marked as gzipped but lacks magic bytes, serving as-is`);
+            htmlContent = indexContent.toString('utf-8');
+          }
         } else {
-          console.warn(`Index file marked as gzipped but lacks magic bytes, serving as-is`);
           htmlContent = indexContent.toString('utf-8');
         }
-      } else {
-        htmlContent = indexContent.toString('utf-8');
+        const rewritten = rewriteHtmlPaths(htmlContent, basePath, indexPath);
+
+        const { gzipSync } = await import('zlib');
+        const recompressed = gzipSync(Buffer.from(rewritten, 'utf-8'));
+
+        rewrittenHtmlCache.set(rewrittenKey, recompressed, recompressed.length);
+
+        return new Response(recompressed, {
+          headers: {
+            'Content-Type': 'text/html; charset=utf-8',
+            'Content-Encoding': 'gzip',
+            'Cache-Control': 'public, max-age=300',
+          },
+        });
       }
-      const rewritten = rewriteHtmlPaths(htmlContent, basePath, indexPath);
-
-      const { gzipSync } = await import('zlib');
-      const recompressed = gzipSync(Buffer.from(rewritten, 'utf-8'));
-
-      rewrittenHtmlCache.set(rewrittenKey, recompressed, recompressed.length);
-
-      return new Response(recompressed, {
-        headers: {
-          'Content-Type': 'text/html; charset=utf-8',
-          'Content-Encoding': 'gzip',
-          'Cache-Control': 'public, max-age=300',
-        },
-      });
     }
   }
 
