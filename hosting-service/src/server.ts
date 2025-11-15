@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { cors } from 'hono/cors';
 import { getWispDomain, getCustomDomain, getCustomDomainByHash } from './lib/db';
 import { resolveDid, getPdsForDid, fetchSiteRecord, downloadAndCacheSite, getCachedFilePath, isCached, sanitizePath, shouldCompressMimeType } from './lib/utils';
 import { rewriteHtmlPaths, isHtmlContent } from './lib/html-rewriter';
@@ -537,6 +538,16 @@ async function ensureSiteCached(did: string, rkey: string): Promise<boolean> {
 }
 
 const app = new Hono();
+
+// Add CORS middleware - allow all origins for static site hosting
+app.use('*', cors({
+  origin: '*',
+  allowMethods: ['GET', 'HEAD', 'OPTIONS'],
+  allowHeaders: ['Content-Type', 'Authorization'],
+  exposeHeaders: ['Content-Length', 'Content-Type', 'Content-Encoding', 'Cache-Control'],
+  maxAge: 86400, // 24 hours
+  credentials: false,
+}));
 
 // Add observability middleware
 app.use('*', observabilityMiddleware('hosting-service'));
