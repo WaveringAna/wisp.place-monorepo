@@ -4,7 +4,7 @@
     "defs": {
       "main": {
         "type": "record",
-        "description": "Virtual filesystem manifest within a place.wisp.fs record",
+        "description": "Virtual filesystem subtree referenced by place.wisp.fs records. When a subfs entry is expanded, its root entries are merged (flattened) into the parent directory, allowing large directories to be split across multiple records while maintaining a flat structure.",
         "record": {
           "type": "object",
           "required": ["root", "createdAt"],
@@ -51,7 +51,7 @@
         "required": ["type", "subject"],
         "properties": {
           "type": { "type": "string", "const": "subfs" },
-          "subject": { "type": "string", "format": "at-uri", "description": "AT-URI pointing to another place.wisp.subfs record for nested subtrees" }
+          "subject": { "type": "string", "format": "at-uri", "description": "AT-URI pointing to another place.wisp.subfs record for nested subtrees. When expanded, the referenced record's root entries are merged (flattened) into the parent directory, allowing recursive splitting of large directory structures." }
         }
       }
     }

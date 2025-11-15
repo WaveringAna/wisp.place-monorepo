@@ -405,6 +405,9 @@ async function processUploadInBackground(
             size: number;
         }> = [];
 
+        // Track completed files count for accurate progress
+        let completedFilesCount = 0;
+
         // Process file with sliding window concurrency
         const processFile = async (file: UploadedFile, index: number) => {
             try {
@@ -418,8 +421,11 @@ async function processUploadInBackground(
 
                 if (existingBlob && existingBlob.cid === fileCID) {
                     logger.info(`[File Upload] ♻️  Reused: ${file.name} (unchanged, CID: ${fileCID})`);
+                    const reusedCount = (getUploadJob(jobId)?.progress.filesReused || 0) + 1;
+                    completedFilesCount++;
                     updateJobProgress(jobId, {
-                        filesReused: (getUploadJob(jobId)?.progress.filesReused || 0) + 1
+                        filesReused: reusedCount,
+                        currentFile: `${completedFilesCount}/${validUploadedFiles.length}: ${file.name} (reused)`
                     });
 
                     return {
@@ -455,8 +461,11 @@ async function processUploadInBackground(
                 );
 
                 const returnedBlobRef = uploadResult.data.blob;
+                const uploadedCount = (getUploadJob(jobId)?.progress.filesUploaded || 0) + 1;
+                completedFilesCount++;
                 updateJobProgress(jobId, {
-                    filesUploaded: (getUploadJob(jobId)?.progress.filesUploaded || 0) + 1
+                    filesUploaded: uploadedCount,
+                    currentFile: `${completedFilesCount}/${validUploadedFiles.length}: ${file.name} (uploaded)`
                 });
                 logger.info(`[File Upload] ✅ Uploaded: ${file.name} (CID: ${fileCID})`);
 
@@ -488,6 +497,11 @@ async function processUploadInBackground(
                 };
                 logger.error(`Upload failed for file: ${fileName} (${fileSize} bytes) at index ${index}`, errorDetails);
                 console.error(`Upload failed for file: ${fileName} (${fileSize} bytes) at index ${index}`, errorDetails);
+
+                completedFilesCount++;
+                updateJobProgress(jobId, {
+                    currentFile: `${completedFilesCount}/${validUploadedFiles.length}: ${fileName} (failed)`
+                });
 
                 // Track failed file but don't throw - continue with other files
                 failedFiles.push({
@@ -532,6 +546,7 @@ async function processUploadInBackground(
 
             // Wait for remaining uploads
             await Promise.all(executing.keys());
+            console.log(`\n✅ Upload complete: ${completedFilesCount}/${validUploadedFiles.length} files processed\n`);
             return results.filter(r => r !== undefined && r !== null); // Filter out null (failed) and undefined entries
         };
 
@@ -557,101 +572,176 @@ async function processUploadInBackground(
         const uploadResults: FileUploadResult[] = uploadedBlobs.map(blob => blob.result);
         const filePaths: string[] = uploadedBlobs.map(blob => blob.filePath);
 
-        // Update directory with file blobs
+        // Update directory with file blobs (only for successfully uploaded files)
         console.log('Updating directory with blob references...');
         updateJobProgress(jobId, { phase: 'creating_manifest' });
-        const updatedDirectory = updateFileBlobs(directory, uploadResults, filePaths);
+
+        // Create a set of successfully uploaded paths for quick lookup
+        const successfulPaths = new Set(filePaths.map(path => path.replace(/^[^\/]*\//, '')));
+
+        const updatedDirectory = updateFileBlobs(directory, uploadResults, filePaths, '', successfulPaths);
+
+        // Calculate actual file count (only successfully uploaded files)
+        const actualFileCount = uploadedBlobs.length;
 
         // Check if we need to split into subfs records
         // Split proactively if we have lots of files to avoid hitting manifest size limits
         const MAX_MANIFEST_SIZE = 140 * 1024; // 140KB to be safe (PDS limit is 150KB)
-        const FILE_COUNT_THRESHOLD = 250; // Start splitting early
+        const FILE_COUNT_THRESHOLD = 250; // Start splitting at this many files
+        const TARGET_FILE_COUNT = 200; // Try to keep main manifest under this many files
         const subfsRecords: Array<{ uri: string; path: string }> = [];
         let workingDirectory = updatedDirectory;
-        let currentFileCount = fileCount;
+        let currentFileCount = actualFileCount;
 
         // Create initial manifest to check size
-        let manifest = createManifest(siteName, workingDirectory, fileCount);
+        let manifest = createManifest(siteName, workingDirectory, actualFileCount);
         let manifestSize = JSON.stringify(manifest).length;
 
         // Split if we have lots of files OR if manifest is already too large
-        if (fileCount >= FILE_COUNT_THRESHOLD || manifestSize > MAX_MANIFEST_SIZE) {
-            console.log(`⚠️  Large site detected (${fileCount} files, ${(manifestSize / 1024).toFixed(1)}KB), splitting into subfs records...`);
-            logger.info(`Large site with ${fileCount} files, splitting into subfs records`);
+        if (actualFileCount >= FILE_COUNT_THRESHOLD || manifestSize > MAX_MANIFEST_SIZE) {
+            console.log(`⚠️  Large site detected (${actualFileCount} files, ${(manifestSize / 1024).toFixed(1)}KB), splitting into subfs records...`);
+            logger.info(`Large site with ${actualFileCount} files, splitting into subfs records`);
 
-            // Keep splitting until manifest fits under limit
+            // Keep splitting until manifest fits under limits (both size and file count)
             let attempts = 0;
             const MAX_ATTEMPTS = 100; // Allow many splits for very large sites
 
-            while (manifestSize > MAX_MANIFEST_SIZE && attempts < MAX_ATTEMPTS) {
+            while ((manifestSize > MAX_MANIFEST_SIZE || currentFileCount > TARGET_FILE_COUNT) && attempts < MAX_ATTEMPTS) {
                 attempts++;
 
                 // Find all directories sorted by size (largest first)
                 const directories = findLargeDirectories(workingDirectory);
                 directories.sort((a, b) => b.size - a.size);
 
-                if (directories.length === 0) {
-                    // No more directories to split - this should be very rare
-                    throw new Error(
-                        `Cannot split manifest further - no subdirectories available. ` +
-                        `Current size: ${(manifestSize / 1024).toFixed(1)}KB. ` +
-                        `Try organizing files into subdirectories.`
+                // Check if we can split subdirectories or need to split flat files
+                if (directories.length > 0) {
+                    // Split the largest subdirectory
+                    const largestDir = directories[0];
+                    console.log(`  Split #${attempts}: ${largestDir.path} (${largestDir.fileCount} files, ${(largestDir.size / 1024).toFixed(1)}KB)`);
+
+                    // Create a subfs record for this directory
+                    const subfsRkey = TID.nextStr();
+                    const subfsManifest = {
+                        $type: 'place.wisp.subfs' as const,
+                        root: largestDir.directory,
+                        fileCount: largestDir.fileCount,
+                        createdAt: new Date().toISOString()
+                    };
+
+                    // Validate subfs record
+                    const subfsValidation = validateSubfsRecord(subfsManifest);
+                    if (!subfsValidation.success) {
+                        throw new Error(`Invalid subfs manifest: ${subfsValidation.error?.message || 'Validation failed'}`);
+                    }
+
+                    // Upload subfs record to PDS
+                    const subfsRecord = await agent.com.atproto.repo.putRecord({
+                        repo: did,
+                        collection: 'place.wisp.subfs',
+                        rkey: subfsRkey,
+                        record: subfsManifest
+                    });
+
+                    const subfsUri = subfsRecord.data.uri;
+                    subfsRecords.push({ uri: subfsUri, path: largestDir.path });
+                    console.log(`  ✅ Created subfs: ${subfsUri}`);
+                    logger.info(`Created subfs record for ${largestDir.path}: ${subfsUri}`);
+
+                    // Replace directory with subfs node in the main tree
+                    workingDirectory = replaceDirectoryWithSubfs(workingDirectory, largestDir.path, subfsUri);
+                    currentFileCount -= largestDir.fileCount;
+                } else {
+                    // No subdirectories - split flat files at root level
+                    const rootFiles = workingDirectory.entries.filter(e => 'type' in e.node && e.node.type === 'file');
+
+                    if (rootFiles.length === 0) {
+                        throw new Error(
+                            `Cannot split manifest further - no files or directories available. ` +
+                            `Current: ${currentFileCount} files, ${(manifestSize / 1024).toFixed(1)}KB.`
+                        );
+                    }
+
+                    // Take a chunk of files (aim for ~100 files per chunk)
+                    const CHUNK_SIZE = 100;
+                    const chunkFiles = rootFiles.slice(0, Math.min(CHUNK_SIZE, rootFiles.length));
+                    console.log(`  Split #${attempts}: flat root (${chunkFiles.length} files)`);
+
+                    // Create a directory with just these files
+                    const chunkDirectory: Directory = {
+                        $type: 'place.wisp.fs#directory' as const,
+                        type: 'directory' as const,
+                        entries: chunkFiles
+                    };
+
+                    // Create subfs record for this chunk
+                    const subfsRkey = TID.nextStr();
+                    const subfsManifest = {
+                        $type: 'place.wisp.subfs' as const,
+                        root: chunkDirectory,
+                        fileCount: chunkFiles.length,
+                        createdAt: new Date().toISOString()
+                    };
+
+                    // Validate subfs record
+                    const subfsValidation = validateSubfsRecord(subfsManifest);
+                    if (!subfsValidation.success) {
+                        throw new Error(`Invalid subfs manifest: ${subfsValidation.error?.message || 'Validation failed'}`);
+                    }
+
+                    // Upload subfs record to PDS
+                    const subfsRecord = await agent.com.atproto.repo.putRecord({
+                        repo: did,
+                        collection: 'place.wisp.subfs',
+                        rkey: subfsRkey,
+                        record: subfsManifest
+                    });
+
+                    const subfsUri = subfsRecord.data.uri;
+                    console.log(`  ✅ Created flat subfs: ${subfsUri}`);
+                    logger.info(`Created flat subfs record with ${chunkFiles.length} files: ${subfsUri}`);
+
+                    // Remove these files from the working directory and add a subfs entry
+                    const remainingEntries = workingDirectory.entries.filter(
+                        e => !chunkFiles.some(cf => cf.name === e.name)
                     );
+
+                    // Add subfs entry (will be merged flat when expanded)
+                    remainingEntries.push({
+                        name: `__subfs_${attempts}`,  // Placeholder name, will be merged away
+                        node: {
+                            $type: 'place.wisp.fs#subfs' as const,
+                            type: 'subfs' as const,
+                            subject: subfsUri
+                        }
+                    });
+
+                    workingDirectory = {
+                        $type: 'place.wisp.fs#directory' as const,
+                        type: 'directory' as const,
+                        entries: remainingEntries
+                    };
+
+                    subfsRecords.push({ uri: subfsUri, path: `__subfs_${attempts}` });
+                    currentFileCount -= chunkFiles.length;
                 }
-
-                // Pick the largest directory
-                const largestDir = directories[0];
-                console.log(`  Split #${attempts}: ${largestDir.path} (${largestDir.fileCount} files, ${(largestDir.size / 1024).toFixed(1)}KB)`);
-
-                // Create a subfs record for this directory
-                const subfsRkey = TID.nextStr();
-                const subfsManifest = {
-                    $type: 'place.wisp.subfs' as const,
-                    root: largestDir.directory,
-                    fileCount: largestDir.fileCount,
-                    createdAt: new Date().toISOString()
-                };
-
-                // Validate subfs record
-                const subfsValidation = validateSubfsRecord(subfsManifest);
-                if (!subfsValidation.success) {
-                    throw new Error(`Invalid subfs manifest: ${subfsValidation.error?.message || 'Validation failed'}`);
-                }
-
-                // Upload subfs record to PDS
-                const subfsRecord = await agent.com.atproto.repo.putRecord({
-                    repo: did,
-                    collection: 'place.wisp.subfs',
-                    rkey: subfsRkey,
-                    record: subfsManifest
-                });
-
-                const subfsUri = subfsRecord.data.uri;
-                subfsRecords.push({ uri: subfsUri, path: largestDir.path });
-                console.log(`  ✅ Created subfs: ${subfsUri}`);
-                logger.info(`Created subfs record for ${largestDir.path}: ${subfsUri}`);
-
-                // Replace directory with subfs node in the main tree
-                workingDirectory = replaceDirectoryWithSubfs(workingDirectory, largestDir.path, subfsUri);
 
                 // Recreate manifest and check new size
-                currentFileCount -= largestDir.fileCount;
-                manifest = createManifest(siteName, workingDirectory, fileCount);
+                manifest = createManifest(siteName, workingDirectory, currentFileCount);
                 manifestSize = JSON.stringify(manifest).length;
                 const newSizeKB = (manifestSize / 1024).toFixed(1);
                 console.log(`  → Manifest now ${newSizeKB}KB with ${currentFileCount} files (${subfsRecords.length} subfs total)`);
 
-                // Check if we're under the limit now
-                if (manifestSize <= MAX_MANIFEST_SIZE) {
-                    console.log(`  ✅ Manifest fits! (${newSizeKB}KB < 140KB)`);
+                // Check if we're under both limits now
+                if (manifestSize <= MAX_MANIFEST_SIZE && currentFileCount <= TARGET_FILE_COUNT) {
+                    console.log(`  ✅ Manifest fits! (${currentFileCount} files, ${newSizeKB}KB)`);
                     break;
                 }
             }
 
-            if (manifestSize > MAX_MANIFEST_SIZE) {
+            if (manifestSize > MAX_MANIFEST_SIZE || currentFileCount > TARGET_FILE_COUNT) {
                 throw new Error(
                     `Failed to fit manifest after splitting ${attempts} directories. ` +
-                    `Current size: ${(manifestSize / 1024).toFixed(1)}KB. ` +
+                    `Current: ${currentFileCount} files, ${(manifestSize / 1024).toFixed(1)}KB. ` +
                     `This should never happen - please report this issue.`
                 );
             }
@@ -902,8 +992,83 @@ export const wispRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
                     const fileArray = Array.isArray(files) ? files : [files];
                     const jobId = createUploadJob(auth.did, siteName, fileArray.length);
 
-                    // Create agent with OAuth session
-                    const agent = new Agent((url, init) => auth.session.fetchHandler(url, init))
+                    // Track upload speeds to estimate progress
+                    const uploadStats = {
+                        speeds: [] as number[], // MB/s from completed uploads
+                        getAverageSpeed(): number {
+                            if (this.speeds.length === 0) return 3; // Default 3 MB/s
+                            const sum = this.speeds.reduce((a, b) => a + b, 0);
+                            return sum / this.speeds.length;
+                        }
+                    };
+
+                    // Create agent with OAuth session and upload progress monitoring
+                    const wrappedFetchHandler = async (url: string, init?: RequestInit) => {
+                        // Check if this is an uploadBlob request with a body
+                        if (url.includes('uploadBlob') && init?.body) {
+                            const originalBody = init.body;
+                            const bodySize = originalBody instanceof Uint8Array ? originalBody.length :
+                                           originalBody instanceof ArrayBuffer ? originalBody.byteLength :
+                                           typeof originalBody === 'string' ? new TextEncoder().encode(originalBody).length : 0;
+
+                            const startTime = Date.now();
+
+                            if (bodySize > 10 * 1024 * 1024) { // Files over 10MB
+                                const sizeMB = (bodySize / 1024 / 1024).toFixed(1);
+                                const avgSpeed = uploadStats.getAverageSpeed();
+                                const estimatedDuration = (bodySize / 1024 / 1024) / avgSpeed;
+
+                                console.log(`[Upload Progress] Starting upload of ${sizeMB}MB file`);
+                                console.log(`[Upload Stats] Measured speeds from last ${uploadStats.speeds.length} files:`, uploadStats.speeds.map(s => s.toFixed(2) + ' MB/s').join(', '));
+                                console.log(`[Upload Stats] Average speed: ${avgSpeed.toFixed(2)} MB/s, estimated duration: ${estimatedDuration.toFixed(0)}s`);
+
+                                // Log estimated progress every 5 seconds
+                                const progressInterval = setInterval(() => {
+                                    const elapsed = (Date.now() - startTime) / 1000;
+                                    const estimatedPercent = Math.min(95, Math.round((elapsed / estimatedDuration) * 100));
+                                    const estimatedMB = Math.min(bodySize / 1024 / 1024, elapsed * avgSpeed).toFixed(1);
+                                    console.log(`[Upload Progress] ~${estimatedPercent}% (~${estimatedMB}/${sizeMB}MB) - ${elapsed.toFixed(0)}s elapsed`);
+                                }, 5000);
+
+                                try {
+                                    const result = await auth.session.fetchHandler(url, init);
+                                    clearInterval(progressInterval);
+                                    const totalTime = (Date.now() - startTime) / 1000;
+                                    const actualSpeed = (bodySize / 1024 / 1024) / totalTime;
+                                    uploadStats.speeds.push(actualSpeed);
+                                    // Keep only last 10 uploads for rolling average
+                                    if (uploadStats.speeds.length > 10) uploadStats.speeds.shift();
+                                    console.log(`[Upload Progress] ✅ Completed ${sizeMB}MB in ${totalTime.toFixed(1)}s (${actualSpeed.toFixed(1)} MB/s)`);
+                                    return result;
+                                } catch (err) {
+                                    clearInterval(progressInterval);
+                                    const elapsed = (Date.now() - startTime) / 1000;
+                                    console.error(`[Upload Progress] ❌ Upload failed after ${elapsed.toFixed(1)}s`);
+                                    throw err;
+                                }
+                            } else {
+                                // Track small files too for speed calculation
+                                try {
+                                    const result = await auth.session.fetchHandler(url, init);
+                                    const totalTime = (Date.now() - startTime) / 1000;
+                                    if (totalTime > 0.5) { // Only track if > 0.5s
+                                        const actualSpeed = (bodySize / 1024 / 1024) / totalTime;
+                                        uploadStats.speeds.push(actualSpeed);
+                                        if (uploadStats.speeds.length > 10) uploadStats.speeds.shift();
+                                        console.log(`[Upload Stats] Small file: ${(bodySize / 1024).toFixed(1)}KB in ${totalTime.toFixed(2)}s = ${actualSpeed.toFixed(2)} MB/s`);
+                                    }
+                                    return result;
+                                } catch (err) {
+                                    throw err;
+                                }
+                            }
+                        }
+
+                        // Normal request
+                        return auth.session.fetchHandler(url, init);
+                    };
+
+                    const agent = new Agent(wrappedFetchHandler)
                     console.log('Agent created for DID:', auth.did);
                     console.log('Created upload job:', jobId);
 

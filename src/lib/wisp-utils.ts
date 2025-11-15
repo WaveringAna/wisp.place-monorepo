@@ -208,17 +208,24 @@ export function createManifest(
 /**
  * Update file blobs in directory structure after upload
  * Uses path-based matching to correctly match files in nested directories
+ * Filters out files that were not successfully uploaded
  */
 export function updateFileBlobs(
 	directory: Directory,
 	uploadResults: FileUploadResult[],
 	filePaths: string[],
-	currentPath: string = ''
+	currentPath: string = '',
+	successfulPaths?: Set<string>
 ): Directory {
 	const updatedEntries = directory.entries.map(entry => {
 		if ('type' in entry.node && entry.node.type === 'file') {
 			// Build the full path for this file
 			const fullPath = currentPath ? `${currentPath}/${entry.name}` : entry.name;
+
+			// If successfulPaths is provided, skip files that weren't successfully uploaded
+			if (successfulPaths && !successfulPaths.has(fullPath)) {
+				return null; // Filter out failed files
+			}
 
 			// Find exact match in filePaths (need to handle normalized paths)
 			const fileIndex = filePaths.findIndex((path) => {
@@ -244,18 +251,18 @@ export function updateFileBlobs(
 					}
 				};
 			} else {
-				console.error(`❌ BLOB MATCHING ERROR: Could not find blob for file: ${fullPath}`);
-				console.error(`   Available paths:`, filePaths.slice(0, 10), filePaths.length > 10 ? `... and ${filePaths.length - 10} more` : '');
+				console.error(`Could not find blob for file: ${fullPath}`);
+				return null; // Filter out files without blobs
 			}
 		} else if ('type' in entry.node && entry.node.type === 'directory') {
 			const dirPath = currentPath ? `${currentPath}/${entry.name}` : entry.name;
 			return {
 				...entry,
-				node: updateFileBlobs(entry.node as Directory, uploadResults, filePaths, dirPath)
+				node: updateFileBlobs(entry.node as Directory, uploadResults, filePaths, dirPath, successfulPaths)
 			};
 		}
 		return entry;
-	}) as Entry[];
+	}).filter(entry => entry !== null) as Entry[]; // Remove null entries (failed files)
 
 	const result = {
 		$type: 'place.wisp.fs#directory' as const,

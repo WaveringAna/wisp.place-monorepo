@@ -257,6 +257,7 @@ async function fetchSubfsRecord(uri: string, pdsEndpoint: string): Promise<Subfs
 
 /**
  * Replace subfs nodes in a directory tree with their actual content
+ * Subfs entries are "merged" - their root entries are hoisted into the parent directory
  */
 async function expandSubfsNodes(directory: Directory, pdsEndpoint: string): Promise<Directory> {
   // Extract all subfs URIs
@@ -277,45 +278,50 @@ async function expandSubfsNodes(directory: Directory, pdsEndpoint: string): Prom
     })
   );
 
-  // Build a map of path -> directory content
-  const subfsMap = new Map<string, Directory>();
+  // Build a map of path -> root entries to merge
+  const subfsMap = new Map<string, Entry[]>();
   for (const { record, path } of subfsRecords) {
-    if (record && record.root) {
-      subfsMap.set(path, record.root);
+    if (record && record.root && record.root.entries) {
+      subfsMap.set(path, record.root.entries);
     }
   }
 
-  // Replace subfs nodes with their actual content
+  // Replace subfs nodes by merging their root entries into the parent directory
   function replaceSubfsInEntries(entries: Entry[], currentPath: string = ''): Entry[] {
-    return entries.map(entry => {
+    const result: Entry[] = [];
+
+    for (const entry of entries) {
       const fullPath = currentPath ? `${currentPath}/${entry.name}` : entry.name;
       const node = entry.node;
 
       if ('type' in node && node.type === 'subfs') {
-        // Replace with actual directory content
-        const subfsDir = subfsMap.get(fullPath);
-        if (subfsDir) {
-          console.log(`Expanding subfs node at ${fullPath}`);
-          return {
-            ...entry,
-            node: subfsDir
-          };
+        // Merge subfs entries into parent directory
+        const subfsEntries = subfsMap.get(fullPath);
+        if (subfsEntries) {
+          console.log(`Merging subfs node at ${fullPath} (${subfsEntries.length} entries)`);
+          // Recursively process the merged entries in case they contain nested subfs
+          const processedEntries = replaceSubfsInEntries(subfsEntries, currentPath);
+          result.push(...processedEntries);
+        } else {
+          // If fetch failed, skip this entry
+          console.warn(`Failed to fetch subfs at ${fullPath}, skipping`);
         }
-        // If fetch failed, keep the subfs node (will be skipped later)
-        return entry;
       } else if ('type' in node && node.type === 'directory' && 'entries' in node) {
         // Recursively process subdirectories
-        return {
+        result.push({
           ...entry,
           node: {
             ...node,
             entries: replaceSubfsInEntries(node.entries, fullPath)
           }
-        };
+        });
+      } else {
+        // Regular file entry
+        result.push(entry);
       }
+    }
 
-      return entry;
-    });
+    return result;
   }
 
   return {
@@ -473,18 +479,24 @@ async function cacheFiles(
 
   console.log(`[Incremental Update] Files to copy: ${copyTasks.length}, Files to download: ${downloadTasks.length}`);
 
-  // Copy unchanged files in parallel (fast local operations)
-  const copyLimit = 10;
+  // Copy unchanged files in parallel (fast local operations) - increased limit for better performance
+  const copyLimit = 50;
   for (let i = 0; i < copyTasks.length; i += copyLimit) {
     const batch = copyTasks.slice(i, i + copyLimit);
     await Promise.all(batch.map(task => task()));
+    if (copyTasks.length > copyLimit) {
+      console.log(`[Cache Progress] Copied ${Math.min(i + copyLimit, copyTasks.length)}/${copyTasks.length} unchanged files`);
+    }
   }
 
-  // Download new/changed files concurrently with a limit of 3 at a time
-  const downloadLimit = 3;
+  // Download new/changed files concurrently - increased from 3 to 20 for much better performance
+  const downloadLimit = 20;
   for (let i = 0; i < downloadTasks.length; i += downloadLimit) {
     const batch = downloadTasks.slice(i, i + downloadLimit);
     await Promise.all(batch.map(task => task()));
+    if (downloadTasks.length > downloadLimit) {
+      console.log(`[Cache Progress] Downloaded ${Math.min(i + downloadLimit, downloadTasks.length)}/${downloadTasks.length} files`);
+    }
   }
 }
 
@@ -519,10 +531,8 @@ async function copyExistingFile(
     if (existsSync(sourceMetaFile)) {
       await copyFile(sourceMetaFile, destMetaFile);
     }
-
-    console.log(`[Incremental] Copied unchanged file: ${filePath}`);
   } catch (err) {
-    console.error(`[Incremental] Failed to copy file ${filePath}, will attempt download:`, err);
+    console.error(`Failed to copy cached file ${filePath}, will attempt download:`, err);
     throw err;
   }
 }
@@ -549,23 +559,13 @@ async function cacheFileBlob(
   // Allow up to 500MB per file blob, with 5 minute timeout
   let content = await safeFetchBlob(blobUrl, { maxSize: 500 * 1024 * 1024, timeout: 300000 });
 
-  console.log(`[DEBUG] ${filePath}: fetched ${content.length} bytes, base64=${base64}, encoding=${encoding}, mimeType=${mimeType}`);
-
   // If content is base64-encoded, decode it back to raw binary (gzipped or not)
   if (base64) {
-    const originalSize = content.length;
     // Decode base64 directly from raw bytes - no string conversion
     // The blob contains base64-encoded text as raw bytes, decode it in-place
     const textDecoder = new TextDecoder();
     const base64String = textDecoder.decode(content);
     content = Buffer.from(base64String, 'base64');
-    console.log(`[DEBUG] ${filePath}: decoded base64 from ${originalSize} bytes to ${content.length} bytes`);
-    
-    // Check if it's actually gzipped by looking at magic bytes
-    if (content.length >= 2) {
-      const hasGzipMagic = content[0] === 0x1f && content[1] === 0x8b;
-      console.log(`[DEBUG] ${filePath}: has gzip magic bytes: ${hasGzipMagic}`);
-    }
   }
 
   const cacheFile = `${CACHE_DIR}/${did}/${site}${dirSuffix}/${filePath}`;
@@ -579,18 +579,16 @@ async function cacheFileBlob(
   const shouldStayCompressed = shouldCompressMimeType(mimeType);
 
   // Decompress files that shouldn't be stored compressed
-  if (encoding === 'gzip' && !shouldStayCompressed && content.length >= 2 && 
+  if (encoding === 'gzip' && !shouldStayCompressed && content.length >= 2 &&
       content[0] === 0x1f && content[1] === 0x8b) {
-    console.log(`[DEBUG] ${filePath}: decompressing non-compressible type (${mimeType}) before caching`);
     try {
       const { gunzipSync } = await import('zlib');
       const decompressed = gunzipSync(content);
-      console.log(`[DEBUG] ${filePath}: decompressed from ${content.length} to ${decompressed.length} bytes`);
       content = decompressed;
       // Clear the encoding flag since we're storing decompressed
       encoding = undefined;
     } catch (error) {
-      console.log(`[DEBUG] ${filePath}: failed to decompress, storing original gzipped content. Error:`, error);
+      console.error(`Failed to decompress ${filePath}, storing original gzipped content:`, error);
     }
   }
 
