@@ -350,6 +350,14 @@ async function processUploadInBackground(
 
                     const isTimeout = error?.name === 'AbortError' || error?.message === 'Upload timeout';
                     const isRateLimited = error?.status === 429 || error?.message?.toLowerCase().includes('rate');
+                    const isRequestEntityTooLarge = error?.status === 419 || error?.status === 413;
+
+                    // Special handling for 419/413 Request Entity Too Large errors
+                    if (isRequestEntityTooLarge) {
+                        const customError = new Error('Your PDS is not allowing uploads large enough to store your site. Please contact your PDS host. This could also possibly be a result of it being behind Cloudflare free tier.');
+                        (customError as any).status = 419;
+                        throw customError;
+                    }
 
                     // Retry on DPoP nonce conflicts, timeouts, or rate limits
                     if ((isDPoPNonceError || isTimeout || isRateLimited) && attempt < maxRetries - 1) {

@@ -176,6 +176,25 @@ export function UploadTab({
             setSkippedFiles(result.skippedFiles || [])
             setFailedFiles(result.failedFiles || [])
             setUploadedCount(result.uploadedCount || result.fileCount || 0)
+            
+            // Debug: log failed files
+            console.log('Failed files:', result.failedFiles)
+            
+            // Check for 419/413 errors and show alert
+            const hasSizeError = result.failedFiles?.some((file: any) => {
+                const error = file.error?.toLowerCase() || ''
+                console.log('Checking error:', error, 'contains PDS?', error.includes('pds'))
+                return error.includes('pds is not allowing') || 
+                       error.includes('your pds is not allowing') ||
+                       error.includes('request entity too large')
+            })
+            
+            console.log('Has size error:', hasSizeError)
+            
+            if (hasSizeError) {
+                window.alert('Some files were too large for your PDS. Your PDS is not allowing uploads large enough to store your site. Please contact your PDS host. This could also possibly be a result of it being behind Cloudflare free tier.')
+            }
+            
             setSelectedSiteRkey('')
             setNewSiteName('')
             setSelectedFiles(null)
