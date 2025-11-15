@@ -110,7 +110,7 @@ export const createClientMetadata = (config: { domain: `http://${string}` | `htt
         // Loopback client for local development
         // For loopback, scopes and redirect_uri must be in client_id query string
         const redirectUri = 'http://127.0.0.1:8000/api/auth/callback';
-        const scope = 'atproto transition:generic';
+        const scope = 'atproto repo:place.wisp.fs repo:place.wisp.domain repo:place.wisp.subfs blob:*/* blob?maxSize=100000000 rpc:app.bsky.actor.getProfile?aud=*';
         const params = new URLSearchParams();
         params.append('redirect_uri', redirectUri);
         params.append('scope', scope);
@@ -145,7 +145,7 @@ export const createClientMetadata = (config: { domain: `http://${string}` | `htt
         application_type: 'web',
         token_endpoint_auth_method: 'private_key_jwt',
         token_endpoint_auth_signing_alg: "ES256",
-        scope: "atproto transition:generic",
+        scope: "atproto repo:place.wisp.fs repo:place.wisp.domain repo:place.wisp.subfs blob:accept=*/*&maxSize=100000000 rpc:app.bsky.actor.getProfile?aud=*",
         dpop_bound_access_tokens: true,
         jwks_uri: `${config.domain}/jwks.json`,
         subject_type: 'public',

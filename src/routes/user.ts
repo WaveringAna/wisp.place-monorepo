@@ -41,13 +41,18 @@ export const userRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		.get('/info', async ({ auth }) => {
 			try {
 				// Get user's handle from AT Protocol
-				const agent = new Agent((url, init) => auth.session.fetchHandler(url, init))
+				const agent = new Agent(auth.session)
 
 				let handle = 'unknown'
 				try {
+					console.log('[User] Attempting to fetch profile for DID:', auth.did)
 					const profile = await agent.getProfile({ actor: auth.did })
+					console.log('[User] Profile fetched successfully:', profile.data.handle)
 					handle = profile.data.handle
 				} catch (err) {
+					console.error('[User] Failed to fetch profile - Full error:', err)
+					console.error('[User] Error message:', err instanceof Error ? err.message : String(err))
+					console.error('[User] Error stack:', err instanceof Error ? err.stack : 'No stack')
 					logger.error('[User] Failed to fetch profile', err)
 				}
 
