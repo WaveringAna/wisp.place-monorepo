@@ -189,7 +189,14 @@ const RESERVED_HANDLES = new Set([
     "admin",
     "static",
     "public",
-    "preview"
+    "preview",
+    "slingshot",
+    "plc",
+    "constellation",
+    "cdn",
+    "pds",
+    "staging",
+    "auth"
 ]);
 
 export const isValidHandle = (handle: string): boolean => {
