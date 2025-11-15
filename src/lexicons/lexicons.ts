@@ -118,7 +118,12 @@ export const schemaDict = {
             type: 'string',
             format: 'at-uri',
             description:
-              'AT-URI pointing to a place.wisp.subfs record containing this subtree',
+              'AT-URI pointing to a place.wisp.subfs record containing this subtree.',
+          },
+          flat: {
+            type: 'boolean',
+            description:
+              "If true, the subfs record's root entries are merged (flattened) into the parent directory, replacing the subfs entry. If false (default), the subfs entries are placed in a subdirectory with the subfs entry's name. Flat merging is useful for splitting large directories across multiple records while maintaining a flat structure.",
           },
         },
       },
@@ -131,7 +136,7 @@ export const schemaDict = {
       main: {
         type: 'record',
         description:
-          'Virtual filesystem manifest within a place.wisp.fs record',
+          'Virtual filesystem subtree referenced by place.wisp.fs records. When a subfs entry is expanded, its root entries are merged (flattened) into the parent directory, allowing large directories to be split across multiple records while maintaining a flat structure.',
         record: {
           type: 'object',
           required: ['root', 'createdAt'],
@@ -230,7 +235,7 @@ export const schemaDict = {
             type: 'string',
             format: 'at-uri',
             description:
-              'AT-URI pointing to another place.wisp.subfs record for nested subtrees',
+              "AT-URI pointing to another place.wisp.subfs record for nested subtrees. When expanded, the referenced record's root entries are merged (flattened) into the parent directory, allowing recursive splitting of large directory structures.",
           },
         },
       },

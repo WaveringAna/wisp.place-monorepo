@@ -93,8 +93,10 @@ export function validateEntry<V>(v: V) {
 export interface Subfs {
   $type?: 'place.wisp.fs#subfs'
   type: 'subfs'
-  /** AT-URI pointing to a place.wisp.subfs record containing this subtree */
+  /** AT-URI pointing to a place.wisp.subfs record containing this subtree. */
   subject: string
+  /** If true, the subfs record's root entries are merged (flattened) into the parent directory, replacing the subfs entry. If false (default), the subfs entries are placed in a subdirectory with the subfs entry's name. Flat merging is useful for splitting large directories across multiple records while maintaining a flat structure. */
+  flat?: boolean
 }
 
 const hashSubfs = 'subfs'

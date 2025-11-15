@@ -92,7 +92,7 @@ export function validateEntry<V>(v: V) {
 export interface Subfs {
   $type?: 'place.wisp.subfs#subfs'
   type: 'subfs'
-  /** AT-URI pointing to another place.wisp.subfs record for nested subtrees */
+  /** AT-URI pointing to another place.wisp.subfs record for nested subtrees. When expanded, the referenced record's root entries are merged (flattened) into the parent directory, allowing recursive splitting of large directory structures. */
   subject: string
 }
 

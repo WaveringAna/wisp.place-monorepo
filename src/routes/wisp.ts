@@ -719,7 +719,8 @@ async function processUploadInBackground(
                         node: {
                             $type: 'place.wisp.fs#subfs' as const,
                             type: 'subfs' as const,
-                            subject: subfsUri
+                            subject: subfsUri,
+                            flat: true  // Merge entries directly into parent (default, but explicit for clarity)
                         }
                     });
 

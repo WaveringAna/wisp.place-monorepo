@@ -51,7 +51,8 @@
       "required": ["type", "subject"],
       "properties": {
         "type": { "type": "string", "const": "subfs" },
-        "subject": { "type": "string", "format": "at-uri", "description": "AT-URI pointing to a place.wisp.subfs record containing this subtree. When expanded, the subfs record's root entries are merged (flattened) into the parent directory - the subfs entry itself is removed and replaced by all entries from the referenced record's root. This allows splitting large directories across multiple records while maintaining a flat structure." }
+        "subject": { "type": "string", "format": "at-uri", "description": "AT-URI pointing to a place.wisp.subfs record containing this subtree." },
+        "flat": { "type": "boolean", "description": "If true, the subfs record's root entries are merged (flattened) into the parent directory, replacing the subfs entry. If false (default), the subfs entries are placed in a subdirectory with the subfs entry's name. Flat merging is useful for splitting large directories across multiple records while maintaining a flat structure." }
       }
     }
   }

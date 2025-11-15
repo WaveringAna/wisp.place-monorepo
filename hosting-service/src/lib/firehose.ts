@@ -82,6 +82,7 @@ export class FirehoseWorker {
 								evt.cid?.toString()
 							)
 						} catch (err) {
+							console.error('Full error details:', err);
 							this.log('Error handling event', {
 								did: evt.did,
 								event: evt.event,

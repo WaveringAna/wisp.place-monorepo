@@ -424,7 +424,8 @@ export function replaceDirectoryWithSubfs(
 					node: {
 						$type: 'place.wisp.fs#subfs' as const,
 						type: 'subfs' as const,
-						subject: subfsUri
+						subject: subfsUri,
+						flat: false  // Preserve directory structure
 					}
 				};
 			}

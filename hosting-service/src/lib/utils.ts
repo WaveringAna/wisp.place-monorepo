@@ -295,13 +295,29 @@ async function expandSubfsNodes(directory: Directory, pdsEndpoint: string): Prom
       const node = entry.node;
 
       if ('type' in node && node.type === 'subfs') {
-        // Merge subfs entries into parent directory
+        // Check if this is a flat merge or subdirectory merge (default to flat if not specified)
+        const subfsNode = node as any;
+        const isFlat = subfsNode.flat !== false; // Default to true
         const subfsEntries = subfsMap.get(fullPath);
+
         if (subfsEntries) {
-          console.log(`Merging subfs node at ${fullPath} (${subfsEntries.length} entries)`);
-          // Recursively process the merged entries in case they contain nested subfs
-          const processedEntries = replaceSubfsInEntries(subfsEntries, currentPath);
-          result.push(...processedEntries);
+          console.log(`Merging subfs node at ${fullPath} (${subfsEntries.length} entries, flat: ${isFlat})`);
+
+          if (isFlat) {
+            // Flat merge: hoist entries directly into parent directory
+            const processedEntries = replaceSubfsInEntries(subfsEntries, currentPath);
+            result.push(...processedEntries);
+          } else {
+            // Subdirectory merge: create a directory with the subfs node's name
+            const processedEntries = replaceSubfsInEntries(subfsEntries, fullPath);
+            result.push({
+              name: entry.name,
+              node: {
+                type: 'directory',
+                entries: processedEntries
+              }
+            });
+          }
         } else {
           // If fetch failed, skip this entry
           console.warn(`Failed to fetch subfs at ${fullPath}, skipping`);
@@ -491,12 +507,30 @@ async function cacheFiles(
 
   // Download new/changed files concurrently - increased from 3 to 20 for much better performance
   const downloadLimit = 20;
+  let successCount = 0;
+  let failureCount = 0;
+
   for (let i = 0; i < downloadTasks.length; i += downloadLimit) {
     const batch = downloadTasks.slice(i, i + downloadLimit);
-    await Promise.all(batch.map(task => task()));
+    const results = await Promise.allSettled(batch.map(task => task()));
+
+    // Count successes and failures
+    results.forEach((result, index) => {
+      if (result.status === 'fulfilled') {
+        successCount++;
+      } else {
+        failureCount++;
+        console.error(`[Cache] Failed to download file (continuing with others):`, result.reason);
+      }
+    });
+
     if (downloadTasks.length > downloadLimit) {
-      console.log(`[Cache Progress] Downloaded ${Math.min(i + downloadLimit, downloadTasks.length)}/${downloadTasks.length} files`);
+      console.log(`[Cache Progress] Downloaded ${Math.min(i + downloadLimit, downloadTasks.length)}/${downloadTasks.length} files (${failureCount} failed)`);
     }
+  }
+
+  if (failureCount > 0) {
+    console.warn(`[Cache] Completed with ${successCount} successful and ${failureCount} failed file downloads`);
   }
 }
 
@@ -555,6 +589,8 @@ async function cacheFileBlob(
   }
 
   const blobUrl = `${pdsEndpoint}/xrpc/com.atproto.sync.getBlob?did=${encodeURIComponent(did)}&cid=${encodeURIComponent(cid)}`;
+
+  console.log(`[Cache] Fetching blob for file: ${filePath}, CID: ${cid}`);
 
   // Allow up to 500MB per file blob, with 5 minute timeout
   let content = await safeFetchBlob(blobUrl, { maxSize: 500 * 1024 * 1024, timeout: 300000 });
