@@ -166,11 +166,21 @@ async function serveFileInternal(did: string, rkey: string, filePath: string) {
       const shouldServeCompressed = shouldCompressMimeType(meta.mimeType);
 
       if (!shouldServeCompressed) {
-        const { gunzipSync } = await import('zlib');
-        const decompressed = gunzipSync(content);
-        headers['Content-Type'] = meta.mimeType;
-        headers['Cache-Control'] = 'public, max-age=31536000, immutable';
-        return new Response(decompressed, { headers });
+        // Verify content is actually gzipped before attempting decompression
+        const isGzipped = content.length >= 2 && content[0] === 0x1f && content[1] === 0x8b;
+        if (isGzipped) {
+          const { gunzipSync } = await import('zlib');
+          const decompressed = gunzipSync(content);
+          headers['Content-Type'] = meta.mimeType;
+          headers['Cache-Control'] = 'public, max-age=31536000, immutable';
+          return new Response(decompressed, { headers });
+        } else {
+          // Meta says gzipped but content isn't - serve as-is
+          console.warn(`File ${filePath} has gzip encoding in meta but content lacks gzip magic bytes`);
+          headers['Content-Type'] = meta.mimeType;
+          headers['Cache-Control'] = 'public, max-age=31536000, immutable';
+          return new Response(content, { headers });
+        }
       }
 
       headers['Content-Type'] = meta.mimeType;
@@ -368,8 +378,15 @@ async function serveFileInternalWithRewrite(did: string, rkey: string, filePath:
     if (isHtmlContent(requestPath, mimeType)) {
       let htmlContent: string;
       if (isGzipped) {
-        const { gunzipSync } = await import('zlib');
-        htmlContent = gunzipSync(content).toString('utf-8');
+        // Verify content is actually gzipped
+        const hasGzipMagic = content.length >= 2 && content[0] === 0x1f && content[1] === 0x8b;
+        if (hasGzipMagic) {
+          const { gunzipSync } = await import('zlib');
+          htmlContent = gunzipSync(content).toString('utf-8');
+        } else {
+          console.warn(`File ${requestPath} marked as gzipped but lacks magic bytes, serving as-is`);
+          htmlContent = content.toString('utf-8');
+        }
       } else {
         htmlContent = content.toString('utf-8');
       }
@@ -400,9 +417,16 @@ async function serveFileInternalWithRewrite(did: string, rkey: string, filePath:
     if (isGzipped) {
       const shouldServeCompressed = shouldCompressMimeType(mimeType);
       if (!shouldServeCompressed) {
-        const { gunzipSync } = await import('zlib');
-        const decompressed = gunzipSync(content);
-        return new Response(decompressed, { headers });
+        // Verify content is actually gzipped
+        const hasGzipMagic = content.length >= 2 && content[0] === 0x1f && content[1] === 0x8b;
+        if (hasGzipMagic) {
+          const { gunzipSync } = await import('zlib');
+          const decompressed = gunzipSync(content);
+          return new Response(decompressed, { headers });
+        } else {
+          console.warn(`File ${requestPath} marked as gzipped but lacks magic bytes, serving as-is`);
+          return new Response(content, { headers });
+        }
       }
       headers['Content-Encoding'] = 'gzip';
     }
@@ -449,8 +473,15 @@ async function serveFileInternalWithRewrite(did: string, rkey: string, filePath:
 
       let htmlContent: string;
       if (isGzipped) {
-        const { gunzipSync } = await import('zlib');
-        htmlContent = gunzipSync(indexContent).toString('utf-8');
+        // Verify content is actually gzipped
+        const hasGzipMagic = indexContent.length >= 2 && indexContent[0] === 0x1f && indexContent[1] === 0x8b;
+        if (hasGzipMagic) {
+          const { gunzipSync } = await import('zlib');
+          htmlContent = gunzipSync(indexContent).toString('utf-8');
+        } else {
+          console.warn(`Index file marked as gzipped but lacks magic bytes, serving as-is`);
+          htmlContent = indexContent.toString('utf-8');
+        }
       } else {
         htmlContent = indexContent.toString('utf-8');
       }

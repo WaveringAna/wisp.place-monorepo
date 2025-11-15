@@ -14,6 +14,7 @@ export interface UploadedFile {
 	mimeType: string;
 	size: number;
 	compressed?: boolean;
+	base64Encoded?: boolean;
 	originalMimeType?: string;
 }
 
@@ -34,7 +35,7 @@ export interface ProcessedDirectory {
  * Determine if a file should be gzip compressed based on its MIME type
  */
 export function shouldCompressFile(mimeType: string): boolean {
-	// Compress text-based files
+	// Compress text-based files and uncompressed audio formats
 	const compressibleTypes = [
 		'text/html',
 		'text/css',
@@ -45,7 +46,13 @@ export function shouldCompressFile(mimeType: string): boolean {
 		'text/xml',
 		'application/xml',
 		'text/plain',
-		'application/x-javascript'
+		'application/x-javascript',
+		// Uncompressed audio formats (WAV, AIFF, etc.)
+		'audio/wav',
+		'audio/wave',
+		'audio/x-wav',
+		'audio/aiff',
+		'audio/x-aiff'
 	];
 
 	// Check if mime type starts with any compressible type

@@ -8,6 +8,7 @@ export interface UploadProgress {
 	filesUploaded: number;
 	filesReused: number;
 	currentFile?: string;
+	currentFileStatus?: 'checking' | 'uploading' | 'uploaded' | 'reused' | 'failed';
 	phase: 'validating' | 'compressing' | 'uploading' | 'creating_manifest' | 'finalizing' | 'done';
 }
 
@@ -24,7 +25,9 @@ export interface UploadJob {
 		fileCount?: number;
 		siteName?: string;
 		skippedFiles?: Array<{ name: string; reason: string }>;
+		failedFiles?: Array<{ name: string; index: number; error: string; size: number }>;
 		uploadedCount?: number;
+		hasFailures?: boolean;
 	};
 	error?: string;
 	createdAt: number;

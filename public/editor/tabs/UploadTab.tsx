@@ -15,9 +15,22 @@ import {
 	Globe,
 	Upload,
 	AlertCircle,
-	Loader2
+	Loader2,
+	ChevronDown,
+	ChevronUp,
+	CheckCircle2,
+	XCircle,
+	RefreshCw
 } from 'lucide-react'
 import type { SiteWithDomains } from '../hooks/useSiteData'
+
+type FileStatus = 'pending' | 'checking' | 'uploading' | 'uploaded' | 'reused' | 'failed'
+
+interface FileProgress {
+	name: string
+	status: FileStatus
+	error?: string
+}
 
 interface UploadTabProps {
 	sites: SiteWithDomains[]
@@ -38,7 +51,10 @@ export function UploadTab({
 	const [isUploading, setIsUploading] = useState(false)
 	const [uploadProgress, setUploadProgress] = useState('')
 	const [skippedFiles, setSkippedFiles] = useState<Array<{ name: string; reason: string }>>([])
+	const [failedFiles, setFailedFiles] = useState<Array<{ name: string; index: number; error: string; size: number }>>([])
 	const [uploadedCount, setUploadedCount] = useState(0)
+	const [fileProgressList, setFileProgressList] = useState<FileProgress[]>([])
+	const [showFileProgress, setShowFileProgress] = useState(false)
 
 	// Keep SSE connection alive across tab switches
 	const eventSourceRef = useRef<EventSource | null>(null)
@@ -79,6 +95,27 @@ export function UploadTab({
 			const progressData = JSON.parse(event.data)
 			const { progress, status } = progressData
 
+			// Update file progress list if we have current file info
+			if (progress.currentFile && progress.currentFileStatus) {
+				setFileProgressList(prev => {
+					const existing = prev.find(f => f.name === progress.currentFile)
+					if (existing) {
+						// Update existing file status
+						return prev.map(f =>
+							f.name === progress.currentFile
+								? { ...f, status: progress.currentFileStatus as FileStatus }
+								: f
+						)
+					} else {
+						// Add new file
+						return [...prev, {
+							name: progress.currentFile,
+							status: progress.currentFileStatus as FileStatus
+						}]
+					}
+				})
+			}
+
 			// Update progress message based on phase
 			let message = 'Processing...'
 			if (progress.phase === 'validating') {
@@ -110,8 +147,33 @@ export function UploadTab({
 			eventSourceRef.current = null
 			currentJobIdRef.current = null
 
-			setUploadProgress('Upload complete!')
+			const hasIssues = (result.skippedFiles && result.skippedFiles.length > 0) ||
+			                  (result.failedFiles && result.failedFiles.length > 0)
+
+			// Update file progress list with failed files
+			if (result.failedFiles && result.failedFiles.length > 0) {
+				setFileProgressList(prev => {
+					const updated = [...prev]
+					result.failedFiles.forEach((failedFile: any) => {
+						const existing = updated.find(f => f.name === failedFile.name)
+						if (existing) {
+							existing.status = 'failed'
+							existing.error = failedFile.error
+						} else {
+							updated.push({
+								name: failedFile.name,
+								status: 'failed',
+								error: failedFile.error
+							})
+						}
+					})
+					return updated
+				})
+			}
+
+			setUploadProgress(hasIssues ? 'Upload completed with issues' : 'Upload complete!')
 			setSkippedFiles(result.skippedFiles || [])
+			setFailedFiles(result.failedFiles || [])
 			setUploadedCount(result.uploadedCount || result.fileCount || 0)
 			setSelectedSiteRkey('')
 			setNewSiteName('')
@@ -120,12 +182,14 @@ export function UploadTab({
 			// Refresh sites list
 			onUploadComplete()
 
-			// Reset form
-			const resetDelay = result.skippedFiles && result.skippedFiles.length > 0 ? 4000 : 1500
+			// Reset form (wait longer if there are issues to show)
+			const resetDelay = hasIssues ? 6000 : 1500
 			setTimeout(() => {
 				setUploadProgress('')
 				setSkippedFiles([])
+				setFailedFiles([])
 				setUploadedCount(0)
+				setFileProgressList([])
 				setIsUploading(false)
 			}, resetDelay)
 		})
@@ -376,6 +440,101 @@ export function UploadTab({
 								</div>
 							</div>
 
+							{fileProgressList.length > 0 && (
+								<div className="border rounded-lg overflow-hidden">
+									<button
+										onClick={() => setShowFileProgress(!showFileProgress)}
+										className="w-full p-3 bg-muted/50 hover:bg-muted transition-colors flex items-center justify-between text-sm font-medium"
+									>
+										<span>
+											Processing files ({fileProgressList.filter(f => f.status === 'uploaded' || f.status === 'reused').length}/{fileProgressList.length})
+										</span>
+										{showFileProgress ? (
+											<ChevronUp className="w-4 h-4" />
+										) : (
+											<ChevronDown className="w-4 h-4" />
+										)}
+									</button>
+									{showFileProgress && (
+										<div className="max-h-64 overflow-y-auto p-3 space-y-1 bg-background">
+											{fileProgressList.map((file, idx) => (
+												<div
+													key={idx}
+													className="flex items-start gap-2 text-xs p-2 rounded hover:bg-muted/50 transition-colors"
+												>
+													{file.status === 'checking' && (
+														<Loader2 className="w-3 h-3 mt-0.5 animate-spin text-blue-500 shrink-0" />
+													)}
+													{file.status === 'uploading' && (
+														<Loader2 className="w-3 h-3 mt-0.5 animate-spin text-purple-500 shrink-0" />
+													)}
+													{file.status === 'uploaded' && (
+														<CheckCircle2 className="w-3 h-3 mt-0.5 text-green-500 shrink-0" />
+													)}
+													{file.status === 'reused' && (
+														<RefreshCw className="w-3 h-3 mt-0.5 text-cyan-500 shrink-0" />
+													)}
+													{file.status === 'failed' && (
+														<XCircle className="w-3 h-3 mt-0.5 text-red-500 shrink-0" />
+													)}
+													<div className="flex-1 min-w-0">
+														<div className="font-mono truncate">{file.name}</div>
+														{file.error && (
+															<div className="text-red-500 mt-0.5">
+																{file.error}
+															</div>
+														)}
+														{file.status === 'checking' && (
+															<div className="text-muted-foreground">Checking for changes...</div>
+														)}
+														{file.status === 'uploading' && (
+															<div className="text-muted-foreground">Uploading to PDS...</div>
+														)}
+														{file.status === 'reused' && (
+															<div className="text-muted-foreground">Reused (unchanged)</div>
+														)}
+													</div>
+												</div>
+											))}
+										</div>
+									)}
+								</div>
+							)}
+
+							{failedFiles.length > 0 && (
+								<div className="p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
+									<div className="flex items-start gap-2 text-red-600 dark:text-red-400 mb-2">
+										<AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+										<div className="flex-1">
+											<span className="font-medium">
+												{failedFiles.length} file{failedFiles.length > 1 ? 's' : ''} failed to upload
+											</span>
+											{uploadedCount > 0 && (
+												<span className="text-sm ml-2">
+													({uploadedCount} uploaded successfully)
+												</span>
+											)}
+										</div>
+									</div>
+									<div className="ml-6 space-y-1 max-h-40 overflow-y-auto">
+										{failedFiles.slice(0, 10).map((file, idx) => (
+											<div key={idx} className="text-xs">
+												<div className="font-mono font-semibold">{file.name}</div>
+												<div className="text-muted-foreground ml-2">
+													Error: {file.error}
+													{file.size > 0 && ` (${(file.size / 1024).toFixed(1)} KB)`}
+												</div>
+											</div>
+										))}
+										{failedFiles.length > 10 && (
+											<div className="text-xs text-muted-foreground">
+												...and {failedFiles.length - 10} more
+											</div>
+										)}
+									</div>
+								</div>
+							)}
+
 							{skippedFiles.length > 0 && (
 								<div className="p-4 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
 									<div className="flex items-start gap-2 text-yellow-600 dark:text-yellow-400 mb-2">
@@ -384,11 +543,6 @@ export function UploadTab({
 											<span className="font-medium">
 												{skippedFiles.length} file{skippedFiles.length > 1 ? 's' : ''} skipped
 											</span>
-											{uploadedCount > 0 && (
-												<span className="text-sm ml-2">
-													({uploadedCount} uploaded successfully)
-												</span>
-											)}
 										</div>
 									</div>
 									<div className="ml-6 space-y-1 max-h-32 overflow-y-auto">

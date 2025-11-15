@@ -149,6 +149,17 @@ async function processUploadInBackground(
 
 		for (let i = 0; i < fileArray.length; i++) {
 			const file = fileArray[i];
+
+			// Skip undefined/null files
+			if (!file || !file.name) {
+				console.log(`Skipping undefined file at index ${i}`);
+				skippedFiles.push({
+					name: `[undefined file at index ${i}]`,
+					reason: 'Invalid file object'
+				});
+				continue;
+			}
+
 			console.log(`Processing file ${i + 1}/${fileArray.length}:`, file.name, file.size, 'bytes');
 			updateJobProgress(jobId, {
 				filesProcessed: i + 1,
@@ -180,19 +191,55 @@ async function processUploadInBackground(
 			const originalContent = Buffer.from(arrayBuffer);
 			const originalMimeType = file.type || 'application/octet-stream';
 
-			// Compress and base64 encode ALL files
-			const compressedContent = compressFile(originalContent);
-			const base64Content = Buffer.from(compressedContent.toString('base64'), 'binary');
-			const compressionRatio = (compressedContent.length / originalContent.length * 100).toFixed(1);
-			console.log(`Compressing ${file.name}: ${originalContent.length} -> ${compressedContent.length} bytes (${compressionRatio}%), base64: ${base64Content.length} bytes`);
-			logger.info(`Compressing ${file.name}: ${originalContent.length} -> ${compressedContent.length} bytes (${compressionRatio}%), base64: ${base64Content.length} bytes`);
+			// Determine if file should be compressed
+			const shouldCompress = shouldCompressFile(originalMimeType);
+
+			// Text files (HTML/CSS/JS) need base64 encoding to prevent PDS content sniffing
+			// Audio files just need compression without base64
+			const needsBase64 = originalMimeType.startsWith('text/') ||
+				originalMimeType.includes('html') ||
+				originalMimeType.includes('javascript') ||
+				originalMimeType.includes('css') ||
+				originalMimeType.includes('json') ||
+				originalMimeType.includes('xml') ||
+				originalMimeType.includes('svg');
+
+			let finalContent: Buffer;
+			let compressed = false;
+			let base64Encoded = false;
+
+			if (shouldCompress) {
+				const compressedContent = compressFile(originalContent);
+				compressed = true;
+
+				if (needsBase64) {
+					// Text files: compress AND base64 encode
+					finalContent = Buffer.from(compressedContent.toString('base64'), 'binary');
+					base64Encoded = true;
+					const compressionRatio = (compressedContent.length / originalContent.length * 100).toFixed(1);
+					console.log(`Compressing+base64 ${file.name}: ${originalContent.length} -> ${compressedContent.length} bytes (${compressionRatio}%), base64: ${finalContent.length} bytes`);
+					logger.info(`Compressing+base64 ${file.name}: ${originalContent.length} -> ${compressedContent.length} bytes (${compressionRatio}%), base64: ${finalContent.length} bytes`);
+				} else {
+					// Audio files: just compress, no base64
+					finalContent = compressedContent;
+					const compressionRatio = (compressedContent.length / originalContent.length * 100).toFixed(1);
+					console.log(`Compressing ${file.name}: ${originalContent.length} -> ${compressedContent.length} bytes (${compressionRatio}%)`);
+					logger.info(`Compressing ${file.name}: ${originalContent.length} -> ${compressedContent.length} bytes (${compressionRatio}%)`);
+				}
+			} else {
+				// Binary files: upload directly
+				finalContent = originalContent;
+				console.log(`Uploading ${file.name} directly: ${originalContent.length} bytes (no compression)`);
+				logger.info(`Uploading ${file.name} directly: ${originalContent.length} bytes (binary)`);
+			}
 
 			uploadedFiles.push({
 				name: file.name,
-				content: base64Content,
+				content: finalContent,
 				mimeType: originalMimeType,
-				size: base64Content.length,
-				compressed: true,
+				size: finalContent.length,
+				compressed,
+				base64Encoded,
 				originalMimeType
 			});
 		}
@@ -275,29 +322,70 @@ async function processUploadInBackground(
 		console.log('Starting blob upload/reuse phase...');
 		updateJobProgress(jobId, { phase: 'uploading' });
 
-		// Helper function to upload blob with exponential backoff retry
+		// Helper function to upload blob with exponential backoff retry and timeout
 		const uploadBlobWithRetry = async (
 			agent: Agent,
 			content: Buffer,
 			mimeType: string,
 			fileName: string,
-			maxRetries = 3
+			maxRetries = 5
 		) => {
 			for (let attempt = 0; attempt < maxRetries; attempt++) {
 				try {
-					return await agent.com.atproto.repo.uploadBlob(content, { encoding: mimeType });
+					console.log(`[File Upload] Starting upload attempt ${attempt + 1}/${maxRetries} for ${fileName} (${content.length} bytes, ${mimeType})`);
+
+					// Add timeout wrapper to prevent hanging requests
+					const uploadPromise = agent.com.atproto.repo.uploadBlob(content, { encoding: mimeType });
+					const timeoutMs = 300000; // 5 minute timeout per upload
+
+					const timeoutPromise = new Promise((_, reject) => {
+						setTimeout(() => reject(new Error('Upload timeout')), timeoutMs);
+					});
+
+					const result = await Promise.race([uploadPromise, timeoutPromise]) as any;
+					console.log(`[File Upload] ✅ Successfully uploaded ${fileName} on attempt ${attempt + 1}`);
+					return result;
 				} catch (error: any) {
 					const isDPoPNonceError =
 						error?.message?.toLowerCase().includes('nonce') ||
 						error?.message?.toLowerCase().includes('dpop') ||
 						error?.status === 409;
 
-					if (isDPoPNonceError && attempt < maxRetries - 1) {
-						const backoffMs = 100 * Math.pow(2, attempt); // 100ms, 200ms, 400ms
-						logger.info(`[File Upload] 🔄 DPoP nonce conflict for ${fileName}, retrying in ${backoffMs}ms (attempt ${attempt + 1}/${maxRetries})`);
+					const isTimeout = error?.message === 'Upload timeout';
+					const isRateLimited = error?.status === 429 || error?.message?.toLowerCase().includes('rate');
+
+					// Retry on DPoP nonce conflicts, timeouts, or rate limits
+					if ((isDPoPNonceError || isTimeout || isRateLimited) && attempt < maxRetries - 1) {
+						let backoffMs: number;
+						if (isRateLimited) {
+							backoffMs = 2000 * Math.pow(2, attempt); // 2s, 4s, 8s, 16s for rate limits
+						} else if (isTimeout) {
+							backoffMs = 1000 * Math.pow(2, attempt); // 1s, 2s, 4s, 8s for timeouts
+						} else {
+							backoffMs = 100 * Math.pow(2, attempt); // 100ms, 200ms, 400ms for DPoP
+						}
+
+						const reason = isDPoPNonceError ? 'DPoP nonce conflict' : isTimeout ? 'timeout' : 'rate limit';
+						logger.info(`[File Upload] 🔄 ${reason} for ${fileName}, retrying in ${backoffMs}ms (attempt ${attempt + 1}/${maxRetries})`);
+						console.log(`[File Upload] 🔄 ${reason} for ${fileName}, retrying in ${backoffMs}ms`);
 						await new Promise(resolve => setTimeout(resolve, backoffMs));
 						continue;
 					}
+
+					// Log detailed error information before throwing
+					logger.error(`[File Upload] ❌ Upload failed for ${fileName} (size: ${content.length} bytes, mimeType: ${mimeType}, attempt: ${attempt + 1}/${maxRetries})`, {
+						error: error?.error || error?.message || 'Unknown error',
+						status: error?.status,
+						headers: error?.headers,
+						success: error?.success
+					});
+					console.error(`[File Upload] ❌ Upload failed for ${fileName}:`, {
+						error: error?.error || error?.message || 'Unknown error',
+						status: error?.status,
+						size: content.length,
+						mimeType,
+						attempt: attempt + 1
+					});
 					throw error;
 				}
 			}
@@ -305,13 +393,19 @@ async function processUploadInBackground(
 		};
 
 		// Use sliding window concurrency for maximum throughput
-		const CONCURRENCY_LIMIT = 50; // Maximum concurrent uploads with retry logic
+		const CONCURRENCY_LIMIT = 20; // Maximum concurrent uploads
 		const uploadedBlobs: Array<{
 			result: FileUploadResult;
 			filePath: string;
 			sentMimeType: string;
 			returnedMimeType: string;
 			reused: boolean;
+		}> = [];
+		const failedFiles: Array<{
+			name: string;
+			index: number;
+			error: string;
+			size: number;
 		}> = [];
 
 		// Process file with sliding window concurrency
@@ -327,7 +421,9 @@ async function processUploadInBackground(
 
 				if (existingBlob && existingBlob.cid === fileCID) {
 					logger.info(`[File Upload] ♻️  Reused: ${file.name} (unchanged, CID: ${fileCID})`);
-					updateJobProgress(jobId, { filesReused: (getUploadJob(jobId)?.progress.filesReused || 0) + 1 });
+					updateJobProgress(jobId, {
+						filesReused: (getUploadJob(jobId)?.progress.filesReused || 0) + 1
+					});
 
 					return {
 						result: {
@@ -336,7 +432,7 @@ async function processUploadInBackground(
 							...(file.compressed && {
 								encoding: 'gzip' as const,
 								mimeType: file.originalMimeType || file.mimeType,
-								base64: true
+								base64: file.base64Encoded || false
 							})
 						},
 						filePath: file.name,
@@ -362,7 +458,9 @@ async function processUploadInBackground(
 				);
 
 				const returnedBlobRef = uploadResult.data.blob;
-				updateJobProgress(jobId, { filesUploaded: (getUploadJob(jobId)?.progress.filesUploaded || 0) + 1 });
+				updateJobProgress(jobId, {
+					filesUploaded: (getUploadJob(jobId)?.progress.filesUploaded || 0) + 1
+				});
 				logger.info(`[File Upload] ✅ Uploaded: ${file.name} (CID: ${fileCID})`);
 
 				return {
@@ -372,7 +470,7 @@ async function processUploadInBackground(
 						...(file.compressed && {
 							encoding: 'gzip' as const,
 							mimeType: file.originalMimeType || file.mimeType,
-							base64: true
+							base64: file.base64Encoded || false
 						})
 					},
 					filePath: file.name,
@@ -381,8 +479,28 @@ async function processUploadInBackground(
 					reused: false
 				};
 			} catch (uploadError) {
-				logger.error('Upload failed for file', uploadError);
-				throw uploadError;
+				const fileName = file?.name || 'unknown';
+				const fileSize = file?.size || 0;
+				const errorMessage = uploadError instanceof Error ? uploadError.message : 'Unknown error';
+				const errorDetails = {
+					fileName,
+					fileSize,
+					index,
+					error: errorMessage,
+					stack: uploadError instanceof Error ? uploadError.stack : undefined
+				};
+				logger.error(`Upload failed for file: ${fileName} (${fileSize} bytes) at index ${index}`, errorDetails);
+				console.error(`Upload failed for file: ${fileName} (${fileSize} bytes) at index ${index}`, errorDetails);
+
+				// Track failed file but don't throw - continue with other files
+				failedFiles.push({
+					name: fileName,
+					index,
+					error: errorMessage,
+					size: fileSize
+				});
+
+				return null; // Return null to indicate failure
 			}
 		};
 
@@ -390,7 +508,7 @@ async function processUploadInBackground(
 		const processWithConcurrency = async () => {
 			const results: any[] = [];
 			let fileIndex = 0;
-			const executing = new Set<Promise<void>>();
+			const executing = new Map<Promise<void>, { index: number; name: string }>();
 
 			for (const file of validUploadedFiles) {
 				const currentIndex = fileIndex++;
@@ -398,25 +516,37 @@ async function processUploadInBackground(
 				const promise = processFile(file, currentIndex)
 					.then(result => {
 						results[currentIndex] = result;
+						console.log(`[Concurrency] File ${currentIndex} (${file.name}) completed successfully`);
 					})
 					.catch(error => {
-						logger.error(`Failed to process file at index ${currentIndex}`, error);
-						throw error; // Re-throw to fail the entire upload
+						// This shouldn't happen since processFile catches errors, but just in case
+						logger.error(`Unexpected error processing file at index ${currentIndex}`, error);
+						console.error(`[Concurrency] File ${currentIndex} (${file.name}) had unexpected error:`, error);
+						results[currentIndex] = null;
 					})
 					.finally(() => {
 						executing.delete(promise);
+						const remaining = Array.from(executing.values()).map(f => `${f.index}:${f.name}`);
+						console.log(`[Concurrency] File ${currentIndex} (${file.name}) removed. Remaining ${executing.size}: [${remaining.join(', ')}]`);
 					});
 
-				executing.add(promise);
+				executing.set(promise, { index: currentIndex, name: file.name });
+				const current = Array.from(executing.values()).map(f => `${f.index}:${f.name}`);
+				console.log(`[Concurrency] Added file ${currentIndex} (${file.name}). Total ${executing.size}: [${current.join(', ')}]`);
 
 				if (executing.size >= CONCURRENCY_LIMIT) {
-					await Promise.race(executing);
+					console.log(`[Concurrency] Hit limit (${CONCURRENCY_LIMIT}), waiting for one to complete...`);
+					await Promise.race(executing.keys());
+					console.log(`[Concurrency] One completed, continuing. Remaining: ${executing.size}`);
 				}
 			}
 
 			// Wait for remaining uploads
-			await Promise.all(executing);
-			return results.filter(r => r !== undefined); // Filter out any undefined entries
+			const remaining = Array.from(executing.values()).map(f => `${f.index}:${f.name}`);
+			console.log(`[Concurrency] Waiting for ${executing.size} remaining uploads: [${remaining.join(', ')}]`);
+			await Promise.all(executing.keys());
+			console.log(`[Concurrency] All uploads complete!`);
+			return results.filter(r => r !== undefined && r !== null); // Filter out null (failed) and undefined entries
 		};
 
 		const allResults = await processWithConcurrency();
@@ -424,11 +554,19 @@ async function processUploadInBackground(
 
 		const currentReused = uploadedBlobs.filter(b => b.reused).length;
 		const currentUploaded = uploadedBlobs.filter(b => !b.reused).length;
-		logger.info(`[File Upload] 🎉 Upload complete → ${uploadedBlobs.length}/${validUploadedFiles.length} files (${currentUploaded} uploaded, ${currentReused} reused)`);
+		const successfulCount = uploadedBlobs.length;
+		const failedCount = failedFiles.length;
+
+		logger.info(`[File Upload] 🎉 Upload complete → ${successfulCount}/${validUploadedFiles.length} files succeeded (${currentUploaded} uploaded, ${currentReused} reused), ${failedCount} failed`);
+
+		if (failedCount > 0) {
+			logger.warn(`[File Upload] ⚠️  Failed files:`, failedFiles);
+			console.warn(`[File Upload] ⚠️  ${failedCount} files failed to upload:`, failedFiles.map(f => f.name).join(', '));
+		}
 
 		const reusedCount = uploadedBlobs.filter(b => b.reused).length;
 		const uploadedCount = uploadedBlobs.filter(b => !b.reused).length;
-		logger.info(`[File Upload] 🎉 Upload phase complete! Total: ${uploadedBlobs.length} files (${uploadedCount} uploaded, ${reusedCount} reused)`);
+		logger.info(`[File Upload] 🎉 Upload phase complete! Total: ${successfulCount} files (${uploadedCount} uploaded, ${reusedCount} reused)`);
 
 		const uploadResults: FileUploadResult[] = uploadedBlobs.map(blob => blob.result);
 		const filePaths: string[] = uploadedBlobs.map(blob => blob.filePath);
@@ -594,7 +732,9 @@ async function processUploadInBackground(
 			fileCount,
 			siteName,
 			skippedFiles,
-			uploadedCount: validUploadedFiles.length
+			failedFiles,
+			uploadedCount: validUploadedFiles.length - failedFiles.length,
+			hasFailures: failedFiles.length > 0
 		});
 
 		console.log('=== UPLOAD FILES COMPLETE ===');

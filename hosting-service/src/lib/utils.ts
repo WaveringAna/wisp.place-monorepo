@@ -26,10 +26,10 @@ interface CacheMetadata {
  */
 export function shouldCompressMimeType(mimeType: string | undefined): boolean {
   if (!mimeType) return false;
-  
+
   const mime = mimeType.toLowerCase();
-  
-  // Text-based web assets that benefit from compression
+
+  // Text-based web assets and uncompressed audio that benefit from compression
   const compressibleTypes = [
     'text/html',
     'text/css',
@@ -41,8 +41,14 @@ export function shouldCompressMimeType(mimeType: string | undefined): boolean {
     'application/json',
     'text/plain',
     'image/svg+xml',
+    // Uncompressed audio formats
+    'audio/wav',
+    'audio/wave',
+    'audio/x-wav',
+    'audio/aiff',
+    'audio/x-aiff',
   ];
-  
+
   if (compressibleTypes.some(type => mime === type || mime.startsWith(type))) {
     return true;
   }
