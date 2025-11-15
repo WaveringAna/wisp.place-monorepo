@@ -145,7 +145,7 @@ export const createClientMetadata = (config: { domain: `http://${string}` | `htt
         application_type: 'web',
         token_endpoint_auth_method: 'private_key_jwt',
         token_endpoint_auth_signing_alg: "ES256",
-        scope: "atproto repo:place.wisp.fs repo:place.wisp.domain repo:place.wisp.subfs blob:accept=*/*&maxSize=100000000 rpc:app.bsky.actor.getProfile?aud=*",
+        scope: "atproto repo:place.wisp.fs repo:place.wisp.domain repo:place.wisp.subfs blob:*/* blob?maxSize=100000000 rpc:*?aud=did:web:api.bsky.app#bsky_appview",
         dpop_bound_access_tokens: true,
         jwks_uri: `${config.domain}/jwks.json`,
         subject_type: 'public',
