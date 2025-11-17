@@ -24,6 +24,9 @@ export interface RedirectMatch {
   status: number;
 }
 
+// Maximum number of redirect rules to prevent DoS attacks
+const MAX_REDIRECT_RULES = 1000;
+
 /**
  * Parse a _redirects file into an array of redirect rules
  */
@@ -34,12 +37,18 @@ export function parseRedirectsFile(content: string): RedirectRule[] {
   for (let lineNum = 0; lineNum < lines.length; lineNum++) {
     const lineRaw = lines[lineNum];
     if (!lineRaw) continue;
-    
+
     const line = lineRaw.trim();
-    
+
     // Skip empty lines and comments
     if (!line || line.startsWith('#')) {
       continue;
+    }
+
+    // Enforce max rules limit
+    if (rules.length >= MAX_REDIRECT_RULES) {
+      console.warn(`Redirect rules limit reached (${MAX_REDIRECT_RULES}), ignoring remaining rules`);
+      break;
     }
 
     try {
@@ -218,7 +227,7 @@ function convertPathToRegex(pattern: string): { pattern: RegExp; params: string[
 }
 
 /**
- * Match a request path against redirect rules
+ * Match a request path against redirect rules with loop detection
  */
 export function matchRedirectRule(
   requestPath: string,
@@ -227,11 +236,27 @@ export function matchRedirectRule(
     queryParams?: Record<string, string>;
     headers?: Record<string, string>;
     cookies?: Record<string, string>;
-  }
+  },
+  visitedPaths: Set<string> = new Set()
 ): RedirectMatch | null {
   // Normalize path: ensure leading slash, remove trailing slash (except for root)
   let normalizedPath = requestPath.startsWith('/') ? requestPath : `/${requestPath}`;
-  
+
+  // Detect redirect loops
+  if (visitedPaths.has(normalizedPath)) {
+    console.warn(`Redirect loop detected for path: ${normalizedPath}`);
+    return null;
+  }
+
+  // Track this path to detect loops
+  visitedPaths.add(normalizedPath);
+
+  // Limit redirect chain depth to 10
+  if (visitedPaths.size > 10) {
+    console.warn(`Redirect chain too deep (>10) for path: ${normalizedPath}`);
+    return null;
+  }
+
   for (const rule of rules) {
     // Check query parameter conditions first (if any)
     if (rule.queryParams) {
@@ -239,12 +264,26 @@ export function matchRedirectRule(
       if (!context?.queryParams) {
         continue;
       }
-      
-      const queryMatches = Object.entries(rule.queryParams).every(([key, value]) => {
+
+      // Check that all required query params are present
+      // The value in rule.queryParams is either a literal or a placeholder (:name)
+      const queryMatches = Object.entries(rule.queryParams).every(([key, expectedValue]) => {
         const actualValue = context.queryParams?.[key];
-        return actualValue !== undefined;
+
+        // Query param must exist
+        if (actualValue === undefined) {
+          return false;
+        }
+
+        // If expected value is a placeholder (:name), any value is acceptable
+        // If it's a literal, it must match exactly
+        if (expectedValue && !expectedValue.startsWith(':')) {
+          return actualValue === expectedValue;
+        }
+
+        return true;
       });
-      
+
       if (!queryMatches) {
         continue;
       }
@@ -302,31 +341,38 @@ export function matchRedirectRule(
 
     // Build the target path by replacing placeholders
     let targetPath = rule.to;
-    
-    // Replace captured parameters
+
+    // Replace captured parameters (with URL encoding)
     if (rule.fromParams && match.length > 1) {
       for (let i = 0; i < rule.fromParams.length; i++) {
         const paramName = rule.fromParams[i];
         const paramValue = match[i + 1];
-        
+
         if (!paramName || !paramValue) continue;
-        
+
+        // URL encode captured values to prevent invalid URLs
+        const encodedValue = encodeURIComponent(paramValue);
+
         if (paramName === 'splat') {
-          targetPath = targetPath.replace(':splat', paramValue);
+          // For splats, preserve slashes by re-decoding them
+          const splatValue = encodedValue.replace(/%2F/g, '/');
+          targetPath = targetPath.replace(':splat', splatValue);
         } else {
-          targetPath = targetPath.replace(`:${paramName}`, paramValue);
+          targetPath = targetPath.replace(`:${paramName}`, encodedValue);
         }
       }
     }
 
-    // Handle query parameter replacements
+    // Handle query parameter replacements (with URL encoding)
     if (rule.queryParams && context?.queryParams) {
       for (const [key, placeholder] of Object.entries(rule.queryParams)) {
         const actualValue = context.queryParams[key];
         if (actualValue && placeholder && placeholder.startsWith(':')) {
           const paramName = placeholder.slice(1);
           if (paramName) {
-            targetPath = targetPath.replace(`:${paramName}`, actualValue);
+            // URL encode query parameter values
+            const encodedValue = encodeURIComponent(actualValue);
+            targetPath = targetPath.replace(`:${paramName}`, encodedValue);
           }
         }
       }

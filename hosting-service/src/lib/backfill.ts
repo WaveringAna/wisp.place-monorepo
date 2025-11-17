@@ -2,6 +2,7 @@ import { getAllSites } from './db';
 import { fetchSiteRecord, getPdsForDid, downloadAndCacheSite, isCached } from './utils';
 import { logger } from './observability';
 import { markSiteAsBeingCached, unmarkSiteAsBeingCached } from './cache';
+import { clearRedirectRulesCache } from '../server';
 
 export interface BackfillOptions {
   skipExisting?: boolean; // Skip sites already in cache
@@ -23,7 +24,7 @@ export interface BackfillStats {
 export async function backfillCache(options: BackfillOptions = {}): Promise<BackfillStats> {
   const {
     skipExisting = true,
-    concurrency = 3,
+    concurrency = 10, // Increased from 3 to 10 for better parallelization
     maxSites,
   } = options;
 
@@ -103,6 +104,8 @@ export async function backfillCache(options: BackfillOptions = {}): Promise<Back
             try {
               // Download and cache site
               await downloadAndCacheSite(site.did, site.rkey, siteData.record, pdsEndpoint, siteData.cid);
+              // Clear redirect rules cache since the site was updated
+              clearRedirectRulesCache(site.did, site.rkey);
               stats.cached++;
               processed++;
               logger.info('Successfully cached site during backfill', { did: site.did, rkey: site.rkey });

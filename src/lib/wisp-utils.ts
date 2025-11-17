@@ -32,9 +32,14 @@ export interface ProcessedDirectory {
 }
 
 /**
- * Determine if a file should be gzip compressed based on its MIME type
+ * Determine if a file should be gzip compressed based on its MIME type and filename
  */
-export function shouldCompressFile(mimeType: string): boolean {
+export function shouldCompressFile(mimeType: string, fileName?: string): boolean {
+	// Never compress _redirects file - it needs to be plain text for the hosting service
+	if (fileName && (fileName.endsWith('/_redirects') || fileName === '_redirects')) {
+		return false;
+	}
+
 	// Compress text-based files and uncompressed audio formats
 	const compressibleTypes = [
 		'text/html',

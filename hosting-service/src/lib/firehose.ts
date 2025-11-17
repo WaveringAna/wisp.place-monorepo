@@ -11,6 +11,7 @@ import { isRecord, validateRecord } from '../lexicon/types/place/wisp/fs'
 import { Firehose } from '@atproto/sync'
 import { IdResolver } from '@atproto/identity'
 import { invalidateSiteCache, markSiteAsBeingCached, unmarkSiteAsBeingCached } from './cache'
+import { clearRedirectRulesCache } from '../server'
 
 const CACHE_DIR = './cache/sites'
 
@@ -201,6 +202,9 @@ export class FirehoseWorker {
 				pdsEndpoint,
 				verifiedCid
 			)
+
+			// Clear redirect rules cache since the site was updated
+			clearRedirectRulesCache(did, site)
 
 			// Acquire distributed lock only for database write to prevent duplicate writes
 			// Note: upsertSite will check cache-only mode internally and skip if needed

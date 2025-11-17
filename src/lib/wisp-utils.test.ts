@@ -58,6 +58,12 @@ describe('shouldCompressFile', () => {
 		expect(shouldCompressFile('text/plain')).toBe(true)
 	})
 
+	test('should NOT compress _redirects file', () => {
+		expect(shouldCompressFile('text/plain', '_redirects')).toBe(false)
+		expect(shouldCompressFile('text/plain', 'folder/_redirects')).toBe(false)
+		expect(shouldCompressFile('application/octet-stream', '_redirects')).toBe(false)
+	})
+
 	test('should NOT compress images', () => {
 		expect(shouldCompressFile('image/png')).toBe(false)
 		expect(shouldCompressFile('image/jpeg')).toBe(false)

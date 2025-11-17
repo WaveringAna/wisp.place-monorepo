@@ -191,8 +191,8 @@ async function processUploadInBackground(
             const originalContent = Buffer.from(arrayBuffer);
             const originalMimeType = file.type || 'application/octet-stream';
 
-            // Determine if file should be compressed
-            const shouldCompress = shouldCompressFile(originalMimeType);
+            // Determine if file should be compressed (pass filename to exclude _redirects)
+            const shouldCompress = shouldCompressFile(originalMimeType, normalizedPath);
 
             // Text files (HTML/CSS/JS) need base64 encoding to prevent PDS content sniffing
             // Audio files just need compression without base64
