@@ -114,7 +114,7 @@ enum Commands {
 async fn main() -> miette::Result<()> {
     let args = Args::parse();
 
-    match args.command {
+    let result = match args.command {
         Some(Commands::Deploy { input, path, site, store, password }) => {
             // Dispatch to appropriate authentication method
             if let Some(password) = password {
@@ -134,7 +134,7 @@ async fn main() -> miette::Result<()> {
             if let Some(input) = args.input {
                 let path = args.path.unwrap_or_else(|| PathBuf::from("."));
                 let store = args.store.unwrap_or_else(|| "/tmp/wisp-oauth-session.json".to_string());
-                
+
                 // Dispatch to appropriate authentication method
                 if let Some(password) = args.password {
                     run_with_app_password(input, password, path, args.site).await
@@ -147,6 +147,15 @@ async fn main() -> miette::Result<()> {
                 Args::command().print_help().into_diagnostic()?;
                 Ok(())
             }
+        }
+    };
+
+    // Force exit to avoid hanging on background tasks/connections
+    match result {
+        Ok(_) => std::process::exit(0),
+        Err(e) => {
+            eprintln!("{:?}", e);
+            std::process::exit(1)
         }
     }
 }
@@ -173,7 +182,32 @@ async fn run_with_oauth(
     path: PathBuf,
     site: Option<String>,
 ) -> miette::Result<()> {
-    let oauth = OAuthClient::with_default_config(FileAuthStore::new(&store));
+    use jacquard::oauth::scopes::Scope;
+    use jacquard::oauth::atproto::AtprotoClientMetadata;
+    use jacquard::oauth::session::ClientData;
+    use url::Url;
+
+    // Request the necessary scopes for wisp.place
+    let scopes = Scope::parse_multiple("atproto repo:place.wisp.fs repo:place.wisp.subfs blob:*/*")
+        .map_err(|e| miette::miette!("Failed to parse scopes: {:?}", e))?;
+
+    // Create redirect URIs that match the loopback server (port 4000, path /oauth/callback)
+    let redirect_uris = vec![
+        Url::parse("http://127.0.0.1:4000/oauth/callback").into_diagnostic()?,
+        Url::parse("http://[::1]:4000/oauth/callback").into_diagnostic()?,
+    ];
+
+    // Create client metadata with matching redirect URIs and scopes
+    let client_data = ClientData {
+        keyset: None,
+        config: AtprotoClientMetadata::new_localhost(
+            Some(redirect_uris),
+            Some(scopes),
+        ),
+    };
+
+    let oauth = OAuthClient::new(FileAuthStore::new(&store), client_data);
+
     let session = oauth
         .login_with_local_server(input, Default::default(), LoopbackConfig::default())
         .await?;

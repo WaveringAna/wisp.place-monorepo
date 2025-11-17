@@ -113,22 +113,22 @@ dependencies = [
 
 [[package]]
 name = "anstyle-query"
-version = "1.1.4"
+version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e231f6134f61b71076a3eab506c379d4f36122f2af15a9ff04415ea4c3339e2"
+checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "anstyle-wincon"
-version = "3.0.10"
+version = "3.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e0633414522a32ffaac8ac6cc8f748e090c5717661fddeea04219e2344f5f2a"
+checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -407,9 +407,9 @@ checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
 name = "bytes"
-version = "1.10.1"
+version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d71b6127be86fdcfddb610f7182ac57211d4b18a3e9c82eb2d17662f2227ad6a"
+checksum = "b35204fbdc0b3f4446b89fc1ac2cf84a8a68971995d0bf2e925ec7cd960f9cb3"
 dependencies = [
  "serde",
 ]
@@ -425,9 +425,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.2.45"
+version = "1.2.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35900b6c8d709fb1d854671ae27aeaa9eec2f8b01b364e1619a40da3e6fe2afe"
+checksum = "b97463e1064cb1b1c1384ad0a0b9c8abd0988e2a91f52606c80ef14aadb63e36"
 dependencies = [
  "find-msvc-tools",
  "shlex",
@@ -996,9 +996,9 @@ dependencies = [
 
 [[package]]
 name = "find-msvc-tools"
-version = "0.1.4"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52051878f80a721bb68ebfbc930e07b65ba72f2da88968ea5c06fd6ca3d3a127"
+checksum = "3a3076410a55c90011c298b04d0cfa770b00fa04e1e3c97d3f6c9de105a03844"
 
 [[package]]
 name = "flate2"
@@ -1207,6 +1207,34 @@ name = "gimli"
 version = "0.32.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
+
+[[package]]
+name = "gloo-storage"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fbc8031e8c92758af912f9bc08fbbadd3c6f3cfcbf6b64cdf3d6a81f0139277a"
+dependencies = [
+ "gloo-utils",
+ "js-sys",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "gloo-utils"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b5555354113b18c547c1d3a98fbf7fb32a9ff4f6fa112ce823a21641a0ba3aa"
+dependencies = [
+ "js-sys",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+ "web-sys",
+]
 
 [[package]]
 name = "group"
@@ -1428,9 +1456,9 @@ checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
 name = "hyper"
-version = "1.8.0"
+version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1744436df46f0bde35af3eda22aeaba453aada65d8f1c171cd8a5f59030bd69f"
+checksum = "2ab2d4f250c3d7b1c9fcdff1cece94ea4e2dfbec68614f7b87cb205f24ca9d11"
 dependencies = [
  "atomic-waker",
  "bytes",
@@ -1468,9 +1496,9 @@ dependencies = [
 
 [[package]]
 name = "hyper-util"
-version = "0.1.17"
+version = "0.1.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c6995591a8f1380fcb4ba966a252a4b29188d51d2b89e3a252f5305be65aea8"
+checksum = "52e9a2a24dc5c6821e71a7030e1e14b7b632acac55c40e9d2e082c621261bb56"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -1725,10 +1753,11 @@ checksum = "4a5f13b858c8d314ee3e8f639011f7ccefe71f97f96e50151fb991f267928e2c"
 [[package]]
 name = "jacquard"
 version = "0.9.0"
-source = "git+https://tangled.org/@nonbinary.computer/jacquard#5c79bb76de544cbd4fa8d5d8b01ba6e828f8ba65"
+source = "git+https://tangled.org/@nonbinary.computer/jacquard#d853091d7de59e18746a78532dc28cfc017079b0"
 dependencies = [
  "bytes",
  "getrandom 0.2.16",
+ "gloo-storage",
  "http",
  "jacquard-api",
  "jacquard-common",
@@ -1753,7 +1782,7 @@ dependencies = [
 [[package]]
 name = "jacquard-api"
 version = "0.9.0"
-source = "git+https://tangled.org/@nonbinary.computer/jacquard#5c79bb76de544cbd4fa8d5d8b01ba6e828f8ba65"
+source = "git+https://tangled.org/@nonbinary.computer/jacquard#d853091d7de59e18746a78532dc28cfc017079b0"
 dependencies = [
  "bon",
  "bytes",
@@ -1771,7 +1800,7 @@ dependencies = [
 [[package]]
 name = "jacquard-common"
 version = "0.9.0"
-source = "git+https://tangled.org/@nonbinary.computer/jacquard#5c79bb76de544cbd4fa8d5d8b01ba6e828f8ba65"
+source = "git+https://tangled.org/@nonbinary.computer/jacquard#d853091d7de59e18746a78532dc28cfc017079b0"
 dependencies = [
  "base64 0.22.1",
  "bon",
@@ -1812,7 +1841,7 @@ dependencies = [
 [[package]]
 name = "jacquard-derive"
 version = "0.9.0"
-source = "git+https://tangled.org/@nonbinary.computer/jacquard#5c79bb76de544cbd4fa8d5d8b01ba6e828f8ba65"
+source = "git+https://tangled.org/@nonbinary.computer/jacquard#d853091d7de59e18746a78532dc28cfc017079b0"
 dependencies = [
  "heck 0.5.0",
  "jacquard-lexicon",
@@ -1824,7 +1853,7 @@ dependencies = [
 [[package]]
 name = "jacquard-identity"
 version = "0.9.1"
-source = "git+https://tangled.org/@nonbinary.computer/jacquard#5c79bb76de544cbd4fa8d5d8b01ba6e828f8ba65"
+source = "git+https://tangled.org/@nonbinary.computer/jacquard#d853091d7de59e18746a78532dc28cfc017079b0"
 dependencies = [
  "bon",
  "bytes",
@@ -1850,7 +1879,7 @@ dependencies = [
 [[package]]
 name = "jacquard-lexicon"
 version = "0.9.1"
-source = "git+https://tangled.org/@nonbinary.computer/jacquard#5c79bb76de544cbd4fa8d5d8b01ba6e828f8ba65"
+source = "git+https://tangled.org/@nonbinary.computer/jacquard#d853091d7de59e18746a78532dc28cfc017079b0"
 dependencies = [
  "cid",
  "dashmap",
@@ -1876,7 +1905,7 @@ dependencies = [
 [[package]]
 name = "jacquard-oauth"
 version = "0.9.0"
-source = "git+https://tangled.org/@nonbinary.computer/jacquard#5c79bb76de544cbd4fa8d5d8b01ba6e828f8ba65"
+source = "git+https://tangled.org/@nonbinary.computer/jacquard#d853091d7de59e18746a78532dc28cfc017079b0"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -3076,9 +3105,9 @@ dependencies = [
 
 [[package]]
 name = "rsa"
-version = "0.9.8"
+version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78928ac1ed176a5ca1d17e578a1825f3d81ca54cf41053a592584b020cfd691b"
+checksum = "40a0376c50d0358279d9d643e4bf7b7be212f1f4ff1da9070a7b54d22ef75c88"
 dependencies = [
  "const-oid",
  "digest",
@@ -3395,9 +3424,9 @@ dependencies = [
 
 [[package]]
 name = "serde_with"
-version = "3.15.1"
+version = "3.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aa66c845eee442168b2c8134fec70ac50dc20e760769c8ba0ad1319ca1959b04"
+checksum = "10574371d41b0d9b2cff89418eda27da52bcaff2cc8741db26382a77c29131f1"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -3414,9 +3443,9 @@ dependencies = [
 
 [[package]]
 name = "serde_with_macros"
-version = "3.15.1"
+version = "3.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b91a903660542fced4e99881aa481bdbaec1634568ee02e0b8bd57c64cb38955"
+checksum = "08a72d8216842fdd57820dc78d840bef99248e35fb2554ff923319e60f2d686b"
 dependencies = [
  "darling",
  "proc-macro2",
@@ -4550,13 +4579,13 @@ dependencies = [
 
 [[package]]
 name = "windows-registry"
-version = "0.5.3"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b8a9ed28765efc97bbc954883f4e6796c33a06546ebafacbabee9696967499e"
+checksum = "02752bf7fbdcce7f2a27a742f798510f3e5ad88dbe84871e5168e2120c3d5720"
 dependencies = [
- "windows-link 0.1.3",
- "windows-result 0.3.4",
- "windows-strings 0.4.2",
+ "windows-link 0.2.1",
+ "windows-result 0.4.1",
+ "windows-strings 0.5.1",
 ]
 
 [[package]]
