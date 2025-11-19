@@ -7,6 +7,7 @@ mod download;
 mod pull;
 mod serve;
 mod subfs_utils;
+mod redirects;
 
 use clap::{Parser, Subcommand};
 use jacquard::CowStr;
@@ -168,7 +169,7 @@ async fn run_with_app_password(
     site: Option<String>,
 ) -> miette::Result<()> {
     let (session, auth) =
-        MemoryCredentialSession::authenticated(input, password, None).await?;
+        MemoryCredentialSession::authenticated(input, password, None, None).await?;
     println!("Signed in as {}", auth.handle);
 
     let agent: Agent<_> = Agent::from(session);
@@ -556,6 +557,8 @@ fn build_directory<'a>(
 /// Process a single file: gzip -> base64 -> upload blob (or reuse existing)
 /// Returns (File, reused: bool)
 /// file_path_key is the full path from the site root (e.g., "config/file.json") for blob map lookup
+///
+/// Special handling: _redirects files are NOT compressed (uploaded as-is)
 async fn process_file(
     agent: &Agent<impl jacquard::client::AgentSession + IdentityResolver>,
     file_path: &Path,
@@ -571,54 +574,75 @@ async fn process_file(
         .first_or_octet_stream()
         .to_string();
 
-    // Gzip compress
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(&file_data).into_diagnostic()?;
-    let gzipped = encoder.finish().into_diagnostic()?;
+    // Check if this is a _redirects file (don't compress it)
+    let is_redirects_file = file_path.file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n == "_redirects")
+        .unwrap_or(false);
 
-    // Base64 encode the gzipped data
-    let base64_bytes = base64::prelude::BASE64_STANDARD.encode(&gzipped).into_bytes();
+    let (upload_bytes, encoding, is_base64) = if is_redirects_file {
+        // Don't compress _redirects - upload as-is
+        (file_data.clone(), None, false)
+    } else {
+        // Gzip compress
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&file_data).into_diagnostic()?;
+        let gzipped = encoder.finish().into_diagnostic()?;
 
-    // Compute CID for this file (CRITICAL: on base64-encoded gzipped content)
-    let file_cid = cid::compute_cid(&base64_bytes);
-    
+        // Base64 encode the gzipped data
+        let base64_bytes = base64::prelude::BASE64_STANDARD.encode(&gzipped).into_bytes();
+        (base64_bytes, Some("gzip"), true)
+    };
+
+    // Compute CID for this file
+    let file_cid = cid::compute_cid(&upload_bytes);
+
     // Check if we have an existing blob with the same CID
     let existing_blob = existing_blobs.get(file_path_key);
-    
+
     if let Some((existing_blob_ref, existing_cid)) = existing_blob {
         if existing_cid == &file_cid {
             // CIDs match - reuse existing blob
             println!("  ✓ Reusing blob for {} (CID: {})", file_path_key, file_cid);
-            return Ok((
-                File::new()
-                    .r#type(CowStr::from("file"))
-                    .blob(existing_blob_ref.clone())
-                    .encoding(CowStr::from("gzip"))
-                    .mime_type(CowStr::from(original_mime))
-                    .base64(true)
-                    .build(),
-                true
-            ));
+            let mut file_builder = File::new()
+                .r#type(CowStr::from("file"))
+                .blob(existing_blob_ref.clone())
+                .mime_type(CowStr::from(original_mime));
+
+            if let Some(enc) = encoding {
+                file_builder = file_builder.encoding(CowStr::from(enc));
+            }
+            if is_base64 {
+                file_builder = file_builder.base64(true);
+            }
+
+            return Ok((file_builder.build(), true));
         }
     }
-    
-    // File is new or changed - upload it
-    println!("  ↑ Uploading {} ({} bytes, CID: {})", file_path_key, base64_bytes.len(), file_cid);
-    let blob = agent.upload_blob(
-        base64_bytes,
-        MimeType::new_static("application/octet-stream"),
-    ).await?;
 
-    Ok((
-        File::new()
-            .r#type(CowStr::from("file"))
-            .blob(blob)
-            .encoding(CowStr::from("gzip"))
-            .mime_type(CowStr::from(original_mime))
-            .base64(true)
-            .build(),
-        false
-    ))
+    // File is new or changed - upload it
+    let mime_type = if is_redirects_file {
+        MimeType::new_static("text/plain")
+    } else {
+        MimeType::new_static("application/octet-stream")
+    };
+
+    println!("  ↑ Uploading {} ({} bytes, CID: {})", file_path_key, upload_bytes.len(), file_cid);
+    let blob = agent.upload_blob(upload_bytes, mime_type).await?;
+
+    let mut file_builder = File::new()
+        .r#type(CowStr::from("file"))
+        .blob(blob)
+        .mime_type(CowStr::from(original_mime));
+
+    if let Some(enc) = encoding {
+        file_builder = file_builder.encoding(CowStr::from(enc));
+    }
+    if is_base64 {
+        file_builder = file_builder.base64(true);
+    }
+
+    Ok((file_builder.build(), false))
 }
 
 /// Convert fs::Directory to subfs::Directory

@@ -8,13 +8,13 @@ default = ["place_wisp"]
 place_wisp = []
 
 [dependencies]
-jacquard = { git = "https://tangled.org/@nonbinary.computer/jacquard", features = ["loopback"] }
-jacquard-oauth = { git = "https://tangled.org/@nonbinary.computer/jacquard" }
-jacquard-api = { git = "https://tangled.org/@nonbinary.computer/jacquard" }
-jacquard-common = { git = "https://tangled.org/@nonbinary.computer/jacquard", features = ["websocket"] }
-jacquard-identity = { git = "https://tangled.org/@nonbinary.computer/jacquard", features = ["dns"] }
-jacquard-derive = { git = "https://tangled.org/@nonbinary.computer/jacquard"  }
-jacquard-lexicon = { git = "https://tangled.org/@nonbinary.computer/jacquard"  }
+jacquard = { path = "/Users/regent/Developer/jacquard/crates/jacquard", features = ["loopback"] }
+jacquard-oauth = { path = "/Users/regent/Developer/jacquard/crates/jacquard-oauth" }
+jacquard-api = { path = "/Users/regent/Developer/jacquard/crates/jacquard-api", features = ["streaming"] }
+jacquard-common = { path = "/Users/regent/Developer/jacquard/crates/jacquard-common", features = ["websocket"] }
+jacquard-identity = { path = "/Users/regent/Developer/jacquard/crates/jacquard-identity", features = ["dns"] }
+jacquard-derive = { path = "/Users/regent/Developer/jacquard/crates/jacquard-derive" }
+jacquard-lexicon = { path = "/Users/regent/Developer/jacquard/crates/jacquard-lexicon" }
 clap = { version = "4.5.51", features = ["derive"] }
 tokio = { version = "1.48", features = ["full"] }
 miette = { version = "7.6.0", features = ["fancy"] }
@@ -39,3 +39,4 @@ tower = "0.5.2"
 n0-future = "0.3.1"
 chrono = "0.4"
 url = "2.5"
+regex = "1.11"
