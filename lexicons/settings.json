@@ -1,0 +1,76 @@
+{
+  "lexicon": 1,
+  "id": "place.wisp.settings",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "Configuration settings for a static site hosted on wisp.place",
+      "key": "any",
+      "record": {
+        "type": "object",
+        "properties": {
+          "directoryListing": {
+            "type": "boolean",
+            "description": "Enable directory listing mode for paths that resolve to directories without an index file. Incompatible with spaMode.",
+            "default": false
+          },
+          "spaMode": {
+            "type": "string",
+            "description": "File to serve for all routes (e.g., 'index.html'). When set, enables SPA mode where all non-file requests are routed to this file. Incompatible with directoryListing and custom404.",
+            "maxLength": 500
+          },
+          "custom404": {
+            "type": "string",
+            "description": "Custom 404 error page file path. Incompatible with directoryListing and spaMode.",
+            "maxLength": 500
+          },
+          "indexFiles": {
+            "type": "array",
+            "description": "Ordered list of files to try when serving a directory. Defaults to ['index.html'] if not specified.",
+            "items": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "maxLength": 10
+          },
+          "cleanUrls": {
+            "type": "boolean",
+            "description": "Enable clean URL routing. When enabled, '/about' will attempt to serve '/about.html' or '/about/index.html' automatically.",
+            "default": false
+          },
+          "headers": {
+            "type": "array",
+            "description": "Custom HTTP headers to set on responses",
+            "items": {
+              "type": "ref",
+              "ref": "#customHeader"
+            },
+            "maxLength": 50
+          }
+        }
+      }
+    },
+    "customHeader": {
+      "type": "object",
+      "description": "Custom HTTP header configuration",
+      "required": ["name", "value"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "HTTP header name (e.g., 'Cache-Control', 'X-Frame-Options')",
+          "maxLength": 100
+        },
+        "value": {
+          "type": "string",
+          "description": "HTTP header value",
+          "maxLength": 1000
+        },
+        "path": {
+          "type": "string",
+          "description": "Optional glob pattern to apply this header to specific paths (e.g., '*.html', '/assets/*'). If not specified, applies to all paths.",
+          "maxLength": 500
+        }
+      }
+    }
+  }
+}

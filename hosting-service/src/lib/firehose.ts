@@ -55,7 +55,7 @@ export class FirehoseWorker {
 		this.firehose = new Firehose({
 			idResolver: this.idResolver,
 			service: 'wss://bsky.network',
-			filterCollections: ['place.wisp.fs'],
+			filterCollections: ['place.wisp.fs', 'place.wisp.settings'],
 			handleEvent: async (evt: any) => {
 				this.lastEventTime = Date.now()
 
@@ -95,6 +95,28 @@ export class FirehoseWorker {
 							})
 						}
 					}
+					// Handle settings changes
+					else if (evt.collection === 'place.wisp.settings') {
+						this.log('Received place.wisp.settings event', {
+							did: evt.did,
+							event: evt.event,
+							rkey: evt.rkey
+						})
+
+						try {
+							await this.handleSettingsChange(evt.did, evt.rkey)
+						} catch (err) {
+							this.log('Error handling settings change', {
+								did: evt.did,
+								event: evt.event,
+								rkey: evt.rkey,
+								error:
+									err instanceof Error
+										? err.message
+										: String(err)
+							})
+						}
+					}
 				} else if (
 					evt.event === 'delete' &&
 					evt.collection === 'place.wisp.fs'
@@ -108,6 +130,25 @@ export class FirehoseWorker {
 						await this.handleDelete(evt.did, evt.rkey)
 					} catch (err) {
 						this.log('Error handling delete', {
+							did: evt.did,
+							rkey: evt.rkey,
+							error:
+								err instanceof Error ? err.message : String(err)
+						})
+					}
+				} else if (
+					evt.event === 'delete' &&
+					evt.collection === 'place.wisp.settings'
+				) {
+					this.log('Received settings delete event', {
+						did: evt.did,
+						rkey: evt.rkey
+					})
+
+					try {
+						await this.handleSettingsChange(evt.did, evt.rkey)
+					} catch (err) {
+						this.log('Error handling settings delete', {
 							did: evt.did,
 							rkey: evt.rkey,
 							error:
@@ -284,6 +325,29 @@ export class FirehoseWorker {
 		this.deleteCache(did, site)
 
 		this.log('Successfully processed delete', { did, site })
+	}
+
+	private async handleSettingsChange(did: string, rkey: string) {
+		this.log('Processing settings change', { did, rkey })
+
+		// Invalidate in-memory caches (includes metadata which stores settings)
+		invalidateSiteCache(did, rkey)
+
+		// Update on-disk metadata with new settings
+		try {
+			const { fetchSiteSettings, updateCacheMetadataSettings } = await import('./utils')
+			const settings = await fetchSiteSettings(did, rkey)
+			await updateCacheMetadataSettings(did, rkey, settings)
+			this.log('Updated cached settings', { did, rkey, hasSettings: !!settings })
+		} catch (err) {
+			this.log('Failed to update cached settings', {
+				did,
+				rkey,
+				error: err instanceof Error ? err.message : String(err)
+			})
+		}
+
+		this.log('Successfully processed settings change', { did, rkey })
 	}
 
 	private deleteCache(did: string, site: string) {

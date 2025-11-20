@@ -1,6 +1,7 @@
 import { AtpAgent } from '@atproto/api';
 import type { Record as WispFsRecord, Directory, Entry, File } from '../lexicon/types/place/wisp/fs';
 import type { Record as SubfsRecord } from '../lexicon/types/place/wisp/subfs';
+import type { Record as WispSettings } from '../lexicon/types/place/wisp/settings';
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'fs';
 import { writeFile, readFile, rename } from 'fs/promises';
 import { safeFetchJson, safeFetchBlob } from './safe-fetch';
@@ -16,6 +17,8 @@ interface CacheMetadata {
   rkey: string;
   // Map of file path to blob CID for incremental updates
   fileCids?: Record<string, string>;
+  // Site settings
+  settings?: WispSettings;
 }
 
 /**
@@ -167,6 +170,21 @@ export async function fetchSiteRecord(did: string, rkey: string): Promise<{ reco
     };
   } catch (err) {
     console.error('Failed to fetch site record', did, rkey, err);
+    return null;
+  }
+}
+
+export async function fetchSiteSettings(did: string, rkey: string): Promise<WispSettings | null> {
+  try {
+    const pdsEndpoint = await getPdsForDid(did);
+    if (!pdsEndpoint) return null;
+
+    const url = `${pdsEndpoint}/xrpc/com.atproto.repo.getRecord?repo=${encodeURIComponent(did)}&collection=place.wisp.settings&rkey=${encodeURIComponent(rkey)}`;
+    const data = await safeFetchJson(url);
+
+    return data.value as WispSettings;
+  } catch (err) {
+    // Settings are optional, so return null if not found
     return null;
   }
 }
@@ -376,9 +394,12 @@ export async function downloadAndCacheSite(did: string, rkey: string, record: Wi
     const newFileCids: Record<string, string> = {};
     collectFileCidsFromEntries(expandedRoot.entries, '', newFileCids);
 
+    // Fetch site settings (optional)
+    const settings = await fetchSiteSettings(did, rkey);
+
     // Download/copy files to temporary directory (with incremental logic, using expanded root)
     await cacheFiles(did, rkey, expandedRoot.entries, pdsEndpoint, '', tempSuffix, existingFileCids, finalDir);
-    await saveCacheMetadata(did, rkey, recordCid, tempSuffix, newFileCids);
+    await saveCacheMetadata(did, rkey, recordCid, tempSuffix, newFileCids, settings);
 
     // Atomically replace old cache with new cache
     // On POSIX systems (Linux/macOS), rename is atomic
@@ -672,13 +693,14 @@ export function isCached(did: string, site: string): boolean {
   return existsSync(`${CACHE_DIR}/${did}/${site}`);
 }
 
-async function saveCacheMetadata(did: string, rkey: string, recordCid: string, dirSuffix: string = '', fileCids?: Record<string, string>): Promise<void> {
+async function saveCacheMetadata(did: string, rkey: string, recordCid: string, dirSuffix: string = '', fileCids?: Record<string, string>, settings?: WispSettings | null): Promise<void> {
   const metadata: CacheMetadata = {
     recordCid,
     cachedAt: Date.now(),
     did,
     rkey,
-    fileCids
+    fileCids,
+    settings: settings || undefined
   };
 
   const metadataPath = `${CACHE_DIR}/${did}/${rkey}${dirSuffix}/.metadata.json`;
@@ -701,6 +723,36 @@ async function getCacheMetadata(did: string, rkey: string): Promise<CacheMetadat
   } catch (err) {
     console.error('Failed to read cache metadata', err);
     return null;
+  }
+}
+
+export async function getCachedSettings(did: string, rkey: string): Promise<WispSettings | null> {
+  const metadata = await getCacheMetadata(did, rkey);
+  return metadata?.settings || null;
+}
+
+export async function updateCacheMetadataSettings(did: string, rkey: string, settings: WispSettings | null): Promise<void> {
+  const metadataPath = `${CACHE_DIR}/${did}/${rkey}/.metadata.json`;
+
+  if (!existsSync(metadataPath)) {
+    console.warn('Metadata file does not exist, cannot update settings', { did, rkey });
+    return;
+  }
+
+  try {
+    // Read existing metadata
+    const content = await readFile(metadataPath, 'utf-8');
+    const metadata = JSON.parse(content) as CacheMetadata;
+
+    // Update settings field
+    metadata.settings = settings || undefined;
+
+    // Write back to disk
+    await writeFile(metadataPath, JSON.stringify(metadata, null, 2), 'utf-8');
+    console.log('Updated metadata settings', { did, rkey, hasSettings: !!settings });
+  } catch (err) {
+    console.error('Failed to update metadata settings', err);
+    throw err;
   }
 }
 

@@ -1,7 +1,8 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { getWispDomain, getCustomDomain, getCustomDomainByHash } from './lib/db';
-import { resolveDid, getPdsForDid, fetchSiteRecord, downloadAndCacheSite, getCachedFilePath, isCached, sanitizePath, shouldCompressMimeType } from './lib/utils';
+import { resolveDid, getPdsForDid, fetchSiteRecord, downloadAndCacheSite, getCachedFilePath, isCached, sanitizePath, shouldCompressMimeType, getCachedSettings } from './lib/utils';
+import type { Record as WispSettings } from './lexicon/types/place/wisp/settings';
 import { rewriteHtmlPaths, isHtmlContent } from './lib/html-rewriter';
 import { existsSync } from 'fs';
 import { readFile, access } from 'fs/promises';
@@ -13,10 +14,315 @@ import { loadRedirectRules, matchRedirectRule, parseCookies, parseQueryString, t
 const BASE_HOST = process.env.BASE_HOST || 'wisp.place';
 
 /**
- * Configurable index file names to check for directory requests
+ * Default index file names to check for directory requests
  * Will be checked in order until one is found
  */
-const INDEX_FILES = ['index.html', 'index.htm'];
+const DEFAULT_INDEX_FILES = ['index.html', 'index.htm'];
+
+/**
+ * Get index files list from settings or use defaults
+ */
+function getIndexFiles(settings: WispSettings | null): string[] {
+  if (settings?.indexFiles && settings.indexFiles.length > 0) {
+    return settings.indexFiles;
+  }
+  return DEFAULT_INDEX_FILES;
+}
+
+/**
+ * Match a file path against a glob pattern
+ * Supports * wildcard and basic path matching
+ */
+function matchGlob(path: string, pattern: string): boolean {
+  // Normalize paths
+  const normalizedPath = path.startsWith('/') ? path : '/' + path;
+  const normalizedPattern = pattern.startsWith('/') ? pattern : '/' + pattern;
+
+  // Convert glob pattern to regex
+  const regexPattern = normalizedPattern
+    .replace(/\./g, '\\.')
+    .replace(/\*/g, '.*')
+    .replace(/\?/g, '.');
+
+  const regex = new RegExp('^' + regexPattern + '$');
+  return regex.test(normalizedPath);
+}
+
+/**
+ * Apply custom headers from settings to response headers
+ */
+function applyCustomHeaders(headers: Record<string, string>, filePath: string, settings: WispSettings | null) {
+  if (!settings?.headers || settings.headers.length === 0) return;
+
+  for (const customHeader of settings.headers) {
+    // If path glob is specified, check if it matches
+    if (customHeader.path) {
+      if (!matchGlob(filePath, customHeader.path)) {
+        continue;
+      }
+    }
+    // Apply the header
+    headers[customHeader.name] = customHeader.value;
+  }
+}
+
+/**
+ * Generate 404 page HTML
+ */
+function generate404Page(): string {
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>404 - Not Found</title>
+  <style>
+    @media (prefers-color-scheme: light) {
+      :root {
+        /* Warm beige background */
+        --background: oklch(0.90 0.012 35);
+        /* Very dark brown text */
+        --foreground: oklch(0.18 0.01 30);
+        --border: oklch(0.75 0.015 30);
+        /* Bright pink accent for links */
+        --accent: oklch(0.78 0.15 345);
+      }
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        /* Slate violet background */
+        --background: oklch(0.23 0.015 285);
+        /* Light gray text */
+        --foreground: oklch(0.90 0.005 285);
+        /* Subtle borders */
+        --border: oklch(0.38 0.02 285);
+        /* Soft pink accent */
+        --accent: oklch(0.85 0.08 5);
+      }
+    }
+    body {
+      font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+      background: var(--background);
+      color: var(--foreground);
+      padding: 2rem;
+      max-width: 800px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+      justify-content: center;
+      align-items: center;
+      text-align: center;
+    }
+    h1 {
+      font-size: 6rem;
+      margin: 0;
+      font-weight: 700;
+      line-height: 1;
+    }
+    h2 {
+      font-size: 1.5rem;
+      margin: 1rem 0 2rem;
+      font-weight: 400;
+      opacity: 0.8;
+    }
+    p {
+      font-size: 1rem;
+      opacity: 0.7;
+      margin-bottom: 2rem;
+    }
+    a {
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 1rem;
+    }
+    a:hover {
+      text-decoration: underline;
+    }
+    footer {
+      margin-top: 3rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--border);
+      text-align: center;
+      font-size: 0.875rem;
+      opacity: 0.7;
+      color: var(--foreground);
+    }
+    footer a {
+      color: var(--accent);
+      text-decoration: none;
+      display: inline;
+    }
+    footer a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <div>
+    <h1>404</h1>
+    <h2>Page not found</h2>
+    <p>The page you're looking for doesn't exist.</p>
+    <a href="/">← Back to home</a>
+  </div>
+  <footer>
+    Hosted on <a href="https://wisp.place" target="_blank" rel="noopener">wisp.place</a> - Made by <a href="https://bsky.app/profile/nekomimi.pet" target="_blank" rel="noopener">@nekomimi.pet</a>
+  </footer>
+</body>
+</html>`;
+  return html;
+}
+
+/**
+ * Generate directory listing HTML
+ */
+function generateDirectoryListing(path: string, entries: Array<{name: string, isDirectory: boolean}>): string {
+  const title = path || 'Index';
+
+  // Sort: directories first, then files, alphabetically within each group
+  const sortedEntries = [...entries].sort((a, b) => {
+    if (a.isDirectory && !b.isDirectory) return -1;
+    if (!a.isDirectory && b.isDirectory) return 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Index of /${path}</title>
+  <style>
+    @media (prefers-color-scheme: light) {
+      :root {
+        /* Warm beige background */
+        --background: oklch(0.90 0.012 35);
+        /* Very dark brown text */
+        --foreground: oklch(0.18 0.01 30);
+        --border: oklch(0.75 0.015 30);
+        /* Bright pink accent for links */
+        --accent: oklch(0.78 0.15 345);
+        /* Lavender for folders */
+        --folder: oklch(0.60 0.12 295);
+        --icon: oklch(0.28 0.01 30);
+      }
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        /* Slate violet background */
+        --background: oklch(0.23 0.015 285);
+        /* Light gray text */
+        --foreground: oklch(0.90 0.005 285);
+        /* Subtle borders */
+        --border: oklch(0.38 0.02 285);
+        /* Soft pink accent */
+        --accent: oklch(0.85 0.08 5);
+        /* Lavender for folders */
+        --folder: oklch(0.70 0.10 295);
+        --icon: oklch(0.85 0.005 285);
+      }
+    }
+    body {
+      font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+      background: var(--background);
+      color: var(--foreground);
+      padding: 2rem;
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    h1 {
+      font-size: 1.5rem;
+      margin-bottom: 2rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+    ul {
+      list-style: none;
+      padding: 0;
+    }
+    li {
+      padding: 0.5rem 0;
+      border-bottom: 1px solid var(--border);
+    }
+    li a {
+      color: var(--accent);
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    li a:hover {
+      text-decoration: underline;
+    }
+    .folder {
+      color: var(--folder);
+      font-weight: 600;
+    }
+    .file {
+      color: var(--accent);
+    }
+    .folder::before,
+    .file::before,
+    .parent::before {
+      content: "";
+      display: inline-block;
+      width: 1.25em;
+      height: 1.25em;
+      background-color: var(--icon);
+      flex-shrink: 0;
+      -webkit-mask-size: contain;
+      mask-size: contain;
+      -webkit-mask-repeat: no-repeat;
+      mask-repeat: no-repeat;
+      -webkit-mask-position: center;
+      mask-position: center;
+    }
+    .folder::before {
+      -webkit-mask-image: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><path d="M64 15v37a5.006 5.006 0 0 1-5 5H5a5.006 5.006 0 0 1-5-5V12a5.006 5.006 0 0 1 5-5h14.116a6.966 6.966 0 0 1 5.466 2.627l5 6.247A2.983 2.983 0 0 0 31.922 17H59a1 1 0 0 1 0 2H31.922a4.979 4.979 0 0 1-3.9-1.876l-5-6.247A4.976 4.976 0 0 0 19.116 9H5a3 3 0 0 0-3 3v40a3 3 0 0 0 3 3h54a3 3 0 0 0 3-3V15a3 3 0 0 0-3-3H30a1 1 0 0 1 0-2h29a5.006 5.006 0 0 1 5 5z"/></svg>');
+      mask-image: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><path d="M64 15v37a5.006 5.006 0 0 1-5 5H5a5.006 5.006 0 0 1-5-5V12a5.006 5.006 0 0 1 5-5h14.116a6.966 6.966 0 0 1 5.466 2.627l5 6.247A2.983 2.983 0 0 0 31.922 17H59a1 1 0 0 1 0 2H31.922a4.979 4.979 0 0 1-3.9-1.876l-5-6.247A4.976 4.976 0 0 0 19.116 9H5a3 3 0 0 0-3 3v40a3 3 0 0 0 3 3h54a3 3 0 0 0 3-3V15a3 3 0 0 0-3-3H30a1 1 0 0 1 0-2h29a5.006 5.006 0 0 1 5 5z"/></svg>');
+    }
+    .file::before {
+      -webkit-mask-image: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 25 25"><g><path d="M18 8.28a.59.59 0 0 0-.13-.18l-4-3.9h-.05a.41.41 0 0 0-.15-.2.41.41 0 0 0-.19 0h-9a.5.5 0 0 0-.5.5v19a.5.5 0 0 0 .5.5h13a.5.5 0 0 0 .5-.5V8.43a.58.58 0 0 0 .02-.15zM16.3 8H14V5.69zM5 23V5h8v3.5a.49.49 0 0 0 .15.36.5.5 0 0 0 .35.14l3.5-.06V23z"/><path d="M20.5 1h-13a.5.5 0 0 0-.5.5V3a.5.5 0 0 0 1 0V2h12v18h-1a.5.5 0 0 0 0 1h1.5a.5.5 0 0 0 .5-.5v-19a.5.5 0 0 0-.5-.5z"/><path d="M7.5 8h3a.5.5 0 0 0 0-1h-3a.5.5 0 0 0 0 1zM7.5 11h4a.5.5 0 0 0 0-1h-4a.5.5 0 0 0 0 1zM13.5 13h-6a.5.5 0 0 0 0 1h6a.5.5 0 0 0 0-1zM13.5 16h-6a.5.5 0 0 0 0 1h6a.5.5 0 0 0 0-1zM13.5 19h-6a.5.5 0 0 0 0 1h6a.5.5 0 0 0 0-1z"/></g></svg>');
+      mask-image: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 25 25"><g><path d="M18 8.28a.59.59 0 0 0-.13-.18l-4-3.9h-.05a.41.41 0 0 0-.15-.2.41.41 0 0 0-.19 0h-9a.5.5 0 0 0-.5.5v19a.5.5 0 0 0 .5.5h13a.5.5 0 0 0 .5-.5V8.43a.58.58 0 0 0 .02-.15zM16.3 8H14V5.69zM5 23V5h8v3.5a.49.49 0 0 0 .15.36.5.5 0 0 0 .35.14l3.5-.06V23z"/><path d="M20.5 1h-13a.5.5 0 0 0-.5.5V3a.5.5 0 0 0 1 0V2h12v18h-1a.5.5 0 0 0 0 1h1.5a.5.5 0 0 0 .5-.5v-19a.5.5 0 0 0-.5-.5z"/><path d="M7.5 8h3a.5.5 0 0 0 0-1h-3a.5.5 0 0 0 0 1zM7.5 11h4a.5.5 0 0 0 0-1h-4a.5.5 0 0 0 0 1zM13.5 13h-6a.5.5 0 0 0 0 1h6a.5.5 0 0 0 0-1zM13.5 16h-6a.5.5 0 0 0 0 1h6a.5.5 0 0 0 0-1zM13.5 19h-6a.5.5 0 0 0 0 1h6a.5.5 0 0 0 0-1z"/></g></svg>');
+    }
+    .parent::before {
+      -webkit-mask-image: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z"/></svg>');
+      mask-image: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z"/></svg>');
+    }
+    footer {
+      margin-top: 3rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--border);
+      text-align: center;
+      font-size: 0.875rem;
+      opacity: 0.7;
+      color: var(--foreground);
+    }
+    footer a {
+      color: var(--accent);
+      text-decoration: none;
+      display: inline;
+    }
+    footer a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <h1>Index of /${path}</h1>
+  <ul>
+    ${path ? '<li><a href="../" class="parent">../</a></li>' : ''}
+    ${sortedEntries.map(e =>
+      `<li><a href="${e.name}${e.isDirectory ? '/' : ''}" class="${e.isDirectory ? 'folder' : 'file'}">${e.name}${e.isDirectory ? '/' : ''}</a></li>`
+    ).join('\n    ')}
+  </ul>
+  <footer>
+    Hosted on <a href="https://wisp.place" target="_blank" rel="noopener">wisp.place</a> - Made by <a href="https://bsky.app/profile/nekomimi.pet" target="_blank" rel="noopener">@nekomimi.pet</a>
+  </footer>
+</body>
+</html>`;
+  return html;
+}
 
 /**
  * Validate site name (rkey) to prevent injection attacks
@@ -146,16 +452,20 @@ export function clearRedirectRulesCache(did: string, rkey: string) {
 
 // Helper to serve files from cache
 async function serveFromCache(
-  did: string, 
-  rkey: string, 
+  did: string,
+  rkey: string,
   filePath: string,
   fullUrl?: string,
   headers?: Record<string, string>
 ) {
-  // Check for redirect rules first
+  // Load settings for this site
+  const settings = await getCachedSettings(did, rkey);
+  const indexFiles = getIndexFiles(settings);
+
+  // Check for redirect rules first (_redirects wins over settings)
   const redirectCacheKey = `${did}:${rkey}`;
   let redirectRules = redirectRulesCache.get(redirectCacheKey);
-  
+
   if (redirectRules === undefined) {
     // Load rules for the first time
     redirectRules = await loadRedirectRules(did, rkey);
@@ -180,9 +490,9 @@ async function serveFromCache(
       // If not forced, check if the requested file exists before redirecting
       if (!rule.force) {
         // Build the expected file path
-        let checkPath = filePath || INDEX_FILES[0];
+        let checkPath = filePath || indexFiles[0];
         if (checkPath.endsWith('/')) {
-          checkPath += INDEX_FILES[0];
+          checkPath += indexFiles[0];
         }
 
         const cachedFile = getCachedFilePath(did, rkey, checkPath);
@@ -190,7 +500,7 @@ async function serveFromCache(
 
         // If file exists and redirect is not forced, serve the file normally
         if (fileExistsOnDisk) {
-          return serveFileInternal(did, rkey, filePath);
+          return serveFileInternal(did, rkey, filePath, settings);
         }
       }
 
@@ -199,7 +509,7 @@ async function serveFromCache(
         // Rewrite: serve different content but keep URL the same
         // Remove leading slash for internal path resolution
         const rewritePath = targetPath.startsWith('/') ? targetPath.slice(1) : targetPath;
-        return serveFileInternal(did, rkey, rewritePath);
+        return serveFileInternal(did, rkey, rewritePath, settings);
       } else if (status === 301 || status === 302) {
         // External redirect: change the URL
         return new Response(null, {
@@ -210,9 +520,9 @@ async function serveFromCache(
           },
         });
       } else if (status === 404) {
-        // Custom 404 page
+        // Custom 404 page from _redirects (wins over settings.custom404)
         const custom404Path = targetPath.startsWith('/') ? targetPath.slice(1) : targetPath;
-        const response = await serveFileInternal(did, rkey, custom404Path);
+        const response = await serveFileInternal(did, rkey, custom404Path, settings);
         // Override status to 404
         return new Response(response.body, {
           status: 404,
@@ -222,48 +532,79 @@ async function serveFromCache(
     }
   }
 
-  // No redirect matched, serve normally
-  return serveFileInternal(did, rkey, filePath);
+  // No redirect matched, serve normally with settings
+  return serveFileInternal(did, rkey, filePath, settings);
 }
 
 // Internal function to serve a file (used by both normal serving and rewrites)
-async function serveFileInternal(did: string, rkey: string, filePath: string) {
+async function serveFileInternal(did: string, rkey: string, filePath: string, settings: WispSettings | null = null) {
   // Check if site is currently being cached - if so, return updating response
   if (isSiteBeingCached(did, rkey)) {
     return siteUpdatingResponse();
   }
 
-  // Default to first index file if path is empty
-  let requestPath = filePath || INDEX_FILES[0];
+  const indexFiles = getIndexFiles(settings);
 
-  // If path ends with /, append first index file
-  if (requestPath.endsWith('/')) {
-    requestPath += INDEX_FILES[0];
+  // Normalize the request path (keep empty for root, remove trailing slash for others)
+  let requestPath = filePath || '';
+  if (requestPath.endsWith('/') && requestPath.length > 1) {
+    requestPath = requestPath.slice(0, -1);
   }
 
-  const cacheKey = getCacheKey(did, rkey, requestPath);
-  const cachedFile = getCachedFilePath(did, rkey, requestPath);
-
-  // Check if the cached file path is a directory
-  if (await fileExists(cachedFile)) {
-    const { stat } = await import('fs/promises');
+  // Check if this path is a directory first
+  const directoryPath = getCachedFilePath(did, rkey, requestPath);
+  if (await fileExists(directoryPath)) {
+    const { stat, readdir } = await import('fs/promises');
     try {
-      const stats = await stat(cachedFile);
+      const stats = await stat(directoryPath);
       if (stats.isDirectory()) {
         // It's a directory, try each index file in order
-        for (const indexFile of INDEX_FILES) {
-          const indexPath = `${requestPath}/${indexFile}`;
+        for (const indexFile of indexFiles) {
+          const indexPath = requestPath ? `${requestPath}/${indexFile}` : indexFile;
           const indexFilePath = getCachedFilePath(did, rkey, indexPath);
           if (await fileExists(indexFilePath)) {
-            return serveFileInternal(did, rkey, indexPath);
+            return serveFileInternal(did, rkey, indexPath, settings);
           }
         }
-        // No index file found, fall through to 404
+        // No index file found - check if directory listing is enabled
+        if (settings?.directoryListing) {
+          const { stat } = await import('fs/promises');
+          const entries = await readdir(directoryPath);
+          // Filter out .meta files and other hidden files
+          const visibleEntries = entries.filter(entry => !entry.endsWith('.meta') && entry !== '.metadata.json');
+
+          // Check which entries are directories
+          const entriesWithType = await Promise.all(
+            visibleEntries.map(async (name) => {
+              try {
+                const entryPath = `${directoryPath}/${name}`;
+                const stats = await stat(entryPath);
+                return { name, isDirectory: stats.isDirectory() };
+              } catch {
+                return { name, isDirectory: false };
+              }
+            })
+          );
+
+          const html = generateDirectoryListing(requestPath, entriesWithType);
+          return new Response(html, {
+            headers: {
+              'Content-Type': 'text/html; charset=utf-8',
+              'Cache-Control': 'public, max-age=300',
+            },
+          });
+        }
+        // Fall through to 404/SPA handling
       }
     } catch (err) {
       // If stat fails, continue with normal flow
     }
   }
+
+  // Not a directory, try to serve as a file
+  const fileRequestPath = requestPath || indexFiles[0];
+  const cacheKey = getCacheKey(did, rkey, fileRequestPath);
+  const cachedFile = getCachedFilePath(did, rkey, fileRequestPath);
 
   // Check in-memory cache first
   let content = fileCache.get(cacheKey);
@@ -297,12 +638,14 @@ async function serveFileInternal(did: string, rkey: string, filePath: string) {
           const decompressed = gunzipSync(content);
           headers['Content-Type'] = meta.mimeType;
           headers['Cache-Control'] = 'public, max-age=31536000, immutable';
+          applyCustomHeaders(headers, fileRequestPath, settings);
           return new Response(decompressed, { headers });
         } else {
           // Meta says gzipped but content isn't - serve as-is
           console.warn(`File ${filePath} has gzip encoding in meta but content lacks gzip magic bytes`);
           headers['Content-Type'] = meta.mimeType;
           headers['Cache-Control'] = 'public, max-age=31536000, immutable';
+          applyCustomHeaders(headers, fileRequestPath, settings);
           return new Response(content, { headers });
         }
       }
@@ -312,6 +655,7 @@ async function serveFileInternal(did: string, rkey: string, filePath: string) {
       headers['Cache-Control'] = meta.mimeType.startsWith('text/html')
         ? 'public, max-age=300'
         : 'public, max-age=31536000, immutable';
+      applyCustomHeaders(headers, fileRequestPath, settings);
       return new Response(content, { headers });
     }
 
@@ -321,13 +665,14 @@ async function serveFileInternal(did: string, rkey: string, filePath: string) {
     headers['Cache-Control'] = mimeType.startsWith('text/html')
       ? 'public, max-age=300'
       : 'public, max-age=31536000, immutable';
+    applyCustomHeaders(headers, fileRequestPath, settings);
     return new Response(content, { headers });
   }
 
   // Try index files for directory-like paths
-  if (!requestPath.includes('.')) {
-    for (const indexFileName of INDEX_FILES) {
-      const indexPath = `${requestPath}/${indexFileName}`;
+  if (!fileRequestPath.includes('.')) {
+    for (const indexFileName of indexFiles) {
+      const indexPath = fileRequestPath ? `${fileRequestPath}/${indexFileName}` : indexFileName;
       const indexCacheKey = getCacheKey(did, rkey, indexPath);
       const indexFile = getCachedFilePath(did, rkey, indexPath);
 
@@ -356,12 +701,76 @@ async function serveFileInternal(did: string, rkey: string, filePath: string) {
           headers['Content-Encoding'] = 'gzip';
         }
 
+        applyCustomHeaders(headers, indexPath, settings);
         return new Response(indexContent, { headers });
       }
     }
   }
 
-  return new Response('Not Found', { status: 404 });
+  // Try clean URLs: /about -> /about.html
+  if (settings?.cleanUrls && !fileRequestPath.includes('.')) {
+    const htmlPath = `${fileRequestPath}.html`;
+    const htmlFile = getCachedFilePath(did, rkey, htmlPath);
+    if (await fileExists(htmlFile)) {
+      return serveFileInternal(did, rkey, htmlPath, settings);
+    }
+
+    // Also try /about/index.html
+    for (const indexFileName of indexFiles) {
+      const indexPath = fileRequestPath ? `${fileRequestPath}/${indexFileName}` : indexFileName;
+      const indexFile = getCachedFilePath(did, rkey, indexPath);
+      if (await fileExists(indexFile)) {
+        return serveFileInternal(did, rkey, indexPath, settings);
+      }
+    }
+  }
+
+  // SPA mode: serve SPA file for all non-existing routes (wins over custom404 but loses to _redirects)
+  if (settings?.spaMode) {
+    const spaFile = settings.spaMode;
+    const spaFilePath = getCachedFilePath(did, rkey, spaFile);
+    if (await fileExists(spaFilePath)) {
+      return serveFileInternal(did, rkey, spaFile, settings);
+    }
+  }
+
+  // Custom 404: serve custom 404 file if configured (wins conflict battle)
+  if (settings?.custom404) {
+    const custom404File = settings.custom404;
+    const custom404Path = getCachedFilePath(did, rkey, custom404File);
+    if (await fileExists(custom404Path)) {
+      const response = await serveFileInternal(did, rkey, custom404File, settings);
+      // Override status to 404
+      return new Response(response.body, {
+        status: 404,
+        headers: response.headers,
+      });
+    }
+  }
+
+  // Autodetect 404 pages (GitHub Pages: 404.html, Neocities/Nekoweb: not_found.html)
+  const auto404Pages = ['404.html', 'not_found.html'];
+  for (const auto404Page of auto404Pages) {
+    const auto404Path = getCachedFilePath(did, rkey, auto404Page);
+    if (await fileExists(auto404Path)) {
+      const response = await serveFileInternal(did, rkey, auto404Page, settings);
+      // Override status to 404
+      return new Response(response.body, {
+        status: 404,
+        headers: response.headers,
+      });
+    }
+  }
+
+  // Default styled 404 page
+  const html = generate404Page();
+  return new Response(html, {
+    status: 404,
+    headers: {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'public, max-age=300',
+    },
+  });
 }
 
 // Helper to serve files from cache with HTML path rewriting for sites.wisp.place routes
@@ -373,10 +782,14 @@ async function serveFromCacheWithRewrite(
   fullUrl?: string,
   headers?: Record<string, string>
 ) {
-  // Check for redirect rules first
+  // Load settings for this site
+  const settings = await getCachedSettings(did, rkey);
+  const indexFiles = getIndexFiles(settings);
+
+  // Check for redirect rules first (_redirects wins over settings)
   const redirectCacheKey = `${did}:${rkey}`;
   let redirectRules = redirectRulesCache.get(redirectCacheKey);
-  
+
   if (redirectRules === undefined) {
     // Load rules for the first time
     redirectRules = await loadRedirectRules(did, rkey);
@@ -401,9 +814,9 @@ async function serveFromCacheWithRewrite(
       // If not forced, check if the requested file exists before redirecting
       if (!rule.force) {
         // Build the expected file path
-        let checkPath = filePath || INDEX_FILES[0];
+        let checkPath = filePath || indexFiles[0];
         if (checkPath.endsWith('/')) {
-          checkPath += INDEX_FILES[0];
+          checkPath += indexFiles[0];
         }
 
         const cachedFile = getCachedFilePath(did, rkey, checkPath);
@@ -411,7 +824,7 @@ async function serveFromCacheWithRewrite(
 
         // If file exists and redirect is not forced, serve the file normally
         if (fileExistsOnDisk) {
-          return serveFileInternalWithRewrite(did, rkey, filePath, basePath);
+          return serveFileInternalWithRewrite(did, rkey, filePath, basePath, settings);
         }
       }
 
@@ -419,7 +832,7 @@ async function serveFromCacheWithRewrite(
       if (status === 200) {
         // Rewrite: serve different content but keep URL the same
         const rewritePath = targetPath.startsWith('/') ? targetPath.slice(1) : targetPath;
-        return serveFileInternalWithRewrite(did, rkey, rewritePath, basePath);
+        return serveFileInternalWithRewrite(did, rkey, rewritePath, basePath, settings);
       } else if (status === 301 || status === 302) {
         // External redirect: change the URL
         // For sites.wisp.place, we need to adjust the target path to include the base path
@@ -436,9 +849,9 @@ async function serveFromCacheWithRewrite(
           },
         });
       } else if (status === 404) {
-        // Custom 404 page
+        // Custom 404 page from _redirects (wins over settings.custom404)
         const custom404Path = targetPath.startsWith('/') ? targetPath.slice(1) : targetPath;
-        const response = await serveFileInternalWithRewrite(did, rkey, custom404Path, basePath);
+        const response = await serveFileInternalWithRewrite(did, rkey, custom404Path, basePath, settings);
         // Override status to 404
         return new Response(response.body, {
           status: 404,
@@ -448,62 +861,93 @@ async function serveFromCacheWithRewrite(
     }
   }
 
-  // No redirect matched, serve normally
-  return serveFileInternalWithRewrite(did, rkey, filePath, basePath);
+  // No redirect matched, serve normally with settings
+  return serveFileInternalWithRewrite(did, rkey, filePath, basePath, settings);
 }
 
 // Internal function to serve a file with rewriting
-async function serveFileInternalWithRewrite(did: string, rkey: string, filePath: string, basePath: string) {
+async function serveFileInternalWithRewrite(did: string, rkey: string, filePath: string, basePath: string, settings: WispSettings | null = null) {
   // Check if site is currently being cached - if so, return updating response
   if (isSiteBeingCached(did, rkey)) {
     return siteUpdatingResponse();
   }
 
-  // Default to first index file if path is empty
-  let requestPath = filePath || INDEX_FILES[0];
+  const indexFiles = getIndexFiles(settings);
 
-  // If path ends with /, append first index file
-  if (requestPath.endsWith('/')) {
-    requestPath += INDEX_FILES[0];
+  // Normalize the request path (keep empty for root, remove trailing slash for others)
+  let requestPath = filePath || '';
+  if (requestPath.endsWith('/') && requestPath.length > 1) {
+    requestPath = requestPath.slice(0, -1);
   }
 
-  const cacheKey = getCacheKey(did, rkey, requestPath);
-  const cachedFile = getCachedFilePath(did, rkey, requestPath);
-
-  // Check if the cached file path is a directory
-  if (await fileExists(cachedFile)) {
-    const { stat } = await import('fs/promises');
+  // Check if this path is a directory first
+  const directoryPath = getCachedFilePath(did, rkey, requestPath);
+  if (await fileExists(directoryPath)) {
+    const { stat, readdir } = await import('fs/promises');
     try {
-      const stats = await stat(cachedFile);
+      const stats = await stat(directoryPath);
       if (stats.isDirectory()) {
         // It's a directory, try each index file in order
-        for (const indexFile of INDEX_FILES) {
-          const indexPath = `${requestPath}/${indexFile}`;
+        for (const indexFile of indexFiles) {
+          const indexPath = requestPath ? `${requestPath}/${indexFile}` : indexFile;
           const indexFilePath = getCachedFilePath(did, rkey, indexPath);
           if (await fileExists(indexFilePath)) {
-            return serveFileInternalWithRewrite(did, rkey, indexPath, basePath);
+            return serveFileInternalWithRewrite(did, rkey, indexPath, basePath, settings);
           }
         }
-        // No index file found, fall through to 404
+        // No index file found - check if directory listing is enabled
+        if (settings?.directoryListing) {
+          const { stat } = await import('fs/promises');
+          const entries = await readdir(directoryPath);
+          // Filter out .meta files and other hidden files
+          const visibleEntries = entries.filter(entry => !entry.endsWith('.meta') && entry !== '.metadata.json');
+
+          // Check which entries are directories
+          const entriesWithType = await Promise.all(
+            visibleEntries.map(async (name) => {
+              try {
+                const entryPath = `${directoryPath}/${name}`;
+                const stats = await stat(entryPath);
+                return { name, isDirectory: stats.isDirectory() };
+              } catch {
+                return { name, isDirectory: false };
+              }
+            })
+          );
+
+          const html = generateDirectoryListing(requestPath, entriesWithType);
+          return new Response(html, {
+            headers: {
+              'Content-Type': 'text/html; charset=utf-8',
+              'Cache-Control': 'public, max-age=300',
+            },
+          });
+        }
+        // Fall through to 404/SPA handling
       }
     } catch (err) {
       // If stat fails, continue with normal flow
     }
   }
 
+  // Not a directory, try to serve as a file
+  const fileRequestPath = requestPath || indexFiles[0];
+  const cacheKey = getCacheKey(did, rkey, fileRequestPath);
+  const cachedFile = getCachedFilePath(did, rkey, fileRequestPath);
+
   // Check for rewritten HTML in cache first (if it's HTML)
-  const mimeTypeGuess = lookup(requestPath) || 'application/octet-stream';
-  if (isHtmlContent(requestPath, mimeTypeGuess)) {
-    const rewrittenKey = getCacheKey(did, rkey, requestPath, `rewritten:${basePath}`);
+  const mimeTypeGuess = lookup(fileRequestPath) || 'application/octet-stream';
+  if (isHtmlContent(fileRequestPath, mimeTypeGuess)) {
+    const rewrittenKey = getCacheKey(did, rkey, fileRequestPath, `rewritten:${basePath}`);
     const rewrittenContent = rewrittenHtmlCache.get(rewrittenKey);
     if (rewrittenContent) {
-      return new Response(rewrittenContent, {
-        headers: {
-          'Content-Type': 'text/html; charset=utf-8',
-          'Content-Encoding': 'gzip',
-          'Cache-Control': 'public, max-age=300',
-        },
-      });
+      const headers: Record<string, string> = {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Content-Encoding': 'gzip',
+        'Cache-Control': 'public, max-age=300',
+      };
+      applyCustomHeaders(headers, fileRequestPath, settings);
+      return new Response(rewrittenContent, { headers });
     }
   }
 
@@ -529,7 +973,7 @@ async function serveFileInternalWithRewrite(did: string, rkey: string, filePath:
     const isGzipped = meta?.encoding === 'gzip';
 
     // Check if this is HTML content that needs rewriting
-    if (isHtmlContent(requestPath, mimeType)) {
+    if (isHtmlContent(fileRequestPath, mimeType)) {
       let htmlContent: string;
       if (isGzipped) {
         // Verify content is actually gzipped
@@ -538,28 +982,28 @@ async function serveFileInternalWithRewrite(did: string, rkey: string, filePath:
           const { gunzipSync } = await import('zlib');
           htmlContent = gunzipSync(content).toString('utf-8');
         } else {
-          console.warn(`File ${requestPath} marked as gzipped but lacks magic bytes, serving as-is`);
+          console.warn(`File ${fileRequestPath} marked as gzipped but lacks magic bytes, serving as-is`);
           htmlContent = content.toString('utf-8');
         }
       } else {
         htmlContent = content.toString('utf-8');
       }
-      const rewritten = rewriteHtmlPaths(htmlContent, basePath, requestPath);
+      const rewritten = rewriteHtmlPaths(htmlContent, basePath, fileRequestPath);
 
       // Recompress and cache the rewritten HTML
       const { gzipSync } = await import('zlib');
       const recompressed = gzipSync(Buffer.from(rewritten, 'utf-8'));
 
-      const rewrittenKey = getCacheKey(did, rkey, requestPath, `rewritten:${basePath}`);
+      const rewrittenKey = getCacheKey(did, rkey, fileRequestPath, `rewritten:${basePath}`);
       rewrittenHtmlCache.set(rewrittenKey, recompressed, recompressed.length);
 
-      return new Response(recompressed, {
-        headers: {
-          'Content-Type': 'text/html; charset=utf-8',
-          'Content-Encoding': 'gzip',
-          'Cache-Control': 'public, max-age=300',
-        },
-      });
+      const htmlHeaders: Record<string, string> = {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Content-Encoding': 'gzip',
+        'Cache-Control': 'public, max-age=300',
+      };
+      applyCustomHeaders(htmlHeaders, fileRequestPath, settings);
+      return new Response(recompressed, { headers: htmlHeaders });
     }
 
     // Non-HTML files: serve as-is
@@ -576,22 +1020,25 @@ async function serveFileInternalWithRewrite(did: string, rkey: string, filePath:
         if (hasGzipMagic) {
           const { gunzipSync } = await import('zlib');
           const decompressed = gunzipSync(content);
+          applyCustomHeaders(headers, fileRequestPath, settings);
           return new Response(decompressed, { headers });
         } else {
-          console.warn(`File ${requestPath} marked as gzipped but lacks magic bytes, serving as-is`);
+          console.warn(`File ${fileRequestPath} marked as gzipped but lacks magic bytes, serving as-is`);
+          applyCustomHeaders(headers, fileRequestPath, settings);
           return new Response(content, { headers });
         }
       }
       headers['Content-Encoding'] = 'gzip';
     }
 
+    applyCustomHeaders(headers, fileRequestPath, settings);
     return new Response(content, { headers });
   }
 
   // Try index files for directory-like paths
-  if (!requestPath.includes('.')) {
-    for (const indexFileName of INDEX_FILES) {
-      const indexPath = `${requestPath}/${indexFileName}`;
+  if (!fileRequestPath.includes('.')) {
+    for (const indexFileName of indexFiles) {
+      const indexPath = fileRequestPath ? `${fileRequestPath}/${indexFileName}` : indexFileName;
       const indexCacheKey = getCacheKey(did, rkey, indexPath);
       const indexFile = getCachedFilePath(did, rkey, indexPath);
 
@@ -599,13 +1046,13 @@ async function serveFileInternalWithRewrite(did: string, rkey: string, filePath:
       const rewrittenKey = getCacheKey(did, rkey, indexPath, `rewritten:${basePath}`);
       const rewrittenContent = rewrittenHtmlCache.get(rewrittenKey);
       if (rewrittenContent) {
-        return new Response(rewrittenContent, {
-          headers: {
-            'Content-Type': 'text/html; charset=utf-8',
-            'Content-Encoding': 'gzip',
-            'Cache-Control': 'public, max-age=300',
-          },
-        });
+        const headers: Record<string, string> = {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Content-Encoding': 'gzip',
+          'Cache-Control': 'public, max-age=300',
+        };
+        applyCustomHeaders(headers, indexPath, settings);
+        return new Response(rewrittenContent, { headers });
       }
 
       let indexContent = fileCache.get(indexCacheKey);
@@ -647,18 +1094,81 @@ async function serveFileInternalWithRewrite(did: string, rkey: string, filePath:
 
         rewrittenHtmlCache.set(rewrittenKey, recompressed, recompressed.length);
 
-        return new Response(recompressed, {
-          headers: {
-            'Content-Type': 'text/html; charset=utf-8',
-            'Content-Encoding': 'gzip',
-            'Cache-Control': 'public, max-age=300',
-          },
-        });
+        const headers: Record<string, string> = {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Content-Encoding': 'gzip',
+          'Cache-Control': 'public, max-age=300',
+        };
+        applyCustomHeaders(headers, indexPath, settings);
+        return new Response(recompressed, { headers });
       }
     }
   }
 
-  return new Response('Not Found', { status: 404 });
+  // Try clean URLs: /about -> /about.html
+  if (settings?.cleanUrls && !fileRequestPath.includes('.')) {
+    const htmlPath = `${fileRequestPath}.html`;
+    const htmlFile = getCachedFilePath(did, rkey, htmlPath);
+    if (await fileExists(htmlFile)) {
+      return serveFileInternalWithRewrite(did, rkey, htmlPath, basePath, settings);
+    }
+
+    // Also try /about/index.html
+    for (const indexFileName of indexFiles) {
+      const indexPath = fileRequestPath ? `${fileRequestPath}/${indexFileName}` : indexFileName;
+      const indexFile = getCachedFilePath(did, rkey, indexPath);
+      if (await fileExists(indexFile)) {
+        return serveFileInternalWithRewrite(did, rkey, indexPath, basePath, settings);
+      }
+    }
+  }
+
+  // SPA mode: serve SPA file for all non-existing routes
+  if (settings?.spaMode) {
+    const spaFile = settings.spaMode;
+    const spaFilePath = getCachedFilePath(did, rkey, spaFile);
+    if (await fileExists(spaFilePath)) {
+      return serveFileInternalWithRewrite(did, rkey, spaFile, basePath, settings);
+    }
+  }
+
+  // Custom 404: serve custom 404 file if configured (wins conflict battle)
+  if (settings?.custom404) {
+    const custom404File = settings.custom404;
+    const custom404Path = getCachedFilePath(did, rkey, custom404File);
+    if (await fileExists(custom404Path)) {
+      const response = await serveFileInternalWithRewrite(did, rkey, custom404File, basePath, settings);
+      // Override status to 404
+      return new Response(response.body, {
+        status: 404,
+        headers: response.headers,
+      });
+    }
+  }
+
+  // Autodetect 404 pages (GitHub Pages: 404.html, Neocities/Nekoweb: not_found.html)
+  const auto404Pages = ['404.html', 'not_found.html'];
+  for (const auto404Page of auto404Pages) {
+    const auto404Path = getCachedFilePath(did, rkey, auto404Page);
+    if (await fileExists(auto404Path)) {
+      const response = await serveFileInternalWithRewrite(did, rkey, auto404Page, basePath, settings);
+      // Override status to 404
+      return new Response(response.body, {
+        status: 404,
+        headers: response.headers,
+      });
+    }
+  }
+
+  // Default styled 404 page
+  const html = generate404Page();
+  return new Response(html, {
+    status: 404,
+    headers: {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'public, max-age=300',
+    },
+  });
 }
 
 // Helper to ensure site is cached

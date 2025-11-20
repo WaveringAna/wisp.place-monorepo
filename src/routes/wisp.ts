@@ -166,13 +166,107 @@ async function processUploadInBackground(
                 currentFile: file.name
             });
 
-            // Skip .git directory files
+            // Skip unwanted files and directories
             const normalizedPath = file.name.replace(/^[^\/]*\//, '');
+            const fileName = normalizedPath.split('/').pop() || '';
+            const pathParts = normalizedPath.split('/');
+
+            // .git directory (version control - thousands of files)
             if (normalizedPath.startsWith('.git/') || normalizedPath === '.git') {
                 console.log(`Skipping .git file: ${file.name}`);
                 skippedFiles.push({
                     name: file.name,
                     reason: '.git directory excluded'
+                });
+                continue;
+            }
+
+            // .DS_Store (macOS metadata - can leak info)
+            if (fileName === '.DS_Store') {
+                console.log(`Skipping .DS_Store file: ${file.name}`);
+                skippedFiles.push({
+                    name: file.name,
+                    reason: '.DS_Store file excluded'
+                });
+                continue;
+            }
+
+            // .env files (environment variables with secrets)
+            if (fileName.startsWith('.env')) {
+                console.log(`Skipping .env file: ${file.name}`);
+                skippedFiles.push({
+                    name: file.name,
+                    reason: 'environment files excluded for security'
+                });
+                continue;
+            }
+
+            // node_modules (dependency folder - can be 100,000+ files)
+            if (pathParts.includes('node_modules')) {
+                console.log(`Skipping node_modules file: ${file.name}`);
+                skippedFiles.push({
+                    name: file.name,
+                    reason: 'node_modules excluded'
+                });
+                continue;
+            }
+
+            // OS metadata files
+            if (fileName === 'Thumbs.db' || fileName === 'desktop.ini' || fileName.startsWith('._')) {
+                console.log(`Skipping OS metadata file: ${file.name}`);
+                skippedFiles.push({
+                    name: file.name,
+                    reason: 'OS metadata file excluded'
+                });
+                continue;
+            }
+
+            // macOS system directories
+            if (pathParts.includes('.Spotlight-V100') || pathParts.includes('.Trashes') || pathParts.includes('.fseventsd')) {
+                console.log(`Skipping macOS system file: ${file.name}`);
+                skippedFiles.push({
+                    name: file.name,
+                    reason: 'macOS system directory excluded'
+                });
+                continue;
+            }
+
+            // Cache and temp directories
+            if (pathParts.some(part => part === '.cache' || part === '.temp' || part === '.tmp')) {
+                console.log(`Skipping cache/temp file: ${file.name}`);
+                skippedFiles.push({
+                    name: file.name,
+                    reason: 'cache/temp directory excluded'
+                });
+                continue;
+            }
+
+            // Python cache
+            if (pathParts.includes('__pycache__') || fileName.endsWith('.pyc')) {
+                console.log(`Skipping Python cache file: ${file.name}`);
+                skippedFiles.push({
+                    name: file.name,
+                    reason: 'Python cache excluded'
+                });
+                continue;
+            }
+
+            // Python virtual environments
+            if (pathParts.some(part => part === '.venv' || part === 'venv' || part === 'env')) {
+                console.log(`Skipping Python venv file: ${file.name}`);
+                skippedFiles.push({
+                    name: file.name,
+                    reason: 'Python virtual environment excluded'
+                });
+                continue;
+            }
+
+            // Editor swap files
+            if (fileName.endsWith('.swp') || fileName.endsWith('.swo') || fileName.endsWith('~')) {
+                console.log(`Skipping editor swap file: ${file.name}`);
+                skippedFiles.push({
+                    name: file.name,
+                    reason: 'editor swap file excluded'
                 });
                 continue;
             }

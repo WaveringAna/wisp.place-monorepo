@@ -5,7 +5,13 @@ import { logCollector, errorTracker, metricsCollector } from '../lib/observabili
 import { db } from '../lib/db'
 
 export const adminRoutes = (cookieSecret: string) =>
-	new Elysia({ prefix: '/api/admin' })
+	new Elysia({
+		prefix: '/api/admin',
+		cookie: {
+			secrets: cookieSecret,
+			sign: ['admin_session']
+		}
+	})
 		// Login
 		.post(
 			'/login',

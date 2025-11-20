@@ -118,3 +118,111 @@ export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				}
 			}
 		})
+		.get('/:rkey/settings', async ({ params, auth }) => {
+			const { rkey } = params
+
+			if (!rkey) {
+				return {
+					success: false,
+					error: 'Site rkey is required'
+				}
+			}
+
+			try {
+				// Create agent with OAuth session
+				const agent = new Agent((url, init) => auth.session.fetchHandler(url, init))
+
+				// Fetch settings record
+				try {
+					const record = await agent.com.atproto.repo.getRecord({
+						repo: auth.did,
+						collection: 'place.wisp.settings',
+						rkey: rkey
+					})
+
+					if (record.data.value) {
+						return record.data.value
+					}
+				} catch (err: any) {
+					// Record doesn't exist, return defaults
+					if (err?.error === 'RecordNotFound') {
+						return {
+							indexFiles: ['index.html'],
+							cleanUrls: false,
+							directoryListing: false
+						}
+					}
+					throw err
+				}
+
+				// Default settings
+				return {
+					indexFiles: ['index.html'],
+					cleanUrls: false,
+					directoryListing: false
+				}
+			} catch (err) {
+				logger.error('[Site] Get settings error', err)
+				return {
+					success: false,
+					error: err instanceof Error ? err.message : 'Failed to fetch settings'
+				}
+			}
+		})
+		.post('/:rkey/settings', async ({ params, body, auth }) => {
+			const { rkey } = params
+
+			if (!rkey) {
+				return {
+					success: false,
+					error: 'Site rkey is required'
+				}
+			}
+
+			// Validate settings
+			const settings = body as any
+
+			// Ensure mutual exclusivity of routing modes
+			const modes = [
+				settings.spaMode,
+				settings.directoryListing,
+				settings.custom404
+			].filter(Boolean)
+
+			if (modes.length > 1) {
+				return {
+					success: false,
+					error: 'Only one of spaMode, directoryListing, or custom404 can be enabled'
+				}
+			}
+
+			try {
+				// Create agent with OAuth session
+				const agent = new Agent((url, init) => auth.session.fetchHandler(url, init))
+
+				// Create or update settings record
+				const record = await agent.com.atproto.repo.putRecord({
+					repo: auth.did,
+					collection: 'place.wisp.settings',
+					rkey: rkey,
+					record: {
+						$type: 'place.wisp.settings',
+						...settings
+					}
+				})
+
+				logger.info(`[Site] Saved settings for ${rkey} (${auth.did})`)
+
+				return {
+					success: true,
+					uri: record.data.uri,
+					cid: record.data.cid
+				}
+			} catch (err) {
+				logger.error('[Site] Save settings error', err)
+				return {
+					success: false,
+					error: err instanceof Error ? err.message : 'Failed to save settings'
+				}
+			}
+		})
