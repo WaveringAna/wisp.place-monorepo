@@ -475,8 +475,55 @@ fn build_directory<'a>(
             .ok_or_else(|| miette::miette!("Invalid filename: {:?}", name))?
             .to_string();
 
-        // Skip .git directories
+        // Skip unwanted files and directories
+
+        // .git directory (version control - thousands of files)
         if name_str == ".git" {
+            continue;
+        }
+
+        // .DS_Store (macOS metadata - can leak info)
+        if name_str == ".DS_Store" {
+            continue;
+        }
+
+        // .env files (environment variables with secrets)
+        if name_str.starts_with(".env") {
+            continue;
+        }
+
+        // node_modules (dependency folder - can be 100,000+ files)
+        if name_str == "node_modules" {
+            continue;
+        }
+
+        // OS metadata files
+        if name_str == "Thumbs.db" || name_str == "desktop.ini" || name_str.starts_with("._") {
+            continue;
+        }
+
+        // macOS system directories
+        if name_str == ".Spotlight-V100" || name_str == ".Trashes" || name_str == ".fseventsd" {
+            continue;
+        }
+
+        // Cache and temp directories
+        if name_str == ".cache" || name_str == ".temp" || name_str == ".tmp" {
+            continue;
+        }
+
+        // Python cache
+        if name_str == "__pycache__" || name_str.ends_with(".pyc") {
+            continue;
+        }
+
+        // Python virtual environments
+        if name_str == ".venv" || name_str == "venv" || name_str == "env" {
+            continue;
+        }
+
+        // Editor swap files
+        if name_str.ends_with(".swp") || name_str.ends_with(".swo") || name_str.ends_with("~") {
             continue;
         }
 
