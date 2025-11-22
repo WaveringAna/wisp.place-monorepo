@@ -728,7 +728,29 @@ async function getCacheMetadata(did: string, rkey: string): Promise<CacheMetadat
 
 export async function getCachedSettings(did: string, rkey: string): Promise<WispSettings | null> {
   const metadata = await getCacheMetadata(did, rkey);
-  return metadata?.settings || null;
+
+  // If metadata has settings, return them
+  if (metadata?.settings) {
+    return metadata.settings;
+  }
+
+  // If metadata exists but has no settings, try to fetch from PDS and update cache
+  if (metadata) {
+    console.log('[Cache] Metadata missing settings, fetching from PDS', { did, rkey });
+    try {
+      const settings = await fetchSiteSettings(did, rkey);
+      if (settings) {
+        // Update the cached metadata with the fetched settings
+        await updateCacheMetadataSettings(did, rkey, settings);
+        console.log('[Cache] Updated metadata with fetched settings', { did, rkey });
+        return settings;
+      }
+    } catch (err) {
+      console.error('[Cache] Failed to fetch/update settings', { did, rkey, err });
+    }
+  }
+
+  return null;
 }
 
 export async function updateCacheMetadataSettings(did: string, rkey: string, settings: WispSettings | null): Promise<void> {

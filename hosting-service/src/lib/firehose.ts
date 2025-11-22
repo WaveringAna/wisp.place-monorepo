@@ -333,7 +333,50 @@ export class FirehoseWorker {
 		// Invalidate in-memory caches (includes metadata which stores settings)
 		invalidateSiteCache(did, rkey)
 
-		// Update on-disk metadata with new settings
+		// Check if site is already cached
+		const cacheDir = `${CACHE_DIR}/${did}/${rkey}`
+		const isCached = existsSync(cacheDir)
+
+		if (!isCached) {
+			this.log('Site not cached yet, checking if fs record exists', { did, rkey })
+
+			// If site exists on PDS, cache it (which will include the new settings)
+			try {
+				const siteRecord = await fetchSiteRecord(did, rkey)
+
+				if (siteRecord) {
+					this.log('Site record found, triggering full cache with settings', { did, rkey })
+					const pdsEndpoint = await getPdsForDid(did)
+
+					if (pdsEndpoint) {
+						// Mark as being cached
+						markSiteAsBeingCached(did, rkey)
+
+						try {
+							await downloadAndCacheSite(did, rkey, siteRecord.record, pdsEndpoint, siteRecord.cid)
+							this.log('Successfully cached site with new settings', { did, rkey })
+						} finally {
+							unmarkSiteAsBeingCached(did, rkey)
+						}
+					} else {
+						this.log('Could not resolve PDS for DID', { did })
+					}
+				} else {
+					this.log('No fs record found for site, skipping cache', { did, rkey })
+				}
+			} catch (err) {
+				this.log('Failed to cache site after settings change', {
+					did,
+					rkey,
+					error: err instanceof Error ? err.message : String(err)
+				})
+			}
+
+			this.log('Successfully processed settings change (new cache)', { did, rkey })
+			return
+		}
+
+		// Site is already cached, just update the settings in metadata
 		try {
 			const { fetchSiteSettings, updateCacheMetadataSettings } = await import('./utils')
 			const settings = await fetchSiteSettings(did, rkey)

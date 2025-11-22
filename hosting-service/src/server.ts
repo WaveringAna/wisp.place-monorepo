@@ -765,6 +765,48 @@ async function serveFileInternal(did: string, rkey: string, filePath: string, se
     }
   }
 
+  // Directory listing fallback: if enabled, show root directory listing on 404
+  if (settings?.directoryListing) {
+    const rootPath = getCachedFilePath(did, rkey, '');
+    if (await fileExists(rootPath)) {
+      const { stat, readdir } = await import('fs/promises');
+      try {
+        const stats = await stat(rootPath);
+        if (stats.isDirectory()) {
+          const entries = await readdir(rootPath);
+          // Filter out .meta files and metadata
+          const visibleEntries = entries.filter(entry =>
+            !entry.endsWith('.meta') && entry !== '.metadata.json'
+          );
+
+          // Check which entries are directories
+          const entriesWithType = await Promise.all(
+            visibleEntries.map(async (name) => {
+              try {
+                const entryPath = `${rootPath}/${name}`;
+                const entryStats = await stat(entryPath);
+                return { name, isDirectory: entryStats.isDirectory() };
+              } catch {
+                return { name, isDirectory: false };
+              }
+            })
+          );
+
+          const html = generateDirectoryListing('', entriesWithType);
+          return new Response(html, {
+            status: 404,
+            headers: {
+              'Content-Type': 'text/html; charset=utf-8',
+              'Cache-Control': 'public, max-age=300',
+            },
+          });
+        }
+      } catch (err) {
+        // If directory listing fails, fall through to 404
+      }
+    }
+  }
+
   // Default styled 404 page
   const html = generate404Page();
   return new Response(html, {
@@ -1160,6 +1202,48 @@ async function serveFileInternalWithRewrite(did: string, rkey: string, filePath:
         status: 404,
         headers: response.headers,
       });
+    }
+  }
+
+  // Directory listing fallback: if enabled, show root directory listing on 404
+  if (settings?.directoryListing) {
+    const rootPath = getCachedFilePath(did, rkey, '');
+    if (await fileExists(rootPath)) {
+      const { stat, readdir } = await import('fs/promises');
+      try {
+        const stats = await stat(rootPath);
+        if (stats.isDirectory()) {
+          const entries = await readdir(rootPath);
+          // Filter out .meta files and metadata
+          const visibleEntries = entries.filter(entry =>
+            !entry.endsWith('.meta') && entry !== '.metadata.json'
+          );
+
+          // Check which entries are directories
+          const entriesWithType = await Promise.all(
+            visibleEntries.map(async (name) => {
+              try {
+                const entryPath = `${rootPath}/${name}`;
+                const entryStats = await stat(entryPath);
+                return { name, isDirectory: entryStats.isDirectory() };
+              } catch {
+                return { name, isDirectory: false };
+              }
+            })
+          );
+
+          const html = generateDirectoryListing('', entriesWithType);
+          return new Response(html, {
+            status: 404,
+            headers: {
+              'Content-Type': 'text/html; charset=utf-8',
+              'Cache-Control': 'public, max-age=300',
+            },
+          });
+        }
+      } catch (err) {
+        // If directory listing fails, fall through to 404
+      }
     }
   }
 
