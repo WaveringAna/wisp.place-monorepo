@@ -70,17 +70,22 @@ export function SitesTab({
 								View and manage all your deployed sites
 							</CardDescription>
 						</div>
-						<Button
-							variant="outline"
-							size="sm"
-							onClick={onSyncSites}
-							disabled={isSyncing || sitesLoading}
-						>
-							<RefreshCw
-								className={`w-4 h-4 mr-2 ${isSyncing ? 'animate-spin' : ''}`}
-							/>
-							Sync from PDS
-						</Button>
+						{userInfo && (
+							<Button
+								variant="outline"
+								size="sm"
+								asChild
+							>
+								<a
+									href={`https://pdsls.dev/at://${userInfo.did}/place.wisp.fs`}
+									target="_blank"
+									rel="noopener noreferrer"
+								>
+									<ExternalLink className="w-4 h-4 mr-2" />
+									View in PDS
+								</a>
+							</Button>
+						)}
 					</div>
 				</CardHeader>
 				<CardContent className="space-y-4">
