@@ -5,7 +5,8 @@
     "test": "bun test",
     "dev": "bun run --watch src/index.ts",
     "start": "bun run src/index.ts",
-    "build": "bun build --compile --target bun --outfile server src/index.ts"
+    "build": "bun build --compile --target bun --outfile server src/index.ts",
+    "screenshot": "bun run scripts/screenshot-sites.ts"
   },
   "dependencies": {
     "@atproto/api": "^0.17.3",
@@ -46,7 +47,8 @@
     "@types/react-dom": "^19.2.1",
     "bun-plugin-tailwind": "^0.1.2",
     "bun-types": "latest",
-    "esbuild": "0.26.0"
+    "esbuild": "0.26.0",
+    "playwright": "^1.49.0"
   },
   "module": "src/index.js",
   "trustedDependencies": [

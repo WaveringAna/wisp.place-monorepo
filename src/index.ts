@@ -143,6 +143,17 @@ export const app = new Elysia({
 			dnsVerifier: dnsVerifierHealth
 		}
 	})
+	.get('/api/screenshots', async () => {
+		const { Glob } = await import('bun')
+		const glob = new Glob('*.png')
+		const screenshots: string[] = []
+
+		for await (const file of glob.scan('./public/screenshots')) {
+			screenshots.push(file)
+		}
+
+		return { screenshots }
+	})
 	.get('/api/admin/test', () => {
 		return { message: 'Admin routes test works!' }
 	})

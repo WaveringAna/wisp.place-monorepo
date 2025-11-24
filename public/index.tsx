@@ -1,14 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
-import {
-	ArrowRight,
-	Shield,
-	Zap,
-	Globe,
-	Lock,
-	Code,
-	Server
-} from 'lucide-react'
+import { ArrowRight } from 'lucide-react'
 import Layout from '@public/layouts'
 import { Button } from '@public/components/ui/button'
 import { Card } from '@public/components/ui/card'
@@ -306,6 +298,7 @@ const LatestPostWithPrefetch: React.FC<{ did: string }> = ({ did }) => {
 function App() {
 	const [showForm, setShowForm] = useState(false)
 	const [checkingAuth, setCheckingAuth] = useState(true)
+	const [screenshots, setScreenshots] = useState<string[]>([])
 	const inputRef = useRef<HTMLInputElement>(null)
 
 	useEffect(() => {
@@ -333,6 +326,21 @@ function App() {
 		}
 
 		checkAuth()
+	}, [])
+
+	useEffect(() => {
+		// Fetch screenshots list
+		const fetchScreenshots = async () => {
+			try {
+				const response = await fetch('/api/screenshots')
+				const data = await response.json()
+				setScreenshots(data.screenshots || [])
+			} catch (error) {
+				console.error('Failed to fetch screenshots:', error)
+			}
+		}
+
+		fetchScreenshots()
 	}, [])
 
 	useEffect(() => {
@@ -553,71 +561,55 @@ function App() {
 					</div>
 				</section>
 
-				{/* Features Grid */}
-				<section id="features" className="container mx-auto px-4 py-20">
+				{/* Site Gallery */}
+				<section id="gallery" className="container mx-auto px-4 py-20">
 					<div className="text-center mb-16">
 						<h2 className="text-4xl md:text-5xl font-bold mb-4 text-balance">
-							Why Wisp.place?
+							Join 80+ sites just like yours:
 						</h2>
-						<p className="text-xl text-muted-foreground text-balance max-w-2xl mx-auto">
-							Static site hosting that respects your ownership
-						</p>
 					</div>
 
-					<div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 max-w-6xl mx-auto">
-						{[
-							{
-								icon: Shield,
-								title: 'You Own Your Content',
-								description:
-									'Your site lives in your AT Protocol account. Move it to another service anytime, or take it offline yourself.'
-							},
-							{
-								icon: Zap,
-								title: 'CDN Performance',
-								description:
-									'We cache and serve your site from edge locations worldwide for fast load times.'
-							},
-							{
-								icon: Lock,
-								title: 'No Vendor Lock-in',
-								description:
-									'Your data stays in your account. Switch providers or self-host whenever you want.'
-							},
-							{
-								icon: Code,
-								title: 'Simple Deployment',
-								description:
-									'Upload your static files and we handle the rest. No complex configuration needed.'
-							},
-							{
-								icon: Server,
-								title: 'AT Protocol Native',
-								description:
-									'Built for the decentralized web. Your site has a verifiable identity on the network.'
-							},
-							{
-								icon: Globe,
-								title: 'Custom Domains',
-								description:
-									'Use your own domain name or a wisp.place subdomain. Your choice, either way.'
+					<div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-5xl mx-auto">
+						{screenshots.map((filename, i) => {
+							// Remove .png extension
+							const baseName = filename.replace('.png', '')
+
+							// Construct site URL from filename
+							let siteUrl: string
+							if (baseName.startsWith('sites_wisp_place_did_plc_')) {
+								// Handle format: sites_wisp_place_did_plc_{identifier}_{sitename}
+								const match = baseName.match(/^sites_wisp_place_did_plc_([a-z0-9]+)_(.+)$/)
+								if (match) {
+									const [, identifier, sitename] = match
+									siteUrl = `https://sites.wisp.place/did:plc:${identifier}/${sitename}`
+								} else {
+									siteUrl = '#'
+								}
+							} else {
+								// Handle format: domain_tld or subdomain_domain_tld
+								// Replace underscores with dots
+								siteUrl = `https://${baseName.replace(/_/g, '.')}`
 							}
-						].map((feature, i) => (
-							<Card
-								key={i}
-								className="p-6 hover:shadow-lg transition-shadow border-2 bg-card"
-							>
-								<div className="w-12 h-12 rounded-lg bg-accent/10 flex items-center justify-center mb-4">
-									<feature.icon className="w-6 h-6 text-accent" />
-								</div>
-								<h3 className="text-xl font-semibold mb-2 text-card-foreground">
-									{feature.title}
-								</h3>
-								<p className="text-muted-foreground leading-relaxed">
-									{feature.description}
-								</p>
-							</Card>
-						))}
+
+							return (
+								<a
+									key={i}
+									href={siteUrl}
+									target="_blank"
+									rel="noopener noreferrer"
+									className="block"
+								>
+									<Card className="overflow-hidden hover:shadow-xl transition-all hover:scale-105 border-2 bg-card p-0 cursor-pointer">
+										<img
+											src={`/screenshots/${filename}`}
+											alt={`${baseName} screenshot`}
+											className="w-full h-auto object-cover aspect-video"
+											loading="lazy"
+										/>
+									</Card>
+								</a>
+							)
+						})}
 					</div>
 				</section>
 
