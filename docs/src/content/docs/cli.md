@@ -48,13 +48,13 @@ The Wisp CLI is a command-line tool for deploying static websites directly to yo
 <h3 style="margin-top: 1.5rem; margin-bottom: 0.5rem;">SHA-1 Checksums</h3>
 
 <pre style="font-size: 0.75rem; padding: 1rem;" class="language-bash" tabindex="0"><code class="language-bash">
-9281454860f2eb07b39b80f7a9cc8e9bdcff491b  wisp-cli-aarch64-darwin
+2b5c1d6d0e21f9d764dd66ef869bfcd348e8a111  wisp-cli-aarch64-darwin
 
-d460863150c4c162b7e7e3801a67746da3aaf9d9  wisp-cli-aarch64-linux
+68d4a3831c07d2f32fdde8d3e809af1ab79e804e  wisp-cli-aarch64-linux
 
-94968abed20422df826b78c38cb506dd4b1b5885  wisp-cli-x86_64-linux
+86e89f592b0ec53239c082f502cbe7a47ed8bbec  wisp-cli-x86_64-linux
 
-45293e47da38b97ef35258a08cb2682eee64a659  wisp-cli-x86_64-windows.exe
+227b735911ad260cff5af3ca3beefa4e1e3956a8  wisp-cli-x86_64-windows.exe
 </code></pre>
 
 </div>
@@ -161,6 +161,16 @@ wisp-cli serve your-handle.bsky.social \
 wisp-cli serve your-handle.bsky.social \
   --site my-site \
   --port 3000
+
+# Enable SPA mode (serve index.html for all routes)
+wisp-cli serve your-handle.bsky.social \
+  --site my-site \
+  --spa
+
+# Enable directory listing for paths without index files
+wisp-cli serve your-handle.bsky.social \
+  --site my-site \
+  --directory
 ```
 
 Downloads site, serves it, and watches firehose for live updates!
@@ -249,6 +259,8 @@ Options:
   -s, --site <SITE>           Site name to serve
   -o, --output <OUTPUT>       Site files directory [default: .]
   -p, --port <PORT>           Port to serve on [default: 8080]
+      --spa                   Enable SPA mode (serve index.html for all routes)
+      --directory             Enable directory listing mode for paths without index files
   -h, --help                  Print help
 ```
 
