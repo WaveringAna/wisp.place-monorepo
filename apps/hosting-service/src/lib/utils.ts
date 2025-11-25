@@ -181,8 +181,16 @@ async function fetchSubfsRecord(uri: string, pdsEndpoint: string): Promise<Subfs
 /**
  * Replace subfs nodes in a directory tree with their actual content
  * Subfs entries are "merged" - their root entries are hoisted into the parent directory
+ * This function is recursive - it will keep expanding until no subfs nodes remain
  */
-async function expandSubfsNodes(directory: Directory, pdsEndpoint: string): Promise<Directory> {
+async function expandSubfsNodes(directory: Directory, pdsEndpoint: string, depth: number = 0): Promise<Directory> {
+  const MAX_DEPTH = 10; // Prevent infinite loops
+
+  if (depth >= MAX_DEPTH) {
+    console.error('Max subfs expansion depth reached, stopping to prevent infinite loop');
+    return directory;
+  }
+
   // Extract all subfs URIs
   const subfsUris = extractSubfsUris(directory);
 
@@ -191,7 +199,7 @@ async function expandSubfsNodes(directory: Directory, pdsEndpoint: string): Prom
     return directory;
   }
 
-  console.log(`Found ${subfsUris.length} subfs records, fetching...`);
+  console.log(`[Depth ${depth}] Found ${subfsUris.length} subfs records, fetching...`);
 
   // Fetch all subfs records in parallel
   const subfsRecords = await Promise.all(
@@ -225,7 +233,7 @@ async function expandSubfsNodes(directory: Directory, pdsEndpoint: string): Prom
         const subfsEntries = subfsMap.get(fullPath);
 
         if (subfsEntries) {
-          console.log(`Merging subfs node at ${fullPath} (${subfsEntries.length} entries, flat: ${isFlat})`);
+          console.log(`[Depth ${depth}] Merging subfs node at ${fullPath} (${subfsEntries.length} entries, flat: ${isFlat})`);
 
           if (isFlat) {
             // Flat merge: hoist entries directly into parent directory
@@ -265,10 +273,13 @@ async function expandSubfsNodes(directory: Directory, pdsEndpoint: string): Prom
     return result;
   }
 
-  return {
+  const partiallyExpanded = {
     ...directory,
     entries: replaceSubfsInEntries(directory.entries)
   };
+
+  // Recursively expand any remaining subfs nodes (e.g., nested subfs inside parent subfs)
+  return expandSubfsNodes(partiallyExpanded, pdsEndpoint, depth + 1);
 }
 
 
