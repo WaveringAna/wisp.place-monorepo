@@ -4,4 +4,5 @@
 // Any manual changes will be overwritten on the next regeneration.
 
 pub mod fs;
+pub mod settings;
 pub mod subfs;
