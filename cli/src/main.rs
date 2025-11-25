@@ -27,6 +27,7 @@ use base64::Engine;
 use futures::stream::{self, StreamExt};
 
 use place_wisp::fs::*;
+use place_wisp::settings::*;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "wisp.place CLI tool")]
@@ -54,6 +55,14 @@ struct Args {
     /// App Password for authentication
     #[arg(long, global = true, conflicts_with = "command")]
     password: Option<CowStr<'static>>,
+
+    /// Enable directory listing mode for paths without index files
+    #[arg(long, global = true, conflicts_with = "command")]
+    directory: bool,
+
+    /// Enable SPA mode (serve index.html for all routes)
+    #[arg(long, global = true, conflicts_with = "command")]
+    spa: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -78,6 +87,14 @@ enum Commands {
         /// App Password for authentication (alternative to OAuth)
         #[arg(long)]
         password: Option<CowStr<'static>>,
+
+        /// Enable directory listing mode for paths without index files
+        #[arg(long)]
+        directory: bool,
+
+        /// Enable SPA mode (serve index.html for all routes)
+        #[arg(long)]
+        spa: bool,
     },
     /// Pull a site from the PDS to a local directory
     Pull {
@@ -116,12 +133,12 @@ async fn main() -> miette::Result<()> {
     let args = Args::parse();
 
     let result = match args.command {
-        Some(Commands::Deploy { input, path, site, store, password }) => {
+        Some(Commands::Deploy { input, path, site, store, password, directory, spa }) => {
             // Dispatch to appropriate authentication method
             if let Some(password) = password {
-                run_with_app_password(input, password, path, site).await
+                run_with_app_password(input, password, path, site, directory, spa).await
             } else {
-                run_with_oauth(input, store, path, site).await
+                run_with_oauth(input, store, path, site, directory, spa).await
             }
         }
         Some(Commands::Pull { input, site, output }) => {
@@ -138,9 +155,9 @@ async fn main() -> miette::Result<()> {
 
                 // Dispatch to appropriate authentication method
                 if let Some(password) = args.password {
-                    run_with_app_password(input, password, path, args.site).await
+                    run_with_app_password(input, password, path, args.site, args.directory, args.spa).await
                 } else {
-                    run_with_oauth(input, store, path, args.site).await
+                    run_with_oauth(input, store, path, args.site, args.directory, args.spa).await
                 }
             } else {
                 // No command and no input, show help
@@ -167,13 +184,15 @@ async fn run_with_app_password(
     password: CowStr<'static>,
     path: PathBuf,
     site: Option<String>,
+    directory: bool,
+    spa: bool,
 ) -> miette::Result<()> {
     let (session, auth) =
         MemoryCredentialSession::authenticated(input, password, None, None).await?;
     println!("Signed in as {}", auth.handle);
 
     let agent: Agent<_> = Agent::from(session);
-    deploy_site(&agent, path, site).await
+    deploy_site(&agent, path, site, directory, spa).await
 }
 
 /// Run deployment with OAuth authentication
@@ -182,14 +201,16 @@ async fn run_with_oauth(
     store: String,
     path: PathBuf,
     site: Option<String>,
+    directory: bool,
+    spa: bool,
 ) -> miette::Result<()> {
     use jacquard::oauth::scopes::Scope;
     use jacquard::oauth::atproto::AtprotoClientMetadata;
     use jacquard::oauth::session::ClientData;
     use url::Url;
 
-    // Request the necessary scopes for wisp.place
-    let scopes = Scope::parse_multiple("atproto repo:place.wisp.fs repo:place.wisp.subfs blob:*/*")
+    // Request the necessary scopes for wisp.place (including settings)
+    let scopes = Scope::parse_multiple("atproto repo:place.wisp.fs repo:place.wisp.subfs repo:place.wisp.settings blob:*/*")
         .map_err(|e| miette::miette!("Failed to parse scopes: {:?}", e))?;
 
     // Create redirect URIs that match the loopback server (port 4000, path /oauth/callback)
@@ -214,7 +235,7 @@ async fn run_with_oauth(
         .await?;
 
     let agent: Agent<_> = Agent::from(session);
-    deploy_site(&agent, path, site).await
+    deploy_site(&agent, path, site, directory, spa).await
 }
 
 /// Deploy the site using the provided agent
@@ -222,6 +243,8 @@ async fn deploy_site(
     agent: &Agent<impl jacquard::client::AgentSession + IdentityResolver>,
     path: PathBuf,
     site: Option<String>,
+    directory_listing: bool,
+    spa_mode: bool,
 ) -> miette::Result<()> {
     // Verify the path exists
     if !path.exists() {
@@ -445,6 +468,43 @@ async fn deploy_site(
         }
     }
 
+    // Upload settings if either flag is set
+    if directory_listing || spa_mode {
+        // Validate mutual exclusivity
+        if directory_listing && spa_mode {
+            return Err(miette::miette!("Cannot enable both --directory and --SPA modes"));
+        }
+
+        println!("\n⚙️  Uploading site settings...");
+
+        // Build settings record
+        let mut settings_builder = Settings::new();
+
+        if directory_listing {
+            settings_builder = settings_builder.directory_listing(Some(true));
+            println!("  • Directory listing: enabled");
+        }
+
+        if spa_mode {
+            settings_builder = settings_builder.spa_mode(Some(CowStr::from("index.html")));
+            println!("  • SPA mode: enabled (serving index.html for all routes)");
+        }
+
+        let settings_record = settings_builder.build();
+
+        // Upload settings record with same rkey as site
+        let rkey = Rkey::new(&site_name).map_err(|e| miette::miette!("Invalid rkey: {}", e))?;
+        match agent.put_record(RecordKey::from(rkey), settings_record).await {
+            Ok(settings_output) => {
+                println!("✅ Settings uploaded: {}", settings_output.uri);
+            }
+            Err(e) => {
+                eprintln!("⚠️  Failed to upload settings: {}", e);
+                eprintln!("   Site was deployed successfully, but settings may need to be configured manually.");
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -484,6 +544,11 @@ fn build_directory<'a>(
 
         // .DS_Store (macOS metadata - can leak info)
         if name_str == ".DS_Store" {
+            continue;
+        }
+
+        // .wisp.metadata.json (wisp internal metadata - should not be uploaded)
+        if name_str == ".wisp.metadata.json" {
             continue;
         }
 
