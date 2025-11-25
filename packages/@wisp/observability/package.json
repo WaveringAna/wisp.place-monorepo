@@ -1,0 +1,34 @@
+{
+  "name": "@wisp/observability",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./core": {
+      "types": "./src/core.ts",
+      "default": "./src/core.ts"
+    },
+    "./middleware/elysia": {
+      "types": "./src/middleware/elysia.ts",
+      "default": "./src/middleware/elysia.ts"
+    },
+    "./middleware/hono": {
+      "types": "./src/middleware/hono.ts",
+      "default": "./src/middleware/hono.ts"
+    }
+  },
+  "peerDependencies": {
+    "hono": "^4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "hono": {
+      "optional": true
+    }
+  }
+}

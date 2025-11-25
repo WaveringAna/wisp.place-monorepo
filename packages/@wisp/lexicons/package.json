@@ -1,0 +1,44 @@
+{
+  "name": "@wisp/lexicons",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./types/place/wisp/fs": {
+      "types": "./src/types/place/wisp/fs.ts",
+      "default": "./src/types/place/wisp/fs.ts"
+    },
+    "./types/place/wisp/settings": {
+      "types": "./src/types/place/wisp/settings.ts",
+      "default": "./src/types/place/wisp/settings.ts"
+    },
+    "./types/place/wisp/subfs": {
+      "types": "./src/types/place/wisp/subfs.ts",
+      "default": "./src/types/place/wisp/subfs.ts"
+    },
+    "./lexicons": {
+      "types": "./src/lexicons.ts",
+      "default": "./src/lexicons.ts"
+    },
+    "./util": {
+      "types": "./src/util.ts",
+      "default": "./src/util.ts"
+    }
+  },
+  "scripts": {
+    "codegen": "lex gen-server ./src ./lexicons"
+  },
+  "dependencies": {
+    "@atproto/lexicon": "^0.5.1",
+    "@atproto/xrpc-server": "^0.9.5"
+  },
+  "devDependencies": {
+    "@atproto/lex-cli": "^0.9.5"
+  }
+}

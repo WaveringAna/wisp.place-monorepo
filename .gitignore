@@ -1,7 +1,8 @@
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 .env
 # dependencies
-/node_modules
+node_modules
+**/node_modules
 /.pnp
 .pnp.js
 
@@ -17,6 +18,9 @@ target/
 # production
 /build
 /result
+dist
+**/dist
+*.tsbuildinfo
 
 # misc
 .DS_Store

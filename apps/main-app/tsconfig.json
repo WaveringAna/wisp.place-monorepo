@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@server": ["./src/index.ts"],
+      "@server/*": ["./src/*"],
+      "@public/*": ["./public/*"],
+      "@wisp/*": ["../../packages/@wisp/*/src"]
+    }
+  },
+  "include": ["src/**/*", "public/**/*", "scripts/**/*"],
+  "exclude": ["node_modules"]
+}

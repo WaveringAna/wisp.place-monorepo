@@ -1,0 +1,31 @@
+{
+  "name": "@wisp/atproto-utils",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./blob": {
+      "types": "./src/blob.ts",
+      "default": "./src/blob.ts"
+    },
+    "./compression": {
+      "types": "./src/compression.ts",
+      "default": "./src/compression.ts"
+    },
+    "./subfs": {
+      "types": "./src/subfs.ts",
+      "default": "./src/subfs.ts"
+    }
+  },
+  "dependencies": {
+    "@atproto/api": "^0.14.1",
+    "@wisp/lexicons": "workspace:*",
+    "multiformats": "^13.3.1"
+  }
+}

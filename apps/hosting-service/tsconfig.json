@@ -1,0 +1,36 @@
+{
+	"compilerOptions": {
+		/* Base Options */
+		"esModuleInterop": true,
+		"skipLibCheck": true,
+		"target": "es2022",
+		"allowJs": true,
+		"resolveJsonModule": true,
+		"moduleDetection": "force",
+		"isolatedModules": true,
+		"verbatimModuleSyntax": true,
+
+		/* Strictness */
+		"strict": true,
+		"noUncheckedIndexedAccess": true,
+		"noImplicitOverride": true,
+		"forceConsistentCasingInFileNames": true,
+
+		/* Transpiling with TypeScript */
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"outDir": "dist",
+		"sourceMap": true,
+
+		/* Code doesn't run in DOM */
+		"lib": ["es2022"],
+
+		/* Workspace Paths */
+		"baseUrl": ".",
+		"paths": {
+			"@wisp/*": ["../../packages/@wisp/*/src"]
+		}
+	},
+	"include": ["src/**/*"],
+	"exclude": ["node_modules", "cache", "dist"]
+}

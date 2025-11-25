@@ -1,0 +1,34 @@
+{
+  "name": "@wisp/fs-utils",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./path": {
+      "types": "./src/path.ts",
+      "default": "./src/path.ts"
+    },
+    "./tree": {
+      "types": "./src/tree.ts",
+      "default": "./src/tree.ts"
+    },
+    "./manifest": {
+      "types": "./src/manifest.ts",
+      "default": "./src/manifest.ts"
+    },
+    "./subfs-split": {
+      "types": "./src/subfs-split.ts",
+      "default": "./src/subfs-split.ts"
+    }
+  },
+  "dependencies": {
+    "@atproto/api": "^0.14.1",
+    "@wisp/lexicons": "workspace:*"
+  }
+}

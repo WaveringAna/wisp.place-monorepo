@@ -1,60 +1,20 @@
 {
-  "name": "elysia-static",
+  "name": "@wisp/monorepo",
   "version": "1.0.50",
+  "private": true,
+  "workspaces": [
+    "packages/@wisp/*",
+    "apps/main-app",
+    "apps/hosting-service"
+  ],
   "scripts": {
     "test": "bun test",
-    "dev": "bun run --watch src/index.ts",
-    "start": "bun run src/index.ts",
-    "build": "bun build --compile --target bun --outfile server src/index.ts",
-    "screenshot": "bun run scripts/screenshot-sites.ts"
-  },
-  "dependencies": {
-    "@atproto/api": "^0.17.3",
-    "@atproto/lex-cli": "^0.9.5",
-    "@atproto/oauth-client-node": "^0.3.9",
-    "@atproto/xrpc-server": "^0.9.5",
-    "@elysiajs/cors": "^1.4.0",
-    "@elysiajs/eden": "^1.4.3",
-    "@elysiajs/openapi": "^1.4.11",
-    "@elysiajs/opentelemetry": "^1.4.6",
-    "@elysiajs/static": "^1.4.2",
-    "@radix-ui/react-checkbox": "^1.3.3",
-    "@radix-ui/react-dialog": "^1.1.15",
-    "@radix-ui/react-label": "^2.1.7",
-    "@radix-ui/react-radio-group": "^1.3.8",
-    "@radix-ui/react-slot": "^1.2.3",
-    "@radix-ui/react-tabs": "^1.1.13",
-    "@tanstack/react-query": "^5.90.2",
-    "actor-typeahead": "^0.1.1",
-    "atproto-ui": "^0.11.3",
-    "class-variance-authority": "^0.7.1",
-    "clsx": "^2.1.1",
-    "elysia": "latest",
-    "iron-session": "^8.0.4",
-    "lucide-react": "^0.546.0",
-    "multiformats": "^13.4.1",
-    "prismjs": "^1.30.0",
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0",
-    "tailwind-merge": "^3.3.1",
-    "tailwindcss": "4",
-    "tw-animate-css": "^1.4.0",
-    "typescript": "^5.9.3",
-    "zlib": "^1.0.5"
-  },
-  "devDependencies": {
-    "@types/react": "^19.2.2",
-    "@types/react-dom": "^19.2.1",
-    "bun-plugin-tailwind": "^0.1.2",
-    "bun-types": "latest",
-    "esbuild": "0.26.0",
-    "playwright": "^1.49.0"
-  },
-  "module": "src/index.js",
-  "trustedDependencies": [
-    "bun",
-    "cbor-extract",
-    "core-js",
-    "protobufjs"
-  ]
+    "dev": "bun run --watch apps/main-app/src/index.ts",
+    "start": "bun run apps/main-app/src/index.ts",
+    "build": "bun build --compile --target bun --outfile server apps/main-app/src/index.ts",
+    "screenshot": "bun run apps/main-app/scripts/screenshot-sites.ts",
+    "hosting:dev": "cd apps/hosting-service && npm run dev",
+    "hosting:build": "cd apps/hosting-service && npm run build",
+    "hosting:start": "cd apps/hosting-service && npm run start"
+  }
 }
