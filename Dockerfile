@@ -4,24 +4,22 @@ FROM oven/bun:1.3 AS base
 # Set working directory
 WORKDIR /app
 
-# Copy package files
-COPY package.json ./
+# Copy workspace configuration
+COPY package.json bunfig.toml tsconfig.json ./
 
-# Copy Bun configuration
-COPY bunfig.toml ./
+# Copy workspace packages
+COPY packages ./packages
 
-COPY tsconfig.json ./
+# Copy both apps (needed for workspace resolution)
+COPY apps/main-app ./apps/main-app
+COPY apps/hosting-service/package.json ./apps/hosting-service/package.json
 
-# Install dependencies
+# Install all dependencies (including workspaces)
 RUN bun install
-
-# Copy source code
-COPY src ./src
-COPY public ./public
 
 ENV PORT=8000
 ENV NODE_ENV=production
 
 EXPOSE 8000
 
-CMD ["bun", "start"]
+CMD ["bun", "run", "start"]

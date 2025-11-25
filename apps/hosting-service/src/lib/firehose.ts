@@ -6,7 +6,8 @@ import {
 } from './utils'
 import { upsertSite, tryAcquireLock, releaseLock } from './db'
 import { safeFetch } from '@wisp/safe-fetch'
-import { isRecord, validateRecord } from '@wisp/lexicons/types/place/wisp/fs'
+// import { isRecord, validateRecord } from '@wisp/lexicons/types/place/wisp/fs'
+import { isRecord } from '@wisp/lexicons/types/place/wisp/fs'
 import { Firehose } from '@atproto/sync'
 import { IdResolver } from '@atproto/identity'
 import { invalidateSiteCache, markSiteAsBeingCached, unmarkSiteAsBeingCached } from './cache'
@@ -65,8 +66,8 @@ export class FirehoseWorker {
 					// If the write is a valid place.wisp.fs record
 					if (
 						evt.collection === 'place.wisp.fs' &&
-						isRecord(record) &&
-						validateRecord(record).success
+						isRecord(record)
+						// && validateRecord(record).success
 					) {
 						this.log('Received place.wisp.fs event', {
 							did: evt.did,

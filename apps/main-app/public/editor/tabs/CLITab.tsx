@@ -17,7 +17,7 @@ export function CLITab() {
           <div className="flex items-center gap-2 mb-2">
             <CardTitle>Wisp CLI Tool</CardTitle>
             <Badge variant="secondary" className="text-xs">
-              v0.2.0
+              v0.4.0
             </Badge>
             <Badge variant="outline" className="text-xs">
               Alpha
@@ -55,7 +55,7 @@ export function CLITab() {
           </div>
 
           <div className="space-y-3">
-            <h3 className="text-sm font-semibold">Download v0.2.0</h3>
+            <h3 className="text-sm font-semibold">Download v0.4.0</h3>
             <div className="grid gap-2">
               <div className="p-3 bg-muted/50 hover:bg-muted rounded-lg transition-colors border border-border">
                 <a
@@ -183,6 +183,16 @@ wisp-cli serve your-handle.bsky.social \\
 wisp-cli serve your-handle.bsky.social \\
   --site my-site \\
   --port 3000
+
+# Enable SPA mode (serve index.html for all routes)
+wisp-cli serve your-handle.bsky.social \\
+  --site my-site \\
+  --spa
+
+# Enable directory listing for paths without index files
+wisp-cli serve your-handle.bsky.social \\
+  --site my-site \\
+  --directory
 
 # Downloads site, serves it, and watches firehose for live updates!`}
               language="bash"

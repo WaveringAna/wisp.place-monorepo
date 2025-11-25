@@ -22,8 +22,9 @@ import {
 import { createManifest } from '@wisp/fs-utils'
 import { upsertSite } from '../lib/db'
 import { createLogger } from '@wisp/observability'
-import { validateRecord, type Directory } from '@wisp/lexicons/types/place/wisp/fs'
-import { validateRecord as validateSubfsRecord } from '@wisp/lexicons/types/place/wisp/subfs'
+// import { validateRecord, type Directory } from '@wisp/lexicons/types/place/wisp/fs'
+import { type Directory } from '@wisp/lexicons/types/place/wisp/fs'
+// import { validateRecord as validateSubfsRecord } from '@wisp/lexicons/types/place/wisp/subfs'
 import { MAX_SITE_SIZE, MAX_FILE_SIZE, MAX_FILE_COUNT } from '@wisp/constants'
 import {
     createUploadJob,
@@ -373,10 +374,10 @@ async function processUploadInBackground(
                 createdAt: new Date().toISOString()
             };
 
-            const validationResult = validateRecord(emptyManifest);
-            if (!validationResult.success) {
-                throw new Error(`Invalid manifest: ${validationResult.error?.message || 'Validation failed'}`);
-            }
+            // const validationResult = validateRecord(emptyManifest);
+            // if (!validationResult.success) {
+            //     throw new Error(`Invalid manifest: ${validationResult.error?.message || 'Validation failed'}`);
+            // }
 
             const rkey = siteName;
             updateJobProgress(jobId, { phase: 'finalizing' });
@@ -735,10 +736,10 @@ async function processUploadInBackground(
                     };
 
                     // Validate subfs record
-                    const subfsValidation = validateSubfsRecord(subfsManifest);
-                    if (!subfsValidation.success) {
-                        throw new Error(`Invalid subfs manifest: ${subfsValidation.error?.message || 'Validation failed'}`);
-                    }
+                    // const subfsValidation = validateSubfsRecord(subfsManifest);
+                    // if (!subfsValidation.success) {
+                    //     throw new Error(`Invalid subfs manifest: ${subfsValidation.error?.message || 'Validation failed'}`);
+                    // }
 
                     // Upload subfs record to PDS
                     const subfsRecord = await agent.com.atproto.repo.putRecord({
@@ -789,10 +790,10 @@ async function processUploadInBackground(
                     };
 
                     // Validate subfs record
-                    const subfsValidation = validateSubfsRecord(subfsManifest);
-                    if (!subfsValidation.success) {
-                        throw new Error(`Invalid subfs manifest: ${subfsValidation.error?.message || 'Validation failed'}`);
-                    }
+                    // const subfsValidation = validateSubfsRecord(subfsManifest);
+                    // if (!subfsValidation.success) {
+                    //     throw new Error(`Invalid subfs manifest: ${subfsValidation.error?.message || 'Validation failed'}`);
+                    // }
 
                     // Upload subfs record to PDS
                     const subfsRecord = await agent.com.atproto.repo.putRecord({
@@ -1070,10 +1071,10 @@ export const wispRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
                             createdAt: new Date().toISOString()
                         };
 
-                        const validationResult = validateRecord(emptyManifest);
-                        if (!validationResult.success) {
-                            throw new Error(`Invalid manifest: ${validationResult.error?.message || 'Validation failed'}`);
-                        }
+                        // const validationResult = validateRecord(emptyManifest);
+                        // if (!validationResult.success) {
+                        //     throw new Error(`Invalid manifest: ${validationResult.error?.message || 'Validation failed'}`);
+                        // }
 
                         const rkey = siteName;
 

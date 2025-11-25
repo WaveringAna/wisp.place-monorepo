@@ -7,6 +7,10 @@
     "apps/main-app",
     "apps/hosting-service"
   ],
+  "dependencies": {
+    "bun-plugin-tailwind": "^0.1.2",
+    "tailwindcss": "4"
+  },
   "scripts": {
     "test": "bun test",
     "dev": "bun run --watch apps/main-app/src/index.ts",
