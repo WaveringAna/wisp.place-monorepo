@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wisp CLI - Download</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css" rel="stylesheet" />
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet" media="(prefers-color-scheme: dark)" />
+    <style>
+        :root {
+            /* Light theme */
+            --demo-bg: #eeeeee;
+            --demo-text: #1a1a1a;
+            --demo-text-secondary: #666;
+            --demo-border: #ddd;
+            --demo-input-bg: #fff;
+            --demo-button-bg: #0066cc;
+            --demo-button-text: #fff;
+            --demo-code-bg: #f5f5f5;
+            --demo-code-border: #e0e0e0;
+            --demo-hr: #e0e0e0;
+        }
+
+        /* Dark theme */
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --demo-bg: #1a1a1a;
+                --demo-text: #e0e0e0;
+                --demo-text-secondary: #999;
+                --demo-border: #444;
+                --demo-input-bg: #2a2a2a;
+                --demo-button-bg: #0066cc;
+                --demo-button-text: #fff;
+                --demo-code-bg: #2a2a2a;
+                --demo-code-border: #444;
+                --demo-hr: #444;
+            }
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background: var(--demo-bg);
+            color: var(--demo-text);
+            transition: background-color 200ms ease, color 200ms ease;
+            font-family: system-ui, sans-serif;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 860px;
+            margin: 40px auto;
+            padding: 0 20px;
+            min-height: 100vh;
+        }
+
+        h1 {
+            margin-top: 0;
+            color: var(--demo-text);
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .subtitle {
+            color: var(--demo-text-secondary);
+            font-size: 1.1rem;
+            margin-bottom: 2rem;
+            line-height: 1.4;
+        }
+
+        .description {
+            margin-bottom: 2rem;
+            line-height: 1.6;
+            color: var(--demo-text);
+        }
+
+        hr {
+            margin: 32px 0;
+            border: none;
+            border-top: 1px solid var(--demo-hr);
+        }
+
+        h2 {
+            color: var(--demo-text);
+            margin-bottom: 1rem;
+            margin-top: 2rem;
+            font-size: 1.5rem;
+        }
+
+        h3 {
+            color: var(--demo-text);
+            margin-bottom: 0.75rem;
+            margin-top: 1.5rem;
+            font-size: 1.2rem;
+        }
+
+        .downloads {
+            background: var(--demo-code-bg);
+            border: 1px solid var(--demo-code-border);
+            border-radius: 8px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+        }
+
+        .downloads h2 {
+            margin-top: 0;
+        }
+
+        .download-link {
+            display: block;
+            background: var(--demo-button-bg);
+            color: var(--demo-button-text);
+            text-decoration: none;
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            transition: opacity 0.2s;
+            font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+            font-size: 0.9rem;
+        }
+
+        .download-link:hover {
+            opacity: 0.85;
+        }
+
+        .platform {
+            font-weight: bold;
+            margin-right: 0.5rem;
+        }
+
+        .cicd-section {
+            margin-top: 2rem;
+        }
+
+        .cicd-section h2 {
+            margin-top: 0;
+        }
+
+        .cicd-section > p {
+            color: var(--demo-text-secondary);
+            margin-bottom: 1rem;
+        }
+
+        pre {
+            background: var(--demo-code-bg) !important;
+            border: 1px solid var(--demo-code-border);
+            padding: 1.5rem !important;
+            border-radius: 8px;
+            overflow-x: auto;
+            font-size: 0.85rem;
+            line-height: 1.5;
+            margin: 1rem 0;
+        }
+
+        pre code {
+            color: var(--demo-text);
+            background: none !important;
+            padding: 0 !important;
+            text-shadow: none !important;
+        }
+
+        code {
+            font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+        }
+
+        .note {
+            background: var(--demo-code-bg);
+            border-left: 4px solid var(--demo-button-bg);
+            border: 1px solid var(--demo-code-border);
+            border-left: 4px solid var(--demo-button-bg);
+            padding: 1rem;
+            margin-top: 1rem;
+            border-radius: 4px;
+        }
+
+        .note strong {
+            color: var(--demo-text);
+        }
+
+        .note code {
+            background: var(--demo-input-bg);
+            padding: 2px 6px;
+            border-radius: 4px;
+            border: 1px solid var(--demo-border);
+        }
+
+        a {
+            color: var(--demo-button-bg);
+            text-decoration: none;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+
+        .features {
+            margin: 2rem 0;
+        }
+
+        .features ul {
+            list-style: none;
+            padding-left: 0;
+        }
+
+        .features li {
+            padding: 0.5rem 0;
+            padding-left: 1.5rem;
+            position: relative;
+            line-height: 1.6;
+        }
+
+        .features li:before {
+            content: "✓";
+            position: absolute;
+            left: 0;
+            color: var(--demo-button-bg);
+            font-weight: bold;
+        }
+
+        .footer {
+            margin-top: 3rem;
+            padding-top: 2rem;
+            border-top: 1px solid var(--demo-hr);
+            text-align: center;
+            color: var(--demo-text-secondary);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Wisp CLI <span style="font-size: 1.5rem; color: var(--demo-text-secondary);">v0.2.0</span></h1>
+        <p class="subtitle">Deploy static sites to the AT Protocol</p>
+
+        <div class="description">
+            <p>
+                The Wisp CLI is a command-line tool for deploying static websites directly to your AT Protocol account.
+                Host your sites on <a href="https://wisp.place" target="_blank">wisp.place</a> with full ownership and control,
+                backed by the decentralized AT Protocol.
+            </p>
+        </div>
+
+        <div class="features">
+            <h2>Features</h2>
+            <ul>
+                <li><strong>Deploy:</strong> Push static sites directly from your terminal</li>
+                <li><strong>Pull:</strong> Download sites from the PDS for development or backup</li>
+                <li><strong>Serve:</strong> Run a local server with real-time firehose updates</li>
+                <li>Authenticate with app password or OAuth</li>
+            </ul>
+        </div>
+
+        <div class="downloads">
+            <h2>Download v0.4.0</h2>
+            <a href="https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-aarch64-darwin" class="download-link" download>
+                <span class="platform">macOS (Apple Silicon):</span> wisp-cli-aarch64-darwin
+            </a>
+            <a href="https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-aarch64-linux" class="download-link" download>
+                <span class="platform">Linux (ARM64):</span> wisp-cli-aarch64-linux
+            </a>
+            <a href="https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-x86_64-linux" class="download-link" download>
+                <span class="platform">Linux (x86_64):</span> wisp-cli-x86_64-linux
+            </a>
+            <a href="https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-x86_64-windows.exe" class="download-link" download>
+                <span class="platform">Windows (x86_64):</span> wisp-cli-x86_64-windows.exe
+            </a>
+
+            <h3 style="margin-top: 1.5rem; margin-bottom: 0.5rem;">SHA-1 Checksums</h3>
+            <pre style="font-size: 0.75rem; padding: 1rem;"><code class="language-bash">2b5c1d6d0e21f9d764dd66ef869bfcd348e8a111  wisp-cli-aarch64-darwin
+68d4a3831c07d2f32fdde8d3e809af1ab79e804e  wisp-cli-aarch64-linux
+86e89f592b0ec53239c082f502cbe7a47ed8bbec  wisp-cli-x86_64-linux
+227b735911ad260cff5af3ca3beefa4e1e3956a8  wisp-cli-x86_64-windows.exe</code></pre>
+        </div>
+
+        <div class="cicd-section">
+            <h2>CI/CD Integration</h2>
+            <p>Deploy automatically on every push using <a href="https://tangledspindle.org" target="_blank">Tangled Spindle</a>:</p>
+
+            <pre><code class="language-yaml">when:
+  - event: ['push']
+    branch: ['main']
+  - event: ['manual']
+
+engine: 'nixery'
+
+clone:
+  skip: false
+  depth: 1
+  submodules: false
+
+dependencies:
+  nixpkgs:
+    - nodejs
+    - coreutils
+    - curl
+  github:NixOS/nixpkgs/nixpkgs-unstable:
+    - bun
+
+environment:
+  SITE_PATH: 'dist'
+  SITE_NAME: 'my-site'
+  WISP_HANDLE: 'your-handle.bsky.social'
+
+steps:
+  - name: build site
+    command: |
+      export PATH="$HOME/.nix-profile/bin:$PATH"
+
+      # regenerate lockfile, https://github.com/npm/cli/pull/8184 makes rolldown not install
+      rm package-lock.json bun.lock
+      bun install @rolldown/binding-linux-arm64-gnu --save-optional
+      bun install
+
+      # run directly with bun because of shebang issues in nix
+      bun node_modules/.bin/vite build
+
+  - name: deploy to wisp
+    command: |
+      # Download Wisp CLI
+      curl https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-x86_64-linux -o wisp-cli
+      chmod +x wisp-cli
+
+      # Deploy to Wisp
+      ./wisp-cli \
+        "$WISP_HANDLE" \
+        --path "$SITE_PATH" \
+        --site "$SITE_NAME" \
+        --password "$WISP_APP_PASSWORD"</code></pre>
+
+            <div class="note">
+                <strong>Note:</strong> Set <code>WISP_APP_PASSWORD</code> as a secret in your Tangled Spindle repository settings.
+                Generate an app password from your AT Protocol account settings.
+            </div>
+        </div>
+
+        <div class="cicd-section">
+            <h2>Basic Usage</h2>
+            
+            <h3>Deploy a Site</h3>
+            <pre><code class="language-bash"># Download and make executable
+curl -O https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-macos-arm64
+chmod +x wisp-cli-macos-arm64
+
+# Deploy your site
+./wisp-cli-macos-arm64 deploy your-handle.bsky.social \
+  --path ./dist \
+  --site my-site \
+
+# Your site will be available at:
+# https://sites.wisp.place/your-handle/my-site</code></pre>
+
+            <h3>Pull a Site from PDS</h3>
+            <p style="color: var(--demo-text-secondary); margin-bottom: 0.5rem;">Download a site from the PDS to your local machine (uses OAuth authentication):</p>
+            <pre><code class="language-bash"># Pull a site to a specific directory
+wisp-cli pull your-handle.bsky.social \
+  --site my-site \
+  --output ./my-site
+
+# Pull to current directory
+wisp-cli pull your-handle.bsky.social \
+  --site my-site
+</code></pre>
+            <h3>Serve a Site Locally with Real-Time Updates</h3>
+            <p style="color: var(--demo-text-secondary); margin-bottom: 0.5rem;">Run a local server that monitors the firehose for real-time updates (uses OAuth authentication):</p>
+            <pre><code class="language-bash"># Serve on http://localhost:8080 (default)
+wisp-cli serve your-handle.bsky.social \
+  --site my-site
+
+# Serve on a custom port
+wisp-cli serve your-handle.bsky.social \
+  --site my-site \
+  --port 3000
+
+# Downloads site, serves it, and watches firehose for live updates!
+
+# Enable SPA mode (serve index.html for all routes)
+wisp-cli serve your-handle.bsky.social \
+  --site my-site \
+  --spa
+
+# Enable directory listing for paths without index files
+wisp-cli serve your-handle.bsky.social \
+  --site my-site \
+  --directory</code></pre>
+        </div>
+
+        <div class="footer">
+            <p>Learn more at <a href="https://wisp.place">wisp.place</a></p>
+        </div>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-bash.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-yaml.min.js"></script>
+</body>
+</html>
