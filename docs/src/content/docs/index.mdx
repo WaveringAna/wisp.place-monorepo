@@ -1,0 +1,154 @@
+---
+title: Wisp.place Documentation
+description: Decentralized static site hosting on the AT Protocol
+template: doc
+---
+
+**Decentralized static site hosting on the AT Protocol.**
+
+Wisp.place enables you to host static websites directly in your AT Protocol repository. Your Personal Data Server (PDS) holds the cryptographically signed manifest and files as the authoritative source of truth, while hosting services index and serve them with CDN-like performance.
+
+## Quick Start
+
+### Using the Web Interface
+Visit [https://wisp.place](https://wisp.place) and sign in with your AT Protocol account to deploy sites through the browser.
+
+### Using the CLI
+```bash
+# Download the CLI binary for your platform
+curl -L https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-x86_64-linux -o wisp-cli
+chmod +x wisp-cli
+
+# Deploy your site
+./wisp-cli your-handle.bsky.social --path ./my-site --site my-site
+```
+
+Your site will be available at:
+```
+https://sites.wisp.place/{your-did}/{site-name}
+```
+
+## Key Features
+
+### Decentralized Storage
+- Sites stored as `place.wisp.fs` records in your AT Protocol repo
+- Cryptographically verifiable ownership
+- Your PDS is the source of truth
+- Portable across hosting providers
+
+### Custom Domains
+- Point your own domain to your Wisp site
+- DNS verification ensures secure ownership
+- Automatic SSL/TLS certificates
+
+### URL Redirects & Rewrites
+- Netlify-style `_redirects` file support
+- Single-page app (SPA) routing
+- API proxying and conditional routing
+- Custom 404 pages
+
+### Efficient Deployment
+- **Incremental updates**: Only upload changed files
+- **Smart compression**: Automatic gzip for text files
+- **Large site support**: Automatic splitting into subfs records for sites with 250+ files to get around 150KB record size limit
+- **Blob reuse**: Content-addressed storage prevents duplicate uploads
+
+## How It Works
+
+The deployment process starts when you upload your files. Each file is compressed with gzip, base64-encoded, and uploaded as a blob to your PDS. A `place.wisp.fs` record then stores the complete site structure with references to these blobs, creating a verifiable manifest of your site.
+
+Hosting services continuously watch the AT Protocol firehose for new and updated sites. When your site is first accessed or updated, the hosting service downloads the manifest and blobs, caching them locally for optimized delivery. Custom domains work through DNS verification, allowing your site to be served from your own domain while maintaining the cryptographic guarantees of the AT Protocol.
+
+## Architecture Overview
+
+```
+       ┌──────────────┐             ┌──────────────┐
+       │  wisp-cli    │             │ wisp.place   │
+       │ (Rust Binary)│             │   Website    │
+       │              │             │  (React UI)  │
+       └──────────────┘             └──────────────┘
+             │                             │
+             │                             │
+             ▼                             ▼
+┌─────────────────────────────────────────────────────────┐
+│                    AT Protocol PDS                      │
+│  (Authoritative Source - Cryptographically Signed)      │
+│                                                         │
+│  ┌──────────────────────────────────────────────┐       │
+│  │ place.wisp.fs record                         │       │
+│  │ - Site manifest (directory tree)             │       │
+│  │ - Blob references (CID-based)                │       │
+│  │ - Metadata (file count, timestamps)          │       │
+│  └──────────────────────────────────────────────┘       │
+│                                                         │
+│  ┌──────────────────────────────────────────────┐       │
+│  │ Blobs (gzipped + base64 encoded)             │       │
+│  │ - index.html                                 │       │
+│  │ - styles.css                                 │       │
+│  │ - assets/*                                   │       │
+│  └──────────────────────────────────────────────┘       │
+└─────────────────────────────────────────────────────────┘
+                           │
+                           ▼
+        ┌─────────────────────────────────┐
+        │    AT Protocol Firehose         │
+        │  (Jetstream WebSocket Stream)   │
+        └─────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────┐
+│              Wisp Hosting Service                       │
+│                                                         │
+│  ┌──────────────────────────────────────────────┐       │
+│  │ Cache (Disk + In-Memory)                     │       │
+│  │ - Downloads sites on first access            │       │
+│  │ - Auto-updates on firehose events            │       │
+│  │ - LRU eviction for memory limits             │       │
+│  └──────────────────────────────────────────────┘       │
+│                                                         │
+│  ┌──────────────────────────────────────────────┐       │
+│  │ Routing & Serving                            │       │
+│  │ - Custom domains (example.com)               │       │
+│  │ - Subdomains (alice.wisp.place)              │       │
+│  │ - Direct URLs (sites.wisp.place/did/site)    │       │
+│  └──────────────────────────────────────────────┘       │
+└─────────────────────────────────────────────────────────┘
+                           │
+                           ▼
+                    ┌─────────────┐
+                    │   Browser   │
+                    └─────────────┘
+```
+
+## Tech Stack
+
+- **Backend**: Bun + Elysia + PostgreSQL
+- **Frontend**: React 19 + Tailwind 4 + Radix UI
+- **Hosting**: Node.js + Hono
+- **CLI**: Rust + Jacquard (AT Protocol library)
+- **Protocol**: AT Protocol OAuth + custom lexicons
+
+## Limits
+
+- **Max file size**: 100MB per file (PDS limit)
+- **Max files**: 1000 files per site
+- **Max total size**: 300MB per site (compressed)
+
+Files are automatically compressed with gzip before upload, so actual limits may be higher depending on your content compressibility.
+
+## Getting Started
+
+- [CLI Documentation](/cli) - Deploy sites from the command line
+- [Deployment Guide](/deployment) - Configure domains, redirects, and hosting
+- [Lexicons](/lexicons) - AT Protocol record schemas and data structures
+
+## Links
+
+- **Website**: [https://wisp.place](https://wisp.place)
+- **Repository**: [https://tangled.org/@nekomimi.pet/wisp.place-monorepo](https://tangled.org/@nekomimi.pet/wisp.place-monorepo)
+- **AT Protocol**: [https://atproto.com](https://atproto.com)
+- **Jacquard Library**: [https://tangled.org/@nonbinary.computer/jacquard](https://tangled.org/@nonbinary.computer/jacquard)
+
+## License
+
+MIT License - See the repository for details.

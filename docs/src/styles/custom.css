@@ -1,0 +1,114 @@
+/* Use the same color scheme as the main app */
+:root {
+	--sl-content-width: 70rem;
+	
+	/* Increase base font size by 10% */
+	font-size: 110%;
+
+	/* Light theme - Warm beige background from app */
+	--sl-color-bg: oklch(0.90 0.012 35);
+	--sl-color-bg-sidebar: oklch(0.93 0.01 35);
+	--sl-color-bg-nav: oklch(0.93 0.01 35);
+	--sl-color-text: oklch(0.18 0.01 30);
+	--sl-color-text-accent: oklch(0.78 0.15 345);
+	--sl-color-accent: oklch(0.78 0.15 345);
+	--sl-color-accent-low: oklch(0.95 0.03 345);
+	--sl-color-border: oklch(0.75 0.015 30);
+	--sl-color-gray-1: oklch(0.52 0.015 30);
+	--sl-color-gray-2: oklch(0.42 0.015 30);
+	--sl-color-gray-3: oklch(0.33 0.015 30);
+	--sl-color-gray-4: oklch(0.25 0.015 30);
+	--sl-color-gray-5: oklch(0.75 0.015 30);
+	--sl-color-bg-accent: oklch(0.88 0.01 35);
+}
+
+/* Dark theme - Slate violet background from app */
+[data-theme="dark"] {
+	--sl-color-bg: oklch(0.23 0.015 285);
+	--sl-color-bg-sidebar: oklch(0.28 0.015 285);
+	--sl-color-bg-nav: oklch(0.28 0.015 285);
+	--sl-color-text: oklch(0.90 0.005 285);
+	--sl-color-text-accent: oklch(0.85 0.08 5);
+	--sl-color-accent: oklch(0.85 0.08 5);
+	--sl-color-accent-low: oklch(0.92 0.05 5);
+	--sl-color-border: oklch(0.38 0.02 285);
+	--sl-color-gray-1: oklch(0.82 0.01 285);
+	--sl-color-gray-2: oklch(0.75 0.01 285);
+	--sl-color-gray-3: oklch(0.68 0.01 285);
+	--sl-color-gray-4: oklch(0.60 0.01 285);
+	--sl-color-gray-5: oklch(0.50 0.02 285);
+	--sl-color-bg-accent: oklch(0.33 0.015 285);
+}
+
+/* Make sidebar narrower */
+@media (min-width: 50rem) {
+	:root {
+		--sl-sidebar-width: 14rem;
+	}
+}
+
+/* Increase main grid layout to give more space to content */
+@media (min-width: 50rem) {
+	.main-wrapper {
+		display: grid;
+		grid-template-columns: 1fr;
+		gap: 0;
+	}
+}
+
+/* Text selection styling */
+::selection {
+	background: var(--sl-color-accent);
+	color: white;
+}
+
+::-moz-selection {
+	background: var(--sl-color-accent);
+	color: white;
+}
+
+/* Sidebar active/hover state text contrast fix */
+.sidebar a[aria-current="page"],
+.sidebar a[aria-current="page"] span {
+	color: oklch(0.23 0.015 285) !important;
+}
+
+[data-theme="dark"] .sidebar a[aria-current="page"],
+[data-theme="dark"] .sidebar a[aria-current="page"] span {
+	color: oklch(0.98 0.01 285) !important;
+}
+
+/* CLI download links styling */
+.downloads {
+	margin: 2rem 0;
+}
+
+.downloads h2 {
+	margin-bottom: 1rem;
+	font-size: 1.5rem;
+}
+
+.download-link {
+	display: block;
+	padding: 0.75rem 1rem;
+	margin-bottom: 0.5rem;
+	background: var(--sl-color-bg-nav);
+	border: 1px solid var(--sl-color-gray-5);
+	border-radius: 0.5rem;
+	text-decoration: none;
+	color: var(--sl-color-text);
+	transition: all 0.2s ease;
+}
+
+.download-link:hover {
+	background: var(--sl-color-bg-accent);
+	border-color: var(--sl-color-accent);
+	text-decoration: none;
+}
+
+.platform {
+	font-weight: 600;
+	color: var(--sl-color-accent);
+	margin-right: 0.5rem;
+}
+
