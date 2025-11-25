@@ -252,8 +252,9 @@ async function expandSubfsNodes(directory: Directory, pdsEndpoint: string, depth
             });
           }
         } else {
-          // If fetch failed, skip this entry
-          console.warn(`Failed to fetch subfs at ${fullPath}, skipping`);
+          // If not in map yet, preserve the subfs node for next recursion depth
+          console.log(`[Depth ${depth}] Subfs at ${fullPath} not yet fetched, preserving for next iteration`);
+          result.push(entry);
         }
       } else if ('type' in node && node.type === 'directory' && 'entries' in node) {
         // Recursively process subdirectories
