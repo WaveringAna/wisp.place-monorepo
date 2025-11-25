@@ -1,5 +1,5 @@
 ---
-title: Wisp CLI 0.2.0 (alpha)
+title: Wisp CLI 0.4.0 (alpha)
 description: Command-line tool for deploying static sites to the AT Protocol
 ---
 
@@ -19,7 +19,7 @@ The Wisp CLI is a command-line tool for deploying static websites directly to yo
 
 <div class="downloads">
 
-<h2>Download v0.3.0</h2>
+<h2>Download v0.4.0</h2>
 
 <a href="https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-aarch64-darwin" class="download-link" download="">
 

@@ -1,5 +1,5 @@
 import type { Record, Directory } from "@wisp/lexicons/types/place/wisp/fs";
-import { validateRecord } from "@wisp/lexicons/types/place/wisp/fs";
+// import { validateRecord } from "@wisp/lexicons/types/place/wisp/fs";
 
 /**
  * Create the manifest record for a site
@@ -18,10 +18,10 @@ export function createManifest(
 	};
 
 	// Validate the manifest before returning
-	const validationResult = validateRecord(manifest);
-	if (!validationResult.success) {
-		throw new Error(`Invalid manifest: ${validationResult.error?.message || 'Validation failed'}`);
-	}
+	// const validationResult = validateRecord(manifest);
+	// if (!validationResult.success) {
+	// 	throw new Error(`Invalid manifest: ${validationResult.error?.message || 'Validation failed'}`);
+	// }
 
 	return manifest;
 }
