@@ -8,13 +8,13 @@ default = ["place_wisp"]
 place_wisp = []
 
 [dependencies]
-jacquard = { path = "/Users/regent/Developer/jacquard/crates/jacquard", features = ["loopback"] }
-jacquard-oauth = { path = "/Users/regent/Developer/jacquard/crates/jacquard-oauth" }
-jacquard-api = { path = "/Users/regent/Developer/jacquard/crates/jacquard-api", features = ["streaming"] }
-jacquard-common = { path = "/Users/regent/Developer/jacquard/crates/jacquard-common", features = ["websocket"] }
-jacquard-identity = { path = "/Users/regent/Developer/jacquard/crates/jacquard-identity", features = ["dns"] }
-jacquard-derive = { path = "/Users/regent/Developer/jacquard/crates/jacquard-derive" }
-jacquard-lexicon = { path = "/Users/regent/Developer/jacquard/crates/jacquard-lexicon" }
+jacquard = { git = "https://tangled.org/nekomimi.pet/jacquard", features = ["loopback"] }
+jacquard-oauth = { git = "https://tangled.org/nekomimi.pet/jacquard" }
+jacquard-api = { git = "https://tangled.org/nekomimi.pet/jacquard", features = ["streaming"] }
+jacquard-common = { git = "https://tangled.org/nekomimi.pet/jacquard", features = ["websocket"] }
+jacquard-identity = { git = "https://tangled.org/nekomimi.pet/jacquard", features = ["dns"] }
+jacquard-derive = { git = "https://tangled.org/nekomimi.pet/jacquard" }
+jacquard-lexicon = { git = "https://tangled.org/nekomimi.pet/jacquard" }
 clap = { version = "4.5.51", features = ["derive"] }
 tokio = { version = "1.48", features = ["full"] }
 miette = { version = "7.6.0", features = ["fancy"] }
