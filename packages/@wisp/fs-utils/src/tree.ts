@@ -54,7 +54,7 @@ export function processUploadedFiles(files: UploadedFile[]): ProcessedDirectory 
 		if (parts.length === 1) {
 			// Root level file
 			entries.push({
-				name: parts[0],
+				name: parts[0]!,
 				node: {
 					$type: 'place.wisp.fs#file' as const,
 					type: 'file' as const,
@@ -110,7 +110,7 @@ export function processUploadedFiles(files: UploadedFile[]): ProcessedDirectory 
 				};
 
 				existingEntry = {
-					name: part,
+					name: part!,
 					node: newDir
 				};
 				currentEntries.push(existingEntry);
