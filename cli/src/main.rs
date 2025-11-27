@@ -15,7 +15,7 @@ use jacquard::client::{Agent, FileAuthStore, AgentSessionExt, MemoryCredentialSe
 use jacquard::oauth::client::OAuthClient;
 use jacquard::oauth::loopback::LoopbackConfig;
 use jacquard::prelude::IdentityResolver;
-use jacquard_common::types::string::{Datetime, Rkey, RecordKey};
+use jacquard_common::types::string::{Datetime, Rkey, RecordKey, AtUri};
 use jacquard_common::types::blob::MimeType;
 use miette::IntoDiagnostic;
 use std::path::{Path, PathBuf};
@@ -356,32 +356,120 @@ async fn deploy_site(
                 println!("  Split #{}: {} ({} files, {:.1}KB)",
                     attempts, largest_dir.path, largest_dir.file_count, largest_dir.size as f64 / 1024.0);
 
-                // Create a subfs record for this directory
-                use jacquard_common::types::string::Tid;
-                let subfs_tid = Tid::now_0();
-                let subfs_rkey = subfs_tid.to_string();
+                // Check if this directory is itself too large for a single subfs record
+                const MAX_SUBFS_SIZE: usize = 75 * 1024; // 75KB soft limit for safety
+                let mut subfs_uri = String::new();
 
-                let subfs_manifest = crate::place_wisp::subfs::SubfsRecord::new()
-                    .root(convert_fs_dir_to_subfs_dir(largest_dir.directory.clone()))
-                    .file_count(Some(largest_dir.file_count as i64))
-                    .created_at(Datetime::now())
-                    .build();
+                if largest_dir.size > MAX_SUBFS_SIZE {
+                    // Need to split this directory into multiple chunks
+                    println!("  → Directory too large, splitting into chunks...");
+                    let chunks = subfs_utils::split_directory_into_chunks(&largest_dir.directory, MAX_SUBFS_SIZE);
+                    println!("  → Created {} chunks", chunks.len());
 
-                // Upload subfs record
-                let subfs_output = agent.put_record(
-                    RecordKey::from(Rkey::new(&subfs_rkey).into_diagnostic()?),
-                    subfs_manifest
-                ).await.into_diagnostic()?;
+                    // Upload each chunk as a subfs record
+                    let mut chunk_uris = Vec::new();
+                    for (i, chunk) in chunks.iter().enumerate() {
+                        use jacquard_common::types::string::Tid;
+                        let chunk_tid = Tid::now_0();
+                        let chunk_rkey = chunk_tid.to_string();
 
-                let subfs_uri = subfs_output.uri.to_string();
-                println!("  ✅ Created subfs: {}", subfs_uri);
+                        let chunk_file_count = subfs_utils::count_files_in_directory(chunk);
+                        let chunk_size = subfs_utils::estimate_directory_size(chunk);
 
-                // Replace directory with subfs node (flat: false to preserve structure)
+                        let chunk_manifest = crate::place_wisp::subfs::SubfsRecord::new()
+                            .root(convert_fs_dir_to_subfs_dir(chunk.clone()))
+                            .file_count(Some(chunk_file_count as i64))
+                            .created_at(Datetime::now())
+                            .build();
+
+                        println!("  → Uploading chunk {}/{} ({} files, {:.1}KB)...",
+                            i + 1, chunks.len(), chunk_file_count, chunk_size as f64 / 1024.0);
+
+                        let chunk_output = agent.put_record(
+                            RecordKey::from(Rkey::new(&chunk_rkey).into_diagnostic()?),
+                            chunk_manifest
+                        ).await.into_diagnostic()?;
+
+                        let chunk_uri = chunk_output.uri.to_string();
+                        chunk_uris.push((chunk_uri.clone(), format!("{}#{}", largest_dir.path, i)));
+                        new_subfs_uris.push((chunk_uri.clone(), format!("{}#{}", largest_dir.path, i)));
+                    }
+
+                    // Create a parent subfs record that references all chunks
+                    // Each chunk reference MUST have flat: true to merge chunk contents
+                    println!("  → Creating parent subfs with {} chunk references...", chunk_uris.len());
+                    use jacquard_common::CowStr;
+                    use crate::place_wisp::fs::{Subfs};
+
+                    // Convert to fs::Subfs (which has the 'flat' field) instead of subfs::Subfs
+                    let parent_entries_fs: Vec<Entry> = chunk_uris.iter().enumerate().map(|(i, (uri, _))| {
+                        let uri_string = uri.clone();
+                        let at_uri = AtUri::new_cow(CowStr::from(uri_string)).expect("valid URI");
+                        Entry::new()
+                            .name(CowStr::from(format!("chunk{}", i)))
+                            .node(EntryNode::Subfs(Box::new(
+                                Subfs::new()
+                                    .r#type(CowStr::from("subfs"))
+                                    .subject(at_uri)
+                                    .flat(Some(true)) // EXPLICITLY TRUE - merge chunk contents
+                                    .build()
+                            )))
+                            .build()
+                    }).collect();
+
+                    let parent_root_fs = Directory::new()
+                        .r#type(CowStr::from("directory"))
+                        .entries(parent_entries_fs)
+                        .build();
+
+                    // Convert to subfs::Directory for the parent subfs record
+                    let parent_root_subfs = convert_fs_dir_to_subfs_dir(parent_root_fs);
+
+                    use jacquard_common::types::string::Tid;
+                    let parent_tid = Tid::now_0();
+                    let parent_rkey = parent_tid.to_string();
+
+                    let parent_manifest = crate::place_wisp::subfs::SubfsRecord::new()
+                        .root(parent_root_subfs)
+                        .file_count(Some(largest_dir.file_count as i64))
+                        .created_at(Datetime::now())
+                        .build();
+
+                    let parent_output = agent.put_record(
+                        RecordKey::from(Rkey::new(&parent_rkey).into_diagnostic()?),
+                        parent_manifest
+                    ).await.into_diagnostic()?;
+
+                    subfs_uri = parent_output.uri.to_string();
+                    println!("  ✅ Created parent subfs with chunks (flat=true on each chunk): {}", subfs_uri);
+                } else {
+                    // Directory fits in a single subfs record
+                    use jacquard_common::types::string::Tid;
+                    let subfs_tid = Tid::now_0();
+                    let subfs_rkey = subfs_tid.to_string();
+
+                    let subfs_manifest = crate::place_wisp::subfs::SubfsRecord::new()
+                        .root(convert_fs_dir_to_subfs_dir(largest_dir.directory.clone()))
+                        .file_count(Some(largest_dir.file_count as i64))
+                        .created_at(Datetime::now())
+                        .build();
+
+                    // Upload subfs record
+                    let subfs_output = agent.put_record(
+                        RecordKey::from(Rkey::new(&subfs_rkey).into_diagnostic()?),
+                        subfs_manifest
+                    ).await.into_diagnostic()?;
+
+                    subfs_uri = subfs_output.uri.to_string();
+                    println!("  ✅ Created subfs: {}", subfs_uri);
+                }
+
+                // Replace directory with subfs node (flat: false to preserve directory structure)
                 working_directory = subfs_utils::replace_directory_with_subfs(
                     working_directory,
                     &largest_dir.path,
                     &subfs_uri,
-                    false // Preserve directory structure
+                    false // Preserve directory - the chunks inside have flat=true
                 )?;
 
                 new_subfs_uris.push((subfs_uri, largest_dir.path.clone()));
@@ -729,6 +817,14 @@ async fn process_file(
             }
 
             return Ok((file_builder.build(), true));
+        } else {
+            // CID mismatch - file changed
+            println!("  → File changed: {} (old CID: {}, new CID: {})", file_path_key, existing_cid, file_cid);
+        }
+    } else {
+        // File not in existing blob map
+        if file_path_key.starts_with("imgs/") {
+            println!("  → New file (not in blob map): {}", file_path_key);
         }
     }
 

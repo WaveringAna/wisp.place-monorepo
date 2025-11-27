@@ -35,16 +35,15 @@ pub async fn pull_site(
     let pds_url = resolver.pds_for_did(&did).await.into_diagnostic()?;
     println!("Resolved PDS: {}", pds_url);
 
-    // Fetch the place.wisp.fs record
-
+    // Create a temporary agent for fetching records (no auth needed for public reads)
     println!("Fetching record from PDS...");
     let client = reqwest::Client::new();
-    
+
     // Use com.atproto.repo.getRecord
     use jacquard::api::com_atproto::repo::get_record::GetRecord;
     use jacquard_common::types::string::Rkey as RkeyType;
     let rkey_parsed = RkeyType::new(&rkey).into_diagnostic()?;
-    
+
     use jacquard_common::types::ident::AtIdentifier;
     use jacquard_common::types::string::RecordKey;
     let request = GetRecord::new()
@@ -70,7 +69,8 @@ pub async fn pull_site(
     println!("Found site '{}' with {} files (in main record)", fs_record.site, file_count);
 
     // Check for and expand subfs nodes
-    let expanded_root = expand_subfs_in_pull(&fs_record.root, &pds_url, did.as_str()).await?;
+    // Note: We use a custom expand function for pull since we don't have an Agent
+    let expanded_root = expand_subfs_in_pull_with_client(&fs_record.root, &client, &pds_url).await?;
     let total_file_count = subfs_utils::count_files_in_directory(&expanded_root);
 
     if total_file_count as i64 != fs_record.file_count.unwrap_or(0) {
@@ -402,16 +402,16 @@ fn download_directory<'a>(
 }
 
 /// Expand subfs nodes in a directory tree by fetching and merging subfs records (RECURSIVELY)
-async fn expand_subfs_in_pull<'a>(
+/// Uses reqwest client directly for pull command (no agent needed)
+async fn expand_subfs_in_pull_with_client<'a>(
     directory: &Directory<'a>,
+    client: &reqwest::Client,
     pds_url: &Url,
-    _did: &str,
 ) -> miette::Result<Directory<'static>> {
-    use crate::place_wisp::subfs::SubfsRecord;
-    use jacquard_common::types::value::from_data;
     use jacquard_common::IntoStatic;
+    use jacquard_common::types::value::from_data;
+    use crate::place_wisp::subfs::SubfsRecord;
 
-    // Recursively fetch ALL subfs records (including nested ones)
     let mut all_subfs_map: HashMap<String, crate::place_wisp::subfs::Directory> = HashMap::new();
     let mut to_fetch = subfs_utils::extract_subfs_uris(directory, String::new());
 
@@ -420,11 +420,9 @@ async fn expand_subfs_in_pull<'a>(
     }
 
     println!("Found {} subfs records, fetching recursively...", to_fetch.len());
-    let client = reqwest::Client::new();
 
-    // Keep fetching until we've resolved all subfs (including nested ones)
     let mut iteration = 0;
-    const MAX_ITERATIONS: usize = 10; // Prevent infinite loops
+    const MAX_ITERATIONS: usize = 10;
 
     while !to_fetch.is_empty() && iteration < MAX_ITERATIONS {
         iteration += 1;
@@ -437,26 +435,27 @@ async fn expand_subfs_in_pull<'a>(
             let pds_url = pds_url.clone();
 
             fetch_tasks.push(async move {
+                // Parse URI
                 let parts: Vec<&str> = uri.trim_start_matches("at://").split('/').collect();
                 if parts.len() < 3 {
                     return Err(miette::miette!("Invalid subfs URI: {}", uri));
                 }
 
-                let _did = parts[0];
+                let did_str = parts[0];
                 let collection = parts[1];
-                let rkey = parts[2];
+                let rkey_str = parts[2];
 
                 if collection != "place.wisp.subfs" {
                     return Err(miette::miette!("Expected place.wisp.subfs collection, got: {}", collection));
                 }
 
+                // Fetch using GetRecord
                 use jacquard::api::com_atproto::repo::get_record::GetRecord;
-                use jacquard_common::types::string::Rkey as RkeyType;
+                use jacquard_common::types::string::{Rkey as RkeyType, Did as DidType, RecordKey};
                 use jacquard_common::types::ident::AtIdentifier;
-                use jacquard_common::types::string::{RecordKey, Did as DidType};
 
-                let rkey_parsed = RkeyType::new(rkey).into_diagnostic()?;
-                let did_parsed = DidType::new(_did).into_diagnostic()?;
+                let rkey_parsed = RkeyType::new(rkey_str).into_diagnostic()?;
+                let did_parsed = DidType::new(did_str).into_diagnostic()?;
 
                 let request = GetRecord::new()
                     .repo(AtIdentifier::Did(did_parsed))
@@ -472,24 +471,23 @@ async fn expand_subfs_in_pull<'a>(
 
                 let record_output = response.into_output().into_diagnostic()?;
                 let subfs_record: SubfsRecord = from_data(&record_output.value).into_diagnostic()?;
-                let subfs_record_static = subfs_record.into_static();
 
-                Ok::<_, miette::Report>((path, subfs_record_static))
+                Ok::<_, miette::Report>((path, subfs_record.into_static()))
             });
         }
 
         let results: Vec<_> = futures::future::join_all(fetch_tasks).await;
 
         // Process results and find nested subfs
-        let mut newly_fetched = Vec::new();
+        let mut newly_found_uris = Vec::new();
         for result in results {
             match result {
                 Ok((path, record)) => {
                     println!("    ✓ Fetched subfs at {}", path);
 
-                    // Check for nested subfs in this record
-                    let nested_subfs = extract_subfs_from_subfs_dir(&record.root, path.clone());
-                    newly_fetched.extend(nested_subfs);
+                    // Extract nested subfs URIs
+                    let nested_uris = extract_subfs_uris_from_subfs_dir(&record.root, path.clone());
+                    newly_found_uris.extend(nested_uris);
 
                     all_subfs_map.insert(path, record.root);
                 }
@@ -499,15 +497,15 @@ async fn expand_subfs_in_pull<'a>(
             }
         }
 
-        // Update to_fetch with only the NEW subfs we haven't fetched yet
-        to_fetch = newly_fetched
+        // Filter out already-fetched paths
+        to_fetch = newly_found_uris
             .into_iter()
-            .filter(|(uri, _)| !all_subfs_map.iter().any(|(k, _)| k == uri))
+            .filter(|(_, path)| !all_subfs_map.contains_key(path))
             .collect();
     }
 
     if iteration >= MAX_ITERATIONS {
-        return Err(miette::miette!("Max iterations reached while fetching nested subfs"));
+        eprintln!("⚠️  Max iterations reached while fetching nested subfs");
     }
 
     println!("  Total subfs records fetched: {}", all_subfs_map.len());
@@ -516,8 +514,8 @@ async fn expand_subfs_in_pull<'a>(
     Ok(replace_subfs_with_content(directory.clone(), &all_subfs_map, String::new()))
 }
 
-/// Extract subfs URIs from a subfs::Directory
-fn extract_subfs_from_subfs_dir(
+/// Extract subfs URIs from a subfs::Directory (helper for pull)
+fn extract_subfs_uris_from_subfs_dir(
     directory: &crate::place_wisp::subfs::Directory,
     current_path: String,
 ) -> Vec<(String, String)> {
@@ -535,7 +533,7 @@ fn extract_subfs_from_subfs_dir(
                 uris.push((subfs_node.subject.to_string(), full_path.clone()));
             }
             crate::place_wisp::subfs::EntryNode::Directory(subdir) => {
-                let nested = extract_subfs_from_subfs_dir(subdir, full_path);
+                let nested = extract_subfs_uris_from_subfs_dir(subdir, full_path);
                 uris.extend(nested);
             }
             _ => {}
