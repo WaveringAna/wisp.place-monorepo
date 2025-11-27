@@ -1,33 +1,38 @@
-# Use official Node.js Alpine image with pnpm
 # Build from monorepo root: docker build -f apps/hosting-service/Dockerfile .
-FROM node:alpine AS base
 
-# Install pnpm globally (supports workspace: protocol)
-RUN npm install -g pnpm
+# Stage 1: Build
+FROM oven/bun:1-alpine AS builder
 
-# Set working directory
 WORKDIR /app
 
-# Copy workspace configuration
-COPY package.json tsconfig.json ./
+# Copy workspace configuration files
+COPY package.json bun.lock ./
+COPY tsconfig.json ./
 
-# Copy all workspace packages
+# Copy all workspace packages (needed for workspace: dependencies)
 COPY packages ./packages
-
-# Copy hosting-service and main-app package.json (for workspace resolution)
 COPY apps/hosting-service ./apps/hosting-service
 COPY apps/main-app/package.json ./apps/main-app/package.json
 
-# Install all dependencies (including workspaces)
-RUN pnpm install --frozen-lockfile || pnpm install
+# Install dependencies
+RUN bun install --frozen-lockfile
 
-# Set working directory to hosting-service
+# Build the hosting service
 WORKDIR /app/apps/hosting-service
+RUN bun run build
+
+# Stage 2: Production
+FROM node:22-alpine AS production
+
+WORKDIR /app
+
+# Copy only the built file
+COPY --from=builder /app/apps/hosting-service/dist/index.js ./index.js
 
 # Create cache directory
 RUN mkdir -p ./cache/sites
 
-# Set environment variables (can be overridden at runtime)
+# Set environment variables
 ENV PORT=3001
 ENV NODE_ENV=production
 
@@ -36,7 +41,7 @@ EXPOSE 3001
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD node -e "fetch('http://localhost:3001/health').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"
+  CMD wget --no-verbose --tries=1 --spider http://localhost:3001/health || exit 1
 
-# Start the application (can override with 'pnpm run backfill' in compose)
-CMD ["pnpm", "run", "start"]
+# Start the application
+CMD ["node", "index.js"]

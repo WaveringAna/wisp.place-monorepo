@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx --env-file=.env  src/index.ts",
-    "build": "tsc",
+    "build": "bun run build.ts",
     "start": "tsx src/index.ts",
     "backfill": "tsx src/index.ts --backfill"
   },

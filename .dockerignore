@@ -1,4 +1,3 @@
-hosting-service
 node_modules
 .git
 .gitignore
@@ -15,3 +14,11 @@ testDeploy
 .tangled
 .crush
 .claude
+
+# Exclude cache directories
+**/cache
+apps/hosting-service/cache
+
+# Exclude local node_modules in subdirectories
+apps/*/node_modules
+packages/*/node_modules
