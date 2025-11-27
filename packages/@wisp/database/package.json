@@ -17,13 +17,5 @@
   },
   "dependencies": {
     "postgres": "^3.4.5"
-  },
-  "peerDependencies": {
-    "bun": "^1.0.0"
-  },
-  "peerDependenciesMeta": {
-    "bun": {
-      "optional": true
-    }
   }
 }

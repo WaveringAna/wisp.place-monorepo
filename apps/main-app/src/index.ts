@@ -115,8 +115,8 @@ export const app = new Elysia({
 	.use(adminRoutes(cookieSecret))
 	.use(
 		await staticPlugin({
-			assets: 'apps/main-app/public',
-			prefix: '/'
+			assets: './apps/main-app/public',
+			prefix: '/',
 		})
 	)
 	.get('/client-metadata.json', () => {
@@ -150,11 +150,10 @@ export const app = new Elysia({
 	.get('/api/screenshots', async () => {
 		const { Glob } = await import('bun')
 		const glob = new Glob('*.png')
-		const screenshots: string[] = []
 
-		for await (const file of glob.scan('./apps/main-app/public/screenshots')) {
-			screenshots.push(file)
-		}
+		// Convert async iterator to array using Array.fromAsync
+		const files = glob.scan('./apps/main-app/public/screenshots')
+		const screenshots = await Array.fromAsync(files)
 
 		return { screenshots }
 	})

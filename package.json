@@ -8,17 +8,19 @@
     "apps/hosting-service"
   ],
   "dependencies": {
+    "@tailwindcss/cli": "^4.1.17",
     "bun-plugin-tailwind": "^0.1.2",
-    "tailwindcss": "4"
+    "tailwindcss": "^4.1.17"
   },
   "scripts": {
     "test": "bun test",
     "dev": "bun run --watch apps/main-app/src/index.ts",
     "start": "bun run apps/main-app/src/index.ts",
-    "build": "bun build --compile --target bun --outfile server apps/main-app/src/index.ts",
+    "build": "cd apps/main-app && bun run build.ts",
+    "build:hosting": "cd apps/hosting-service && npm run build",
+    "build:all": "bun run build && npm run build:hosting",
     "screenshot": "bun run apps/main-app/scripts/screenshot-sites.ts",
     "hosting:dev": "cd apps/hosting-service && npm run dev",
-    "hosting:build": "cd apps/hosting-service && npm run build",
     "hosting:start": "cd apps/hosting-service && npm run start"
   }
 }

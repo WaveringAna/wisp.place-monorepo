@@ -23,8 +23,8 @@ interface CacheMetadata {
   rkey: string;
   // Map of file path to blob CID for incremental updates
   fileCids?: Record<string, string>;
-  // Site settings
-  settings?: WispSettings;
+  // Site settings (null = explicitly no settings, undefined = not yet checked)
+  settings?: WispSettings | null;
 }
 
 
@@ -608,22 +608,21 @@ async function getCacheMetadata(did: string, rkey: string): Promise<CacheMetadat
 export async function getCachedSettings(did: string, rkey: string): Promise<WispSettings | null> {
   const metadata = await getCacheMetadata(did, rkey);
 
-  // If metadata has settings, return them
-  if (metadata?.settings) {
-    return metadata.settings;
+  // If metadata has settings (including explicit null for "no settings"), return them
+  if (metadata && 'settings' in metadata) {
+    return metadata.settings ?? null;
   }
 
-  // If metadata exists but has no settings, try to fetch from PDS and update cache
+  // If metadata exists but has never checked for settings, try to fetch from PDS and update cache
   if (metadata) {
     console.log('[Cache] Metadata missing settings, fetching from PDS', { did, rkey });
     try {
       const settings = await fetchSiteSettings(did, rkey);
-      if (settings) {
-        // Update the cached metadata with the fetched settings
-        await updateCacheMetadataSettings(did, rkey, settings);
-        console.log('[Cache] Updated metadata with fetched settings', { did, rkey });
-        return settings;
-      }
+      // Update cache with settings (or null if none found)
+      // This caches the "no settings" state to avoid repeated PDS fetches
+      await updateCacheMetadataSettings(did, rkey, settings);
+      console.log('[Cache] Updated metadata with fetched settings', { did, rkey, hasSettings: !!settings });
+      return settings;
     } catch (err) {
       console.error('[Cache] Failed to fetch/update settings', { did, rkey, err });
     }
@@ -646,7 +645,8 @@ export async function updateCacheMetadataSettings(did: string, rkey: string, set
     const metadata = JSON.parse(content) as CacheMetadata;
 
     // Update settings field
-    metadata.settings = settings || undefined;
+    // Store null explicitly to cache "no settings" state and avoid repeated fetches
+    metadata.settings = settings ?? null;
 
     // Write back to disk
     await writeFile(metadataPath, JSON.stringify(metadata, null, 2), 'utf-8');
