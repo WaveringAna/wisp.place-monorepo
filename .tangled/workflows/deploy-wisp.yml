@@ -28,7 +28,7 @@ steps:
     command: |
       git submodule update --init --recursive
   - name: Build wisp-cli
-    command: >
+    command: |
       cd cli
 
       export PATH="$HOME/.nix-profile/bin:$PATH"
