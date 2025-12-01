@@ -34,6 +34,8 @@ import {
     failUploadJob,
     addJobListener
 } from '../lib/upload-jobs'
+import { createIgnoreMatcher, shouldIgnore, parseWispignore } from '../lib/ignore-patterns'
+import type { Ignore } from 'ignore'
 
 const logger = createLogger('main-app')
 
@@ -145,6 +147,22 @@ async function processUploadInBackground(
             }
         }
 
+        // Check for .wispignore file in uploaded files
+        let customIgnorePatterns: string[] = [];
+        const wispignoreFile = fileArray.find(f => f && f.name && f.name.endsWith('.wispignore'));
+        if (wispignoreFile) {
+            try {
+                const content = await wispignoreFile.text();
+                customIgnorePatterns = parseWispignore(content);
+                console.log(`Found .wispignore file with ${customIgnorePatterns.length} custom patterns`);
+            } catch (err) {
+                console.warn('Failed to parse .wispignore file:', err);
+            }
+        }
+
+        // Create ignore matcher with default and custom patterns
+        const ignoreMatcher = createIgnoreMatcher(customIgnorePatterns);
+
         // Convert File objects to UploadedFile format
         const uploadedFiles: UploadedFile[] = [];
         const skippedFiles: Array<{ name: string; reason: string }> = [];
@@ -171,107 +189,14 @@ async function processUploadInBackground(
                 currentFile: file.name
             });
 
-            // Skip unwanted files and directories
+            // Skip files that match ignore patterns
             const normalizedPath = file.name.replace(/^[^\/]*\//, '');
-            const fileName = normalizedPath.split('/').pop() || '';
-            const pathParts = normalizedPath.split('/');
 
-            // .git directory (version control - thousands of files)
-            if (normalizedPath.startsWith('.git/') || normalizedPath === '.git') {
-                console.log(`Skipping .git file: ${file.name}`);
+            if (shouldIgnore(ignoreMatcher, normalizedPath)) {
+                console.log(`Skipping ignored file: ${file.name}`);
                 skippedFiles.push({
                     name: file.name,
-                    reason: '.git directory excluded'
-                });
-                continue;
-            }
-
-            // .DS_Store (macOS metadata - can leak info)
-            if (fileName === '.DS_Store') {
-                console.log(`Skipping .DS_Store file: ${file.name}`);
-                skippedFiles.push({
-                    name: file.name,
-                    reason: '.DS_Store file excluded'
-                });
-                continue;
-            }
-
-            // .env files (environment variables with secrets)
-            if (fileName.startsWith('.env')) {
-                console.log(`Skipping .env file: ${file.name}`);
-                skippedFiles.push({
-                    name: file.name,
-                    reason: 'environment files excluded for security'
-                });
-                continue;
-            }
-
-            // node_modules (dependency folder - can be 100,000+ files)
-            if (pathParts.includes('node_modules')) {
-                console.log(`Skipping node_modules file: ${file.name}`);
-                skippedFiles.push({
-                    name: file.name,
-                    reason: 'node_modules excluded'
-                });
-                continue;
-            }
-
-            // OS metadata files
-            if (fileName === 'Thumbs.db' || fileName === 'desktop.ini' || fileName.startsWith('._')) {
-                console.log(`Skipping OS metadata file: ${file.name}`);
-                skippedFiles.push({
-                    name: file.name,
-                    reason: 'OS metadata file excluded'
-                });
-                continue;
-            }
-
-            // macOS system directories
-            if (pathParts.includes('.Spotlight-V100') || pathParts.includes('.Trashes') || pathParts.includes('.fseventsd')) {
-                console.log(`Skipping macOS system file: ${file.name}`);
-                skippedFiles.push({
-                    name: file.name,
-                    reason: 'macOS system directory excluded'
-                });
-                continue;
-            }
-
-            // Cache and temp directories
-            if (pathParts.some(part => part === '.cache' || part === '.temp' || part === '.tmp')) {
-                console.log(`Skipping cache/temp file: ${file.name}`);
-                skippedFiles.push({
-                    name: file.name,
-                    reason: 'cache/temp directory excluded'
-                });
-                continue;
-            }
-
-            // Python cache
-            if (pathParts.includes('__pycache__') || fileName.endsWith('.pyc')) {
-                console.log(`Skipping Python cache file: ${file.name}`);
-                skippedFiles.push({
-                    name: file.name,
-                    reason: 'Python cache excluded'
-                });
-                continue;
-            }
-
-            // Python virtual environments
-            if (pathParts.some(part => part === '.venv' || part === 'venv' || part === 'env')) {
-                console.log(`Skipping Python venv file: ${file.name}`);
-                skippedFiles.push({
-                    name: file.name,
-                    reason: 'Python virtual environment excluded'
-                });
-                continue;
-            }
-
-            // Editor swap files
-            if (fileName.endsWith('.swp') || fileName.endsWith('.swo') || fileName.endsWith('~')) {
-                console.log(`Skipping editor swap file: ${file.name}`);
-                skippedFiles.push({
-                    name: file.name,
-                    reason: 'editor swap file excluded'
+                    reason: 'matched ignore pattern'
                 });
                 continue;
             }
