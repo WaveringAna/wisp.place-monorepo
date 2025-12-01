@@ -1,54 +1,59 @@
-# Deploy to Wisp.place
-# This workflow builds your site and deploys it to Wisp.place using the wisp-cli
+---
 when:
-    - event: ['push']
-      branch: ['main']
-    - event: ['manual']
-engine: 'nixery'
+  - event:
+      - push
+    branch:
+      - main
+  - event:
+      - manual
+engine: nixery
 clone:
-    skip: false
-    depth: 1
-    submodules: true
+  skip: false
+  depth: 1
+  submodules: true
 dependencies:
-    nixpkgs:
-        - git
-        - gcc
-    github:NixOS/nixpkgs/nixpkgs-unstable:
-        - rustc
-        - cargo
-        - bun
-
+  nixpkgs:
+    - git
+    - gcc
+  github:NixOS/nixpkgs/nixpkgs-unstable:
+    - rustc
+    - cargo
+    - bun
 environment:
-    WISP_HANDLE: 'wisp.place'
-    SITE_PATH: 'docs/dist'
-    SITE_NAME: 'docs'
+  WISP_HANDLE: wisp.place
+  SITE_PATH: docs/dist
+  SITE_NAME: docs
 steps:
-    - name: 'Initialize submodules'
-      command: |
-          git submodule update --init --recursive
+  - name: Initialize submodules
+    command: |
+      git submodule update --init --recursive
+  - name: Build wisp-cli
+    command: >
+      cd cli
 
-    - name: 'Build wisp-cli'
-      command: |
-          cd cli
-          export PATH="$HOME/.nix-profile/bin:$PATH"
-          nix-channel --add https://nixos.org/channels/nixpkgs-unstable nixpkgs
-          nix-channel --update
-          nix-shell -p pkg-config openssl --run '
-            export PKG_CONFIG_PATH="$(pkg-config --variable pc_path pkg-config)"
-            export OPENSSL_DIR="$(nix-build --no-out-link "<nixpkgs>" -A openssl.dev)"
-            export OPENSSL_NO_VENDOR=1
-            export OPENSSL_LIB_DIR="$(nix-build --no-out-link "<nixpkgs>" -A openssl.out)/lib"
-            cargo build --release
-          '
-          cd ..
-    - name: 'Build docs'
-      command: |
-          cd docs
-          bun run build
-    - name: 'Deploy to Wisp.place'
-      command: |
-          ./cli/target/release/wisp-cli \
-            "$WISP_HANDLE" \
-            --path "$SITE_PATH" \
-            --site "$SITE_NAME" \
-            --password "$WISP_APP_PASSWORD"
+      export PATH="$HOME/.nix-profile/bin:$PATH"
+
+      nix-channel --add https://nixos.org/channels/nixpkgs-unstable nixpkgs
+
+      nix-channel --update
+
+      nix-shell -p pkg-config openssl --run '
+        export PKG_CONFIG_PATH="$(pkg-config --variable pc_path pkg-config)"
+        export OPENSSL_DIR="$(nix-build --no-out-link "<nixpkgs>" -A openssl.dev)"
+        export OPENSSL_NO_VENDOR=1
+        export OPENSSL_LIB_DIR="$(nix-build --no-out-link "<nixpkgs>" -A openssl.out)/lib"
+        cargo build --release
+      '
+
+      cd ..
+  - name: Build docs
+    command: |
+      cd docs
+      bun run build
+  - name: Deploy to Wisp.place
+    command: |
+      ./cli/target/release/wisp-cli \
+        "$WISP_HANDLE" \
+        --path "$SITE_PATH" \
+        --site "$SITE_NAME" \
+        --password "$WISP_APP_PASSWORD"
