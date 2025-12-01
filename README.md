@@ -53,6 +53,23 @@ cargo build
 
 ## Features
 
+### File Filtering and `.wispignore`
+
+Wisp automatically excludes common files that shouldn't be uploaded to your site (like `.git`, `node_modules`, `.env` files, etc.). You can customize this behavior by creating a `.wispignore` file in your site root.
+
+The `.wispignore` file uses the same syntax as `.gitignore`:
+```
+# Custom ignore patterns
+*.log
+temp/
+build/
+.secret
+```
+
+Default patterns include: `.git`, `.github`, `.gitlab`, `.DS_Store`, `node_modules`, `.env`, cache directories, Python virtual environments, editor swap files, `.tangled`, and more.
+
+See [File Filtering Documentation](./docs/src/content/docs/file-filtering.md) for details.
+
 ### URL Redirects and Rewrites
 
 The hosting service supports Netlify-style `_redirects` files for managing URLs. Place a `_redirects` file in your site root to enable:
