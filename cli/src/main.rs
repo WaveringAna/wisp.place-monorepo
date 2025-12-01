@@ -8,6 +8,7 @@ mod pull;
 mod serve;
 mod subfs_utils;
 mod redirects;
+mod ignore_patterns;
 
 use clap::{Parser, Subcommand};
 use jacquard::CowStr;
@@ -323,8 +324,9 @@ async fn deploy_site(
         }
     };
 
-    // Build directory tree
-    let (root_dir, total_files, reused_count) = build_directory(agent, &path, &existing_blob_map, String::new()).await?;
+    // Build directory tree with ignore patterns
+    let ignore_matcher = ignore_patterns::IgnoreMatcher::new(&path)?;
+    let (root_dir, total_files, reused_count) = build_directory(agent, &path, &existing_blob_map, String::new(), &ignore_matcher).await?;
     let uploaded_count = total_files - reused_count;
 
     // Check if we need to split into subfs records
@@ -603,6 +605,7 @@ fn build_directory<'a>(
     dir_path: &'a Path,
     existing_blobs: &'a HashMap<String, (jacquard_common::types::blob::BlobRef<'static>, String)>,
     current_path: String,
+    ignore_matcher: &'a ignore_patterns::IgnoreMatcher,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = miette::Result<(Directory<'static>, usize, usize)>> + 'a>>
 {
     Box::pin(async move {
@@ -623,60 +626,15 @@ fn build_directory<'a>(
             .ok_or_else(|| miette::miette!("Invalid filename: {:?}", name))?
             .to_string();
 
-        // Skip unwanted files and directories
+        // Construct full path for ignore checking
+        let full_path = if current_path.is_empty() {
+            name_str.clone()
+        } else {
+            format!("{}/{}", current_path, name_str)
+        };
 
-        // .git directory (version control - thousands of files)
-        if name_str == ".git" {
-            continue;
-        }
-
-        // .DS_Store (macOS metadata - can leak info)
-        if name_str == ".DS_Store" {
-            continue;
-        }
-
-        // .wisp.metadata.json (wisp internal metadata - should not be uploaded)
-        if name_str == ".wisp.metadata.json" {
-            continue;
-        }
-
-        // .env files (environment variables with secrets)
-        if name_str.starts_with(".env") {
-            continue;
-        }
-
-        // node_modules (dependency folder - can be 100,000+ files)
-        if name_str == "node_modules" {
-            continue;
-        }
-
-        // OS metadata files
-        if name_str == "Thumbs.db" || name_str == "desktop.ini" || name_str.starts_with("._") {
-            continue;
-        }
-
-        // macOS system directories
-        if name_str == ".Spotlight-V100" || name_str == ".Trashes" || name_str == ".fseventsd" {
-            continue;
-        }
-
-        // Cache and temp directories
-        if name_str == ".cache" || name_str == ".temp" || name_str == ".tmp" {
-            continue;
-        }
-
-        // Python cache
-        if name_str == "__pycache__" || name_str.ends_with(".pyc") {
-            continue;
-        }
-
-        // Python virtual environments
-        if name_str == ".venv" || name_str == "venv" || name_str == "env" {
-            continue;
-        }
-
-        // Editor swap files
-        if name_str.ends_with(".swp") || name_str.ends_with(".swo") || name_str.ends_with("~") {
+        // Skip files/directories that match ignore patterns
+        if ignore_matcher.is_ignored(&full_path) || ignore_matcher.is_filename_ignored(&name_str) {
             continue;
         }
 
@@ -732,7 +690,7 @@ fn build_directory<'a>(
         } else {
             format!("{}/{}", current_path, name)
         };
-        let (subdir, sub_total, sub_reused) = build_directory(agent, &path, existing_blobs, subdir_path).await?;
+        let (subdir, sub_total, sub_reused) = build_directory(agent, &path, existing_blobs, subdir_path, ignore_matcher).await?;
         dir_entries.push(Entry::new()
             .name(CowStr::from(name))
             .node(EntryNode::Directory(Box::new(subdir)))
