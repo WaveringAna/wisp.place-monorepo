@@ -20,16 +20,33 @@ export class FirehoseWorker {
 	private idResolver: IdResolver
 	private isShuttingDown = false
 	private lastEventTime = Date.now()
+	private cacheCleanupInterval: NodeJS.Timeout | null = null
 
 	constructor(
 		private logger?: (msg: string, data?: Record<string, unknown>) => void
 	) {
 		this.idResolver = new IdResolver()
+		this.startCacheCleanup()
 	}
 
 	private log(msg: string, data?: Record<string, unknown>) {
 		const log = this.logger || console.log
 		log(`[FirehoseWorker] ${msg}`, data || {})
+	}
+
+	private startCacheCleanup() {
+		// Clear IdResolver cache every hour to prevent unbounded memory growth
+		// The IdResolver has an internal cache that never expires and can cause heap exhaustion
+		this.cacheCleanupInterval = setInterval(() => {
+			if (this.isShuttingDown) return
+
+			this.log('Clearing IdResolver cache to prevent memory leak')
+
+			// Recreate the IdResolver to clear its internal cache
+			this.idResolver = new IdResolver()
+
+			this.log('IdResolver cache cleared')
+		}, 60 * 60 * 1000) // Every hour
 	}
 
 	start() {
@@ -40,6 +57,11 @@ export class FirehoseWorker {
 	stop() {
 		this.log('Stopping firehose worker')
 		this.isShuttingDown = true
+
+		if (this.cacheCleanupInterval) {
+			clearInterval(this.cacheCleanupInterval)
+			this.cacheCleanupInterval = null
+		}
 
 		if (this.firehose) {
 			this.firehose.destroy()

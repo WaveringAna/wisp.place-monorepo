@@ -17,7 +17,7 @@ export function CLITab() {
           <div className="flex items-center gap-2 mb-2">
             <CardTitle>Wisp CLI Tool</CardTitle>
             <Badge variant="secondary" className="text-xs">
-              v0.4.0
+              v0.4.1
             </Badge>
             <Badge variant="outline" className="text-xs">
               Alpha
@@ -55,7 +55,7 @@ export function CLITab() {
           </div>
 
           <div className="space-y-3">
-            <h3 className="text-sm font-semibold">Download v0.4.0</h3>
+            <h3 className="text-sm font-semibold">Download v0.4.1</h3>
             <div className="grid gap-2">
               <div className="p-3 bg-muted/50 hover:bg-muted rounded-lg transition-colors border border-border">
                 <a
@@ -71,7 +71,7 @@ export function CLITab() {
                 </a>
                 <div className="text-xs text-muted-foreground">
                   <span className="font-mono">
-                    SHA-1: 2b5c1d6d0e21f9d764dd66ef869bfcd348e8a111
+                    SHA-1: 69de880e160a2f26e3c26b7c28030457913754dc
                   </span>
                 </div>
               </div>
@@ -87,7 +87,7 @@ export function CLITab() {
                 </a>
                 <div className="text-xs text-muted-foreground">
                   <span className="font-mono">
-                    SHA-1: 68d4a3831c07d2f32fdde8d3e809af1ab79e804e
+                    SHA-1: 026189f2c10077a2be4705102e169e66cb207f84
                   </span>
                 </div>
               </div>
@@ -103,7 +103,7 @@ export function CLITab() {
                 </a>
                 <div className="text-xs text-muted-foreground">
                   <span className="font-mono">
-                    SHA-1: 86e89f592b0ec53239c082f502cbe7a47ed8bbec
+                    SHA-1: 4777cff07558906717402484a3313359880eae96
                   </span>
                 </div>
               </div>
@@ -119,7 +119,7 @@ export function CLITab() {
                 </a>
                 <div className="text-xs text-muted-foreground">
                   <span className="font-mono">
-                    SHA-1: 227b735911ad260cff5af3ca3beefa4e1e3956a8
+                    SHA-1: d6bc789d7fd7c787e5520eb476cee70c97ccb3ce
                   </span>
                 </div>
               </div>

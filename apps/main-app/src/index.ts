@@ -148,14 +148,16 @@ export const app = new Elysia({
 		}
 	})
 	.get('/api/screenshots', async () => {
-		const { Glob } = await import('bun')
-		const glob = new Glob('*.png')
+		const fs = await import('fs/promises')
 
-		// Convert async iterator to array using Array.fromAsync
-		const files = glob.scan('./apps/main-app/public/screenshots')
-		const screenshots = await Array.fromAsync(files)
-
-		return { screenshots }
+		try {
+			const screenshotsDir = './apps/main-app/public/screenshots'
+			const files = await fs.readdir(screenshotsDir)
+			const screenshots = files.filter(file => file.endsWith('.png'))
+			return { screenshots }
+		} catch (error) {
+			return { screenshots: [] }
+		}
 	})
 	.get('/api/admin/test', () => {
 		return { message: 'Admin routes test works!' }
