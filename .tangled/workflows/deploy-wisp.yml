@@ -16,10 +16,12 @@ dependencies:
     github:NixOS/nixpkgs/nixpkgs-unstable:
         - rustc
         - cargo
+        - bun
+
 environment:
-    # Customize these for your project
-    SITE_PATH: 'testDeploy'
-    SITE_NAME: 'wispPlaceDocs'
+    WISP_HANDLE: 'wisp.place'
+    SITE_PATH: 'docs/dist'
+    SITE_NAME: 'docs'
 steps:
     - name: 'Initialize submodules'
       command: |
@@ -39,7 +41,10 @@ steps:
             cargo build --release
           '
           cd ..
-
+    - name: 'Build docs'
+      command: |
+          cd docs
+          bun run build
     - name: 'Deploy to Wisp.place'
       command: |
           ./cli/target/release/wisp-cli \
