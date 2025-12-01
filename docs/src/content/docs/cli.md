@@ -204,6 +204,8 @@ wisp-cli deploy your-handle.bsky.social \
 
 The CLI handles all file processing automatically to ensure reliable storage and delivery. Files are compressed with gzip at level 9 for optimal size reduction, then base64 encoded to bypass PDS content sniffing restrictions. Everything is uploaded as `application/octet-stream` blobs while preserving the original MIME type as metadata. When serving your site, the hosting service automatically decompresses non-HTML/CSS/JS files, ensuring your content is delivered correctly to visitors.
 
+**File Filtering**: The CLI automatically excludes common files like `.git`, `node_modules`, `.env`, and other development artifacts. Customize this with a [`.wispignore` file](/file-filtering).
+
 ## Incremental Updates
 
 The CLI tracks file changes using CID-based content addressing to minimize upload times and bandwidth usage. On your first deploy, all files are uploaded to establish the initial site. For subsequent deploys, the CLI compares content-addressed CIDs to detect which files have actually changed, uploading only those that differ from the previous version. This makes fast iterations possible even for large sites, with deploys completing in seconds when only a few files have changed.
