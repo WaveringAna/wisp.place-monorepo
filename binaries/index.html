@@ -51,13 +51,19 @@
             transition: background-color 200ms ease, color 200ms ease;
             font-family: system-ui, sans-serif;
             line-height: 1.6;
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
         }
 
         .container {
             max-width: 860px;
             margin: 40px auto;
             padding: 0 20px;
-            min-height: 100vh;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            width: 100%;
         }
 
         h1 {
@@ -224,8 +230,9 @@
         }
 
         .footer {
-            margin-top: 3rem;
+            margin-top: auto;
             padding-top: 2rem;
+            padding-bottom: 2rem;
             border-top: 1px solid var(--demo-hr);
             text-align: center;
             color: var(--demo-text-secondary);
