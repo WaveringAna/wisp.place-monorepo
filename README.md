@@ -22,10 +22,11 @@ Your site appears at `https://sites.wisp.place/{your-did}/{site-name}` or your c
 
 ## Architecture
 
-- **`/src`** - Main backend (OAuth, site management, custom domains)
-- **`/hosting-service`** - Microservice that serves cached sites from disk
+- **`/apps/main-app`** - Main backend (OAuth, site management, custom domains)
+- **`/apps/hosting-service`** - Microservice that serves cached sites from disk
 - **`/cli`** - Rust CLI for direct PDS uploads
-- **`/public`** - React frontend
+- **`/apps/main-app/public`** - React frontend
+- **`/packages`** - Shared packages
 
 ### How it works
 
