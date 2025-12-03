@@ -9,6 +9,7 @@
   ],
   "dependencies": {
     "@tailwindcss/cli": "^4.1.17",
+    "atproto-ui": "^0.12.0",
     "bun-plugin-tailwind": "^0.1.2",
     "tailwindcss": "^4.1.17"
   },
@@ -22,5 +23,10 @@
     "screenshot": "bun run apps/main-app/scripts/screenshot-sites.ts",
     "hosting:dev": "cd apps/hosting-service && npm run dev",
     "hosting:start": "cd apps/hosting-service && npm run start"
-  }
+  },
+  "trustedDependencies": [
+    "@parcel/watcher",
+    "bun",
+    "esbuild"
+  ]
 }
