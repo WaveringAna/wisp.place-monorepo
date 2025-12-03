@@ -76,6 +76,10 @@ export async function safeFetch(
 			...options,
 			signal: controller.signal,
 			redirect: 'follow',
+			headers: {
+				'User-Agent': 'wisp-place hosting-service',
+				...(options?.headers || {}),
+			},
 		});
 
 		const contentLength = response.headers.get('content-length');
