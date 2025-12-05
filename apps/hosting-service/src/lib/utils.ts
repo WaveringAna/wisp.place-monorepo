@@ -149,7 +149,7 @@ function calculateTotalBlobSize(directory: Directory): number {
 /**
  * Extract all subfs URIs from a directory tree with their mount paths
  */
-function extractSubfsUris(directory: Directory, currentPath: string = ''): Array<{ uri: string; path: string }> {
+export function extractSubfsUris(directory: Directory, currentPath: string = ''): Array<{ uri: string; path: string }> {
   const uris: Array<{ uri: string; path: string }> = [];
 
   for (const entry of directory.entries) {
@@ -209,8 +209,14 @@ async function fetchSubfsRecord(uri: string, pdsEndpoint: string): Promise<Subfs
  * Replace subfs nodes in a directory tree with their actual content
  * Subfs entries are "merged" - their root entries are hoisted into the parent directory
  * This function is recursive - it will keep expanding until no subfs nodes remain
+ * Uses a cache to avoid re-fetching the same subfs records across recursion depths
  */
-async function expandSubfsNodes(directory: Directory, pdsEndpoint: string, depth: number = 0): Promise<Directory> {
+export async function expandSubfsNodes(
+  directory: Directory,
+  pdsEndpoint: string,
+  depth: number = 0,
+  subfsCache: Map<string, SubfsRecord | null> = new Map()
+): Promise<Directory> {
   const MAX_DEPTH = 10; // Prevent infinite loops
 
   if (depth >= MAX_DEPTH) {
@@ -226,20 +232,33 @@ async function expandSubfsNodes(directory: Directory, pdsEndpoint: string, depth
     return directory;
   }
 
-  console.log(`[Depth ${depth}] Found ${subfsUris.length} subfs records, fetching...`);
+  // Filter to only URIs we haven't fetched yet
+  const uncachedUris = subfsUris.filter(({ uri }) => !subfsCache.has(uri));
 
-  // Fetch all subfs records in parallel
-  const subfsRecords = await Promise.all(
-    subfsUris.map(async ({ uri, path }) => {
-      const record = await fetchSubfsRecord(uri, pdsEndpoint);
-      return { record, path };
-    })
-  );
+  if (uncachedUris.length > 0) {
+    console.log(`[Depth ${depth}] Found ${subfsUris.length} subfs references, fetching ${uncachedUris.length} new records (${subfsUris.length - uncachedUris.length} cached)...`);
 
-  // Build a map of path -> root entries to merge
+    // Fetch only uncached subfs records in parallel
+    const fetchedRecords = await Promise.all(
+      uncachedUris.map(async ({ uri }) => {
+        const record = await fetchSubfsRecord(uri, pdsEndpoint);
+        return { uri, record };
+      })
+    );
+
+    // Add fetched records to cache
+    for (const { uri, record } of fetchedRecords) {
+      subfsCache.set(uri, record);
+    }
+  } else {
+    console.log(`[Depth ${depth}] Found ${subfsUris.length} subfs references, all cached`);
+  }
+
+  // Build a map of path -> root entries to merge using the cache
   // Note: SubFS entries are compatible with FS entries at runtime
   const subfsMap = new Map<string, Entry[]>();
-  for (const { record, path } of subfsRecords) {
+  for (const { uri, path } of subfsUris) {
+    const record = subfsCache.get(uri);
     if (record && record.root && record.root.entries) {
       subfsMap.set(path, record.root.entries as unknown as Entry[]);
     }
@@ -307,7 +326,8 @@ async function expandSubfsNodes(directory: Directory, pdsEndpoint: string, depth
   };
 
   // Recursively expand any remaining subfs nodes (e.g., nested subfs inside parent subfs)
-  return expandSubfsNodes(partiallyExpanded, pdsEndpoint, depth + 1);
+  // Pass the cache to avoid re-fetching records
+  return expandSubfsNodes(partiallyExpanded, pdsEndpoint, depth + 1, subfsCache);
 }
 
 
