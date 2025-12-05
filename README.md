@@ -39,12 +39,12 @@ Your site appears at `https://sites.wisp.place/{your-did}/{site-name}` or your c
 
 ```bash
 # Backend
+# bun install will install packages across the monorepo
 bun install
-bun run src/index.ts
+bun run dev
 
 # Hosting service
-cd hosting-service
-npm run start
+bun run hosting:dev
 
 # CLI
 cd cli
