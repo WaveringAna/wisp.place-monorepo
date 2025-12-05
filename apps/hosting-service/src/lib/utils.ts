@@ -327,29 +327,26 @@ export async function downloadAndCacheSite(did: string, rkey: string, record: Wi
   // Expand subfs nodes before caching
   const expandedRoot = await expandSubfsNodes(record.root, pdsEndpoint);
 
-  // Verify all subfs nodes were expanded (defensive check)
+  // Verify all subfs nodes were expanded
   const remainingSubfs = extractSubfsUris(expandedRoot);
   if (remainingSubfs.length > 0) {
     console.warn(`[Cache] Warning: ${remainingSubfs.length} subfs nodes remain unexpanded after expansion`, remainingSubfs);
   }
 
-  // ===== VALIDATE LIMITS BEFORE DOWNLOADING ANY BLOBS =====
-
-  // 1. Validate file count limit
+  // Validate file count limit
   const fileCount = countFilesInDirectory(expandedRoot);
   if (fileCount > MAX_FILE_COUNT) {
     throw new Error(`Site exceeds file count limit: ${fileCount} files (max ${MAX_FILE_COUNT})`);
   }
   console.log(`[Cache] File count validation passed: ${fileCount} files (limit: ${MAX_FILE_COUNT})`);
 
-  // 2. Validate total size from blob metadata in manifest (before downloading)
+  // Validate total size from blob metadata
   const totalBlobSize = calculateTotalBlobSize(expandedRoot);
   if (totalBlobSize > MAX_SITE_SIZE) {
     throw new Error(`Site exceeds size limit: ${(totalBlobSize / 1024 / 1024).toFixed(2)}MB (max ${(MAX_SITE_SIZE / 1024 / 1024).toFixed(0)}MB)`);
   }
   console.log(`[Cache] Size validation passed: ${(totalBlobSize / 1024 / 1024).toFixed(2)}MB (limit: ${(MAX_SITE_SIZE / 1024 / 1024).toFixed(0)}MB)`);
 
-  // All validations passed, proceed with caching
   // Get existing cache metadata to check for incremental updates
   const existingMetadata = await getCacheMetadata(did, rkey);
   const existingFileCids = existingMetadata?.fileCids || {};
@@ -564,7 +561,6 @@ async function cacheFileBlob(
 
   console.log(`[Cache] Fetching blob for file: ${filePath}, CID: ${cid}`);
 
-  // Allow up to MAX_BLOB_SIZE per file blob, with 5 minute timeout
   let content = await safeFetchBlob(blobUrl, { maxSize: MAX_BLOB_SIZE, timeout: 300000 });
 
   // If content is base64-encoded, decode it back to raw binary (gzipped or not)
