@@ -20,6 +20,7 @@
     "build": "cd apps/main-app && bun run build.ts",
     "build:hosting": "cd apps/hosting-service && npm run build",
     "build:all": "bun run build && npm run build:hosting",
+    "check": "cd apps/main-app && npm run check && cd ../hosting-service && npm run check",
     "screenshot": "bun run apps/main-app/scripts/screenshot-sites.ts",
     "hosting:dev": "cd apps/hosting-service && npm run dev",
     "hosting:start": "cd apps/hosting-service && npm run start"

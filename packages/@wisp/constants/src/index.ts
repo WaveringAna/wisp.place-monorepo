@@ -14,7 +14,7 @@ export const BASE_HOST = getBaseHost();
 
 // File size limits
 export const MAX_SITE_SIZE = 300 * 1024 * 1024; // 300MB
-export const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
+export const MAX_FILE_SIZE = 200 * 1024 * 1024; // 200MB
 export const MAX_FILE_COUNT = 1000;
 
 // Cache configuration

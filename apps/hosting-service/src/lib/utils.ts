@@ -7,8 +7,9 @@ import { writeFile, readFile, rename } from 'fs/promises';
 import { safeFetchJson, safeFetchBlob } from '@wisp/safe-fetch';
 import { CID } from 'multiformats';
 import { extractBlobCid } from '@wisp/atproto-utils';
-import { sanitizePath, collectFileCidsFromEntries } from '@wisp/fs-utils';
+import { sanitizePath, collectFileCidsFromEntries, countFilesInDirectory } from '@wisp/fs-utils';
 import { shouldCompressMimeType } from '@wisp/atproto-utils/compression';
+import { MAX_BLOB_SIZE, MAX_FILE_COUNT, MAX_SITE_SIZE } from '@wisp/constants';
 
 // Re-export shared utilities for local usage and tests
 export { extractBlobCid, sanitizePath };
@@ -117,6 +118,32 @@ export async function fetchSiteSettings(did: string, rkey: string): Promise<Wisp
     // Settings are optional, so return null if not found
     return null;
   }
+}
+
+/**
+ * Calculate total size of all blobs in a directory tree from manifest metadata
+ */
+function calculateTotalBlobSize(directory: Directory): number {
+  let totalSize = 0;
+
+  function sumBlobSizes(entries: Entry[]) {
+    for (const entry of entries) {
+      const node = entry.node;
+
+      if ('type' in node && node.type === 'directory' && 'entries' in node) {
+        // Recursively sum subdirectories
+        sumBlobSizes(node.entries);
+      } else if ('type' in node && node.type === 'file' && 'blob' in node) {
+        // Add blob size from manifest
+        const fileNode = node as File;
+        const blobSize = (fileNode.blob as any)?.size || 0;
+        totalSize += blobSize;
+      }
+    }
+  }
+
+  sumBlobSizes(directory.entries);
+  return totalSize;
 }
 
 /**
@@ -300,6 +327,29 @@ export async function downloadAndCacheSite(did: string, rkey: string, record: Wi
   // Expand subfs nodes before caching
   const expandedRoot = await expandSubfsNodes(record.root, pdsEndpoint);
 
+  // Verify all subfs nodes were expanded (defensive check)
+  const remainingSubfs = extractSubfsUris(expandedRoot);
+  if (remainingSubfs.length > 0) {
+    console.warn(`[Cache] Warning: ${remainingSubfs.length} subfs nodes remain unexpanded after expansion`, remainingSubfs);
+  }
+
+  // ===== VALIDATE LIMITS BEFORE DOWNLOADING ANY BLOBS =====
+
+  // 1. Validate file count limit
+  const fileCount = countFilesInDirectory(expandedRoot);
+  if (fileCount > MAX_FILE_COUNT) {
+    throw new Error(`Site exceeds file count limit: ${fileCount} files (max ${MAX_FILE_COUNT})`);
+  }
+  console.log(`[Cache] File count validation passed: ${fileCount} files (limit: ${MAX_FILE_COUNT})`);
+
+  // 2. Validate total size from blob metadata in manifest (before downloading)
+  const totalBlobSize = calculateTotalBlobSize(expandedRoot);
+  if (totalBlobSize > MAX_SITE_SIZE) {
+    throw new Error(`Site exceeds size limit: ${(totalBlobSize / 1024 / 1024).toFixed(2)}MB (max ${(MAX_SITE_SIZE / 1024 / 1024).toFixed(0)}MB)`);
+  }
+  console.log(`[Cache] Size validation passed: ${(totalBlobSize / 1024 / 1024).toFixed(2)}MB (limit: ${(MAX_SITE_SIZE / 1024 / 1024).toFixed(0)}MB)`);
+
+  // All validations passed, proceed with caching
   // Get existing cache metadata to check for incremental updates
   const existingMetadata = await getCacheMetadata(did, rkey);
   const existingFileCids = existingMetadata?.fileCids || {};
@@ -514,8 +564,8 @@ async function cacheFileBlob(
 
   console.log(`[Cache] Fetching blob for file: ${filePath}, CID: ${cid}`);
 
-  // Allow up to 500MB per file blob, with 5 minute timeout
-  let content = await safeFetchBlob(blobUrl, { maxSize: 500 * 1024 * 1024, timeout: 300000 });
+  // Allow up to MAX_BLOB_SIZE per file blob, with 5 minute timeout
+  let content = await safeFetchBlob(blobUrl, { maxSize: MAX_BLOB_SIZE, timeout: 300000 });
 
   // If content is base64-encoded, decode it back to raw binary (gzipped or not)
   if (base64) {
