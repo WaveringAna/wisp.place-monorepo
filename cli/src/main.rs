@@ -34,6 +34,10 @@ use place_wisp::settings::*;
 /// Maximum number of concurrent file uploads to the PDS
 const MAX_CONCURRENT_UPLOADS: usize = 2;
 
+/// Limits for caching on wisp.place (from @wisp/constants)
+const MAX_FILE_COUNT: usize = 1000;
+const MAX_SITE_SIZE: usize = 300 * 1024 * 1024; // 300MB
+
 #[derive(Parser, Debug)]
 #[command(author, version, about = "wisp.place CLI tool")]
 struct Args {
@@ -68,6 +72,10 @@ struct Args {
     /// Enable SPA mode (serve index.html for all routes)
     #[arg(long, global = true, conflicts_with = "command")]
     spa: bool,
+
+    /// Skip confirmation prompts (automatically accept warnings)
+    #[arg(short = 'y', long, global = true, conflicts_with = "command")]
+    yes: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -100,6 +108,10 @@ enum Commands {
         /// Enable SPA mode (serve index.html for all routes)
         #[arg(long)]
         spa: bool,
+
+        /// Skip confirmation prompts (automatically accept warnings)
+        #[arg(short = 'y', long)]
+        yes: bool,
     },
     /// Pull a site from the PDS to a local directory
     Pull {
@@ -138,12 +150,12 @@ async fn main() -> miette::Result<()> {
     let args = Args::parse();
 
     let result = match args.command {
-        Some(Commands::Deploy { input, path, site, store, password, directory, spa }) => {
+        Some(Commands::Deploy { input, path, site, store, password, directory, spa, yes }) => {
             // Dispatch to appropriate authentication method
             if let Some(password) = password {
-                run_with_app_password(input, password, path, site, directory, spa).await
+                run_with_app_password(input, password, path, site, directory, spa, yes).await
             } else {
-                run_with_oauth(input, store, path, site, directory, spa).await
+                run_with_oauth(input, store, path, site, directory, spa, yes).await
             }
         }
         Some(Commands::Pull { input, site, output }) => {
@@ -160,9 +172,9 @@ async fn main() -> miette::Result<()> {
 
                 // Dispatch to appropriate authentication method
                 if let Some(password) = args.password {
-                    run_with_app_password(input, password, path, args.site, args.directory, args.spa).await
+                    run_with_app_password(input, password, path, args.site, args.directory, args.spa, args.yes).await
                 } else {
-                    run_with_oauth(input, store, path, args.site, args.directory, args.spa).await
+                    run_with_oauth(input, store, path, args.site, args.directory, args.spa, args.yes).await
                 }
             } else {
                 // No command and no input, show help
@@ -191,13 +203,14 @@ async fn run_with_app_password(
     site: Option<String>,
     directory: bool,
     spa: bool,
+    yes: bool,
 ) -> miette::Result<()> {
     let (session, auth) =
         MemoryCredentialSession::authenticated(input, password, None, None).await?;
     println!("Signed in as {}", auth.handle);
 
     let agent: Agent<_> = Agent::from(session);
-    deploy_site(&agent, path, site, directory, spa).await
+    deploy_site(&agent, path, site, directory, spa, yes).await
 }
 
 /// Run deployment with OAuth authentication
@@ -208,6 +221,7 @@ async fn run_with_oauth(
     site: Option<String>,
     directory: bool,
     spa: bool,
+    yes: bool,
 ) -> miette::Result<()> {
     use jacquard::oauth::scopes::Scope;
     use jacquard::oauth::atproto::AtprotoClientMetadata;
@@ -240,7 +254,60 @@ async fn run_with_oauth(
         .await?;
 
     let agent: Agent<_> = Agent::from(session);
-    deploy_site(&agent, path, site, directory, spa).await
+    deploy_site(&agent, path, site, directory, spa, yes).await
+}
+
+/// Scan directory to count files and calculate total size
+/// Returns (file_count, total_size_bytes)
+fn scan_directory_stats(
+    dir_path: &Path,
+    ignore_matcher: &ignore_patterns::IgnoreMatcher,
+    current_path: String,
+) -> miette::Result<(usize, u64)> {
+    let mut file_count = 0;
+    let mut total_size = 0u64;
+
+    let dir_entries: Vec<_> = std::fs::read_dir(dir_path)
+        .into_diagnostic()?
+        .collect::<Result<Vec<_>, _>>()
+        .into_diagnostic()?;
+
+    for entry in dir_entries {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name_str = name.to_str()
+            .ok_or_else(|| miette::miette!("Invalid filename: {:?}", name))?
+            .to_string();
+
+        let full_path = if current_path.is_empty() {
+            name_str.clone()
+        } else {
+            format!("{}/{}", current_path, name_str)
+        };
+
+        // Skip files/directories that match ignore patterns
+        if ignore_matcher.is_ignored(&full_path) || ignore_matcher.is_filename_ignored(&name_str) {
+            continue;
+        }
+
+        let metadata = entry.metadata().into_diagnostic()?;
+
+        if metadata.is_file() {
+            file_count += 1;
+            total_size += metadata.len();
+        } else if metadata.is_dir() {
+            let subdir_path = if current_path.is_empty() {
+                name_str
+            } else {
+                format!("{}/{}", current_path, name_str)
+            };
+            let (sub_count, sub_size) = scan_directory_stats(&path, ignore_matcher, subdir_path)?;
+            file_count += sub_count;
+            total_size += sub_size;
+        }
+    }
+
+    Ok((file_count, total_size))
 }
 
 /// Deploy the site using the provided agent
@@ -250,6 +317,7 @@ async fn deploy_site(
     site: Option<String>,
     directory_listing: bool,
     spa_mode: bool,
+    skip_prompts: bool,
 ) -> miette::Result<()> {
     // Verify the path exists
     if !path.exists() {
@@ -266,6 +334,56 @@ async fn deploy_site(
     });
 
     println!("Deploying site '{}'...", site_name);
+
+    // Scan directory to check file count and size
+    let ignore_matcher = ignore_patterns::IgnoreMatcher::new(&path)?;
+    let (file_count, total_size) = scan_directory_stats(&path, &ignore_matcher, String::new())?;
+
+    let size_mb = total_size as f64 / (1024.0 * 1024.0);
+    println!("Scanned: {} files, {:.1} MB total", file_count, size_mb);
+
+    // Check if limits are exceeded
+    let exceeds_file_count = file_count > MAX_FILE_COUNT;
+    let exceeds_size = total_size > MAX_SITE_SIZE as u64;
+
+    if exceeds_file_count || exceeds_size {
+        println!("\n⚠️  Warning: Your site exceeds wisp.place caching limits:");
+
+        if exceeds_file_count {
+            println!("  • File count: {} (limit: {})", file_count, MAX_FILE_COUNT);
+        }
+
+        if exceeds_size {
+            let size_mb = total_size as f64 / (1024.0 * 1024.0);
+            let limit_mb = MAX_SITE_SIZE as f64 / (1024.0 * 1024.0);
+            println!("  • Total size: {:.1} MB (limit: {:.0} MB)", size_mb, limit_mb);
+        }
+
+        println!("\nwisp.place will NOT serve your site if you proceed.");
+        println!("Your site will be uploaded to your PDS, but will only be accessible via:");
+        println!("  • wisp-cli serve (local hosting)");
+        println!("  • Other hosting services with more generous limits");
+
+        if !skip_prompts {
+            // Prompt for confirmation
+            use std::io::{self, Write};
+            print!("\nDo you want to upload anyway? (y/N): ");
+            io::stdout().flush().into_diagnostic()?;
+
+            let mut input = String::new();
+            io::stdin().read_line(&mut input).into_diagnostic()?;
+            let input = input.trim().to_lowercase();
+
+            if input != "y" && input != "yes" {
+                println!("Upload cancelled.");
+                return Ok(());
+            }
+        } else {
+            println!("\nSkipping confirmation (--yes flag set).");
+        }
+
+        println!("\nProceeding with upload...\n");
+    }
 
     // Try to fetch existing manifest for incremental updates
     let (existing_blob_map, old_subfs_uris): (HashMap<String, (jacquard_common::types::blob::BlobRef<'static>, String)>, Vec<(String, String)>) = {
@@ -327,9 +445,6 @@ async fn deploy_site(
             (HashMap::new(), Vec::new())
         }
     };
-
-    // Build directory tree with ignore patterns
-    let ignore_matcher = ignore_patterns::IgnoreMatcher::new(&path)?;
 
     // Create progress tracking (spinner style since we don't know total count upfront)
     let multi_progress = MultiProgress::new();
