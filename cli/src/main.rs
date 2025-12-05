@@ -26,9 +26,13 @@ use flate2::write::GzEncoder;
 use std::io::Write;
 use base64::Engine;
 use futures::stream::{self, StreamExt};
+use indicatif::{ProgressBar, ProgressStyle, MultiProgress};
 
 use place_wisp::fs::*;
 use place_wisp::settings::*;
+
+/// Maximum number of concurrent file uploads to the PDS
+const MAX_CONCURRENT_UPLOADS: usize = 2;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "wisp.place CLI tool")]
@@ -326,8 +330,23 @@ async fn deploy_site(
 
     // Build directory tree with ignore patterns
     let ignore_matcher = ignore_patterns::IgnoreMatcher::new(&path)?;
-    let (root_dir, total_files, reused_count) = build_directory(agent, &path, &existing_blob_map, String::new(), &ignore_matcher).await?;
+
+    // Create progress tracking (spinner style since we don't know total count upfront)
+    let multi_progress = MultiProgress::new();
+    let progress = multi_progress.add(ProgressBar::new_spinner());
+    progress.set_style(
+        ProgressStyle::default_spinner()
+            .template("[{elapsed_precise}] {spinner:.cyan} {pos} files {msg}")
+            .into_diagnostic()?
+            .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ")
+    );
+    progress.set_message("Scanning files...");
+    progress.enable_steady_tick(std::time::Duration::from_millis(100));
+
+    let (root_dir, total_files, reused_count) = build_directory(agent, &path, &existing_blob_map, String::new(), &ignore_matcher, &progress).await?;
     let uploaded_count = total_files - reused_count;
+
+    progress.finish_with_message(format!("✓ {} files ({} uploaded, {} reused)", total_files, uploaded_count, reused_count));
 
     // Check if we need to split into subfs records
     const MAX_MANIFEST_SIZE: usize = 140 * 1024; // 140KB (PDS limit is 150KB)
@@ -606,6 +625,7 @@ fn build_directory<'a>(
     existing_blobs: &'a HashMap<String, (jacquard_common::types::blob::BlobRef<'static>, String)>,
     current_path: String,
     ignore_matcher: &'a ignore_patterns::IgnoreMatcher,
+    progress: &'a ProgressBar,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = miette::Result<(Directory<'static>, usize, usize)>> + 'a>>
 {
     Box::pin(async move {
@@ -653,17 +673,18 @@ fn build_directory<'a>(
         }
     }
 
-    // Process files concurrently with a limit of 5
+    // Process files concurrently with a limit of 2
     let file_results: Vec<(Entry<'static>, bool)> = stream::iter(file_tasks)
         .map(|(name, path, full_path)| async move {
-            let (file_node, reused) = process_file(agent, &path, &full_path, existing_blobs).await?;
+            let (file_node, reused) = process_file(agent, &path, &full_path, existing_blobs, progress).await?;
+            progress.inc(1);
             let entry = Entry::new()
                 .name(CowStr::from(name))
                 .node(EntryNode::File(Box::new(file_node)))
                 .build();
             Ok::<_, miette::Report>((entry, reused))
         })
-        .buffer_unordered(5)
+        .buffer_unordered(MAX_CONCURRENT_UPLOADS)
         .collect::<Vec<_>>()
         .await
         .into_iter()
@@ -690,7 +711,7 @@ fn build_directory<'a>(
         } else {
             format!("{}/{}", current_path, name)
         };
-        let (subdir, sub_total, sub_reused) = build_directory(agent, &path, existing_blobs, subdir_path, ignore_matcher).await?;
+        let (subdir, sub_total, sub_reused) = build_directory(agent, &path, existing_blobs, subdir_path, ignore_matcher, progress).await?;
         dir_entries.push(Entry::new()
             .name(CowStr::from(name))
             .node(EntryNode::Directory(Box::new(subdir)))
@@ -722,6 +743,7 @@ async fn process_file(
     file_path: &Path,
     file_path_key: &str,
     existing_blobs: &HashMap<String, (jacquard_common::types::blob::BlobRef<'static>, String)>,
+    progress: &ProgressBar,
 ) -> miette::Result<(File<'static>, bool)>
 {
     // Read file
@@ -761,7 +783,7 @@ async fn process_file(
     if let Some((existing_blob_ref, existing_cid)) = existing_blob {
         if existing_cid == &file_cid {
             // CIDs match - reuse existing blob
-            println!("  ✓ Reusing blob for {} (CID: {})", file_path_key, file_cid);
+            progress.set_message(format!("✓ Reused {}", file_path_key));
             let mut file_builder = File::new()
                 .r#type(CowStr::from("file"))
                 .blob(existing_blob_ref.clone())
@@ -775,14 +797,6 @@ async fn process_file(
             }
 
             return Ok((file_builder.build(), true));
-        } else {
-            // CID mismatch - file changed
-            println!("  → File changed: {} (old CID: {}, new CID: {})", file_path_key, existing_cid, file_cid);
-        }
-    } else {
-        // File not in existing blob map
-        if file_path_key.starts_with("imgs/") {
-            println!("  → New file (not in blob map): {}", file_path_key);
         }
     }
 
@@ -793,8 +807,18 @@ async fn process_file(
         MimeType::new_static("application/octet-stream")
     };
 
-    println!("  ↑ Uploading {} ({} bytes, CID: {})", file_path_key, upload_bytes.len(), file_cid);
+    // Format file size nicely
+    let size_str = if upload_bytes.len() < 1024 {
+        format!("{} B", upload_bytes.len())
+    } else if upload_bytes.len() < 1024 * 1024 {
+        format!("{:.1} KB", upload_bytes.len() as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", upload_bytes.len() as f64 / (1024.0 * 1024.0))
+    };
+
+    progress.set_message(format!("↑ Uploading {} ({})", file_path_key, size_str));
     let blob = agent.upload_blob(upload_bytes, mime_type).await?;
+    progress.set_message(format!("✓ Uploaded {}", file_path_key));
 
     let mut file_builder = File::new()
         .r#type(CowStr::from("file"))

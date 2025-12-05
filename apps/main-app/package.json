@@ -7,6 +7,7 @@
     "dev": "bun run --watch src/index.ts",
     "start": "bun run src/index.ts",
     "build": "bun run build.ts",
+    "check": "tsc --noEmit",
     "screenshot": "bun run scripts/screenshot-sites.ts"
   },
   "dependencies": {
@@ -53,6 +54,8 @@
     "zlib": "^1.0.5"
   },
   "devDependencies": {
+    "@atproto-labs/handle-resolver": "^0.3.4",
+    "@atproto/did": "^0.2.3",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.1",
     "bun-types": "latest",

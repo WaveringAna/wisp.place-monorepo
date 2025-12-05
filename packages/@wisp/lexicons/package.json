@@ -39,6 +39,7 @@
     "@atproto/xrpc-server": "^0.9.5"
   },
   "devDependencies": {
-    "@atproto/lex-cli": "^0.9.5"
+    "@atproto/lex-cli": "^0.9.5",
+    "multiformats": "^13.4.1"
   }
 }
