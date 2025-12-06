@@ -1,12 +1,13 @@
 import { Elysia, t } from 'elysia'
 import { requireAuth } from '../lib/wisp-auth'
 import { NodeOAuthClient } from '@atproto/oauth-client-node'
-import { Agent } from '@atproto/api'
 import { getSitesByDid, getDomainByDid, getCustomDomainsByDid, getWispDomainInfo, getDomainsBySite, getAllWispDomains } from '../lib/db'
 import { syncSitesFromPDS } from '../lib/sync-sites'
 import { createLogger } from '@wisp/observability'
+import { createDidResolver, extractAtprotoData } from '@atproto-labs/did-resolver'
 
 const logger = createLogger('main-app')
+const didResolver = createDidResolver({})
 
 export const userRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 	new Elysia({
@@ -42,20 +43,17 @@ export const userRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		})
 		.get('/info', async ({ auth }) => {
 			try {
-				// Get user's handle from AT Protocol
-				const agent = new Agent(auth.session)
-
 				let handle = 'unknown'
 				try {
-					console.log('[User] Attempting to fetch profile for DID:', auth.did)
-					const profile = await agent.getProfile({ actor: auth.did })
-					console.log('[User] Profile fetched successfully:', profile.data.handle)
-					handle = profile.data.handle
+					const didDoc = await didResolver.resolve(auth.did)
+					const atprotoData = extractAtprotoData(didDoc)
+
+					if (atprotoData.aka) {
+						handle = atprotoData.aka
+					}
 				} catch (err) {
-					console.error('[User] Failed to fetch profile - Full error:', err)
-					console.error('[User] Error message:', err instanceof Error ? err.message : String(err))
-					console.error('[User] Error stack:', err instanceof Error ? err.stack : 'No stack')
-					logger.error('[User] Failed to fetch profile', err)
+
+					logger.error('[User] Failed to resolve DID', err)
 				}
 
 				return {

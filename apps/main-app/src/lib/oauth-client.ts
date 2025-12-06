@@ -4,6 +4,8 @@ import { db } from "./db";
 import { logger } from "./logger";
 import { SlingshotHandleResolver } from "./slingshot-handle-resolver";
 
+// OAuth scope for all client types
+const OAUTH_SCOPE = 'atproto repo:place.wisp.fs repo:place.wisp.domain repo:place.wisp.subfs repo:place.wisp.settings blob:*/*';
 // Session timeout configuration (30 days in seconds)
 const SESSION_TIMEOUT = 30 * 24 * 60 * 60; // 2592000 seconds
 // OAuth state timeout (1 hour in seconds)
@@ -110,10 +112,9 @@ export const createClientMetadata = (config: { domain: `http://${string}` | `htt
         // Loopback client for local development
         // For loopback, scopes and redirect_uri must be in client_id query string
         const redirectUri = 'http://127.0.0.1:8000/api/auth/callback';
-        const scope = 'atproto repo:place.wisp.fs repo:place.wisp.domain repo:place.wisp.subfs repo:place.wisp.settings blob:*/* rpc:app.bsky.actor.getProfile?aud=did:web:api.bsky.app#bsky_appview';
         const params = new URLSearchParams();
         params.append('redirect_uri', redirectUri);
-        params.append('scope', scope);
+        params.append('scope', OAUTH_SCOPE);
 
         return {
             client_id: `http://localhost?${params.toString()}`,
@@ -124,7 +125,7 @@ export const createClientMetadata = (config: { domain: `http://${string}` | `htt
             response_types: ['code'],
             application_type: 'web',
             token_endpoint_auth_method: 'none',
-            scope: scope,
+            scope: OAUTH_SCOPE,
             dpop_bound_access_tokens: false,
             subject_type: 'public',
             authorization_signed_response_alg: 'ES256'
@@ -145,7 +146,7 @@ export const createClientMetadata = (config: { domain: `http://${string}` | `htt
         application_type: 'web',
         token_endpoint_auth_method: 'private_key_jwt',
         token_endpoint_auth_signing_alg: "ES256",
-        scope: "atproto repo:place.wisp.fs repo:place.wisp.domain repo:place.wisp.subfs repo:place.wisp.settings blob:*/* rpc:app.bsky.actor.getProfile?aud=did:web:api.bsky.app#bsky_appview",
+        scope: OAUTH_SCOPE,
         dpop_bound_access_tokens: true,
         jwks_uri: `${config.domain}/jwks.json`,
         subject_type: 'public',
