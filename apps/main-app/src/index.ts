@@ -20,10 +20,16 @@ import { userRoutes } from './routes/user'
 import { siteRoutes } from './routes/site'
 import { csrfProtection } from './lib/csrf'
 import { DNSVerificationWorker } from './lib/dns-verification-worker'
-import { createLogger, logCollector } from '@wisp/observability'
+import { createLogger, logCollector, initializeGrafanaExporters } from '@wisp/observability'
 import { observabilityMiddleware } from '@wisp/observability/middleware/elysia'
 import { promptAdminSetup } from './lib/admin-auth'
 import { adminRoutes } from './routes/admin'
+
+// Initialize Grafana exporters if configured
+initializeGrafanaExporters({
+	serviceName: 'main-app',
+	serviceVersion: '1.0.50'
+})
 
 const logger = createLogger('main-app')
 

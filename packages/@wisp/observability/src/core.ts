@@ -3,6 +3,8 @@
  * Framework-agnostic logging, error tracking, and metrics collection
  */
 
+import { lokiExporter, metricsExporter } from './exporters'
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -128,6 +130,9 @@ export const logCollector = {
 			logs.splice(MAX_LOGS)
 		}
 
+		// Send to Loki exporter
+		lokiExporter.pushLog(entry)
+
 		// Also log to console for compatibility
 		const contextStr = context ? ` ${JSON.stringify(context)}` : ''
 		const traceStr = traceId ? ` [trace:${traceId}]` : ''
@@ -233,6 +238,9 @@ export const errorTracker = {
 
 			errors.set(key, entry)
 
+			// Send to Loki exporter
+			lokiExporter.pushError(entry)
+
 			// Rotate if needed
 			if (errors.size > MAX_ERRORS) {
 				const oldest = Array.from(errors.keys())[0]
@@ -284,6 +292,9 @@ export const metricsCollector = {
 		}
 
 		metrics.unshift(entry)
+
+		// Send to Prometheus/OTLP exporter
+		metricsExporter.recordMetric(entry)
 
 		// Rotate if needed
 		if (metrics.length > MAX_METRICS) {
