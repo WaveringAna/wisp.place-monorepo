@@ -24,6 +24,7 @@ export default defineConfig({
 					label: 'Guides',
 					items: [
 						{ label: 'Self-Hosting', slug: 'deployment' },
+						{ label: 'Monitoring & Metrics', slug: 'monitoring' },
 						{ label: 'Redirects & Rewrites', slug: 'redirects' },
 					],
 				},

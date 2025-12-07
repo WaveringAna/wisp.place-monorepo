@@ -1,10 +1,16 @@
 import app from './server';
 import { serve } from '@hono/node-server';
 import { FirehoseWorker } from './lib/firehose';
-import { createLogger } from '@wisp/observability';
+import { createLogger, initializeGrafanaExporters } from '@wisp/observability';
 import { mkdirSync, existsSync } from 'fs';
 import { backfillCache } from './lib/backfill';
 import { startDomainCacheCleanup, stopDomainCacheCleanup, setCacheOnlyMode } from './lib/db';
+
+// Initialize Grafana exporters if configured
+initializeGrafanaExporters({
+  serviceName: 'hosting-service',
+  serviceVersion: '1.0.0'
+});
 
 const logger = createLogger('hosting-service');
 
