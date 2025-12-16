@@ -41,7 +41,7 @@
     "bun-plugin-tailwind": "^0.1.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "elysia": "latest",
+    "elysia": "^1.4.18",
     "ignore": "^7.0.5",
     "iron-session": "^8.0.4",
     "lucide-react": "^0.546.0",
