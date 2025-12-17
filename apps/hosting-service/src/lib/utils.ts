@@ -90,7 +90,10 @@ function didWebToHttps(did: string): string {
 export async function fetchSiteRecord(did: string, rkey: string): Promise<{ record: WispFsRecord; cid: string } | null> {
   try {
     const pdsEndpoint = await getPdsForDid(did);
-    if (!pdsEndpoint) return null;
+    if (!pdsEndpoint) {
+      console.error('[hosting-service] Failed to get PDS endpoint for DID', { did, rkey });
+      return null;
+    }
 
     const url = `${pdsEndpoint}/xrpc/com.atproto.repo.getRecord?repo=${encodeURIComponent(did)}&collection=place.wisp.fs&rkey=${encodeURIComponent(rkey)}`;
     const data = await safeFetchJson(url);
@@ -100,7 +103,28 @@ export async function fetchSiteRecord(did: string, rkey: string): Promise<{ reco
       cid: data.cid || ''
     };
   } catch (err) {
-    console.error('Failed to fetch site record', did, rkey, err);
+    const errorCode = (err as any)?.code;
+    const errorMsg = err instanceof Error ? err.message : String(err);
+
+    // Better error logging to distinguish between network errors and 404s
+    if (errorMsg.includes('HTTP 404') || errorMsg.includes('Not Found')) {
+      console.log('[hosting-service] Site record not found', { did, rkey });
+    } else if (errorCode && ['ECONNRESET', 'ERR_SSL_TLSV1_ALERT_INTERNAL_ERROR', 'ETIMEDOUT'].includes(errorCode)) {
+      console.error('[hosting-service] Network/SSL error fetching site record (after retries)', {
+        did,
+        rkey,
+        error: errorMsg,
+        code: errorCode
+      });
+    } else {
+      console.error('[hosting-service] Failed to fetch site record', {
+        did,
+        rkey,
+        error: errorMsg,
+        code: errorCode
+      });
+    }
+
     return null;
   }
 }

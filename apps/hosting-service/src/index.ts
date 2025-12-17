@@ -16,6 +16,9 @@ const logger = createLogger('hosting-service');
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3001;
 const CACHE_DIR = process.env.CACHE_DIR || './cache/sites';
+const BACKFILL_CONCURRENCY = process.env.BACKFILL_CONCURRENCY
+  ? parseInt(process.env.BACKFILL_CONCURRENCY)
+  : undefined; // Let backfill.ts default (10) apply
 
 // Parse CLI arguments
 const args = process.argv.slice(2);
@@ -52,7 +55,7 @@ if (backfillOnStartup) {
   console.log('🔄 Backfill requested, starting cache backfill...');
   backfillCache({
     skipExisting: true,
-    concurrency: 3,
+    concurrency: BACKFILL_CONCURRENCY,
   }).then((stats) => {
     console.log('✅ Cache backfill completed');
   }).catch((err) => {
@@ -83,6 +86,7 @@ Health:       http://localhost:${PORT}/health
 Cache:        ${CACHE_DIR}
 Firehose:     Connected to Firehose
 Cache-Only:   ${CACHE_ONLY_MODE ? 'ENABLED (no DB writes)' : 'DISABLED'}
+Backfill:     ${backfillOnStartup ? `ENABLED (concurrency: ${BACKFILL_CONCURRENCY || 10})` : 'DISABLED'}
 `);
 
 // Graceful shutdown
