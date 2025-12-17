@@ -60,71 +60,79 @@ export async function backfillCache(options: BackfillOptions = {}): Promise<Back
       console.log(`⚙️  Limited to ${maxSites} sites for backfill`);
     }
 
-    // Process sites in batches
-    const batches: typeof sites[] = [];
-    for (let i = 0; i < sites.length; i += concurrency) {
-      batches.push(sites.slice(i, i + concurrency));
-    }
-
+    // Process sites with sliding window concurrency pool
+    const executing = new Set<Promise<void>>();
     let processed = 0;
-    for (const batch of batches) {
-      await Promise.all(
-        batch.map(async (site) => {
-          try {
-            // Check if already cached
-            if (skipExisting && isCached(site.did, site.rkey)) {
-              stats.skipped++;
-              processed++;
-              logger.debug(`Skipping already cached site`, { did: site.did, rkey: site.rkey });
-              console.log(`⏭️  [${processed}/${sites.length}] Skipped (cached): ${site.display_name || site.rkey}`);
-              return;
-            }
 
-            // Fetch site record
-            const siteData = await fetchSiteRecord(site.did, site.rkey);
-            if (!siteData) {
-              stats.failed++;
-              processed++;
-              logger.error('Site record not found during backfill', null, { did: site.did, rkey: site.rkey });
-              console.log(`❌ [${processed}/${sites.length}] Failed (not found): ${site.display_name || site.rkey}`);
-              return;
-            }
+    for (const site of sites) {
+      // Create task for this site
+      const processSite = async () => {
+        try {
+          // Check if already cached
+          if (skipExisting && isCached(site.did, site.rkey)) {
+            stats.skipped++;
+            processed++;
+            logger.debug(`Skipping already cached site`, { did: site.did, rkey: site.rkey });
+            console.log(`⏭️  [${processed}/${sites.length}] Skipped (cached): ${site.display_name || site.rkey}`);
+            return;
+          }
 
-            // Get PDS endpoint
-            const pdsEndpoint = await getPdsForDid(site.did);
-            if (!pdsEndpoint) {
-              stats.failed++;
-              processed++;
-              logger.error('PDS not found during backfill', null, { did: site.did });
-              console.log(`❌ [${processed}/${sites.length}] Failed (no PDS): ${site.display_name || site.rkey}`);
-              return;
-            }
-
-            // Mark site as being cached to prevent serving stale content during update
-            markSiteAsBeingCached(site.did, site.rkey);
-
-            try {
-              // Download and cache site
-              await downloadAndCacheSite(site.did, site.rkey, siteData.record, pdsEndpoint, siteData.cid);
-              // Clear redirect rules cache since the site was updated
-              clearRedirectRulesCache(site.did, site.rkey);
-              stats.cached++;
-              processed++;
-              logger.info('Successfully cached site during backfill', { did: site.did, rkey: site.rkey });
-              console.log(`✅ [${processed}/${sites.length}] Cached: ${site.display_name || site.rkey}`);
-            } finally {
-              // Always unmark, even if caching fails
-              unmarkSiteAsBeingCached(site.did, site.rkey);
-            }
-          } catch (err) {
+          // Fetch site record
+          const siteData = await fetchSiteRecord(site.did, site.rkey);
+          if (!siteData) {
             stats.failed++;
             processed++;
-            logger.error('Failed to cache site during backfill', err, { did: site.did, rkey: site.rkey });
-            console.log(`❌ [${processed}/${sites.length}] Failed: ${site.display_name || site.rkey}`);
+            logger.error('Site record not found during backfill', null, { did: site.did, rkey: site.rkey });
+            console.log(`❌ [${processed}/${sites.length}] Failed (not found): ${site.display_name || site.rkey}`);
+            return;
           }
-        })
-      );
+
+          // Get PDS endpoint
+          const pdsEndpoint = await getPdsForDid(site.did);
+          if (!pdsEndpoint) {
+            stats.failed++;
+            processed++;
+            logger.error('PDS not found during backfill', null, { did: site.did });
+            console.log(`❌ [${processed}/${sites.length}] Failed (no PDS): ${site.display_name || site.rkey}`);
+            return;
+          }
+
+          // Mark site as being cached to prevent serving stale content during update
+          markSiteAsBeingCached(site.did, site.rkey);
+
+          try {
+            // Download and cache site
+            await downloadAndCacheSite(site.did, site.rkey, siteData.record, pdsEndpoint, siteData.cid);
+            // Clear redirect rules cache since the site was updated
+            clearRedirectRulesCache(site.did, site.rkey);
+            stats.cached++;
+            processed++;
+            logger.info('Successfully cached site during backfill', { did: site.did, rkey: site.rkey });
+            console.log(`✅ [${processed}/${sites.length}] Cached: ${site.display_name || site.rkey}`);
+          } finally {
+            // Always unmark, even if caching fails
+            unmarkSiteAsBeingCached(site.did, site.rkey);
+          }
+        } catch (err) {
+          stats.failed++;
+          processed++;
+          logger.error('Failed to cache site during backfill', err, { did: site.did, rkey: site.rkey });
+          console.log(`❌ [${processed}/${sites.length}] Failed: ${site.display_name || site.rkey}`);
+        }
+      };
+
+      // Add to executing pool and remove when done
+      const promise = processSite().finally(() => executing.delete(promise));
+      executing.add(promise);
+
+      // When pool is full, wait for at least one to complete
+      if (executing.size >= concurrency) {
+        await Promise.race(executing);
+      }
     }
+
+    // Wait for all remaining tasks to complete
+    await Promise.all(executing);
 
     stats.duration = Date.now() - startTime;
 
