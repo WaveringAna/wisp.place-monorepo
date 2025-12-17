@@ -61,18 +61,18 @@ class GrafanaExporterConfig {
 
 		// Load from environment variables if not provided
 		if (!this.config.lokiUrl) {
-			this.config.lokiUrl = process.env.GRAFANA_LOKI_URL || Bun?.env?.GRAFANA_LOKI_URL
+			this.config.lokiUrl = process.env.GRAFANA_LOKI_URL
 		}
 
 		if (!this.config.prometheusUrl) {
-			this.config.prometheusUrl = process.env.GRAFANA_PROMETHEUS_URL || Bun?.env?.GRAFANA_PROMETHEUS_URL
+			this.config.prometheusUrl = process.env.GRAFANA_PROMETHEUS_URL
 		}
 
 		// Load Loki authentication from environment
 		if (!this.config.lokiAuth?.bearerToken && !this.config.lokiAuth?.username) {
-			const token = process.env.GRAFANA_LOKI_TOKEN || Bun?.env?.GRAFANA_LOKI_TOKEN
-			const username = process.env.GRAFANA_LOKI_USERNAME || Bun?.env?.GRAFANA_LOKI_USERNAME
-			const password = process.env.GRAFANA_LOKI_PASSWORD || Bun?.env?.GRAFANA_LOKI_PASSWORD
+			const token = process.env.GRAFANA_LOKI_TOKEN
+			const username = process.env.GRAFANA_LOKI_USERNAME
+			const password = process.env.GRAFANA_LOKI_PASSWORD
 
 			if (token) {
 				this.config.lokiAuth = { ...this.config.lokiAuth, bearerToken: token }
@@ -83,9 +83,9 @@ class GrafanaExporterConfig {
 
 		// Load Prometheus authentication from environment
 		if (!this.config.prometheusAuth?.bearerToken && !this.config.prometheusAuth?.username) {
-			const token = process.env.GRAFANA_PROMETHEUS_TOKEN || Bun?.env?.GRAFANA_PROMETHEUS_TOKEN
-			const username = process.env.GRAFANA_PROMETHEUS_USERNAME || Bun?.env?.GRAFANA_PROMETHEUS_USERNAME
-			const password = process.env.GRAFANA_PROMETHEUS_PASSWORD || Bun?.env?.GRAFANA_PROMETHEUS_PASSWORD
+			const token = process.env.GRAFANA_PROMETHEUS_TOKEN
+			const username = process.env.GRAFANA_PROMETHEUS_USERNAME
+			const password = process.env.GRAFANA_PROMETHEUS_PASSWORD
 
 			if (token) {
 				this.config.prometheusAuth = { ...this.config.prometheusAuth, bearerToken: token }
@@ -120,7 +120,7 @@ export const grafanaConfig = new GrafanaExporterConfig()
 class LokiExporter {
 	private buffer: LogEntry[] = []
 	private errorBuffer: ErrorEntry[] = []
-	private flushTimer?: Timer | NodeJS.Timer
+	private flushTimer?: NodeJS.Timeout
 	private config: GrafanaConfig = {}
 
 	initialize(config: GrafanaConfig) {

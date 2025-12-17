@@ -168,8 +168,7 @@ export const logCollector = {
 	},
 
 	debug(message: string, service: string, context?: Record<string, any>, traceId?: string) {
-		const env = typeof Bun !== 'undefined' ? Bun.env.NODE_ENV : process.env.NODE_ENV;
-		if (env !== 'production') {
+		if (process.env.NODE_ENV !== 'production') {
 			this.log('debug', message, service, context, traceId)
 		}
 	},
