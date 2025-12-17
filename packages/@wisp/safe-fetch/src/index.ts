@@ -28,6 +28,11 @@ const MAX_JSON_SIZE = 1024 * 1024; // 1MB
 const MAX_BLOB_SIZE = 500 * 1024 * 1024; // 500MB
 const MAX_REDIRECTS = 10;
 
+// Retry configuration
+const MAX_RETRIES = 3;
+const INITIAL_RETRY_DELAY = 1000; // 1 second
+const MAX_RETRY_DELAY = 10000; // 10 seconds
+
 function isBlockedHost(hostname: string): boolean {
 	const lowerHost = hostname.toLowerCase();
 
@@ -44,14 +49,102 @@ function isBlockedHost(hostname: string): boolean {
 	return false;
 }
 
+/**
+ * Check if an error is retryable (network/SSL errors, not HTTP errors)
+ */
+function isRetryableError(err: unknown): boolean {
+	if (!(err instanceof Error)) return false;
+
+	// Network errors (ECONNRESET, ENOTFOUND, etc.)
+	const errorCode = (err as any).code;
+	if (errorCode) {
+		const retryableCodes = [
+			'ECONNRESET',
+			'ECONNREFUSED',
+			'ETIMEDOUT',
+			'ENOTFOUND',
+			'ENETUNREACH',
+			'EAI_AGAIN',
+			'EPIPE',
+			'ERR_SSL_TLSV1_ALERT_INTERNAL_ERROR', // SSL/TLS handshake failures
+			'ERR_SSL_WRONG_VERSION_NUMBER',
+			'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+		];
+		if (retryableCodes.includes(errorCode)) {
+			return true;
+		}
+	}
+
+	// Timeout errors
+	if (err.name === 'AbortError' || err.message.includes('timeout')) {
+		return true;
+	}
+
+	// Fetch failures (generic network errors)
+	if (err.message.includes('fetch failed')) {
+		return true;
+	}
+
+	return false;
+}
+
+/**
+ * Sleep for a given number of milliseconds
+ */
+function sleep(ms: number): Promise<void> {
+	return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Retry a function with exponential backoff
+ */
+async function withRetry<T>(
+	fn: () => Promise<T>,
+	options: { maxRetries?: number; initialDelay?: number; maxDelay?: number; context?: string } = {}
+): Promise<T> {
+	const maxRetries = options.maxRetries ?? MAX_RETRIES;
+	const initialDelay = options.initialDelay ?? INITIAL_RETRY_DELAY;
+	const maxDelay = options.maxDelay ?? MAX_RETRY_DELAY;
+	const context = options.context ?? 'Request';
+
+	let lastError: unknown;
+
+	for (let attempt = 0; attempt <= maxRetries; attempt++) {
+		try {
+			return await fn();
+		} catch (err) {
+			lastError = err;
+
+			// Don't retry if this is the last attempt or error is not retryable
+			if (attempt === maxRetries || !isRetryableError(err)) {
+				throw err;
+			}
+
+			// Calculate delay with exponential backoff
+			const delay = Math.min(initialDelay * Math.pow(2, attempt), maxDelay);
+
+			const errorCode = (err as any)?.code;
+			const errorMsg = err instanceof Error ? err.message : String(err);
+			console.warn(
+				`${context} failed (attempt ${attempt + 1}/${maxRetries + 1}): ${errorMsg}${errorCode ? ` [${errorCode}]` : ''} - retrying in ${delay}ms`
+			);
+
+			await sleep(delay);
+		}
+	}
+
+	throw lastError;
+}
+
 export async function safeFetch(
 	url: string,
-	options?: RequestInit & { maxSize?: number; timeout?: number }
+	options?: RequestInit & { maxSize?: number; timeout?: number; retry?: boolean }
 ): Promise<Response> {
+	const shouldRetry = options?.retry !== false; // Default to true
 	const timeoutMs = options?.timeout ?? FETCH_TIMEOUT;
 	const maxSize = options?.maxSize ?? MAX_RESPONSE_SIZE;
 
-	// Parse and validate URL
+	// Parse and validate URL (done once, outside retry loop)
 	let parsedUrl: URL;
 	try {
 		parsedUrl = new URL(url);
@@ -68,39 +161,47 @@ export async function safeFetch(
 		throw new Error(`Blocked host: ${hostname}`);
 	}
 
-	const controller = new AbortController();
-	const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+	const fetchFn = async () => {
+		const controller = new AbortController();
+		const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-	try {
-		const response = await fetch(url, {
-			...options,
-			signal: controller.signal,
-			redirect: 'follow',
-			headers: {
-				'User-Agent': 'wisp-place hosting-service',
-				...(options?.headers || {}),
-			},
-		});
+		try {
+			const response = await fetch(url, {
+				...options,
+				signal: controller.signal,
+				redirect: 'follow',
+				headers: {
+					'User-Agent': 'wisp-place hosting-service',
+					...(options?.headers || {}),
+				},
+			});
 
-		const contentLength = response.headers.get('content-length');
-		if (contentLength && parseInt(contentLength, 10) > maxSize) {
-			throw new Error(`Response too large: ${contentLength} bytes`);
+			const contentLength = response.headers.get('content-length');
+			if (contentLength && parseInt(contentLength, 10) > maxSize) {
+				throw new Error(`Response too large: ${contentLength} bytes`);
+			}
+
+			return response;
+		} catch (err) {
+			if (err instanceof Error && err.name === 'AbortError') {
+				throw new Error(`Request timeout after ${timeoutMs}ms`);
+			}
+			throw err;
+		} finally {
+			clearTimeout(timeoutId);
 		}
+	};
 
-		return response;
-	} catch (err) {
-		if (err instanceof Error && err.name === 'AbortError') {
-			throw new Error(`Request timeout after ${timeoutMs}ms`);
-		}
-		throw err;
-	} finally {
-		clearTimeout(timeoutId);
+	if (shouldRetry) {
+		return withRetry(fetchFn, { context: `Fetch ${parsedUrl.hostname}` });
+	} else {
+		return fetchFn();
 	}
 }
 
 export async function safeFetchJson<T = any>(
 	url: string,
-	options?: RequestInit & { maxSize?: number; timeout?: number }
+	options?: RequestInit & { maxSize?: number; timeout?: number; retry?: boolean }
 ): Promise<T> {
 	const maxJsonSize = options?.maxSize ?? MAX_JSON_SIZE;
 	const response = await safeFetch(url, { ...options, maxSize: maxJsonSize });
@@ -146,7 +247,7 @@ export async function safeFetchJson<T = any>(
 
 export async function safeFetchBlob(
 	url: string,
-	options?: RequestInit & { maxSize?: number; timeout?: number }
+	options?: RequestInit & { maxSize?: number; timeout?: number; retry?: boolean }
 ): Promise<Uint8Array> {
 	const maxBlobSize = options?.maxSize ?? MAX_BLOB_SIZE;
 	const timeoutMs = options?.timeout ?? FETCH_TIMEOUT_BLOB;
