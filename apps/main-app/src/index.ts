@@ -61,6 +61,7 @@ runMaintenance()
 setInterval(runMaintenance, 60 * 60 * 1000)
 
 // Start DNS verification worker (runs every 10 minutes)
+// Can be disabled via DISABLE_DNS_WORKER=true environment variable
 const dnsVerifier = new DNSVerificationWorker(
 	10 * 60 * 1000, // 10 minutes
 	(msg, data) => {
@@ -68,8 +69,12 @@ const dnsVerifier = new DNSVerificationWorker(
 	}
 )
 
-dnsVerifier.start()
-logger.info('DNS Verifier Started - checking custom domains every 10 minutes')
+if (Bun.env.DISABLE_DNS_WORKER !== 'true') {
+	dnsVerifier.start()
+	logger.info('DNS Verifier Started - checking custom domains every 10 minutes')
+} else {
+	logger.info('DNS Verifier disabled via DISABLE_DNS_WORKER environment variable')
+}
 
 export const app = new Elysia({
 		serve: {
