@@ -6,56 +6,58 @@
 :root {
   color-scheme: light;
 
-  /* Warm beige background inspired by Sunset design #E9DDD8 */
-  --background: oklch(0.90 0.012 35);
-  /* Very dark brown text for strong contrast #2A2420 */
-  --foreground: oklch(0.18 0.01 30);
+  /* Warm beige background inspired by Sunset design */
+  --background: oklch(0.92 0.012 35);
+  /* Very dark brown text for strong contrast */
+  --foreground: oklch(0.15 0.015 30);
 
-  /* Slightly lighter card background */
-  --card: oklch(0.93 0.01 35);
-  --card-foreground: oklch(0.18 0.01 30);
+  /* Slightly lighter card background for elevation */
+  --card: oklch(0.95 0.008 35);
+  --card-foreground: oklch(0.15 0.015 30);
 
-  --popover: oklch(0.93 0.01 35);
-  --popover-foreground: oklch(0.18 0.01 30);
+  --popover: oklch(0.96 0.006 35);
+  --popover-foreground: oklch(0.15 0.015 30);
 
-  /* Dark brown primary inspired by #645343 */
-  --primary: oklch(0.35 0.02 35);
-  --primary-foreground: oklch(0.95 0.01 35);
+  /* Dark brown primary - darker for better contrast */
+  --primary: oklch(0.30 0.025 35);
+  --primary-foreground: oklch(0.96 0.008 35);
 
-  /* Bright pink accent for links #FFAAD2 */
-  --accent: oklch(0.78 0.15 345);
-  --accent-foreground: oklch(0.18 0.01 30);
+  /* Deeper pink accent for better visibility */
+  --accent: oklch(0.65 0.18 345);
+  --accent-foreground: oklch(0.15 0.015 30);
 
-  /* Medium taupe secondary inspired by #867D76 */
-  --secondary: oklch(0.52 0.015 30);
-  --secondary-foreground: oklch(0.95 0.01 35);
+  /* Darker taupe secondary for better contrast */
+  --secondary: oklch(0.85 0.012 30);
+  --secondary-foreground: oklch(0.25 0.02 30);
 
-  /* Light warm muted background */
+  /* Muted areas with better distinction */
   --muted: oklch(0.88 0.01 35);
-  --muted-foreground: oklch(0.42 0.015 30);
+  --muted-foreground: oklch(0.35 0.02 30);
 
-  --border: oklch(0.75 0.015 30);
-  --input: oklch(0.92 0.01 35);
-  --ring: oklch(0.72 0.08 15);
+  /* Significantly darker border for visibility */
+  --border: oklch(0.65 0.02 30);
+  /* Input backgrounds lighter than cards */
+  --input: oklch(0.97 0.005 35);
+  --ring: oklch(0.55 0.12 345);
 
-  --destructive: oklch(0.577 0.245 27.325);
-  --destructive-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.50 0.20 25);
+  --destructive-foreground: oklch(0.98 0 0);
 
-  --chart-1: oklch(0.78 0.15 345);
+  --chart-1: oklch(0.65 0.18 345);
   --chart-2: oklch(0.32 0.04 285);
-  --chart-3: oklch(0.56 0.08 220);
-  --chart-4: oklch(0.85 0.02 130);
-  --chart-5: oklch(0.93 0.03 85);
+  --chart-3: oklch(0.50 0.10 220);
+  --chart-4: oklch(0.70 0.08 130);
+  --chart-5: oklch(0.75 0.06 85);
 
   --radius: 0.75rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --sidebar: oklch(0.94 0.008 35);
+  --sidebar-foreground: oklch(0.15 0.015 30);
+  --sidebar-primary: oklch(0.30 0.025 35);
+  --sidebar-primary-foreground: oklch(0.96 0.008 35);
+  --sidebar-accent: oklch(0.90 0.01 35);
+  --sidebar-accent-foreground: oklch(0.20 0.02 30);
+  --sidebar-border: oklch(0.65 0.02 30);
+  --sidebar-ring: oklch(0.55 0.12 345);
 }
 
 .dark {
@@ -160,15 +162,23 @@
   * {
     @apply border-border outline-ring/50;
   }
+
+  html {
+    scrollbar-gutter: stable;
+  }
+
   body {
     @apply bg-background text-foreground;
   }
 }
 
 @keyframes arrow-bounce {
-  0%, 100% {
+
+  0%,
+  100% {
     transform: translateX(0);
   }
+
   50% {
     transform: translateX(4px);
   }
@@ -189,10 +199,173 @@
   border-radius: 0.5rem;
   padding: 1rem;
   overflow-x: auto;
-  border: 1px solid hsl(var(--border));
+  border: 1px solid var(--border);
 }
 
 .shiki-wrapper pre {
   margin: 0 !important;
   padding: 0 !important;
+}
+
+/* ========== Landing Page Animations ========== */
+
+/* Animated gradient for headline text */
+@keyframes gradient-shift {
+
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+.text-gradient-animate {
+  background: linear-gradient(90deg,
+      oklch(0.55 0.22 350),
+      oklch(0.60 0.24 10),
+      oklch(0.55 0.22 350));
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: gradient-shift 4s ease-in-out infinite;
+}
+
+.dark .text-gradient-animate {
+  background: linear-gradient(90deg,
+      oklch(0.75 0.12 295),
+      oklch(0.85 0.10 5),
+      oklch(0.75 0.12 295));
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Floating/breathing animation for hero elements */
+@keyframes float {
+
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+.animate-float-delayed {
+  animation: float 3s ease-in-out infinite;
+  animation-delay: 0.5s;
+}
+
+/* Staggered fade-in animation */
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.6s ease-out forwards;
+  opacity: 0;
+}
+
+.animate-delay-100 {
+  animation-delay: 0.1s;
+}
+
+.animate-delay-200 {
+  animation-delay: 0.2s;
+}
+
+.animate-delay-300 {
+  animation-delay: 0.3s;
+}
+
+.animate-delay-400 {
+  animation-delay: 0.4s;
+}
+
+.animate-delay-500 {
+  animation-delay: 0.5s;
+}
+
+.animate-delay-600 {
+  animation-delay: 0.6s;
+}
+
+/* Terminal cursor blink */
+@keyframes cursor-blink {
+
+  0%,
+  50% {
+    opacity: 1;
+  }
+
+  51%,
+  100% {
+    opacity: 0;
+  }
+}
+
+.animate-cursor-blink {
+  animation: cursor-blink 1s step-end infinite;
+}
+
+/* Button hover scale effect */
+.btn-hover-lift {
+  transition: all 0.2s ease-out;
+}
+
+.btn-hover-lift:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.btn-hover-lift:active {
+  transform: translateY(0);
+}
+
+/* Subtle pulse for feature dots */
+@keyframes dot-pulse {
+
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+
+  50% {
+    transform: scale(1.2);
+    opacity: 0.8;
+  }
+}
+
+.animate-dot-pulse {
+  animation: dot-pulse 2s ease-in-out infinite;
+}
+
+.animate-dot-pulse-delayed-1 {
+  animation: dot-pulse 2s ease-in-out infinite;
+  animation-delay: 0.3s;
+}
+
+.animate-dot-pulse-delayed-2 {
+  animation: dot-pulse 2s ease-in-out infinite;
+  animation-delay: 0.6s;
 }

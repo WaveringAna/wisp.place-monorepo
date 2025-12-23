@@ -88,7 +88,7 @@ const ActorTypeahead: React.FC<ActorTypeaheadProps> = ({
 
 	const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
 		const navigationKeys = ['ArrowDown', 'ArrowUp', 'PageDown', 'PageUp', 'Enter', 'Escape']
-		
+
 		// Mark that we should preserve the index for navigation keys
 		if (navigationKeys.includes(e.key)) {
 			preserveIndexRef.current = true
@@ -142,7 +142,7 @@ const ActorTypeahead: React.FC<ActorTypeaheadProps> = ({
 		setIndex(-1)
 		setIsOpen(false)
 		onSelect?.(handle)
-		
+
 		// Auto-submit the form if enabled
 		if (autoSubmit && inputRef.current) {
 			const form = inputRef.current.closest('form')
@@ -236,7 +236,7 @@ const ActorTypeahead: React.FC<ActorTypeaheadProps> = ({
 									height: 'calc(1.5rem + 12px)',
 									borderRadius: '4px',
 									cursor: 'pointer',
-									backgroundColor: i === index ? 'hsl(var(--accent) / 0.5)' : 'transparent',
+									backgroundColor: i === index ? 'color-mix(in oklch, var(--accent) 50%, transparent)' : 'transparent',
 									transition: 'background-color 0.1s'
 								}}
 								onMouseEnter={() => setIndex(i)}
@@ -246,7 +246,7 @@ const ActorTypeahead: React.FC<ActorTypeaheadProps> = ({
 										width: '1.5rem',
 										height: '1.5rem',
 										borderRadius: '50%',
-										backgroundColor: 'hsl(var(--muted))',
+										backgroundColor: 'var(--muted)',
 										overflow: 'hidden',
 										flexShrink: 0
 									}}
@@ -255,6 +255,7 @@ const ActorTypeahead: React.FC<ActorTypeaheadProps> = ({
 										<img
 											src={actor.avatar}
 											alt=""
+											loading="lazy"
 											style={{
 												display: 'block',
 												width: '100%',
@@ -359,81 +360,91 @@ function App() {
 
 	return (
 		<>
-			<div className="min-h-screen">
+			<div className="w-full min-h-screen flex flex-col">
 				{/* Header */}
-				<header className="border-b border-border/40 bg-background/80 backdrop-blur-sm sticky top-0 z-50">
-					<div className="container mx-auto px-4 py-4 flex items-center justify-between">
+				<header className="w-full border-b border-border/40 bg-background/80 backdrop-blur-sm sticky top-0 z-50">
+					<div className="max-w-6xl w-full mx-auto px-4 h-16 flex items-center justify-between">
 						<div className="flex items-center gap-2">
 							<img src="/transparent-full-size-ico.png" alt="wisp.place" className="w-8 h-8" />
-							<span className="text-xl font-semibold text-foreground">
+							<span className="text-lg font-semibold text-foreground">
 								wisp.place
 							</span>
 						</div>
-						<div className="flex items-center gap-3">
+						<div className="flex items-center gap-4">
+							<a
+								href="https://docs.wisp.place"
+								target="_blank"
+								rel="noopener noreferrer"
+								className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+							>
+								Read the Docs
+							</a>
 							<Button
-								variant="ghost"
+								variant="outline"
 								size="sm"
+								className="btn-hover-lift"
 								onClick={() => setShowForm(true)}
 							>
 								Sign In
-							</Button>
-							<Button
-								size="sm"
-								className="bg-accent text-accent-foreground hover:bg-accent/90"
-								asChild
-							>
-								<a href="https://docs.wisp.place" target="_blank" rel="noopener noreferrer">
-									Read the Docs
-								</a>
 							</Button>
 						</div>
 					</div>
 				</header>
 
 				{/* Hero Section */}
-				<section className="container mx-auto px-4 py-20 md:py-32">
+				<section className="container mx-auto px-4 py-24 md:py-36">
 					<div className="max-w-4xl mx-auto text-center">
-						<div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-accent/10 border border-accent/20 mb-8">
-							<span className="w-2 h-2 bg-accent rounded-full animate-pulse"></span>
-							<span className="text-sm text-foreground">
-								Built on AT Protocol
-							</span>
-						</div>
-
-						<h1 className="text-5xl md:text-7xl font-bold text-balance mb-6 leading-tight">
-							Your Website.Your Control. Lightning Fast.
+						{/* Main Headline */}
+						<h1 className="animate-fade-in-up animate-delay-100 text-5xl md:text-7xl font-bold mb-2 leading-tight tracking-tight">
+							Deploy Anywhere.
+						</h1>
+						<h1 className="animate-fade-in-up animate-delay-200 text-5xl md:text-7xl font-bold mb-8 leading-tight tracking-tight text-gradient-animate">
+							For Free. Forever.
 						</h1>
 
-						<p className="text-xl md:text-2xl text-muted-foreground text-balance mb-10 leading-relaxed max-w-3xl mx-auto">
-							Host static sites in your AT Protocol account. You
-							keep ownership and control. We just serve them fast
-							through our CDN.
+						{/* Subheadline */}
+						<p className="animate-fade-in-up animate-delay-300 text-lg md:text-xl text-muted-foreground mb-12 leading-relaxed max-w-2xl mx-auto">
+							The easiest way to deploy and orchestrate static sites.
+							Push updates instantly. Host on our infrastructure or yours.
+							All powered by AT Protocol.
 						</p>
 
-						<div className="max-w-md mx-auto relative">
+						{/* CTA Buttons */}
+						<div className="animate-fade-in-up animate-delay-400 max-w-lg mx-auto relative">
 							<div
-								className={`transition-all duration-500 ease-in-out ${
-									showForm
-										? 'opacity-0 -translate-y-5 pointer-events-none'
-										: 'opacity-100 translate-y-0'
-								}`}
+								className={`transition-all duration-500 ease-in-out ${showForm
+									? 'opacity-0 -translate-y-5 pointer-events-none absolute inset-0'
+									: 'opacity-100 translate-y-0'
+									}`}
 							>
-								<Button
-									size="lg"
-									className="bg-primary text-primary-foreground hover:bg-primary/90 text-lg px-8 py-6 w-full"
-									onClick={() => setShowForm(true)}
-								>
-									Log in with AT Proto
-									<ArrowRight className="ml-2 w-5 h-5" />
-								</Button>
+								<div className="flex flex-col sm:flex-row gap-3 justify-center">
+									<Button
+										size="lg"
+										className="bg-foreground text-background hover:bg-foreground/90 text-base px-6 py-5 btn-hover-lift"
+										onClick={() => setShowForm(true)}
+									>
+										<span className="mr-2 font-bold">@</span>
+										Deploy with AT
+									</Button>
+									<Button
+										variant="outline"
+										size="lg"
+										className="text-base px-6 py-5 btn-hover-lift"
+										asChild
+									>
+										<a href="https://docs.wisp.place/cli/" target="_blank" rel="noopener noreferrer">
+											<span className="font-mono mr-2 text-muted-foreground">&gt;_</span>
+											Install wisp-cli
+										</a>
+									</Button>
+								</div>
 							</div>
 
 							<div
-								className={`transition-all duration-500 ease-in-out absolute inset-0 ${
-									showForm
-										? 'opacity-100 translate-y-0'
-										: 'opacity-0 translate-y-5 pointer-events-none'
-								}`}
+								className={`transition-all duration-500 ease-in-out ${showForm
+									? 'opacity-100 translate-y-0'
+									: 'opacity-0 translate-y-5 pointer-events-none absolute inset-0'
+									}`}
 							>
 								<form
 									onSubmit={async (e) => {
@@ -494,7 +505,7 @@ function App() {
 									</ActorTypeahead>
 									<button
 										type="submit"
-										className="w-full bg-accent hover:bg-accent/90 text-accent-foreground font-semibold py-4 px-6 text-lg rounded-lg inline-flex items-center justify-center transition-colors"
+										className="w-full bg-foreground text-background hover:bg-foreground/90 font-semibold py-4 px-6 text-lg rounded-lg inline-flex items-center justify-center transition-colors btn-hover-lift"
 									>
 										Continue
 										<ArrowRight className="ml-2 w-5 h-5" />
@@ -518,12 +529,11 @@ function App() {
 								</div>
 								<div>
 									<h3 className="text-xl font-semibold mb-2">
-										Upload your static site
+										Drop in your files
 									</h3>
 									<p className="text-muted-foreground">
-										Your HTML, CSS, and JavaScript files are
-										stored in your AT Protocol account as
-										gzipped blobs and a manifest record.
+										Upload your site through our dashboard or push with the CLI.
+										Everything gets stored directly in your AT Protocol account.
 									</p>
 								</div>
 							</div>
@@ -533,12 +543,11 @@ function App() {
 								</div>
 								<div>
 									<h3 className="text-xl font-semibold mb-2">
-										We serve it globally
+										We handle the rest
 									</h3>
 									<p className="text-muted-foreground">
-										Wisp.place reads your site from your
-										account and delivers it through our CDN
-										for fast loading anywhere.
+										Your site goes live instantly on our global CDN.
+										Custom domains, HTTPS, caching—all automatic.
 									</p>
 								</div>
 							</div>
@@ -548,12 +557,11 @@ function App() {
 								</div>
 								<div>
 									<h3 className="text-xl font-semibold mb-2">
-										You stay in control
+										Push updates instantly
 									</h3>
 									<p className="text-muted-foreground">
-										Update or remove your site anytime
-										through your AT Protocol account. No
-										lock-in, no middleman ownership.
+										Ship changes in seconds. Update through the dashboard,
+										run wisp-cli deploy, or wire up your CI/CD pipeline.
 									</p>
 								</div>
 							</div>
@@ -686,7 +694,7 @@ function App() {
 				</section>
 
 				{/* Footer */}
-				<footer className="border-t border-border/40 bg-muted/20">
+				<footer className="border-t border-border/40 bg-muted/20 mt-auto">
 					<div className="container mx-auto px-4 py-8">
 						<div className="text-center text-sm text-muted-foreground">
 							<p>

@@ -5,20 +5,20 @@
 	/* Increase base font size by 10% */
 	font-size: 110%;
 
-	/* Light theme - Warm beige background from app */
-	--sl-color-bg: oklch(0.90 0.012 35);
-	--sl-color-bg-sidebar: oklch(0.93 0.01 35);
-	--sl-color-bg-nav: oklch(0.93 0.01 35);
-	--sl-color-text: oklch(0.18 0.01 30);
-	--sl-color-text-accent: oklch(0.78 0.15 345);
-	--sl-color-accent: oklch(0.78 0.15 345);
-	--sl-color-accent-low: oklch(0.95 0.03 345);
-	--sl-color-border: oklch(0.75 0.015 30);
-	--sl-color-gray-1: oklch(0.52 0.015 30);
-	--sl-color-gray-2: oklch(0.42 0.015 30);
-	--sl-color-gray-3: oklch(0.33 0.015 30);
-	--sl-color-gray-4: oklch(0.25 0.015 30);
-	--sl-color-gray-5: oklch(0.75 0.015 30);
+	/* Light theme - Warm beige with improved contrast */
+	--sl-color-bg: oklch(0.92 0.012 35);
+	--sl-color-bg-sidebar: oklch(0.95 0.008 35);
+	--sl-color-bg-nav: oklch(0.95 0.008 35);
+	--sl-color-text: oklch(0.15 0.015 30);
+	--sl-color-text-accent: oklch(0.65 0.18 345);
+	--sl-color-accent: oklch(0.65 0.18 345);
+	--sl-color-accent-low: oklch(0.92 0.05 345);
+	--sl-color-border: oklch(0.65 0.02 30);
+	--sl-color-gray-1: oklch(0.45 0.02 30);
+	--sl-color-gray-2: oklch(0.35 0.02 30);
+	--sl-color-gray-3: oklch(0.28 0.02 30);
+	--sl-color-gray-4: oklch(0.20 0.015 30);
+	--sl-color-gray-5: oklch(0.65 0.02 30);
 	--sl-color-bg-accent: oklch(0.88 0.01 35);
 }
 
@@ -70,7 +70,7 @@
 /* Sidebar active/hover state text contrast fix */
 .sidebar a[aria-current="page"],
 .sidebar a[aria-current="page"] span {
-	color: oklch(0.23 0.015 285) !important;
+	color: oklch(0.15 0.015 30) !important;
 }
 
 [data-theme="dark"] .sidebar a[aria-current="page"],
