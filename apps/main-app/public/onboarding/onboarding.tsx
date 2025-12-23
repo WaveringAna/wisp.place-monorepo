@@ -161,8 +161,8 @@ function Onboarding() {
 	return (
 		<div className="w-full min-h-screen bg-background">
 			{/* Header */}
-			<header className="border-b border-border/40 bg-background/80 backdrop-blur-sm sticky top-0 z-50">
-				<div className="container mx-auto px-4 py-4 flex items-center justify-between">
+			<header className="w-full border-b border-border/40 bg-background/80 backdrop-blur-sm sticky top-0 z-50">
+				<div className="max-w-6xl w-full mx-auto px-4 h-16 flex items-center justify-between">
 					<div className="flex items-center gap-2">
 						<div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
 							<Globe className="w-5 h-5 text-primary-foreground" />
@@ -179,11 +179,10 @@ function Onboarding() {
 				<div className="mb-8">
 					<div className="flex items-center justify-center gap-2 mb-4">
 						<div
-							className={`w-8 h-8 rounded-full flex items-center justify-center ${
-								step === 'domain'
-									? 'bg-primary text-primary-foreground'
-									: 'bg-green-500 text-white'
-							}`}
+							className={`w-8 h-8 rounded-full flex items-center justify-center ${step === 'domain'
+								? 'bg-primary text-primary-foreground'
+								: 'bg-green-500 text-white'
+								}`}
 						>
 							{step === 'domain' ? (
 								'1'
@@ -193,13 +192,12 @@ function Onboarding() {
 						</div>
 						<div className="w-16 h-0.5 bg-border"></div>
 						<div
-							className={`w-8 h-8 rounded-full flex items-center justify-center ${
-								step === 'upload'
-									? 'bg-primary text-primary-foreground'
-									: step === 'domain'
-										? 'bg-muted text-muted-foreground'
-										: 'bg-green-500 text-white'
-							}`}
+							className={`w-8 h-8 rounded-full flex items-center justify-center ${step === 'upload'
+								? 'bg-primary text-primary-foreground'
+								: step === 'domain'
+									? 'bg-muted text-muted-foreground'
+									: 'bg-green-500 text-white'
+								}`}
 						>
 							{step === 'complete' ? (
 								<CheckCircle2 className="w-5 h-5" />
@@ -258,11 +256,10 @@ function Onboarding() {
 										{!isCheckingAvailability &&
 											isAvailable !== null && (
 												<div
-													className={`absolute right-3 top-1/2 -translate-y-1/2 ${
-														isAvailable
-															? 'text-green-500'
-															: 'text-red-500'
-													}`}
+													className={`absolute right-3 top-1/2 -translate-y-1/2 ${isAvailable
+														? 'text-green-500'
+														: 'text-red-500'
+														}`}
 												>
 													{isAvailable ? '✓' : '✗'}
 												</div>

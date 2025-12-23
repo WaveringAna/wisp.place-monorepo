@@ -6,10 +6,10 @@ import { ArrowLeft, Shield, AlertCircle, CheckCircle, Scale } from 'lucide-react
 
 function AcceptableUsePage() {
 	return (
-		<div className="min-h-screen bg-background">
+		<div className="w-full min-h-screen bg-background flex flex-col">
 			{/* Header */}
-			<header className="border-b border-border/40 bg-background/80 backdrop-blur-sm sticky top-0 z-50">
-				<div className="container mx-auto px-4 py-4 flex items-center justify-between">
+			<header className="w-full border-b border-border/40 bg-background/80 backdrop-blur-sm sticky top-0 z-50">
+				<div className="max-w-6xl w-full mx-auto px-4 h-16 flex items-center justify-between">
 					<div className="flex items-center gap-2">
 						<img src="/transparent-full-size-ico.png" alt="wisp.place" className="w-8 h-8" />
 						<span className="text-xl font-semibold text-foreground">
@@ -326,7 +326,7 @@ function AcceptableUsePage() {
 			</div>
 
 			{/* Footer */}
-			<footer className="border-t border-border/40 bg-muted/20 mt-12">
+			<footer className="border-t border-border/40 bg-muted/20 mt-auto">
 				<div className="container mx-auto px-4 py-8">
 					<div className="text-center text-sm text-muted-foreground">
 						<p>
