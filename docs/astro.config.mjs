@@ -7,7 +7,9 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			title: 'Wisp.place Docs',
-			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/tangled-org/wisp.place' }],
+			components: {
+				SocialIcons: './src/components/SocialIcons.astro',
+			},
 			sidebar: [
 				{
 					label: 'Getting Started',
