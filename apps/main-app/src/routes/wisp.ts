@@ -183,19 +183,20 @@ async function processUploadInBackground(
                 continue;
             }
 
-            console.log(`Processing file ${i + 1}/${fileArray.length}:`, file.name, file.size, 'bytes');
+            // Use webkitRelativePath when available (directory uploads), fallback to name for regular file uploads
+            const filePath = (file as any).webkitRelativePath || file.name;
+
             updateJobProgress(jobId, {
                 filesProcessed: i + 1,
-                currentFile: file.name
+                currentFile: filePath
             });
 
             // Skip files that match ignore patterns
-            const normalizedPath = file.name.replace(/^[^\/]*\//, '');
+            const normalizedPath = filePath.replace(/^[^\/]*\//, '');
 
             if (shouldIgnore(ignoreMatcher, normalizedPath)) {
-                console.log(`Skipping ignored file: ${file.name}`);
                 skippedFiles.push({
-                    name: file.name,
+                    name: filePath,
                     reason: 'matched ignore pattern'
                 });
                 continue;
@@ -205,7 +206,7 @@ async function processUploadInBackground(
             const maxSize = MAX_FILE_SIZE;
             if (file.size > maxSize) {
                 skippedFiles.push({
-                    name: file.name,
+                    name: filePath,
                     reason: `file too large (${(file.size / 1024 / 1024).toFixed(2)}MB, max 100MB)`
                 });
                 continue;
@@ -238,25 +239,17 @@ async function processUploadInBackground(
                     // Text files: compress AND base64 encode
                     finalContent = Buffer.from(compressedContent.toString('base64'), 'binary');
                     base64Encoded = true;
-                    const compressionRatio = (compressedContent.length / originalContent.length * 100).toFixed(1);
-                    console.log(`Compressing+base64 ${file.name}: ${originalContent.length} -> ${compressedContent.length} bytes (${compressionRatio}%), base64: ${finalContent.length} bytes`);
-                    logger.info(`Compressing+base64 ${file.name}: ${originalContent.length} -> ${compressedContent.length} bytes (${compressionRatio}%), base64: ${finalContent.length} bytes`);
                 } else {
                     // Audio files: just compress, no base64
                     finalContent = compressedContent;
-                    const compressionRatio = (compressedContent.length / originalContent.length * 100).toFixed(1);
-                    console.log(`Compressing ${file.name}: ${originalContent.length} -> ${compressedContent.length} bytes (${compressionRatio}%)`);
-                    logger.info(`Compressing ${file.name}: ${originalContent.length} -> ${compressedContent.length} bytes (${compressionRatio}%)`);
                 }
             } else {
                 // Binary files: upload directly
                 finalContent = originalContent;
-                console.log(`Uploading ${file.name} directly: ${originalContent.length} bytes (no compression)`);
-                logger.info(`Uploading ${file.name} directly: ${originalContent.length} bytes (binary)`);
             }
 
             uploadedFiles.push({
-                name: file.name,
+                name: filePath,
                 content: finalContent,
                 mimeType: originalMimeType,
                 size: finalContent.length,
