@@ -4,7 +4,7 @@ import { FirehoseWorker } from './lib/firehose';
 import { createLogger, initializeGrafanaExporters } from '@wisp/observability';
 import { mkdirSync, existsSync } from 'fs';
 import { backfillCache } from './lib/backfill';
-import { startDomainCacheCleanup, stopDomainCacheCleanup, setCacheOnlyMode } from './lib/db';
+import { startDomainCacheCleanup, stopDomainCacheCleanup, setCacheOnlyMode, closeDatabase } from './lib/db';
 
 // Initialize Grafana exporters if configured
 initializeGrafanaExporters({
@@ -94,6 +94,7 @@ process.on('SIGINT', async () => {
   console.log('\n🛑 Shutting down...');
   firehose.stop();
   stopDomainCacheCleanup();
+  await closeDatabase();
   server.close();
   process.exit(0);
 });
@@ -102,6 +103,7 @@ process.on('SIGTERM', async () => {
   console.log('\n🛑 Shutting down...');
   firehose.stop();
   stopDomainCacheCleanup();
+  await closeDatabase();
   server.close();
   process.exit(0);
 });

@@ -12,7 +12,7 @@ import {
 	cleanupExpiredSessions,
 	rotateKeysIfNeeded
 } from './lib/oauth-client'
-import { getCookieSecret } from './lib/db'
+import { getCookieSecret, closeDatabase } from './lib/db'
 import { authRoutes } from './routes/auth'
 import { wispRoutes } from './routes/wisp'
 import { domainRoutes } from './routes/domain'
@@ -205,3 +205,18 @@ export const app = new Elysia({
 console.log(
 	`🦊 Elysia is running at ${app.server?.hostname}:${app.server?.port}`
 )
+
+// Graceful shutdown
+process.on('SIGINT', async () => {
+	console.log('\n🛑 Shutting down...')
+	dnsVerifier.stop()
+	await closeDatabase()
+	process.exit(0)
+})
+
+process.on('SIGTERM', async () => {
+	console.log('\n🛑 Shutting down...')
+	dnsVerifier.stop()
+	await closeDatabase()
+	process.exit(0)
+})
