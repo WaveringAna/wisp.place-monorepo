@@ -183,6 +183,9 @@ function stringToLockId(key: string): bigint {
   return hashNum & 0x7FFFFFFFFFFFFFFFn;
 }
 
+// Track active locks for cleanup on shutdown
+const activeLocks = new Set<string>();
+
 /**
  * Acquire a distributed lock using PostgreSQL advisory locks
  * Returns true if lock was acquired, false if already held by another instance
@@ -193,7 +196,11 @@ export async function tryAcquireLock(key: string): Promise<boolean> {
 
   try {
     const result = await sql`SELECT pg_try_advisory_lock(${Number(lockId)}) as acquired`;
-    return result[0]?.acquired === true;
+    const acquired = result[0]?.acquired === true;
+    if (acquired) {
+      activeLocks.add(key);
+    }
+    return acquired;
   } catch (err) {
     console.error('Failed to acquire lock', { key, error: err });
     return false;
@@ -208,8 +215,32 @@ export async function releaseLock(key: string): Promise<void> {
 
   try {
     await sql`SELECT pg_advisory_unlock(${Number(lockId)})`;
+    activeLocks.delete(key);
   } catch (err) {
     console.error('Failed to release lock', { key, error: err });
+    // Still remove from tracking even if unlock fails
+    activeLocks.delete(key);
+  }
+}
+
+/**
+ * Close all database connections
+ * Call this during graceful shutdown
+ */
+export async function closeDatabase(): Promise<void> {
+  try {
+    // Release all active advisory locks before closing connections
+    if (activeLocks.size > 0) {
+      console.log(`[DB] Releasing ${activeLocks.size} active advisory locks before shutdown`);
+      for (const key of activeLocks) {
+        await releaseLock(key);
+      }
+    }
+
+    await sql.end({ timeout: 5 });
+    console.log('[DB] Database connections closed');
+  } catch (err) {
+    console.error('[DB] Error closing database connections:', err);
   }
 }
 

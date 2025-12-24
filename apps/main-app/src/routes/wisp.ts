@@ -39,7 +39,7 @@ import type { Ignore } from 'ignore'
 
 const logger = createLogger('main-app')
 
-function isValidSiteName(siteName: string): boolean {
+export function isValidSiteName(siteName: string): boolean {
     if (!siteName || typeof siteName !== 'string') return false;
 
     // Length check (AT Protocol rkey limit)
@@ -184,7 +184,8 @@ async function processUploadInBackground(
             }
 
             // Use webkitRelativePath when available (directory uploads), fallback to name for regular file uploads
-            const filePath = (file as any).webkitRelativePath || file.name;
+            const webkitPath = 'webkitRelativePath' in file ? String(file.webkitRelativePath) : '';
+            const filePath = webkitPath || file.name;
 
             updateJobProgress(jobId, {
                 filesProcessed: i + 1,

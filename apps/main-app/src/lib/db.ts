@@ -526,3 +526,16 @@ export const getCookieSecret = async (): Promise<string> => {
     console.log('[CookieSecret] Generated new cookie signing secret');
     return secret;
 };
+
+/**
+ * Close database connection
+ * Call this during graceful shutdown
+ */
+export const closeDatabase = async (): Promise<void> => {
+    try {
+        await db.end();
+        console.log('[DB] Database connection closed');
+    } catch (err) {
+        console.error('[DB] Error closing database connection:', err);
+    }
+};
