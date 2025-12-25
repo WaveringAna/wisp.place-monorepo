@@ -214,4 +214,4 @@ process.on('beforeExit', async () => {
 
 ## License
 
-Private
+MIT
