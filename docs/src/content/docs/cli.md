@@ -71,11 +71,6 @@ when:
 
 engine: 'nixery'
 
-clone:
-  skip: false
-  depth: 1
-  submodules: false
-
 dependencies:
   nixpkgs:
     - nodejs
