@@ -1,7 +1,7 @@
 use crate::blob_map;
 use crate::download;
 use crate::metadata::SiteMetadata;
-use crate::place_wisp::fs::*;
+use wisp_lexicons::place_wisp::fs::*;
 use crate::subfs_utils;
 use jacquard::CowStr;
 use jacquard::prelude::IdentityResolver;
@@ -410,9 +410,9 @@ async fn expand_subfs_in_pull_with_client<'a>(
 ) -> miette::Result<Directory<'static>> {
     use jacquard_common::IntoStatic;
     use jacquard_common::types::value::from_data;
-    use crate::place_wisp::subfs::SubfsRecord;
+    use wisp_lexicons::place_wisp::subfs::SubfsRecord;
 
-    let mut all_subfs_map: HashMap<String, crate::place_wisp::subfs::Directory> = HashMap::new();
+    let mut all_subfs_map: HashMap<String, wisp_lexicons::place_wisp::subfs::Directory> = HashMap::new();
     let mut to_fetch = subfs_utils::extract_subfs_uris(directory, String::new());
 
     if to_fetch.is_empty() {
@@ -516,7 +516,7 @@ async fn expand_subfs_in_pull_with_client<'a>(
 
 /// Extract subfs URIs from a subfs::Directory (helper for pull)
 fn extract_subfs_uris_from_subfs_dir(
-    directory: &crate::place_wisp::subfs::Directory,
+    directory: &wisp_lexicons::place_wisp::subfs::Directory,
     current_path: String,
 ) -> Vec<(String, String)> {
     let mut uris = Vec::new();
@@ -529,10 +529,10 @@ fn extract_subfs_uris_from_subfs_dir(
         };
 
         match &entry.node {
-            crate::place_wisp::subfs::EntryNode::Subfs(subfs_node) => {
+            wisp_lexicons::place_wisp::subfs::EntryNode::Subfs(subfs_node) => {
                 uris.push((subfs_node.subject.to_string(), full_path.clone()));
             }
-            crate::place_wisp::subfs::EntryNode::Directory(subdir) => {
+            wisp_lexicons::place_wisp::subfs::EntryNode::Directory(subdir) => {
                 let nested = extract_subfs_uris_from_subfs_dir(subdir, full_path);
                 uris.extend(nested);
             }
@@ -546,7 +546,7 @@ fn extract_subfs_uris_from_subfs_dir(
 /// Recursively replace subfs nodes with their actual content
 fn replace_subfs_with_content(
     directory: Directory,
-    subfs_map: &HashMap<String, crate::place_wisp::subfs::Directory>,
+    subfs_map: &HashMap<String, wisp_lexicons::place_wisp::subfs::Directory>,
     current_path: String,
 ) -> Directory<'static> {
     use jacquard_common::IntoStatic;
@@ -628,11 +628,11 @@ fn replace_subfs_with_content(
 }
 
 /// Convert a subfs entry to a fs entry (they have the same structure but different types)
-fn convert_subfs_entry_to_fs(subfs_entry: crate::place_wisp::subfs::Entry<'static>) -> Entry<'static> {
+fn convert_subfs_entry_to_fs(subfs_entry: wisp_lexicons::place_wisp::subfs::Entry<'static>) -> Entry<'static> {
     use jacquard_common::IntoStatic;
 
     let node = match subfs_entry.node {
-        crate::place_wisp::subfs::EntryNode::File(file) => {
+        wisp_lexicons::place_wisp::subfs::EntryNode::File(file) => {
             EntryNode::File(Box::new(
                 File::new()
                     .r#type(file.r#type.into_static())
@@ -643,7 +643,7 @@ fn convert_subfs_entry_to_fs(subfs_entry: crate::place_wisp::subfs::Entry<'stati
                     .build()
             ))
         }
-        crate::place_wisp::subfs::EntryNode::Directory(dir) => {
+        wisp_lexicons::place_wisp::subfs::EntryNode::Directory(dir) => {
             let converted_entries: Vec<Entry<'static>> = dir
                 .entries
                 .into_iter()
@@ -657,7 +657,7 @@ fn convert_subfs_entry_to_fs(subfs_entry: crate::place_wisp::subfs::Entry<'stati
                     .build()
             ))
         }
-        crate::place_wisp::subfs::EntryNode::Subfs(_nested_subfs) => {
+        wisp_lexicons::place_wisp::subfs::EntryNode::Subfs(_nested_subfs) => {
             // Nested subfs should have been expanded already - if we get here, it means expansion failed
             // Treat it like a directory reference that should have been expanded
             eprintln!("  ⚠️  Warning: unexpanded nested subfs at path, treating as empty directory");
@@ -668,7 +668,7 @@ fn convert_subfs_entry_to_fs(subfs_entry: crate::place_wisp::subfs::Entry<'stati
                     .build()
             ))
         }
-        crate::place_wisp::subfs::EntryNode::Unknown(unknown) => {
+        wisp_lexicons::place_wisp::subfs::EntryNode::Unknown(unknown) => {
             EntryNode::Unknown(unknown)
         }
     };

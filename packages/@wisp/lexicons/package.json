@@ -32,7 +32,7 @@
     }
   },
   "scripts": {
-    "codegen": "lex gen-server ./src ./lexicons"
+    "codegen": "lex gen-server ./src ../../../lexicons/*.json"
   },
   "dependencies": {
     "@atproto/lexicon": "^0.5.1",

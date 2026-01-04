@@ -24,7 +24,8 @@
     "check": "cd apps/main-app && npm run check && cd ../hosting-service && npm run check",
     "screenshot": "bun run apps/main-app/scripts/screenshot-sites.ts",
     "hosting:dev": "cd apps/hosting-service && npm run dev",
-    "hosting:start": "cd apps/hosting-service && npm run start"
+    "hosting:start": "cd apps/hosting-service && npm run start",
+    "codegen": "./scripts/codegen.sh"
   },
   "trustedDependencies": [
     "@parcel/watcher",

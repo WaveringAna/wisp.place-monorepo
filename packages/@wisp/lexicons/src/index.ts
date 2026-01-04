@@ -9,7 +9,7 @@ import {
   type MethodConfigOrHandler,
   createServer as createXrpcServer,
 } from '@atproto/xrpc-server'
-import { schemas } from './lexicons'
+import { schemas } from './lexicons.js'
 
 export function createServer(options?: XrpcOptions): Server {
   return new Server(options)

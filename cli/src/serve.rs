@@ -1,6 +1,6 @@
 use crate::pull::pull_site;
 use crate::redirects::{load_redirect_rules, match_redirect_rule, RedirectRule};
-use crate::place_wisp::settings::Settings;
+use wisp_lexicons::place_wisp::settings::Settings;
 use axum::{
     Router,
     extract::Request,

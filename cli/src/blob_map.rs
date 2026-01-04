@@ -2,7 +2,7 @@ use jacquard_common::types::blob::BlobRef;
 use jacquard_common::IntoStatic;
 use std::collections::HashMap;
 
-use crate::place_wisp::fs::{Directory, EntryNode};
+use wisp_lexicons::place_wisp::fs::{Directory, EntryNode};
 
 /// Extract blob information from a directory tree
 /// Returns a map of file paths to their blob refs and CIDs

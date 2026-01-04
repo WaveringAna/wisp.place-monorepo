@@ -8,13 +8,14 @@ default = ["place_wisp"]
 place_wisp = []
 
 [dependencies]
-jacquard = { git = "https://tangled.org/nekomimi.pet/jacquard", features = ["loopback"] }
-jacquard-oauth = { git = "https://tangled.org/nekomimi.pet/jacquard" }
-jacquard-api = { git = "https://tangled.org/nekomimi.pet/jacquard", features = ["streaming"] }
-jacquard-common = { git = "https://tangled.org/nekomimi.pet/jacquard", features = ["websocket"] }
-jacquard-identity = { git = "https://tangled.org/nekomimi.pet/jacquard", features = ["dns"] }
-jacquard-derive = { git = "https://tangled.org/nekomimi.pet/jacquard" }
-jacquard-lexicon = { git = "https://tangled.org/nekomimi.pet/jacquard" }
+jacquard = { git = "https://tangled.org/nonbinary.computer/jacquard", features = ["loopback"] }
+jacquard-oauth = { git = "https://tangled.org/nonbinary.computer/jacquard" }
+jacquard-api = { git = "https://tangled.org/nonbinary.computer/jacquard", features = ["streaming"] }
+jacquard-common = { git = "https://tangled.org/nonbinary.computer/jacquard", features = ["websocket"] }
+jacquard-identity = { git = "https://tangled.org/nonbinary.computer/jacquard", features = ["dns"] }
+jacquard-derive = { git = "https://tangled.org/nonbinary.computer/jacquard" }
+jacquard-lexicon = { git = "https://tangled.org/nonbinary.computer/jacquard" }
+wisp-lexicons = { path = "crates/lexicons" }
 #jacquard = { path = "../../jacquard/crates/jacquard", features = ["loopback"] }
 #jacquard-oauth = { path = "../../jacquard/crates/jacquard-oauth" }
 #jacquard-api = { path = "../../jacquard/crates/jacquard-api", features = ["streaming"] }
