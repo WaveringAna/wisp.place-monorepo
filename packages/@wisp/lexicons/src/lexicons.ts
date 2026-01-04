@@ -7,7 +7,7 @@ import {
   ValidationError,
   type ValidationResult,
 } from '@atproto/lexicon'
-import { type $Typed, is$typed, maybe$typed } from './util'
+import { type $Typed, is$typed, maybe$typed } from './util.js'
 
 export const schemaDict = {
   PlaceWispFs: {

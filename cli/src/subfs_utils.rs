@@ -6,8 +6,8 @@ use jacquard::prelude::IdentityResolver;
 use miette::IntoDiagnostic;
 use std::collections::HashMap;
 
-use crate::place_wisp::fs::{Directory as FsDirectory, EntryNode as FsEntryNode};
-use crate::place_wisp::subfs::SubfsRecord;
+use wisp_lexicons::place_wisp::fs::{Directory as FsDirectory, EntryNode as FsEntryNode};
+use wisp_lexicons::place_wisp::subfs::SubfsRecord;
 
 /// Extract all subfs URIs from a directory tree with their mount paths
 pub fn extract_subfs_uris(directory: &FsDirectory, current_path: String) -> Vec<(String, String)> {
@@ -145,14 +145,14 @@ pub async fn fetch_all_subfs_records_recursive(
 
 /// Extract subfs URIs from a subfs::Directory
 fn extract_subfs_uris_from_subfs_dir(
-    directory: &crate::place_wisp::subfs::Directory,
+    directory: &wisp_lexicons::place_wisp::subfs::Directory,
     current_path: String,
 ) -> Vec<(String, String)> {
     let mut uris = Vec::new();
 
     for entry in &directory.entries {
         match &entry.node {
-            crate::place_wisp::subfs::EntryNode::Subfs(subfs_node) => {
+            wisp_lexicons::place_wisp::subfs::EntryNode::Subfs(subfs_node) => {
                 // Check if this is a chunk entry (chunk0, chunk1, etc.)
                 // Chunks should be flat-merged, so use the parent's path
                 let mount_path = if entry.name.starts_with("chunk") &&
@@ -171,7 +171,7 @@ fn extract_subfs_uris_from_subfs_dir(
 
                 uris.push((subfs_node.subject.to_string(), mount_path));
             }
-            crate::place_wisp::subfs::EntryNode::Directory(subdir) => {
+            wisp_lexicons::place_wisp::subfs::EntryNode::Directory(subdir) => {
                 let full_path = if current_path.is_empty() {
                     entry.name.to_string()
                 } else {
@@ -204,7 +204,7 @@ pub async fn merge_subfs_blob_maps(
     for (mount_path, subfs_record) in all_subfs {
         // Check if this record only contains chunk subfs references (no files)
         let only_has_chunks = subfs_record.root.entries.iter().all(|e| {
-            matches!(&e.node, crate::place_wisp::subfs::EntryNode::Subfs(_)) &&
+            matches!(&e.node, wisp_lexicons::place_wisp::subfs::EntryNode::Subfs(_)) &&
             e.name.starts_with("chunk") &&
             e.name.chars().skip(5).all(|c| c.is_ascii_digit())
         });
@@ -232,7 +232,7 @@ pub async fn merge_subfs_blob_maps(
 /// Extract blobs from a subfs directory (works with subfs::Directory)
 /// Returns a map of file paths to their blob refs and CIDs
 fn extract_subfs_blobs(
-    directory: &crate::place_wisp::subfs::Directory,
+    directory: &wisp_lexicons::place_wisp::subfs::Directory,
     current_path: String,
 ) -> HashMap<String, (BlobRef<'static>, String)> {
     let mut blob_map = HashMap::new();
@@ -245,7 +245,7 @@ fn extract_subfs_blobs(
         };
 
         match &entry.node {
-            crate::place_wisp::subfs::EntryNode::File(file_node) => {
+            wisp_lexicons::place_wisp::subfs::EntryNode::File(file_node) => {
                 let blob_ref = &file_node.blob;
                 let cid_string = blob_ref.blob().r#ref.to_string();
                 blob_map.insert(
@@ -253,16 +253,16 @@ fn extract_subfs_blobs(
                     (blob_ref.clone().into_static(), cid_string)
                 );
             }
-            crate::place_wisp::subfs::EntryNode::Directory(subdir) => {
+            wisp_lexicons::place_wisp::subfs::EntryNode::Directory(subdir) => {
                 let sub_map = extract_subfs_blobs(subdir, full_path);
                 blob_map.extend(sub_map);
             }
-            crate::place_wisp::subfs::EntryNode::Subfs(_nested_subfs) => {
+            wisp_lexicons::place_wisp::subfs::EntryNode::Subfs(_nested_subfs) => {
                 // Nested subfs - these should be resolved recursively in the main flow
                 // For now, we skip them (they'll be fetched separately)
                 eprintln!("  ⚠️  Found nested subfs at {}, skipping (should be fetched separately)", full_path);
             }
-            crate::place_wisp::subfs::EntryNode::Unknown(_) => {
+            wisp_lexicons::place_wisp::subfs::EntryNode::Unknown(_) => {
                 // Skip unknown nodes
             }
         }
@@ -352,7 +352,7 @@ pub fn replace_directory_with_subfs(
     flat: bool,
 ) -> miette::Result<FsDirectory<'static>> {
     use jacquard_common::CowStr;
-    use crate::place_wisp::fs::{Entry, Subfs};
+    use wisp_lexicons::place_wisp::fs::{Entry, Subfs};
 
     let path_parts: Vec<&str> = target_path.split('/').collect();
 
@@ -430,7 +430,7 @@ pub async fn delete_subfs_record(
 
     // Construct AT-URI and convert to RecordUri
     let at_uri = AtUri::new(uri).into_diagnostic()?;
-    let record_uri: RecordUri<'_, crate::place_wisp::subfs::SubfsRecordRecord> = RecordUri::try_from_uri(at_uri).into_diagnostic()?;
+    let record_uri: RecordUri<'_, wisp_lexicons::place_wisp::subfs::SubfsRecordRecord> = RecordUri::try_from_uri(at_uri).into_diagnostic()?;
 
     let rkey = record_uri.rkey()
         .ok_or_else(|| miette::miette!("Invalid subfs URI: missing rkey"))?
@@ -489,7 +489,7 @@ pub fn split_directory_into_chunks(
 }
 
 /// Estimate the JSON size of a single entry
-fn estimate_entry_size(entry: &crate::place_wisp::fs::Entry) -> usize {
+fn estimate_entry_size(entry: &wisp_lexicons::place_wisp::fs::Entry) -> usize {
     match serde_json::to_string(entry) {
         Ok(json) => json.len(),
         Err(_) => 500, // Conservative estimate if serialization fails

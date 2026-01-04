@@ -1,5 +1,3 @@
-mod builder_types;
-mod place_wisp;
 mod cid;
 mod blob_map;
 mod metadata;
@@ -28,8 +26,8 @@ use base64::Engine;
 use futures::stream::{self, StreamExt};
 use indicatif::{ProgressBar, ProgressStyle, MultiProgress};
 
-use place_wisp::fs::*;
-use place_wisp::settings::*;
+use wisp_lexicons::place_wisp::fs::*;
+use wisp_lexicons::place_wisp::settings::*;
 
 /// Maximum number of concurrent file uploads to the PDS
 const MAX_CONCURRENT_UPLOADS: usize = 2;
@@ -512,7 +510,7 @@ async fn deploy_site(
                         let chunk_file_count = subfs_utils::count_files_in_directory(chunk);
                         let chunk_size = subfs_utils::estimate_directory_size(chunk);
 
-                        let chunk_manifest = crate::place_wisp::subfs::SubfsRecord::new()
+                        let chunk_manifest = wisp_lexicons::place_wisp::subfs::SubfsRecord::new()
                             .root(convert_fs_dir_to_subfs_dir(chunk.clone()))
                             .file_count(Some(chunk_file_count as i64))
                             .created_at(Datetime::now())
@@ -535,7 +533,7 @@ async fn deploy_site(
                     // Each chunk reference MUST have flat: true to merge chunk contents
                     println!("  → Creating parent subfs with {} chunk references...", chunk_uris.len());
                     use jacquard_common::CowStr;
-                    use crate::place_wisp::fs::{Subfs};
+                    use wisp_lexicons::place_wisp::fs::{Subfs};
 
                     // Convert to fs::Subfs (which has the 'flat' field) instead of subfs::Subfs
                     let parent_entries_fs: Vec<Entry> = chunk_uris.iter().enumerate().map(|(i, (uri, _))| {
@@ -565,7 +563,7 @@ async fn deploy_site(
                     let parent_tid = Tid::now_0();
                     let parent_rkey = parent_tid.to_string();
 
-                    let parent_manifest = crate::place_wisp::subfs::SubfsRecord::new()
+                    let parent_manifest = wisp_lexicons::place_wisp::subfs::SubfsRecord::new()
                         .root(parent_root_subfs)
                         .file_count(Some(largest_dir.file_count as i64))
                         .created_at(Datetime::now())
@@ -584,7 +582,7 @@ async fn deploy_site(
                     let subfs_tid = Tid::now_0();
                     let subfs_rkey = subfs_tid.to_string();
 
-                    let subfs_manifest = crate::place_wisp::subfs::SubfsRecord::new()
+                    let subfs_manifest = wisp_lexicons::place_wisp::subfs::SubfsRecord::new()
                         .root(convert_fs_dir_to_subfs_dir(largest_dir.directory.clone()))
                         .file_count(Some(largest_dir.file_count as i64))
                         .created_at(Datetime::now())
@@ -952,12 +950,12 @@ async fn process_file(
 
 /// Convert fs::Directory to subfs::Directory
 /// They have the same structure, but different types
-fn convert_fs_dir_to_subfs_dir(fs_dir: place_wisp::fs::Directory<'static>) -> place_wisp::subfs::Directory<'static> {
-    use place_wisp::subfs::{Directory as SubfsDirectory, Entry as SubfsEntry, EntryNode as SubfsEntryNode, File as SubfsFile};
+fn convert_fs_dir_to_subfs_dir(fs_dir: wisp_lexicons::place_wisp::fs::Directory<'static>) -> wisp_lexicons::place_wisp::subfs::Directory<'static> {
+    use wisp_lexicons::place_wisp::subfs::{Directory as SubfsDirectory, Entry as SubfsEntry, EntryNode as SubfsEntryNode, File as SubfsFile};
 
     let subfs_entries: Vec<SubfsEntry> = fs_dir.entries.into_iter().map(|entry| {
         let node = match entry.node {
-            place_wisp::fs::EntryNode::File(file) => {
+            wisp_lexicons::place_wisp::fs::EntryNode::File(file) => {
                 SubfsEntryNode::File(Box::new(SubfsFile::new()
                     .r#type(file.r#type)
                     .blob(file.blob)
@@ -966,18 +964,18 @@ fn convert_fs_dir_to_subfs_dir(fs_dir: place_wisp::fs::Directory<'static>) -> pl
                     .base64(file.base64)
                     .build()))
             }
-            place_wisp::fs::EntryNode::Directory(dir) => {
+            wisp_lexicons::place_wisp::fs::EntryNode::Directory(dir) => {
                 SubfsEntryNode::Directory(Box::new(convert_fs_dir_to_subfs_dir(*dir)))
             }
-            place_wisp::fs::EntryNode::Subfs(subfs) => {
+            wisp_lexicons::place_wisp::fs::EntryNode::Subfs(subfs) => {
                 // Nested subfs in the directory we're converting
                 // Note: subfs::Subfs doesn't have the 'flat' field - that's only in fs::Subfs
-                SubfsEntryNode::Subfs(Box::new(place_wisp::subfs::Subfs::new()
+                SubfsEntryNode::Subfs(Box::new(wisp_lexicons::place_wisp::subfs::Subfs::new()
                     .r#type(subfs.r#type)
                     .subject(subfs.subject)
                     .build()))
             }
-            place_wisp::fs::EntryNode::Unknown(unknown) => {
+            wisp_lexicons::place_wisp::fs::EntryNode::Unknown(unknown) => {
                 SubfsEntryNode::Unknown(unknown)
             }
         };
