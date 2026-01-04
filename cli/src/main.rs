@@ -41,38 +41,37 @@ const MAX_SITE_SIZE: usize = 300 * 1024 * 1024; // 300MB
 struct Args {
     #[command(subcommand)]
     command: Option<Commands>,
-    
+
     // Deploy arguments (when no subcommand is specified)
     /// Handle (e.g., alice.bsky.social), DID, or PDS URL
-    #[arg(global = true, conflicts_with = "command")]
     input: Option<CowStr<'static>>,
 
     /// Path to the directory containing your static site
-    #[arg(short, long, global = true, conflicts_with = "command")]
+    #[arg(short, long)]
     path: Option<PathBuf>,
 
     /// Site name (defaults to directory name)
-    #[arg(short, long, global = true, conflicts_with = "command")]
+    #[arg(short, long)]
     site: Option<String>,
 
     /// Path to auth store file
-    #[arg(long, global = true, conflicts_with = "command")]
+    #[arg(long)]
     store: Option<String>,
 
     /// App Password for authentication
-    #[arg(long, global = true, conflicts_with = "command")]
+    #[arg(long)]
     password: Option<CowStr<'static>>,
 
     /// Enable directory listing mode for paths without index files
-    #[arg(long, global = true, conflicts_with = "command")]
+    #[arg(long)]
     directory: bool,
 
     /// Enable SPA mode (serve index.html for all routes)
-    #[arg(long, global = true, conflicts_with = "command")]
+    #[arg(long)]
     spa: bool,
 
     /// Skip confirmation prompts (automatically accept warnings)
-    #[arg(short = 'y', long, global = true, conflicts_with = "command")]
+    #[arg(short = 'y', long)]
     yes: bool,
 }
 
@@ -122,7 +121,7 @@ enum Commands {
 
         /// Output directory for the downloaded site
         #[arg(short, long, default_value = ".")]
-        output: PathBuf,
+        path: PathBuf,
     },
     /// Serve a site locally with real-time firehose updates
     Serve {
@@ -135,10 +134,10 @@ enum Commands {
 
         /// Output directory for the site files
         #[arg(short, long, default_value = ".")]
-        output: PathBuf,
+        path: PathBuf,
 
         /// Port to serve on
-        #[arg(short, long, default_value = "8080")]
+        #[arg(short = 'P', long, default_value = "8080")]
         port: u16,
     },
 }
@@ -156,11 +155,11 @@ async fn main() -> miette::Result<()> {
                 run_with_oauth(input, store, path, site, directory, spa, yes).await
             }
         }
-        Some(Commands::Pull { input, site, output }) => {
-            pull::pull_site(input, CowStr::from(site), output).await
+        Some(Commands::Pull { input, site, path }) => {
+            pull::pull_site(input, CowStr::from(site), path).await
         }
-        Some(Commands::Serve { input, site, output, port }) => {
-            serve::serve_site(input, CowStr::from(site), output, port).await
+        Some(Commands::Serve { input, site, path, port }) => {
+            serve::serve_site(input, CowStr::from(site), path, port).await
         }
         None => {
             // Legacy mode: if input is provided, assume deploy command

@@ -32,12 +32,19 @@ The binary will be available at `target/release/wisp-cli`.
 
 ## Usage
 
+### Commands
+
+The CLI supports three main commands:
+- **deploy**: Upload a site to your PDS (default command)
+- **pull**: Download a site from a PDS to a local directory
+- **serve**: Serve a site locally with real-time firehose updates
+
 ### Basic Deployment
 
 Deploy the current directory:
 
 ```bash
-wisp-cli nekomimi.ppet --path . --site my-site
+wisp-cli nekomimi.pet --path . --site my-site
 ```
 
 Deploy a specific directory:
@@ -45,6 +52,35 @@ Deploy a specific directory:
 ```bash
 wisp-cli alice.bsky.social --path ./dist/ --site my-site
 ```
+
+Or use the explicit `deploy` subcommand:
+
+```bash
+wisp-cli deploy alice.bsky.social --path ./dist/ --site my-site
+```
+
+### Pull a Site
+
+Download a site from a PDS to a local directory:
+
+```bash
+wisp-cli pull alice.bsky.social --site my-site --path ./downloaded-site
+```
+
+This will download all files from the site to the specified directory.
+
+### Serve a Site Locally
+
+Serve a site locally with real-time updates from the firehose:
+
+```bash
+wisp-cli serve alice.bsky.social --site my-site --path ./site --port 8080
+```
+
+This will:
+1. Download the site to the specified path
+2. Start a local server on the specified port (default: 8080)
+3. Watch the firehose for updates and automatically reload files when changed
 
 ### Authentication Methods
 
@@ -79,8 +115,10 @@ wisp-cli alice.bsky.social --path ./my-site --site my-site --password YOUR_APP_P
 
 ## Command-Line Options
 
+### Deploy Command
+
 ```
-wisp-cli [OPTIONS] <INPUT>
+wisp-cli [deploy] [OPTIONS] <INPUT>
 
 Arguments:
   <INPUT>  Handle (e.g., alice.bsky.social), DID, or PDS URL
@@ -90,8 +128,40 @@ Options:
   -s, --site <SITE>           Site name (defaults to directory name)
       --store <STORE>         Path to auth store file (only used with OAuth) [default: /tmp/wisp-oauth-session.json]
       --password <PASSWORD>   App Password for authentication (alternative to OAuth)
+      --directory             Enable directory listing mode for paths without index files
+      --spa                   Enable SPA mode (serve index.html for all routes)
+  -y, --yes                   Skip confirmation prompts (automatically accept warnings)
   -h, --help                  Print help
   -V, --version               Print version
+```
+
+### Pull Command
+
+```
+wisp-cli pull [OPTIONS] --site <SITE> <INPUT>
+
+Arguments:
+  <INPUT>  Handle (e.g., alice.bsky.social) or DID
+
+Options:
+  -s, --site <SITE>  Site name (record key)
+  -p, --path <PATH>  Output directory for the downloaded site [default: .]
+  -h, --help         Print help
+```
+
+### Serve Command
+
+```
+wisp-cli serve [OPTIONS] --site <SITE> <INPUT>
+
+Arguments:
+  <INPUT>  Handle (e.g., alice.bsky.social) or DID
+
+Options:
+  -s, --site <SITE>  Site name (record key)
+  -p, --path <PATH>  Output directory for the site files [default: .]
+  -P, --port <PORT>  Port to serve on [default: 8080]
+  -h, --help         Print help
 ```
 
 ## How It Works
