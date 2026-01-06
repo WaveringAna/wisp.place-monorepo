@@ -61,6 +61,7 @@ function initializeStorage(): TieredStorage<Uint8Array> {
 		directory: CACHE_DIR,
 		maxSizeBytes: WARM_CACHE_SIZE,
 		evictionPolicy: WARM_EVICTION_POLICY,
+		encodeColons: false, // Preserve colons for readable DID paths on Unix/macOS
 	});
 
 	if (S3_BUCKET) {
