@@ -69,7 +69,7 @@ export async function backfillCache(options: BackfillOptions = {}): Promise<Back
       const processSite = async () => {
         try {
           // Check if already cached
-          if (skipExisting && isCached(site.did, site.rkey)) {
+          if (skipExisting && await isCached(site.did, site.rkey)) {
             stats.skipped++;
             processed++;
             logger.debug(`Skipping already cached site`, { did: site.did, rkey: site.rkey });

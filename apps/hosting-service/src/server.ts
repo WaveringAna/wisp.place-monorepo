@@ -227,7 +227,7 @@ app.get('/__internal__/observability/metrics', (c) => {
 
 app.get('/__internal__/observability/cache', async (c) => {
   const { getCacheStats } = await import('./lib/cache');
-  const stats = getCacheStats();
+  const stats = await getCacheStats();
   return c.json({ cache: stats });
 });
 

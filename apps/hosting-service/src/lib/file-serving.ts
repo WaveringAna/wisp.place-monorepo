@@ -7,13 +7,22 @@ import { readFile } from 'fs/promises';
 import { lookup } from 'mime-types';
 import type { Record as WispSettings } from '@wisp/lexicons/types/place/wisp/settings';
 import { shouldCompressMimeType } from '@wisp/atproto-utils/compression';
-import { fileCache, metadataCache, rewrittenHtmlCache, getCacheKey, isSiteBeingCached } from './cache';
+import { rewrittenHtmlCache, getCacheKey, isSiteBeingCached } from './cache';
 import { getCachedFilePath, getCachedSettings } from './utils';
 import { loadRedirectRules, matchRedirectRule, parseCookies, parseQueryString } from './redirects';
 import { rewriteHtmlPaths, isHtmlContent } from './html-rewriter';
 import { generate404Page, generateDirectoryListing, siteUpdatingResponse } from './page-generators';
 import { getIndexFiles, applyCustomHeaders, fileExists } from './request-utils';
 import { getRedirectRulesFromCache, setRedirectRulesInCache } from './site-cache';
+import { storage } from './storage';
+
+/**
+ * Helper to retrieve a file with metadata from tiered storage
+ */
+async function getFileWithMetadata(did: string, rkey: string, filePath: string) {
+  const key = `${did}/${rkey}/${filePath}`;
+  return await storage.getWithMetadata(key);
+}
 
 /**
  * Helper to serve files from cache (for custom domains and subdomains)
@@ -176,31 +185,20 @@ export async function serveFileInternal(
 
   // Not a directory, try to serve as a file
   const fileRequestPath: string = requestPath || indexFiles[0] || 'index.html';
-  const cacheKey = getCacheKey(did, rkey, fileRequestPath);
-  const cachedFile = getCachedFilePath(did, rkey, fileRequestPath);
 
-  // Check in-memory cache first
-  let content = fileCache.get(cacheKey);
-  let meta = metadataCache.get(cacheKey);
+  // Retrieve from tiered storage
+  const result = await getFileWithMetadata(did, rkey, fileRequestPath);
 
-  if (!content && await fileExists(cachedFile)) {
-    // Read from disk and cache
-    content = await readFile(cachedFile);
-    fileCache.set(cacheKey, content, content.length);
+  if (result) {
+    const content = Buffer.from(result.data);
+    const meta = result.metadata.customMetadata as { encoding?: string; mimeType?: string } | undefined;
 
-    const metaFile = `${cachedFile}.meta`;
-    if (await fileExists(metaFile)) {
-      const metaJson = await readFile(metaFile, 'utf-8');
-      meta = JSON.parse(metaJson);
-      metadataCache.set(cacheKey, meta!, JSON.stringify(meta).length);
-    }
-  }
-
-  if (content) {
     // Build headers with caching
-    const headers: Record<string, string> = {};
+    const headers: Record<string, string> = {
+      'X-Cache-Tier': result.source,
+    };
 
-    if (meta && meta.encoding === 'gzip' && meta.mimeType) {
+    if (meta?.encoding === 'gzip' && meta.mimeType) {
       const shouldServeCompressed = shouldCompressMimeType(meta.mimeType);
 
       if (!shouldServeCompressed) {
@@ -233,7 +231,7 @@ export async function serveFileInternal(
     }
 
     // Non-compressed files
-    const mimeType = lookup(cachedFile) || 'application/octet-stream';
+    const mimeType = meta?.mimeType || lookup(fileRequestPath) || 'application/octet-stream';
     headers['Content-Type'] = mimeType;
     headers['Cache-Control'] = mimeType.startsWith('text/html')
       ? 'public, max-age=300'
@@ -246,31 +244,20 @@ export async function serveFileInternal(
   if (!fileRequestPath.includes('.')) {
     for (const indexFileName of indexFiles) {
       const indexPath = fileRequestPath ? `${fileRequestPath}/${indexFileName}` : indexFileName;
-      const indexCacheKey = getCacheKey(did, rkey, indexPath);
-      const indexFile = getCachedFilePath(did, rkey, indexPath);
 
-      let indexContent = fileCache.get(indexCacheKey);
-      let indexMeta = metadataCache.get(indexCacheKey);
+      const indexResult = await getFileWithMetadata(did, rkey, indexPath);
 
-      if (!indexContent && await fileExists(indexFile)) {
-        indexContent = await readFile(indexFile);
-        fileCache.set(indexCacheKey, indexContent, indexContent.length);
+      if (indexResult) {
+        const indexContent = Buffer.from(indexResult.data);
+        const indexMeta = indexResult.metadata.customMetadata as { encoding?: string; mimeType?: string } | undefined;
 
-        const indexMetaFile = `${indexFile}.meta`;
-        if (await fileExists(indexMetaFile)) {
-          const metaJson = await readFile(indexMetaFile, 'utf-8');
-          indexMeta = JSON.parse(metaJson);
-          metadataCache.set(indexCacheKey, indexMeta!, JSON.stringify(indexMeta).length);
-        }
-      }
-
-      if (indexContent) {
         const headers: Record<string, string> = {
           'Content-Type': 'text/html; charset=utf-8',
           'Cache-Control': 'public, max-age=300',
+          'X-Cache-Tier': indexResult.source,
         };
 
-        if (indexMeta && indexMeta.encoding === 'gzip') {
+        if (indexMeta?.encoding === 'gzip') {
           headers['Content-Encoding'] = 'gzip';
         }
 
@@ -556,8 +543,6 @@ export async function serveFileInternalWithRewrite(
 
   // Not a directory, try to serve as a file
   const fileRequestPath: string = requestPath || indexFiles[0] || 'index.html';
-  const cacheKey = getCacheKey(did, rkey, fileRequestPath);
-  const cachedFile = getCachedFilePath(did, rkey, fileRequestPath);
 
   // Check for rewritten HTML in cache first (if it's HTML)
   const mimeTypeGuess = lookup(fileRequestPath) || 'application/octet-stream';
@@ -569,31 +554,20 @@ export async function serveFileInternalWithRewrite(
         'Content-Type': 'text/html; charset=utf-8',
         'Content-Encoding': 'gzip',
         'Cache-Control': 'public, max-age=300',
+        'X-Cache-Tier': 'local', // Rewritten HTML is stored locally
       };
       applyCustomHeaders(headers, fileRequestPath, settings);
       return new Response(rewrittenContent, { headers });
     }
   }
 
-  // Check in-memory file cache
-  let content = fileCache.get(cacheKey);
-  let meta = metadataCache.get(cacheKey);
+  // Retrieve from tiered storage
+  const result = await getFileWithMetadata(did, rkey, fileRequestPath);
 
-  if (!content && await fileExists(cachedFile)) {
-    // Read from disk and cache
-    content = await readFile(cachedFile);
-    fileCache.set(cacheKey, content, content.length);
-
-    const metaFile = `${cachedFile}.meta`;
-    if (await fileExists(metaFile)) {
-      const metaJson = await readFile(metaFile, 'utf-8');
-      meta = JSON.parse(metaJson);
-      metadataCache.set(cacheKey, meta!, JSON.stringify(meta).length);
-    }
-  }
-
-  if (content) {
-    const mimeType = meta?.mimeType || lookup(cachedFile) || 'application/octet-stream';
+  if (result) {
+    const content = Buffer.from(result.data);
+    const meta = result.metadata.customMetadata as { encoding?: string; mimeType?: string } | undefined;
+    const mimeType = meta?.mimeType || lookup(fileRequestPath) || 'application/octet-stream';
     const isGzipped = meta?.encoding === 'gzip';
 
     // Check if this is HTML content that needs rewriting
@@ -625,6 +599,7 @@ export async function serveFileInternalWithRewrite(
         'Content-Type': 'text/html; charset=utf-8',
         'Content-Encoding': 'gzip',
         'Cache-Control': 'public, max-age=300',
+        'X-Cache-Tier': result.source,
       };
       applyCustomHeaders(htmlHeaders, fileRequestPath, settings);
       return new Response(recompressed, { headers: htmlHeaders });
@@ -634,6 +609,7 @@ export async function serveFileInternalWithRewrite(
     const headers: Record<string, string> = {
       'Content-Type': mimeType,
       'Cache-Control': 'public, max-age=31536000, immutable',
+      'X-Cache-Tier': result.source,
     };
 
     if (isGzipped) {
@@ -663,8 +639,6 @@ export async function serveFileInternalWithRewrite(
   if (!fileRequestPath.includes('.')) {
     for (const indexFileName of indexFiles) {
       const indexPath = fileRequestPath ? `${fileRequestPath}/${indexFileName}` : indexFileName;
-      const indexCacheKey = getCacheKey(did, rkey, indexPath);
-      const indexFile = getCachedFilePath(did, rkey, indexPath);
 
       // Check for rewritten index file in cache
       const rewrittenKey = getCacheKey(did, rkey, indexPath, `rewritten:${basePath}`);
@@ -674,27 +648,17 @@ export async function serveFileInternalWithRewrite(
           'Content-Type': 'text/html; charset=utf-8',
           'Content-Encoding': 'gzip',
           'Cache-Control': 'public, max-age=300',
+          'X-Cache-Tier': 'local', // Rewritten HTML is stored locally
         };
         applyCustomHeaders(headers, indexPath, settings);
         return new Response(rewrittenContent, { headers });
       }
 
-      let indexContent = fileCache.get(indexCacheKey);
-      let indexMeta = metadataCache.get(indexCacheKey);
+      const indexResult = await getFileWithMetadata(did, rkey, indexPath);
 
-      if (!indexContent && await fileExists(indexFile)) {
-        indexContent = await readFile(indexFile);
-        fileCache.set(indexCacheKey, indexContent, indexContent.length);
-
-        const indexMetaFile = `${indexFile}.meta`;
-        if (await fileExists(indexMetaFile)) {
-          const metaJson = await readFile(indexMetaFile, 'utf-8');
-          indexMeta = JSON.parse(metaJson);
-          metadataCache.set(indexCacheKey, indexMeta!, JSON.stringify(indexMeta).length);
-        }
-      }
-
-      if (indexContent) {
+      if (indexResult) {
+        const indexContent = Buffer.from(indexResult.data);
+        const indexMeta = indexResult.metadata.customMetadata as { encoding?: string; mimeType?: string } | undefined;
         const isGzipped = indexMeta?.encoding === 'gzip';
 
         let htmlContent: string;
@@ -722,6 +686,7 @@ export async function serveFileInternalWithRewrite(
           'Content-Type': 'text/html; charset=utf-8',
           'Content-Encoding': 'gzip',
           'Cache-Control': 'public, max-age=300',
+          'X-Cache-Tier': indexResult.source,
         };
         applyCustomHeaders(headers, indexPath, settings);
         return new Response(recompressed, { headers });
