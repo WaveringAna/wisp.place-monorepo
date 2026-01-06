@@ -20,7 +20,9 @@ export class FirehoseWorker {
 	private idResolver: IdResolver
 	private isShuttingDown = false
 	private lastEventTime = Date.now()
+	private eventCount = 0
 	private cacheCleanupInterval: NodeJS.Timeout | null = null
+	private healthCheckInterval: NodeJS.Timeout | null = null
 
 	constructor(
 		private logger?: (msg: string, data?: Record<string, unknown>) => void
@@ -47,6 +49,24 @@ export class FirehoseWorker {
 
 			this.log('IdResolver cache cleared')
 		}, 60 * 60 * 1000) // Every hour
+
+		// Health check: log if no events received for 30 seconds
+		this.healthCheckInterval = setInterval(() => {
+			if (this.isShuttingDown) return
+
+			const timeSinceLastEvent = Date.now() - this.lastEventTime
+			if (timeSinceLastEvent > 30000 && this.eventCount === 0) {
+				this.log('Warning: No firehose events received in the last 30 seconds', {
+					timeSinceLastEvent,
+					eventsReceived: this.eventCount
+				})
+			} else if (timeSinceLastEvent > 60000) {
+				this.log('Firehose status check', {
+					timeSinceLastEvent,
+					eventsReceived: this.eventCount
+				})
+			}
+		}, 30000) // Every 30 seconds
 	}
 
 	start() {
@@ -61,6 +81,11 @@ export class FirehoseWorker {
 		if (this.cacheCleanupInterval) {
 			clearInterval(this.cacheCleanupInterval)
 			this.cacheCleanupInterval = null
+		}
+
+		if (this.healthCheckInterval) {
+			clearInterval(this.healthCheckInterval)
+			this.healthCheckInterval = null
 		}
 
 		if (this.firehose) {
@@ -80,6 +105,14 @@ export class FirehoseWorker {
 			filterCollections: ['place.wisp.fs', 'place.wisp.settings'],
 			handleEvent: async (evt: any) => {
 				this.lastEventTime = Date.now()
+				this.eventCount++
+
+				if (this.eventCount === 1) {
+					this.log('First firehose event received - connection established', {
+						eventType: evt.event,
+						collection: evt.collection
+					})
+				}
 
 				// Watch for write events
 				if (evt.event === 'create' || evt.event === 'update') {
