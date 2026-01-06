@@ -16,7 +16,7 @@ steps:
       export PATH="$HOME/.nix-profile/bin:$PATH"
 
       # have to regenerate otherwise it wont install necessary dependencies to run
-      rm -rf bun.lock package-lock.json
+      find . -type f \( -name "bun.lock" -o -name "package-lock.json" \) -delete
       bun install
 
   - name: run all tests
