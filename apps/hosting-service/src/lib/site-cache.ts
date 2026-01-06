@@ -42,7 +42,7 @@ export function setRedirectRulesInCache(did: string, rkey: string, rules: Redire
  * Returns true if site is successfully cached, false otherwise
  */
 export async function ensureSiteCached(did: string, rkey: string): Promise<boolean> {
-  if (isCached(did, rkey)) {
+  if (await isCached(did, rkey)) {
     return true;
   }
 

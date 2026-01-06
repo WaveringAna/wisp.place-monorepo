@@ -1,4 +1,4 @@
-import { existsSync, rmSync } from 'fs'
+import { existsSync } from 'fs'
 import {
 	getPdsForDid,
 	downloadAndCacheSite,
@@ -13,7 +13,7 @@ import { IdResolver } from '@atproto/identity'
 import { invalidateSiteCache, markSiteAsBeingCached, unmarkSiteAsBeingCached } from './cache'
 import { clearRedirectRulesCache } from './site-cache'
 
-const CACHE_DIR = './cache/sites'
+const CACHE_DIR = process.env.CACHE_DIR || './cache/sites'
 
 export class FirehoseWorker {
 	private firehose: Firehose | null = null
@@ -189,8 +189,13 @@ export class FirehoseWorker {
 			}
 		})
 
-		this.firehose.start()
-		this.log('Firehose started')
+		this.firehose.start().catch((err: unknown) => {
+			this.log('Fatal firehose error', {
+				error: err instanceof Error ? err.message : String(err)
+			})
+			console.error('Fatal firehose error:', err)
+		})
+		this.log('Firehose starting')
 	}
 
 	private async handleCreateOrUpdate(
@@ -250,7 +255,7 @@ export class FirehoseWorker {
 		}
 
 		// Invalidate in-memory caches before updating
-		invalidateSiteCache(did, site)
+		await invalidateSiteCache(did, site)
 
 		// Mark site as being cached to prevent serving stale content during update
 		markSiteAsBeingCached(did, site)
@@ -340,11 +345,8 @@ export class FirehoseWorker {
 			})
 		}
 
-		// Invalidate in-memory caches
-		invalidateSiteCache(did, site)
-
-		// Delete disk cache
-		this.deleteCache(did, site)
+		// Invalidate all caches (tiered storage invalidation is handled by invalidateSiteCache)
+		await invalidateSiteCache(did, site)
 
 		this.log('Successfully processed delete', { did, site })
 	}
@@ -353,7 +355,7 @@ export class FirehoseWorker {
 		this.log('Processing settings change', { did, rkey })
 
 		// Invalidate in-memory caches (includes metadata which stores settings)
-		invalidateSiteCache(did, rkey)
+		await invalidateSiteCache(did, rkey)
 
 		// Check if site is already cached
 		const cacheDir = `${CACHE_DIR}/${did}/${rkey}`
@@ -413,30 +415,6 @@ export class FirehoseWorker {
 		}
 
 		this.log('Successfully processed settings change', { did, rkey })
-	}
-
-	private deleteCache(did: string, site: string) {
-		const cacheDir = `${CACHE_DIR}/${did}/${site}`
-
-		if (!existsSync(cacheDir)) {
-			this.log('Cache directory does not exist, nothing to delete', {
-				did,
-				site
-			})
-			return
-		}
-
-		try {
-			rmSync(cacheDir, { recursive: true, force: true })
-			this.log('Cache deleted', { did, site, path: cacheDir })
-		} catch (err) {
-			this.log('Failed to delete cache', {
-				did,
-				site,
-				path: cacheDir,
-				error: err instanceof Error ? err.message : String(err)
-			})
-		}
 	}
 
 	getHealth() {

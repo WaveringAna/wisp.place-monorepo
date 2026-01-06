@@ -1,5 +1,13 @@
-// In-memory LRU cache for file contents and metadata
+/**
+ * Cache management for wisp-hosting-service
+ *
+ * With tiered storage, most caching is handled transparently.
+ * This module tracks sites being cached and manages rewritten HTML cache.
+ */
 
+import { storage } from './storage';
+
+// In-memory LRU cache for rewritten HTML (for path rewriting in subdomain routes)
 interface CacheEntry<T> {
   value: T;
   size: number;
@@ -96,22 +104,6 @@ export class LRUCache<T> {
     return true;
   }
 
-  // Invalidate all entries for a specific site
-  invalidateSite(did: string, rkey: string): number {
-    const prefix = `${did}:${rkey}:`;
-    let count = 0;
-
-    for (const key of Array.from(this.cache.keys())) {
-      if (key.startsWith(prefix)) {
-        this.delete(key);
-        count++;
-      }
-    }
-
-    return count;
-  }
-
-  // Get cache size
   size(): number {
     return this.cache.size;
   }
@@ -127,41 +119,42 @@ export class LRUCache<T> {
     return { ...this.stats };
   }
 
-  // Get cache hit rate
   getHitRate(): number {
     const total = this.stats.hits + this.stats.misses;
     return total === 0 ? 0 : (this.stats.hits / total) * 100;
   }
 }
 
-// File metadata cache entry
-export interface FileMetadata {
-  encoding?: 'gzip';
-  mimeType: string;
-}
-
-// Global cache instances
-const FILE_CACHE_SIZE = 100 * 1024 * 1024; // 100MB
-const FILE_CACHE_COUNT = 500;
-const METADATA_CACHE_COUNT = 2000;
-
-export const fileCache = new LRUCache<Buffer>(FILE_CACHE_SIZE, FILE_CACHE_COUNT);
-export const metadataCache = new LRUCache<FileMetadata>(1024 * 1024, METADATA_CACHE_COUNT); // 1MB for metadata
+// Rewritten HTML cache: stores HTML after path rewriting for subdomain routes
 export const rewrittenHtmlCache = new LRUCache<Buffer>(50 * 1024 * 1024, 200); // 50MB for rewritten HTML
 
-// Helper to generate cache keys
+// Helper to generate cache keys for rewritten HTML
 export function getCacheKey(did: string, rkey: string, filePath: string, suffix?: string): string {
   const base = `${did}:${rkey}:${filePath}`;
   return suffix ? `${base}:${suffix}` : base;
 }
 
-// Invalidate all caches for a site
-export function invalidateSiteCache(did: string, rkey: string): void {
-  const fileCount = fileCache.invalidateSite(did, rkey);
-  const metaCount = metadataCache.invalidateSite(did, rkey);
-  const htmlCount = rewrittenHtmlCache.invalidateSite(did, rkey);
+/**
+ * Invalidate site cache via tiered storage
+ * Also invalidates locally cached rewritten HTML
+ */
+export async function invalidateSiteCache(did: string, rkey: string): Promise<void> {
+  // Invalidate in tiered storage
+  const prefix = `${did}/${rkey}/`;
+  const deleted = await storage.invalidate(prefix);
 
-  console.log(`[Cache] Invalidated site ${did}:${rkey} - ${fileCount} files, ${metaCount} metadata, ${htmlCount} HTML`);
+  // Invalidate rewritten HTML cache for this site
+  const sitePrefix = `${did}:${rkey}:`;
+  let htmlCount = 0;
+  const cacheKeys = Array.from((rewrittenHtmlCache as any).cache?.keys() || []) as string[];
+  for (const key of cacheKeys) {
+    if (key.startsWith(sitePrefix)) {
+      rewrittenHtmlCache.delete(key);
+      htmlCount++;
+    }
+  }
+
+  console.log(`[Cache] Invalidated site ${did}:${rkey} - ${deleted} files in tiered storage, ${htmlCount} rewritten HTML`);
 }
 
 // Track sites currently being cached (to prevent serving stale cache during updates)
@@ -183,12 +176,11 @@ export function isSiteBeingCached(did: string, rkey: string): boolean {
 }
 
 // Get overall cache statistics
-export function getCacheStats() {
+export async function getCacheStats() {
+  const tieredStats = await storage.getStats();
+
   return {
-    files: fileCache.getStats(),
-    fileHitRate: fileCache.getHitRate(),
-    metadata: metadataCache.getStats(),
-    metadataHitRate: metadataCache.getHitRate(),
+    tieredStorage: tieredStats,
     rewrittenHtml: rewrittenHtmlCache.getStats(),
     rewrittenHtmlHitRate: rewrittenHtmlCache.getHitRate(),
     sitesBeingCached: sitesBeingCached.size,

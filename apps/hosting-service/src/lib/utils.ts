@@ -4,12 +4,14 @@ import type { Record as SubfsRecord } from '@wisp/lexicons/types/place/wisp/subf
 import type { Record as WispSettings } from '@wisp/lexicons/types/place/wisp/settings';
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'fs';
 import { writeFile, readFile, rename } from 'fs/promises';
+import { Readable } from 'stream';
 import { safeFetchJson, safeFetchBlob } from '@wisp/safe-fetch';
 import { CID } from 'multiformats';
 import { extractBlobCid } from '@wisp/atproto-utils';
 import { sanitizePath, collectFileCidsFromEntries, countFilesInDirectory } from '@wisp/fs-utils';
 import { shouldCompressMimeType } from '@wisp/atproto-utils/compression';
 import { MAX_BLOB_SIZE, MAX_FILE_COUNT, MAX_SITE_SIZE } from '@wisp/constants';
+import { storage } from './storage';
 
 // Re-export shared utilities for local usage and tests
 export { extractBlobCid, sanitizePath };
@@ -616,13 +618,6 @@ async function cacheFileBlob(
     content = Buffer.from(base64String, 'base64');
   }
 
-  const cacheFile = `${CACHE_DIR}/${did}/${site}${dirSuffix}/${filePath}`;
-  const fileDir = cacheFile.substring(0, cacheFile.lastIndexOf('/'));
-
-  if (fileDir && !existsSync(fileDir)) {
-    mkdirSync(fileDir, { recursive: true });
-  }
-
   // Use the shared function to determine if this should remain compressed
   const shouldStayCompressed = shouldCompressMimeType(mimeType);
 
@@ -640,12 +635,24 @@ async function cacheFileBlob(
     }
   }
 
-  await writeFile(cacheFile, content);
+  // Write to tiered storage via streaming (warm + cold, skip hot on ingest)
+  // Convert buffer to stream for large file support
+  const stream = Readable.from([content]);
+  const key = `${did}/${site}/${filePath}`;
 
-  // Store metadata only if file is still compressed
+  // Build metadata object, only including defined values
+  const customMetadata: Record<string, string> = {};
+  if (encoding) customMetadata.encoding = encoding;
+  if (mimeType) customMetadata.mimeType = mimeType;
+
+  await storage.setStream(key, stream, {
+    size: content.length,
+    skipTiers: ['hot'], // Don't put in memory on ingest, only on access
+    metadata: customMetadata,
+  });
+
+  // Log completion
   if (encoding === 'gzip' && mimeType) {
-    const metaFile = `${cacheFile}.meta`;
-    await writeFile(metaFile, JSON.stringify({ encoding, mimeType }));
     console.log('Cached file', filePath, content.length, 'bytes (gzipped,', mimeType + ')');
   } else {
     console.log('Cached file', filePath, content.length, 'bytes');
@@ -658,8 +665,15 @@ export function getCachedFilePath(did: string, site: string, filePath: string): 
   return `${CACHE_DIR}/${did}/${site}/${sanitizedPath}`;
 }
 
-export function isCached(did: string, site: string): boolean {
-  return existsSync(`${CACHE_DIR}/${did}/${site}`);
+/**
+ * Check if a site exists in any tier of the cache (without checking metadata)
+ * This is a quick existence check - for actual retrieval, use storage.get()
+ */
+export async function isCached(did: string, site: string): Promise<boolean> {
+  // Check if any file exists for this site by checking for the index.html
+  // If index.html exists, the site is cached
+  const indexKey = `${did}/${site}/index.html`;
+  return await storage.exists(indexKey);
 }
 
 async function saveCacheMetadata(did: string, rkey: string, recordCid: string, dirSuffix: string = '', fileCids?: Record<string, string>, settings?: WispSettings | null): Promise<void> {

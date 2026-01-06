@@ -3,8 +3,8 @@
  * Integrates with Grafana Loki for logs and Prometheus/OTLP for metrics
  */
 
-import { LogEntry, ErrorEntry, MetricEntry } from './core'
-import { metrics, MeterProvider } from '@opentelemetry/api'
+import type { LogEntry, ErrorEntry, MetricEntry } from './core'
+import { metrics, type MeterProvider } from '@opentelemetry/api'
 import { MeterProvider as SdkMeterProvider, PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics'
 import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-http'
 import { Resource } from '@opentelemetry/resources'
