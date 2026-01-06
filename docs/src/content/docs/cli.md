@@ -136,7 +136,7 @@ Download a site from the PDS to your local machine:
 # Pull a site to a specific directory
 wisp-cli pull your-handle.bsky.social \
   --site my-site \
-  --output ./my-site
+  --path ./my-site
 
 # Pull to current directory
 wisp-cli pull your-handle.bsky.social \
@@ -233,29 +233,29 @@ Options:
 ### Pull Command
 
 ```bash
-wisp-cli pull [OPTIONS] <INPUT>
+wisp-cli pull [OPTIONS] --site <SITE> <INPUT>
 
 Arguments:
   <INPUT>  Handle or DID
 
 Options:
   -s, --site <SITE>           Site name to download
-  -o, --output <OUTPUT>       Output directory [default: .]
+  -p, --path <PATH>           Output directory [default: .]
   -h, --help                  Print help
 ```
 
 ### Serve Command
 
 ```bash
-wisp-cli serve [OPTIONS] <INPUT>
+wisp-cli serve [OPTIONS] --site <SITE> <INPUT>
 
 Arguments:
   <INPUT>  Handle or DID
 
 Options:
   -s, --site <SITE>           Site name to serve
-  -o, --output <OUTPUT>       Site files directory [default: .]
-  -p, --port <PORT>           Port to serve on [default: 8080]
+  -p, --path <PATH>           Site files directory [default: .]
+  -P, --port <PORT>           Port to serve on [default: 8080]
       --spa                   Enable SPA mode (serve index.html for all routes)
       --directory             Enable directory listing mode for paths without index files
   -h, --help                  Print help
