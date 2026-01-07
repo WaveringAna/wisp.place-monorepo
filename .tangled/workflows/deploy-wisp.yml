@@ -30,6 +30,9 @@ steps:
   - name: Build wisp-cli
     command: |
       cd cli
+
+      export PATH="$HOME/.nix-profile/bin:$PATH"
+
       nix-channel --add https://nixos.org/channels/nixpkgs-unstable nixpkgs
 
       nix-channel --update
@@ -46,7 +49,7 @@ steps:
   - name: Build docs
     command: |
       cd docs
-      bun install
+      export PATH="$HOME/.nix-profile/bin:$PATH"
       bun run build
   - name: Deploy to Wisp.place
     command: |
