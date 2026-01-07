@@ -50,6 +50,7 @@ steps:
     command: |
       cd docs
       export PATH="$HOME/.nix-profile/bin:$PATH"
+      bun install
       bun run build
   - name: Deploy to Wisp.place
     command: |
