@@ -550,6 +550,7 @@ export async function serveFileInternalWithRewrite(
     const rewrittenKey = getCacheKey(did, rkey, fileRequestPath, `rewritten:${basePath}`);
     const rewrittenContent = rewrittenHtmlCache.get(rewrittenKey);
     if (rewrittenContent) {
+      console.log(`[HTML Rewrite] Serving from rewritten cache: ${rewrittenKey}`);
       const headers: Record<string, string> = {
         'Content-Type': 'text/html; charset=utf-8',
         'Content-Encoding': 'gzip',
@@ -570,8 +571,11 @@ export async function serveFileInternalWithRewrite(
     const mimeType = meta?.mimeType || lookup(fileRequestPath) || 'application/octet-stream';
     const isGzipped = meta?.encoding === 'gzip';
 
+    console.log(`[File Serve] Serving ${fileRequestPath}, mimeType: ${mimeType}, isHTML: ${isHtmlContent(fileRequestPath, mimeType)}, basePath: ${basePath}`);
+
     // Check if this is HTML content that needs rewriting
     if (isHtmlContent(fileRequestPath, mimeType)) {
+      console.log(`[HTML Rewrite] Processing ${fileRequestPath}, basePath: ${basePath}, mimeType: ${mimeType}, isGzipped: ${isGzipped}`);
       let htmlContent: string;
       if (isGzipped) {
         // Verify content is actually gzipped
@@ -586,7 +590,26 @@ export async function serveFileInternalWithRewrite(
       } else {
         htmlContent = content.toString('utf-8');
       }
+      // Check for <base> tag which can override paths
+      const baseTagMatch = htmlContent.match(/<base\s+[^>]*href=["'][^"']+["'][^>]*>/i);
+      if (baseTagMatch) {
+        console.warn(`[HTML Rewrite] WARNING: <base> tag found: ${baseTagMatch[0]} - this may override path rewrites`);
+      }
+
+      // Find src/href attributes (quoted and unquoted) to debug
+      const allMatches = htmlContent.match(/(?:src|href)\s*=\s*["']?\/[^"'\s>]+/g);
+      console.log(`[HTML Rewrite] Found ${allMatches ? allMatches.length : 0} local path attrs`);
+      if (allMatches && allMatches.length > 0) {
+        console.log(`[HTML Rewrite] Sample paths: ${allMatches.slice(0, 5).join(', ')}`);
+      }
+
       const rewritten = rewriteHtmlPaths(htmlContent, basePath, fileRequestPath);
+
+      const rewrittenMatches = rewritten.match(/(?:src|href)\s*=\s*["']?\/[^"'\s>]+/g);
+      console.log(`[HTML Rewrite] After rewrite, found ${rewrittenMatches ? rewrittenMatches.length : 0} local paths`);
+      if (rewrittenMatches && rewrittenMatches.length > 0) {
+        console.log(`[HTML Rewrite] Sample rewritten: ${rewrittenMatches.slice(0, 5).join(', ')}`);
+      }
 
       // Recompress and cache the rewritten HTML
       const { gzipSync } = await import('zlib');

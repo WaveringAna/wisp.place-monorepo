@@ -80,6 +80,8 @@ app.get('/*', async (c) => {
       return c.text('Invalid identifier', 400);
     }
 
+    console.log(`[Server] sites.wisp.place request: identifier=${identifier}, site=${site}, filePath=${filePath}`);
+
     // Check if site is currently being cached - return updating response early
     if (isSiteBeingCached(did, site)) {
       return siteUpdatingResponse();
@@ -93,6 +95,7 @@ app.get('/*', async (c) => {
 
     // Serve with HTML path rewriting to handle absolute paths
     const basePath = `/${identifier}/${site}/`;
+    console.log(`[Server] Serving with basePath: ${basePath}`);
     const headers = extractHeaders(c.req.raw.headers);
     return serveFromCacheWithRewrite(did, site, filePath, basePath, c.req.url, headers);
   }
