@@ -189,6 +189,13 @@ export function rewriteHtmlPaths(
 				`\\b${attr}[ \\t]{0,5}=[ \\t]{0,5}'([^']*)'`,
 				'gi'
 			)
+			// Unquoted attributes (valid in HTML5 for values without spaces/special chars)
+			// Match: attr=value where value starts immediately (no quotes) and continues until space or >
+			// Use negative lookahead to ensure we don't match quoted attributes
+			const unquotedRegex = new RegExp(
+				`\\b${attr}[ \\t]{0,5}=[ \\t]{0,5}(?!["'])([^\\s>]+)`,
+				'gi'
+			)
 
 			rewritten = rewritten.replace(doubleQuoteRegex, (match, value) => {
 				const rewrittenValue = rewritePath(
@@ -206,6 +213,15 @@ export function rewriteHtmlPaths(
 					documentPath
 				)
 				return `${attr}='${rewrittenValue}'`
+			})
+
+			rewritten = rewritten.replace(unquotedRegex, (match, value) => {
+				const rewrittenValue = rewritePath(
+					value,
+					normalizedBase,
+					documentPath
+				)
+				return `${attr}=${rewrittenValue}`
 			})
 		}
 	}

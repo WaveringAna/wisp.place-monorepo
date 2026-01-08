@@ -397,56 +397,18 @@ export async function downloadAndCacheSite(did: string, rkey: string, record: Wi
   const existingMetadata = await getCacheMetadata(did, rkey);
   const existingFileCids = existingMetadata?.fileCids || {};
 
-  // Use a temporary directory with timestamp to avoid collisions
-  const tempSuffix = `.tmp-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-  const tempDir = `${CACHE_DIR}/${did}/${rkey}${tempSuffix}`;
-  const finalDir = `${CACHE_DIR}/${did}/${rkey}`;
+  // Collect file CIDs from the new record (using expanded root)
+  const newFileCids: Record<string, string> = {};
+  collectFileCidsFromEntries(expandedRoot.entries, '', newFileCids);
 
-  try {
-    // Collect file CIDs from the new record (using expanded root)
-    const newFileCids: Record<string, string> = {};
-    collectFileCidsFromEntries(expandedRoot.entries, '', newFileCids);
+  // Fetch site settings (optional)
+  const settings = await fetchSiteSettings(did, rkey);
 
-    // Fetch site settings (optional)
-    const settings = await fetchSiteSettings(did, rkey);
+  // Download files directly to tiered storage (with incremental logic)
+  await cacheFiles(did, rkey, expandedRoot.entries, pdsEndpoint, '', existingFileCids);
+  await saveCacheMetadata(did, rkey, recordCid, newFileCids, settings);
 
-    // Download/copy files to temporary directory (with incremental logic, using expanded root)
-    await cacheFiles(did, rkey, expandedRoot.entries, pdsEndpoint, '', tempSuffix, existingFileCids, finalDir);
-    await saveCacheMetadata(did, rkey, recordCid, tempSuffix, newFileCids, settings);
-
-    // Atomically replace old cache with new cache
-    // On POSIX systems (Linux/macOS), rename is atomic
-    if (existsSync(finalDir)) {
-      // Rename old directory to backup
-      const backupDir = `${finalDir}.old-${Date.now()}`;
-      await rename(finalDir, backupDir);
-
-      try {
-        // Rename new directory to final location
-        await rename(tempDir, finalDir);
-
-        // Clean up old backup
-        rmSync(backupDir, { recursive: true, force: true });
-      } catch (err) {
-        // If rename failed, restore backup
-        if (existsSync(backupDir) && !existsSync(finalDir)) {
-          await rename(backupDir, finalDir);
-        }
-        throw err;
-      }
-    } else {
-      // No existing cache, just rename temp to final
-      await rename(tempDir, finalDir);
-    }
-
-    console.log('Successfully cached site atomically', did, rkey);
-  } catch (err) {
-    // Clean up temp directory on failure
-    if (existsSync(tempDir)) {
-      rmSync(tempDir, { recursive: true, force: true });
-    }
-    throw err;
-  }
+  console.log('Successfully cached site', did, rkey);
 }
 
 
@@ -456,13 +418,10 @@ async function cacheFiles(
   entries: Entry[],
   pdsEndpoint: string,
   pathPrefix: string,
-  dirSuffix: string = '',
-  existingFileCids: Record<string, string> = {},
-  existingCacheDir?: string
+  existingFileCids: Record<string, string> = {}
 ): Promise<void> {
-  // Collect file tasks, separating unchanged files from new/changed files
+  // Collect file download tasks (skip unchanged files)
   const downloadTasks: Array<() => Promise<void>> = [];
-  const copyTasks: Array<() => Promise<void>> = [];
 
   function collectFileTasks(
     entries: Entry[],
@@ -479,15 +438,9 @@ async function cacheFiles(
         const cid = extractBlobCid(fileNode.blob);
 
         // Check if file is unchanged (same CID as existing cache)
-        if (cid && existingFileCids[currentPath] === cid && existingCacheDir) {
-          // File unchanged - copy from existing cache instead of downloading
-          copyTasks.push(() => copyExistingFile(
-            did,
-            site,
-            currentPath,
-            dirSuffix,
-            existingCacheDir
-          ));
+        if (cid && existingFileCids[currentPath] === cid) {
+          // File unchanged - skip download (already in tiered storage)
+          console.log(`Skipping unchanged file: ${currentPath}`);
         } else {
           // File new or changed - download it
           downloadTasks.push(() => cacheFileBlob(
@@ -498,8 +451,7 @@ async function cacheFiles(
             pdsEndpoint,
             fileNode.encoding,
             fileNode.mimeType,
-            fileNode.base64,
-            dirSuffix
+            fileNode.base64
           ));
         }
       }
@@ -508,19 +460,9 @@ async function cacheFiles(
 
   collectFileTasks(entries, pathPrefix);
 
-  console.log(`[Incremental Update] Files to copy: ${copyTasks.length}, Files to download: ${downloadTasks.length}`);
+  console.log(`[Incremental Update] Files to download: ${downloadTasks.length}`);
 
-  // Copy unchanged files in parallel (fast local operations) - increased limit for better performance
-  const copyLimit = 50;
-  for (let i = 0; i < copyTasks.length; i += copyLimit) {
-    const batch = copyTasks.slice(i, i + copyLimit);
-    await Promise.all(batch.map(task => task()));
-    if (copyTasks.length > copyLimit) {
-      console.log(`[Cache Progress] Copied ${Math.min(i + copyLimit, copyTasks.length)}/${copyTasks.length} unchanged files`);
-    }
-  }
-
-  // Download new/changed files concurrently - increased from 3 to 20 for much better performance
+  // Download new/changed files concurrently
   const downloadLimit = 20;
   let successCount = 0;
   let failureCount = 0;
@@ -549,43 +491,6 @@ async function cacheFiles(
   }
 }
 
-/**
- * Copy an unchanged file from existing cache to new cache location
- */
-async function copyExistingFile(
-  did: string,
-  site: string,
-  filePath: string,
-  dirSuffix: string,
-  existingCacheDir: string
-): Promise<void> {
-  const { copyFile } = await import('fs/promises');
-
-  const sourceFile = `${existingCacheDir}/${filePath}`;
-  const destFile = `${CACHE_DIR}/${did}/${site}${dirSuffix}/${filePath}`;
-  const destDir = destFile.substring(0, destFile.lastIndexOf('/'));
-
-  // Create destination directory if needed
-  if (destDir && !existsSync(destDir)) {
-    mkdirSync(destDir, { recursive: true });
-  }
-
-  try {
-    // Copy the file
-    await copyFile(sourceFile, destFile);
-
-    // Copy metadata file if it exists
-    const sourceMetaFile = `${sourceFile}.meta`;
-    const destMetaFile = `${destFile}.meta`;
-    if (existsSync(sourceMetaFile)) {
-      await copyFile(sourceMetaFile, destMetaFile);
-    }
-  } catch (err) {
-    console.error(`Failed to copy cached file ${filePath}, will attempt download:`, err);
-    throw err;
-  }
-}
-
 async function cacheFileBlob(
   did: string,
   site: string,
@@ -594,8 +499,7 @@ async function cacheFileBlob(
   pdsEndpoint: string,
   encoding?: 'gzip',
   mimeType?: string,
-  base64?: boolean,
-  dirSuffix: string = ''
+  base64?: boolean
 ): Promise<void> {
   const cid = extractBlobCid(blobRef);
   if (!cid) {
@@ -635,8 +539,7 @@ async function cacheFileBlob(
     }
   }
 
-  // Write to tiered storage via streaming (warm + cold, skip hot on ingest)
-  // Convert buffer to stream for large file support
+  // Write to tiered storage with metadata
   const stream = Readable.from([content]);
   const key = `${did}/${site}/${filePath}`;
 
@@ -676,7 +579,7 @@ export async function isCached(did: string, site: string): Promise<boolean> {
   return await storage.exists(indexKey);
 }
 
-async function saveCacheMetadata(did: string, rkey: string, recordCid: string, dirSuffix: string = '', fileCids?: Record<string, string>, settings?: WispSettings | null): Promise<void> {
+async function saveCacheMetadata(did: string, rkey: string, recordCid: string, fileCids?: Record<string, string>, settings?: WispSettings | null): Promise<void> {
   const metadata: CacheMetadata = {
     recordCid,
     cachedAt: Date.now(),
@@ -686,23 +589,23 @@ async function saveCacheMetadata(did: string, rkey: string, recordCid: string, d
     settings: settings || undefined
   };
 
-  const metadataPath = `${CACHE_DIR}/${did}/${rkey}${dirSuffix}/.metadata.json`;
-  const metadataDir = metadataPath.substring(0, metadataPath.lastIndexOf('/'));
-
-  if (!existsSync(metadataDir)) {
-    mkdirSync(metadataDir, { recursive: true });
-  }
-
-  await writeFile(metadataPath, JSON.stringify(metadata, null, 2));
+  // Store through tiered storage for persistence to S3/cold tier
+  const metadataKey = `${did}/${rkey}/.metadata.json`;
+  const metadataBytes = new TextEncoder().encode(JSON.stringify(metadata, null, 2));
+  await storage.set(metadataKey, metadataBytes);
 }
 
 async function getCacheMetadata(did: string, rkey: string): Promise<CacheMetadata | null> {
   try {
-    const metadataPath = `${CACHE_DIR}/${did}/${rkey}/.metadata.json`;
-    if (!existsSync(metadataPath)) return null;
+    // Retrieve metadata from tiered storage
+    const metadataKey = `${did}/${rkey}/.metadata.json`;
+    const data = await storage.get(metadataKey);
 
-    const content = await readFile(metadataPath, 'utf-8');
-    return JSON.parse(content) as CacheMetadata;
+    if (!data) return null;
+
+    // Deserialize from Uint8Array to JSON (storage uses identity serialization)
+    const jsonString = new TextDecoder().decode(data as Uint8Array);
+    return JSON.parse(jsonString) as CacheMetadata;
   } catch (err) {
     console.error('Failed to read cache metadata', err);
     return null;
@@ -736,24 +639,24 @@ export async function getCachedSettings(did: string, rkey: string): Promise<Wisp
 }
 
 export async function updateCacheMetadataSettings(did: string, rkey: string, settings: WispSettings | null): Promise<void> {
-  const metadataPath = `${CACHE_DIR}/${did}/${rkey}/.metadata.json`;
-
-  if (!existsSync(metadataPath)) {
-    console.warn('Metadata file does not exist, cannot update settings', { did, rkey });
-    return;
-  }
-
   try {
-    // Read existing metadata
-    const content = await readFile(metadataPath, 'utf-8');
-    const metadata = JSON.parse(content) as CacheMetadata;
+    // Read existing metadata from tiered storage
+    const metadata = await getCacheMetadata(did, rkey);
+
+    if (!metadata) {
+      console.warn('Metadata does not exist, cannot update settings', { did, rkey });
+      return;
+    }
 
     // Update settings field
     // Store null explicitly to cache "no settings" state and avoid repeated fetches
     metadata.settings = settings ?? null;
 
-    // Write back to disk
-    await writeFile(metadataPath, JSON.stringify(metadata, null, 2), 'utf-8');
+    // Write back through tiered storage
+    // Convert to Uint8Array since storage is typed for binary data
+    const metadataKey = `${did}/${rkey}/.metadata.json`;
+    const metadataBytes = new TextEncoder().encode(JSON.stringify(metadata, null, 2));
+    await storage.set(metadataKey, metadataBytes);
     console.log('Updated metadata settings', { did, rkey, hasSettings: !!settings });
   } catch (err) {
     console.error('Failed to update metadata settings', err);

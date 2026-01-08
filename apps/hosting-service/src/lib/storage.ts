@@ -7,6 +7,7 @@
  * - Cold (S3/R2): Object storage as source of truth (optional)
  *
  * When S3 is not configured, falls back to disk-only mode (warm tier acts as source of truth).
+ * In cache-only mode (non-master nodes), S3 writes are skipped even if configured.
  */
 
 import {
@@ -15,6 +16,7 @@ import {
 	DiskStorageTier,
 	S3StorageTier,
 	type StorageTier,
+	type StorageMetadata,
 } from 'tiered-storage';
 
 const CACHE_DIR = process.env.CACHE_DIR || './cache/sites';
@@ -22,6 +24,10 @@ const HOT_CACHE_SIZE = parseInt(process.env.HOT_CACHE_SIZE || '104857600', 10); 
 const HOT_CACHE_COUNT = parseInt(process.env.HOT_CACHE_COUNT || '500', 10);
 const WARM_CACHE_SIZE = parseInt(process.env.WARM_CACHE_SIZE || '10737418240', 10); // 10GB default
 const WARM_EVICTION_POLICY = (process.env.WARM_EVICTION_POLICY || 'lru') as 'lru' | 'fifo' | 'size';
+
+// Cache-only mode: skip S3 writes (non-master nodes)
+// This is the same flag used to skip database writes
+const CACHE_ONLY_MODE = process.env.CACHE_ONLY_MODE === 'true';
 
 // S3/Cold tier configuration (optional)
 const S3_BUCKET = process.env.S3_BUCKET || '';
@@ -49,6 +55,78 @@ const identityDeserialize = async (data: Uint8Array): Promise<unknown> => {
 };
 
 /**
+ * Read-only wrapper for S3 tier in cache-only mode.
+ * Allows reads from S3 but skips all writes (for non-master nodes).
+ */
+class ReadOnlyS3Tier implements StorageTier {
+	private static hasLoggedWriteSkip = false;
+
+	constructor(private tier: StorageTier) {}
+
+	// Read operations - pass through to underlying tier
+	async get(key: string) {
+		return this.tier.get(key);
+	}
+
+	async getWithMetadata(key: string) {
+		return this.tier.getWithMetadata?.(key) ?? null;
+	}
+
+	async getStream(key: string) {
+		return this.tier.getStream?.(key) ?? null;
+	}
+
+	async exists(key: string) {
+		return this.tier.exists(key);
+	}
+
+	async getMetadata(key: string) {
+		return this.tier.getMetadata(key);
+	}
+
+	async *listKeys(prefix?: string) {
+		yield* this.tier.listKeys(prefix);
+	}
+
+	async getStats() {
+		return this.tier.getStats();
+	}
+
+	// Write operations - no-op in cache-only mode
+	async set(key: string, _data: Uint8Array, _metadata: StorageMetadata) {
+		this.logWriteSkip('set', key);
+	}
+
+	async setStream(key: string, _stream: NodeJS.ReadableStream, _metadata: StorageMetadata) {
+		this.logWriteSkip('setStream', key);
+	}
+
+	async setMetadata(key: string, _metadata: StorageMetadata) {
+		this.logWriteSkip('setMetadata', key);
+	}
+
+	async delete(key: string) {
+		this.logWriteSkip('delete', key);
+	}
+
+	async deleteMany(keys: string[]) {
+		this.logWriteSkip('deleteMany', `${keys.length} keys`);
+	}
+
+	async clear() {
+		this.logWriteSkip('clear', 'all keys');
+	}
+
+	private logWriteSkip(operation: string, key: string) {
+		// Only log once to avoid spam
+		if (!ReadOnlyS3Tier.hasLoggedWriteSkip) {
+			console.log(`[Storage] Cache-only mode: skipping S3 writes (operation: ${operation})`);
+			ReadOnlyS3Tier.hasLoggedWriteSkip = true;
+		}
+	}
+}
+
+/**
  * Initialize tiered storage
  * Must be called before serving requests
  */
@@ -66,7 +144,7 @@ function initializeStorage(): TieredStorage<Uint8Array> {
 
 	if (S3_BUCKET) {
 		// Full three-tier setup with S3 as cold storage
-		coldTier = new S3StorageTier({
+		const s3Tier = new S3StorageTier({
 			bucket: S3_BUCKET,
 			metadataBucket: S3_METADATA_BUCKET,
 			region: S3_REGION,
@@ -78,8 +156,16 @@ function initializeStorage(): TieredStorage<Uint8Array> {
 					: undefined,
 			prefix: S3_PREFIX,
 		});
+
+		// In cache-only mode, wrap S3 tier to make it read-only
+		coldTier = CACHE_ONLY_MODE ? new ReadOnlyS3Tier(s3Tier) : s3Tier;
 		warmTier = diskTier;
-		console.log('[Storage] Using S3 as cold tier, disk as warm tier');
+
+		if (CACHE_ONLY_MODE) {
+			console.log('[Storage] Cache-only mode: S3 as read-only cold tier (no writes), disk as warm tier');
+		} else {
+			console.log('[Storage] Using S3 as cold tier, disk as warm tier');
+		}
 	} else {
 		// Disk-only mode: disk tier acts as source of truth (cold)
 		coldTier = diskTier;
@@ -104,6 +190,12 @@ function initializeStorage(): TieredStorage<Uint8Array> {
 
 		// Placement rules: determine which tiers each file goes to
 		placementRules: [
+			// Metadata is critical: frequently accessed for cache validity checks
+			{
+				pattern: '**/.metadata.json',
+				tiers: ['hot', 'warm', 'cold'],
+			},
+
 			// index.html is critical: write to all tiers for instant serving
 			{
 				pattern: '**/index.html',
