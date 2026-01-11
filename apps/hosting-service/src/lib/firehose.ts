@@ -23,6 +23,8 @@ export class FirehoseWorker {
 	private eventCount = 0
 	private cacheCleanupInterval: NodeJS.Timeout | null = null
 	private healthCheckInterval: NodeJS.Timeout | null = null
+	private processingQueue: Set<Promise<void>> = new Set()
+	private readonly maxConcurrency = parseInt(process.env.FIREHOSE_MAX_CONCURRENCY || '5', 10)
 
 	constructor(
 		private logger?: (msg: string, data?: Record<string, unknown>) => void
@@ -34,6 +36,34 @@ export class FirehoseWorker {
 	private log(msg: string, data?: Record<string, unknown>) {
 		const log = this.logger || console.log
 		log(`[FirehoseWorker] ${msg}`, data || {})
+	}
+
+	/**
+	 * Queue a task with concurrency limiting
+	 * Waits if max concurrent tasks are already running
+	 */
+	private async queueTask(task: () => Promise<void>): Promise<void> {
+		// Wait if we're at max concurrency
+		if (this.processingQueue.size >= this.maxConcurrency) {
+			this.log(`Queue at max capacity (${this.maxConcurrency}), waiting for slot...`, {
+				queueSize: this.processingQueue.size
+			})
+			await Promise.race(this.processingQueue)
+		}
+
+		// Execute task and track in queue
+		const promise = task()
+			.catch(err => {
+				// Errors are already logged in the handlers
+			})
+			.finally(() => {
+				this.processingQueue.delete(promise)
+			})
+
+		this.processingQueue.add(promise)
+
+		// Don't await here - we want handleEvent to return quickly
+		// The task will process in the background with concurrency limiting
 	}
 
 	private startCacheCleanup() {
@@ -74,7 +104,7 @@ export class FirehoseWorker {
 		this.connect()
 	}
 
-	stop() {
+	async stop() {
 		this.log('Stopping firehose worker')
 		this.isShuttingDown = true
 
@@ -91,6 +121,13 @@ export class FirehoseWorker {
 		if (this.firehose) {
 			this.firehose.destroy()
 			this.firehose = null
+		}
+
+		// Wait for all queued tasks to complete
+		if (this.processingQueue.size > 0) {
+			this.log(`Waiting for ${this.processingQueue.size} queued tasks to complete...`)
+			await Promise.all(this.processingQueue)
+			this.log('All queued tasks completed')
 		}
 	}
 
@@ -130,25 +167,27 @@ export class FirehoseWorker {
 							rkey: evt.rkey
 						})
 
-						try {
-							await this.handleCreateOrUpdate(
-								evt.did,
-								evt.rkey,
-								record,
-								evt.cid?.toString()
-							)
-						} catch (err) {
-							console.error('Full error details:', err);
-							this.log('Error handling event', {
-								did: evt.did,
-								event: evt.event,
-								rkey: evt.rkey,
-								error:
-									err instanceof Error
-										? err.message
-										: String(err)
-							})
-						}
+						await this.queueTask(async () => {
+							try {
+								await this.handleCreateOrUpdate(
+									evt.did,
+									evt.rkey,
+									record,
+									evt.cid?.toString()
+								)
+							} catch (err) {
+								console.error('Full error details:', err);
+								this.log('Error handling event', {
+									did: evt.did,
+									event: evt.event,
+									rkey: evt.rkey,
+									error:
+										err instanceof Error
+											? err.message
+											: String(err)
+								})
+							}
+						})
 					}
 					// Handle settings changes
 					else if (evt.collection === 'place.wisp.settings') {
@@ -158,19 +197,21 @@ export class FirehoseWorker {
 							rkey: evt.rkey
 						})
 
-						try {
-							await this.handleSettingsChange(evt.did, evt.rkey)
-						} catch (err) {
-							this.log('Error handling settings change', {
-								did: evt.did,
-								event: evt.event,
-								rkey: evt.rkey,
-								error:
-									err instanceof Error
-										? err.message
-										: String(err)
-							})
-						}
+						await this.queueTask(async () => {
+							try {
+								await this.handleSettingsChange(evt.did, evt.rkey)
+							} catch (err) {
+								this.log('Error handling settings change', {
+									did: evt.did,
+									event: evt.event,
+									rkey: evt.rkey,
+									error:
+										err instanceof Error
+											? err.message
+											: String(err)
+								})
+							}
+						})
 					}
 				} else if (
 					evt.event === 'delete' &&
@@ -181,16 +222,18 @@ export class FirehoseWorker {
 						rkey: evt.rkey
 					})
 
-					try {
-						await this.handleDelete(evt.did, evt.rkey)
-					} catch (err) {
-						this.log('Error handling delete', {
-							did: evt.did,
-							rkey: evt.rkey,
-							error:
-								err instanceof Error ? err.message : String(err)
-						})
-					}
+					await this.queueTask(async () => {
+						try {
+							await this.handleDelete(evt.did, evt.rkey)
+						} catch (err) {
+							this.log('Error handling delete', {
+								did: evt.did,
+								rkey: evt.rkey,
+								error:
+									err instanceof Error ? err.message : String(err)
+							})
+						}
+					})
 				} else if (
 					evt.event === 'delete' &&
 					evt.collection === 'place.wisp.settings'
@@ -200,16 +243,18 @@ export class FirehoseWorker {
 						rkey: evt.rkey
 					})
 
-					try {
-						await this.handleSettingsChange(evt.did, evt.rkey)
-					} catch (err) {
-						this.log('Error handling settings delete', {
-							did: evt.did,
-							rkey: evt.rkey,
-							error:
-								err instanceof Error ? err.message : String(err)
-						})
-					}
+					await this.queueTask(async () => {
+						try {
+							await this.handleSettingsChange(evt.did, evt.rkey)
+						} catch (err) {
+							this.log('Error handling settings delete', {
+								did: evt.did,
+								rkey: evt.rkey,
+								error:
+									err instanceof Error ? err.message : String(err)
+							})
+						}
+					})
 				}
 			},
 			onError: (err: any) => {
@@ -237,6 +282,7 @@ export class FirehoseWorker {
 		record: any,
 		eventCid?: string
 	) {
+		console.log(`[Firehose] Processing create/update from firehose - ${did}:${site}`)
 		this.log('Processing create/update', { did, site })
 
 		// Record is already validated in handleEvent
@@ -458,6 +504,8 @@ export class FirehoseWorker {
 			connected: isConnected,
 			lastEventTime: this.lastEventTime,
 			timeSinceLastEvent,
+			queueSize: this.processingQueue.size,
+			maxConcurrency: this.maxConcurrency,
 			healthy: isConnected && timeSinceLastEvent < 300000 // 5 minutes
 		}
 	}

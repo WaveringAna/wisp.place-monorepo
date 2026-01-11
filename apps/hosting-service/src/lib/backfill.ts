@@ -102,13 +102,14 @@ export async function backfillCache(options: BackfillOptions = {}): Promise<Back
 
           try {
             // Download and cache site
+            console.log(`[Backfill] Caching site from backfill - ${site.did}:${site.rkey}`);
             await downloadAndCacheSite(site.did, site.rkey, siteData.record, pdsEndpoint, siteData.cid);
             // Clear redirect rules cache since the site was updated
             clearRedirectRulesCache(site.did, site.rkey);
             stats.cached++;
             processed++;
             logger.info('Successfully cached site during backfill', { did: site.did, rkey: site.rkey });
-            console.log(`✅ [${processed}/${sites.length}] Cached: ${site.display_name || site.rkey}`);
+            console.log(`✅ [${processed}/${sites.length}] Cached (backfill): ${site.display_name || site.rkey}`);
           } finally {
             // Always unmark, even if caching fails
             unmarkSiteAsBeingCached(site.did, site.rkey);
