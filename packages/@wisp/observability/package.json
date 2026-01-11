@@ -24,10 +24,14 @@
     }
   },
   "peerDependencies": {
-    "hono": "^4.10.7"
+    "hono": "^4.10.7",
+    "elysia": "^1.0.0"
   },
   "peerDependenciesMeta": {
     "hono": {
+      "optional": true
+    },
+    "elysia": {
       "optional": true
     }
   },

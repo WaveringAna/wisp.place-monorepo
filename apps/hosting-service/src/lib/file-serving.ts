@@ -18,10 +18,19 @@ import { storage } from './storage';
 
 /**
  * Helper to retrieve a file with metadata from tiered storage
+ * Logs which tier the file was served from
  */
 async function getFileWithMetadata(did: string, rkey: string, filePath: string) {
   const key = `${did}/${rkey}/${filePath}`;
-  return await storage.getWithMetadata(key);
+  const result = await storage.getWithMetadata(key);
+
+  if (result) {
+    const tier = result.metadata?.tier || 'unknown';
+    const size = result.data ? (result.data as Uint8Array).length : 0;
+    console.log(`[Storage] Served ${filePath} from ${tier} tier (${size} bytes) - ${did}:${rkey}`);
+  }
+
+  return result;
 }
 
 /**
@@ -41,8 +50,8 @@ export async function serveFromCache(
   // Check for redirect rules first (_redirects wins over settings)
   let redirectRules = getRedirectRulesFromCache(did, rkey);
 
-  if (redirectRules === undefined) {
-    // Load rules for the first time
+  if (redirectRules === null) {
+    // Load rules (not in cache or evicted)
     redirectRules = await loadRedirectRules(did, rkey);
     setRedirectRulesInCache(did, rkey, redirectRules);
   }
@@ -393,8 +402,8 @@ export async function serveFromCacheWithRewrite(
   // Check for redirect rules first (_redirects wins over settings)
   let redirectRules = getRedirectRulesFromCache(did, rkey);
 
-  if (redirectRules === undefined) {
-    // Load rules for the first time
+  if (redirectRules === null) {
+    // Load rules (not in cache or evicted)
     redirectRules = await loadRedirectRules(did, rkey);
     setRedirectRulesInCache(did, rkey, redirectRules);
   }

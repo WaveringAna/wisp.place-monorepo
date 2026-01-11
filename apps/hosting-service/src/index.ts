@@ -80,11 +80,14 @@ if (backfillOnStartup) {
 }
 
 // Add health check endpoint
-app.get('/health', (c) => {
+app.get('/health', async (c) => {
   const firehoseHealth = firehose.getHealth();
+  const storageStats = await storage.getStats();
+
   return c.json({
     status: 'ok',
     firehose: firehoseHealth,
+    storage: storageStats,
   });
 });
 
@@ -120,7 +123,7 @@ Firehose:     Connecting...
 // Graceful shutdown
 process.on('SIGINT', async () => {
   console.log('\n🛑 Shutting down...');
-  firehose.stop();
+  await firehose.stop();
   stopDomainCacheCleanup();
   await closeDatabase();
   server.close();
@@ -129,7 +132,7 @@ process.on('SIGINT', async () => {
 
 process.on('SIGTERM', async () => {
   console.log('\n🛑 Shutting down...');
-  firehose.stop();
+  await firehose.stop();
   stopDomainCacheCleanup();
   await closeDatabase();
   server.close();

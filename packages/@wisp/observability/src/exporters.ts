@@ -4,11 +4,13 @@
  */
 
 import type { LogEntry, ErrorEntry, MetricEntry } from './core'
-import { metrics, type MeterProvider } from '@opentelemetry/api'
+import { metrics, type MeterProvider, type Counter, type Histogram } from '@opentelemetry/api'
 import { MeterProvider as SdkMeterProvider, PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics'
 import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-http'
 import { Resource } from '@opentelemetry/resources'
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions'
+import os from 'node:os'
+import { gzipSync } from 'node:zlib'
 
 // ============================================================================
 // Types
@@ -208,6 +210,7 @@ class LokiExporter {
 			const [service, level] = key.split('-')
 			const values: Array<[string, string]> = entries.map(entry => {
 				const logLine = JSON.stringify({
+					_msg: entry.message,
 					message: entry.message,
 					context: entry.context,
 					traceId: entry.traceId,
@@ -229,10 +232,20 @@ class LokiExporter {
 			})
 		}
 
-		// Create streams for errors
-		if (errors.length > 0) {
-			const errorValues: Array<[string, string]> = errors.map(entry => {
+		// Group errors by service (similar to logs)
+		const errorGroups = new Map<string, ErrorEntry[]>()
+		for (const error of errors) {
+			const service = error.service
+			const group = errorGroups.get(service) || []
+			group.push(error)
+			errorGroups.set(service, group)
+		}
+
+		// Create streams for errors (one per service)
+		for (const [service, entries] of errorGroups) {
+			const errorValues: Array<[string, string]> = entries.map(entry => {
 				const logLine = JSON.stringify({
+					_msg: entry.message,
 					message: entry.message,
 					stack: entry.stack,
 					context: entry.context,
@@ -245,7 +258,7 @@ class LokiExporter {
 
 			streams.push({
 				stream: {
-					service: errors[0]?.service || 'unknown',
+					service: service,
 					level: 'error',
 					job: this.config.serviceName || 'wisp-app',
 					type: 'aggregated_error'
@@ -261,7 +274,8 @@ class LokiExporter {
 		if (!this.config.lokiUrl) return
 
 		const headers: Record<string, string> = {
-			'Content-Type': 'application/json'
+			'Content-Type': 'application/json',
+			'Content-Encoding': 'gzip'
 		}
 
 		// Add authentication
@@ -272,10 +286,15 @@ class LokiExporter {
 			headers['Authorization'] = `Basic ${auth}`
 		}
 
-		const response = await fetch(`${this.config.lokiUrl}/loki/api/v1/push`, {
+		// Gzip compress the payload
+		const jsonPayload = JSON.stringify(batch)
+		const compressedPayload = gzipSync(jsonPayload)
+
+		const lokiPath = process.env.GRAFANA_LOKI_PATH || '/loki/api/v1/push'
+		const response = await fetch(`${this.config.lokiUrl}${lokiPath}`, {
 			method: 'POST',
 			headers,
-			body: JSON.stringify(batch)
+			body: compressedPayload
 		})
 
 		if (!response.ok) {
@@ -291,9 +310,9 @@ class LokiExporter {
 
 class MetricsExporter {
 	private meterProvider?: MeterProvider
-	private requestCounter?: any
-	private requestDuration?: any
-	private errorCounter?: any
+	private requestCounter?: Counter
+	private requestDuration?: Histogram
+	private errorCounter?: Counter
 	private config: GrafanaConfig = {}
 
 	initialize(config: GrafanaConfig) {
@@ -302,17 +321,22 @@ class MetricsExporter {
 		if (!this.config.enabled || !this.config.prometheusUrl) return
 
 		// Create OTLP exporter with Prometheus endpoint
+		const prometheusPath = process.env.GRAFANA_PROMETHEUS_PATH || '/v1/metrics'
 		const exporter = new OTLPMetricExporter({
-			url: `${this.config.prometheusUrl}/v1/metrics`,
+			url: `${this.config.prometheusUrl}${prometheusPath}`,
 			headers: this.getAuthHeaders(),
-			timeoutMillis: 10000
+			timeoutMillis: 10000,
+			compression: 'gzip'
 		})
 
 		// Create meter provider with periodic exporting
+		const hostname = os.hostname()
+		const serviceName = this.config.serviceName || 'wisp-app'
 		const meterProvider = new SdkMeterProvider({
 			resource: new Resource({
-				[ATTR_SERVICE_NAME]: this.config.serviceName || 'wisp-app',
-				[ATTR_SERVICE_VERSION]: this.config.serviceVersion || '1.0.0'
+				[ATTR_SERVICE_NAME]: serviceName,
+				[ATTR_SERVICE_VERSION]: this.config.serviceVersion || '1.0.0',
+				'instance': `${serviceName}-${hostname}`
 			}),
 			readers: [
 				new PeriodicExportingMetricReader({

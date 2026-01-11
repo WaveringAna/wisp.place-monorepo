@@ -3,11 +3,11 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx --env-file=.env  src/index.ts",
+    "dev": "NODE_OPTIONS='--max-old-space-size=2048' tsx --env-file=.env  src/index.ts",
     "build": "bun run build.ts",
-    "start": "tsx src/index.ts",
+    "start": "NODE_OPTIONS='--max-old-space-size=2048' tsx src/index.ts",
     "check": "tsc --noEmit",
-    "backfill": "tsx src/index.ts --backfill"
+    "backfill": "NODE_OPTIONS='--max-old-space-size=2048' tsx src/index.ts --backfill"
   },
   "dependencies": {
     "@atproto/api": "^0.17.4",

@@ -404,11 +404,16 @@ export async function downloadAndCacheSite(did: string, rkey: string, record: Wi
   // Fetch site settings (optional)
   const settings = await fetchSiteSettings(did, rkey);
 
+  // Determine if this is an incremental update or full cache
+  const isIncremental = Object.keys(existingFileCids).length > 0;
+  const updateType = isIncremental ? 'incremental update' : 'full cache';
+  console.log(`[Cache] Starting ${updateType} for ${did}:${rkey}`);
+
   // Download files directly to tiered storage (with incremental logic)
   await cacheFiles(did, rkey, expandedRoot.entries, pdsEndpoint, '', existingFileCids);
   await saveCacheMetadata(did, rkey, recordCid, newFileCids, settings);
 
-  console.log('Successfully cached site', did, rkey);
+  console.log(`[Cache] Successfully cached site ${did}:${rkey} (${updateType})`);
 }
 
 
@@ -422,6 +427,7 @@ async function cacheFiles(
 ): Promise<void> {
   // Collect file download tasks (skip unchanged files)
   const downloadTasks: Array<() => Promise<void>> = [];
+  let skippedCount = 0;
 
   function collectFileTasks(
     entries: Entry[],
@@ -440,7 +446,7 @@ async function cacheFiles(
         // Check if file is unchanged (same CID as existing cache)
         if (cid && existingFileCids[currentPath] === cid) {
           // File unchanged - skip download (already in tiered storage)
-          console.log(`Skipping unchanged file: ${currentPath}`);
+          skippedCount++;
         } else {
           // File new or changed - download it
           downloadTasks.push(() => cacheFileBlob(
@@ -460,7 +466,7 @@ async function cacheFiles(
 
   collectFileTasks(entries, pathPrefix);
 
-  console.log(`[Incremental Update] Files to download: ${downloadTasks.length}`);
+  console.log(`[Incremental Update] Files to copy: ${skippedCount}, Files to download: ${downloadTasks.length}`);
 
   // Download new/changed files concurrently
   const downloadLimit = 20;
@@ -554,11 +560,12 @@ async function cacheFileBlob(
     metadata: customMetadata,
   });
 
-  // Log completion
+  // Log completion with tier info
+  const tierInfo = 'to warm/cold tiers';
   if (encoding === 'gzip' && mimeType) {
-    console.log('Cached file', filePath, content.length, 'bytes (gzipped,', mimeType + ')');
+    console.log(`[Cache] Stored ${filePath} ${tierInfo} (${content.length} bytes, gzipped, ${mimeType})`);
   } else {
-    console.log('Cached file', filePath, content.length, 'bytes');
+    console.log(`[Cache] Stored ${filePath} ${tierInfo} (${content.length} bytes)`);
   }
 }
 

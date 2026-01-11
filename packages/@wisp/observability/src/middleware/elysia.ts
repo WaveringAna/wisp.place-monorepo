@@ -1,3 +1,4 @@
+import type { Context } from 'elysia'
 import { metricsCollector, logCollector } from '../core'
 
 /**
@@ -6,12 +7,13 @@ import { metricsCollector, logCollector } from '../core'
  */
 export function observabilityMiddleware(service: string) {
 	return {
-		beforeHandle: ({ request }: any) => {
+		beforeHandle: ({ request }: Context) => {
 			// Store start time on request object
 			(request as any).__startTime = Date.now()
 		},
-		afterHandle: ({ request, set }: any) => {
-			const duration = Date.now() - ((request as any).__startTime || Date.now())
+		afterHandle: ({ request, set }: Context) => {
+			const startTime = (request as any).__startTime || Date.now()
+			const duration = Date.now() - startTime
 			const url = new URL(request.url)
 
 			metricsCollector.recordRequest(
@@ -22,8 +24,9 @@ export function observabilityMiddleware(service: string) {
 				service
 			)
 		},
-		onError: ({ request, error, set }: any) => {
-			const duration = Date.now() - ((request as any).__startTime || Date.now())
+		onError: ({ request, error, set }: Context & { error: Error }) => {
+			const startTime = (request as any).__startTime || Date.now()
+			const duration = Date.now() - startTime
 			const url = new URL(request.url)
 
 			metricsCollector.recordRequest(
