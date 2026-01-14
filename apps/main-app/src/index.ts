@@ -1,3 +1,6 @@
+// Fix for Elysia issue with Bun, (see https://github.com/oven-sh/bun/issues/12161)
+process.getBuiltinModule = require;
+
 import { Elysia } from 'elysia'
 import type { Context } from 'elysia'
 import { cors } from '@elysiajs/cors'
@@ -127,7 +130,7 @@ export const app = new Elysia({
 	.use(
 		await staticPlugin({
 			assets: './apps/main-app/public',
-			prefix: '/',
+			prefix: '/'
 		})
 	)
 	.get('/client-metadata.json', () => {
@@ -200,7 +203,10 @@ export const app = new Elysia({
 		exposeHeaders: ['Content-Type'],
 		maxAge: 86400 // 24 hours
 	}))
-	.listen(8000)
+	.listen({
+		port: 8000,
+		hostname: '0.0.0.0'
+	})
 
 console.log(
 	`🦊 Elysia is running at ${app.server?.hostname}:${app.server?.port}`
