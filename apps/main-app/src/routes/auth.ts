@@ -13,6 +13,35 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) => new
 			sign: ['did']
 		}
 	})
+	.get('/api/auth/login', async (c) => {
+		// GET endpoint for initiating OAuth via atproto.wisp.place entryway
+		// Accepts: login_hint (handle) or pds (server)
+		try {
+			const query = c.query as { login_hint?: string; pds?: string }
+			const handle = query.login_hint || ''
+			const pds = query.pds || ''
+
+			// Use login_hint if provided, otherwise use PDS URL
+			const identifier = handle || (pds ? `https://${pds}` : '')
+
+			if (!identifier) {
+				logger.error('Login attempt with no login_hint or pds')
+				return c.redirect('/?error=missing_handle')
+			}
+
+			logger.info('Login attempt via entryway', { identifier })
+			const state = crypto.randomUUID()
+			const url = await client.authorize(identifier, { state })
+			logger.info('Authorization URL generated', { identifier })
+
+			// Redirect to the OAuth authorization URL
+			return c.redirect(url.toString())
+		} catch (err) {
+			logger.error('Login error', err)
+			console.error('[Auth] Full error:', err)
+			return c.redirect('/?error=auth_failed')
+		}
+	})
 	.post('/api/auth/signin', async (c) => {
 		let handle = 'unknown'
 		try {
