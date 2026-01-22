@@ -23,10 +23,18 @@ import {
 	CheckCircle2,
 	XCircle,
 	Loader2,
-	Trash2
+	Trash2,
+	AlertCircle
 } from 'lucide-react'
 import type { WispDomain, CustomDomain } from '../hooks/useDomainData'
 import type { UserInfo } from '../hooks/useUserInfo'
+
+// Hosting node IP addresses for A record fallback
+const HOSTING_NODES = [
+	{ region: 'US East (Virginia)', ip: '192.0.2.1' },
+	{ region: 'US West (California)', ip: '192.0.2.2' },
+	{ region: 'Europe (Frankfurt)', ip: '192.0.2.3' },
+] as const
 
 interface DomainsTabProps {
 	wispDomains: WispDomain[]
@@ -511,7 +519,7 @@ export function DomainsTab({
 											<div className="p-3 bg-background rounded border border-border">
 												<div className="flex justify-between items-start mb-2">
 													<span className="text-xs font-semibold text-muted-foreground">
-														CNAME Record (Pointing)
+														CNAME Record (Pointing) — Recommended
 													</span>
 												</div>
 												<div className="font-mono text-xs space-y-2">
@@ -534,6 +542,55 @@ export function DomainsTab({
 												</div>
 												<p className="text-xs text-muted-foreground mt-2">
 													Note: Some DNS providers (like Cloudflare) flatten CNAMEs to A records - this is fine and won't affect verification.
+												</p>
+											</div>
+
+											<div className="p-3 bg-background rounded border border-border">
+												<div className="flex items-start gap-2 mb-2">
+													<span className="text-xs font-semibold text-muted-foreground">
+														A Records (Fallback Option)
+													</span>
+												</div>
+												<div className="p-2 bg-yellow-500/10 border border-yellow-500/20 rounded mb-3 flex gap-2">
+													<AlertCircle className="w-4 h-4 text-yellow-600 shrink-0 mt-0.5" />
+													<p className="text-xs text-yellow-700 dark:text-yellow-500">
+														<strong>Warning:</strong> Using A records instead of CNAME means you lose GeoDNS capabilities. 
+														Your site will always be served from the specific node you choose below, regardless of visitor location.
+													</p>
+												</div>
+												<div className="space-y-3">
+													{HOSTING_NODES.map((node) => (
+														<div key={node.ip} className="font-mono text-xs space-y-1 pl-3 border-l-2 border-muted">
+															<div className="font-semibold text-muted-foreground mb-1">
+																{node.region}
+															</div>
+															<div>
+																<span className="text-muted-foreground">
+																	Name:
+																</span>{' '}
+																<span className="select-all">
+																	{domain.domain}
+																</span>
+															</div>
+															<div>
+																<span className="text-muted-foreground">
+																	Type:
+																</span>{' '}
+																<span>A</span>
+															</div>
+															<div>
+																<span className="text-muted-foreground">
+																	Value:
+																</span>{' '}
+																<span className="select-all">
+																	{node.ip}
+																</span>
+															</div>
+														</div>
+													))}
+												</div>
+												<p className="text-xs text-muted-foreground mt-3">
+													Choose one region that best matches your primary audience location.
 												</p>
 											</div>
 										</div>
