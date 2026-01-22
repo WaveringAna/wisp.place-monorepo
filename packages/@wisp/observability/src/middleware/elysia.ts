@@ -6,6 +6,15 @@ import { metricsCollector, logCollector } from '../core'
  * Tracks request metrics and logs errors
  */
 export function observabilityMiddleware(service: string) {
+	const normalizeStatus = (status: unknown, fallback: number) => {
+		if (typeof status === 'number') return status
+		if (typeof status === 'string') {
+			const parsed = Number(status)
+			if (!Number.isNaN(parsed)) return parsed
+		}
+		return fallback
+	}
+
 	return {
 		beforeHandle: ({ request }: Context) => {
 			// Store start time on request object
@@ -15,30 +24,32 @@ export function observabilityMiddleware(service: string) {
 			const startTime = (request as any).__startTime || Date.now()
 			const duration = Date.now() - startTime
 			const url = new URL(request.url)
+			const statusCode = normalizeStatus(set.status, 200)
 
 			metricsCollector.recordRequest(
 				url.pathname,
 				request.method,
-				set.status || 200,
+				statusCode,
 				duration,
 				service
 			)
 		},
-		onError: ({ request, error, set }: Context & { error: Error }) => {
+		onError: (context: any) => {
+			const { request, error, set } = context as Context & { error: Error }
 			const startTime = (request as any).__startTime || Date.now()
 			const duration = Date.now() - startTime
 			const url = new URL(request.url)
+			const statusCode = normalizeStatus(set.status, 500)
 
 			metricsCollector.recordRequest(
 				url.pathname,
 				request.method,
-				set.status || 500,
+				statusCode,
 				duration,
 				service
 			)
 
 			// Don't log 404 errors
-			const statusCode = set.status || 500
 			if (statusCode !== 404) {
 				logCollector.error(
 					`Request failed: ${request.method} ${url.pathname}`,

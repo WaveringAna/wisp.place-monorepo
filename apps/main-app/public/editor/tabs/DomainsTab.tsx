@@ -76,6 +76,19 @@ export function DomainsTab({
 	const [customDomain, setCustomDomain] = useState('')
 	const [isAddingDomain, setIsAddingDomain] = useState(false)
 	const [viewDomainDNS, setViewDomainDNS] = useState<string | null>(null)
+	const [copiedField, setCopiedField] = useState<string | null>(null)
+
+	const copyToClipboard = async (value: string, label: string) => {
+		try {
+			await navigator.clipboard.writeText(value)
+			setCopiedField(label)
+			window.setTimeout(() => {
+				setCopiedField((current) => (current === label ? null : current))
+			}, 1400)
+		} catch {
+			setCopiedField(null)
+		}
+	}
 
 	const checkWispAvailability = async (handle: string) => {
 		const trimmedHandle = handle.trim().toLowerCase()
@@ -463,7 +476,7 @@ export function DomainsTab({
 				open={viewDomainDNS !== null}
 				onOpenChange={(open) => !open && setViewDomainDNS(null)}
 			>
-				<DialogContent className="sm:max-w-lg">
+				<DialogContent className="sm:max-w-lg max-h-[80vh] overflow-hidden">
 					<DialogHeader>
 						<DialogTitle>DNS Configuration</DialogTitle>
 						<DialogDescription>
@@ -471,7 +484,8 @@ export function DomainsTab({
 						</DialogDescription>
 					</DialogHeader>
 					{viewDomainDNS && userInfo && (
-						<>
+						<div className="relative max-h-[62vh] overflow-y-auto pr-2">
+							<div className="pointer-events-none sticky top-0 z-10 h-3 bg-gradient-to-b from-background to-transparent" />
 							{(() => {
 								const domain = customDomains.find(
 									(d) => d.id === viewDomainDNS
@@ -481,132 +495,232 @@ export function DomainsTab({
 								return (
 									<div className="space-y-4 py-4">
 										<div className="p-3 bg-muted/30 rounded-lg">
-											<p className="text-sm font-medium mb-1">
-												Domain:
+											<p className="text-xs uppercase tracking-wide text-muted-foreground">
+												Domain
 											</p>
-											<p className="font-mono text-sm">
+											<p className="font-mono text-sm mt-1">
 												{domain.domain}
 											</p>
 										</div>
 
 										<div className="space-y-3">
-											<div className="p-3 bg-background rounded border border-border">
-												<div className="flex justify-between items-start mb-2">
-													<span className="text-xs font-semibold text-muted-foreground">
-														TXT Record (Verification)
-													</span>
-												</div>
-												<div className="font-mono text-xs space-y-2">
+											<div className="p-4 bg-background rounded border border-border">
+												<div className="flex items-center justify-between gap-3">
 													<div>
-														<span className="text-muted-foreground">
-															Name:
-														</span>{' '}
-														<span className="select-all">
-															_wisp.{domain.domain}
-														</span>
+														<p className="text-xs uppercase tracking-wide text-muted-foreground">
+															Step 1
+														</p>
+														<p className="text-sm font-semibold">
+															Verify ownership (TXT)
+														</p>
 													</div>
-													<div>
-														<span className="text-muted-foreground">
-															Value:
-														</span>{' '}
-														<span className="select-all break-all">
-															{userInfo.did}
-														</span>
+													<Badge variant="secondary" className="text-xs">
+														Required
+													</Badge>
+												</div>
+												<div className="mt-3 space-y-2">
+													<div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/30 px-3 py-2">
+														<div className="min-w-0">
+															<p className="text-xs text-muted-foreground">
+																Name
+															</p>
+															<p className="font-mono text-sm select-all">
+																_wisp.{domain.domain}
+															</p>
+														</div>
+														<Button
+															variant="outline"
+															size="sm"
+															onClick={() =>
+																copyToClipboard(
+																	`_wisp.${domain.domain}`,
+																	'txt-name'
+																)
+															}
+														>
+															{copiedField === 'txt-name'
+																? 'Copied'
+																: 'Copy'}
+														</Button>
+													</div>
+													<div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/30 px-3 py-2">
+														<div className="min-w-0">
+															<p className="text-xs text-muted-foreground">
+																Value
+															</p>
+															<p className="font-mono text-sm break-all select-all">
+																{userInfo.did}
+															</p>
+														</div>
+														<Button
+															variant="outline"
+															size="sm"
+															onClick={() =>
+																copyToClipboard(userInfo.did, 'txt-value')
+															}
+														>
+															{copiedField === 'txt-value'
+																? 'Copied'
+																: 'Copy'}
+														</Button>
 													</div>
 												</div>
 											</div>
 
-											<div className="p-3 bg-background rounded border border-border">
-												<div className="flex justify-between items-start mb-2">
-													<span className="text-xs font-semibold text-muted-foreground">
-														CNAME Record (Pointing) — Recommended
-													</span>
-												</div>
-												<div className="font-mono text-xs space-y-2">
+											<div className="p-4 bg-background rounded border border-border">
+												<div className="flex items-center justify-between gap-3">
 													<div>
-														<span className="text-muted-foreground">
-															Name:
-														</span>{' '}
-														<span className="select-all">
-															{domain.domain}
-														</span>
+														<p className="text-xs uppercase tracking-wide text-muted-foreground">
+															Step 2
+														</p>
+														<p className="text-sm font-semibold">
+															Point your domain (CNAME)
+														</p>
 													</div>
-													<div>
-														<span className="text-muted-foreground">
-															Value:
-														</span>{' '}
-														<span className="select-all">
-															{domain.id}.dns.wisp.place
-														</span>
+													<Badge variant="secondary" className="text-xs">
+														Recommended
+													</Badge>
+												</div>
+												<div className="mt-3 space-y-2">
+													<div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/30 px-3 py-2">
+														<div className="min-w-0">
+															<p className="text-xs text-muted-foreground">
+																Name
+															</p>
+															<p className="font-mono text-sm select-all">
+																{domain.domain}
+															</p>
+														</div>
+														<Button
+															variant="outline"
+															size="sm"
+															onClick={() =>
+																copyToClipboard(domain.domain, 'cname-name')
+															}
+														>
+															{copiedField === 'cname-name'
+																? 'Copied'
+																: 'Copy'}
+														</Button>
+													</div>
+													<div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/30 px-3 py-2">
+														<div className="min-w-0">
+															<p className="text-xs text-muted-foreground">
+																Value
+															</p>
+															<p className="font-mono text-sm select-all">
+																{domain.id}.dns.wisp.place
+															</p>
+														</div>
+														<Button
+															variant="outline"
+															size="sm"
+															onClick={() =>
+																copyToClipboard(
+																	`${domain.id}.dns.wisp.place`,
+																	'cname-value'
+																)
+															}
+														>
+															{copiedField === 'cname-value'
+																? 'Copied'
+																: 'Copy'}
+														</Button>
 													</div>
 												</div>
-												<p className="text-xs text-muted-foreground mt-2">
-													Note: Some DNS providers (like Cloudflare) flatten CNAMEs to A records - this is fine and won't affect verification.
-												</p>
-											</div>
-
-											<div className="p-3 bg-background rounded border border-border">
-												<div className="flex items-start gap-2 mb-2">
-													<span className="text-xs font-semibold text-muted-foreground">
-														A Records (Fallback Option)
-													</span>
-												</div>
-												<div className="p-2 bg-yellow-500/10 border border-yellow-500/20 rounded mb-3 flex gap-2">
-													<AlertCircle className="w-4 h-4 text-yellow-600 shrink-0 mt-0.5" />
-													<p className="text-xs text-yellow-700 dark:text-yellow-500">
-														<strong>Warning:</strong> Using A records instead of CNAME means you lose GeoDNS capabilities. 
-														Your site will always be served from the specific node you choose below, regardless of visitor location.
+												<div className="mt-3 flex gap-2 rounded-md border border-blue-500/20 bg-blue-500/10 p-2 text-xs text-blue-200">
+													<AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-blue-300" />
+													<p>
+														Some DNS providers (like Cloudflare) flatten CNAMEs to A records.
+														That&apos;s okay and won&apos;t affect verification.
 													</p>
 												</div>
-												<div className="space-y-3">
-													{HOSTING_NODES.map((node) => (
-														<div key={node.ip} className="font-mono text-xs space-y-1 pl-3 border-l-2 border-muted">
-															<div className="font-semibold text-muted-foreground mb-1">
-																{node.region}
-															</div>
-															<div>
-																<span className="text-muted-foreground">
-																	Name:
-																</span>{' '}
-																<span className="select-all">
-																	{domain.domain}
-																</span>
-															</div>
-															<div>
-																<span className="text-muted-foreground">
-																	Type:
-																</span>{' '}
-																<span>A</span>
-															</div>
-															<div>
-																<span className="text-muted-foreground">
-																	Value:
-																</span>{' '}
-																<span className="select-all">
-																	{node.ip}
-																</span>
-															</div>
-														</div>
-													))}
-												</div>
-												<p className="text-xs text-muted-foreground mt-3">
-													Choose one region that best matches your primary audience location.
-												</p>
 											</div>
+
+											<details className="p-4 bg-background rounded border border-border">
+												<summary className="text-sm font-semibold cursor-pointer select-none">
+													Use A Records Instead (Fallback)
+												</summary>
+												<div className="mt-3">
+													<div className="p-2 bg-yellow-500/10 border border-yellow-500/20 rounded mb-3 flex gap-2">
+														<AlertCircle className="w-4 h-4 text-yellow-600 shrink-0 mt-0.5" />
+														<p className="text-sm text-yellow-700 dark:text-yellow-500">
+															<strong>Warning:</strong> A records disable GeoDNS. Your site
+															will always be served from the single region you choose.
+														</p>
+													</div>
+													<div className="space-y-3">
+														{HOSTING_NODES.map((node) => (
+															<div key={node.ip} className="space-y-2 pl-3 border-l-2 border-muted">
+																<div className="font-semibold text-muted-foreground mb-1">
+																	{node.region}
+																</div>
+																<div className="font-mono text-xs space-y-1">
+																	<div>
+																		<span className="text-muted-foreground">
+																			Name:
+																		</span>{' '}
+																		<span className="select-all">
+																			{domain.domain}
+																		</span>
+																	</div>
+																	<div>
+																		<span className="text-muted-foreground">
+																			Type:
+																		</span>{' '}
+																		<span>A</span>
+																	</div>
+																</div>
+																<div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/30 px-3 py-2 font-mono text-xs">
+																	<div className="min-w-0">
+																		<p className="text-xs text-muted-foreground">
+																			Value
+																		</p>
+																		<p className="select-all">
+																			{node.ip}
+																		</p>
+																	</div>
+																	<Button
+																		variant="outline"
+																		size="sm"
+																		onClick={() =>
+																			copyToClipboard(
+																				node.ip,
+																				`a-value-${node.ip}`
+																			)
+																		}
+																	>
+																		{copiedField === `a-value-${node.ip}`
+																			? 'Copied'
+																			: 'Copy'}
+																	</Button>
+																</div>
+															</div>
+														))}
+													</div>
+													<p className="text-sm text-muted-foreground mt-3">
+														Choose the region closest to your primary audience.
+													</p>
+												</div>
+											</details>
 										</div>
 
 										<div className="p-3 bg-muted/30 rounded-lg">
-											<p className="text-xs text-muted-foreground">
-												💡 After configuring DNS, click "Verify DNS"
-												to check if everything is set up correctly.
-												DNS changes can take a few minutes to
+											<p className="text-sm text-muted-foreground">
+												After configuring DNS, click "Verify DNS" to check
+												everything. DNS changes can take a few minutes to
 												propagate.
 											</p>
 										</div>
 									</div>
 								)
 							})()}
-						</>
+							<div className="pointer-events-none sticky bottom-0 z-10 flex h-8 items-end justify-center bg-gradient-to-t from-background to-transparent">
+								<span className="text-[10px] text-muted-foreground">
+									Scroll for more
+								</span>
+							</div>
+						</div>
 					)}
 					<DialogFooter>
 						<Button
