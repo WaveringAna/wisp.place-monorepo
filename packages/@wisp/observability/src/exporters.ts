@@ -7,6 +7,7 @@ import type { LogEntry, ErrorEntry, MetricEntry } from './core'
 import { metrics, type MeterProvider, type Counter, type Histogram } from '@opentelemetry/api'
 import { MeterProvider as SdkMeterProvider, PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics'
 import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-http'
+import type { CompressionAlgorithm } from '@opentelemetry/otlp-exporter-base'
 import { Resource } from '@opentelemetry/resources'
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions'
 import os from 'node:os'
@@ -326,7 +327,7 @@ class MetricsExporter {
 			url: `${this.config.prometheusUrl}${prometheusPath}`,
 			headers: this.getAuthHeaders(),
 			timeoutMillis: 10000,
-			compression: 'gzip'
+			compression: 'gzip' as CompressionAlgorithm
 		})
 
 		// Create meter provider with periodic exporting
