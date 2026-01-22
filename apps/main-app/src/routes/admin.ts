@@ -13,6 +13,11 @@ export const adminRoutes = (cookieSecret: string) =>
 		}
 	})
 		// Login
+		/**
+		 * POST /api/admin/login
+		 * Success: { success: true } with admin_session cookie set.
+		 * Failure (401): { error: 'Invalid credentials' }
+		 */
 		.post(
 			'/login',
 			async ({ body, cookie, set }) => {
@@ -52,6 +57,10 @@ export const adminRoutes = (cookieSecret: string) =>
 		)
 
 		// Logout
+		/**
+		 * POST /api/admin/logout
+		 * Success: { success: true } and clears admin_session cookie.
+		 */
 		.post('/logout', ({ cookie }) => {
 			const sessionId = cookie.admin_session?.value
 			if (sessionId && typeof sessionId === 'string') {
@@ -69,6 +78,11 @@ export const adminRoutes = (cookieSecret: string) =>
 		})
 
 		// Check auth status
+		/**
+		 * GET /api/admin/status
+		 * Authenticated: { authenticated: true, username }
+		 * Not authenticated: { authenticated: false }
+		 */
 		.get('/status', ({ cookie }) => {
 			const sessionId = cookie.admin_session?.value
 			if (!sessionId || typeof sessionId !== 'string') {
@@ -94,6 +108,11 @@ export const adminRoutes = (cookieSecret: string) =>
 		})
 
 		// Get logs (protected)
+		/**
+		 * GET /api/admin/logs
+		 * Success: { logs }
+		 * Unauthorized (401): { error: 'Unauthorized' }
+		 */
 		.get('/logs', async ({ query, cookie, set }) => {
 			const check = requireAdmin({ cookie, set })
 			if (check) return check
@@ -145,6 +164,11 @@ export const adminRoutes = (cookieSecret: string) =>
 		})
 
 		// Get errors (protected)
+		/**
+		 * GET /api/admin/errors
+		 * Success: { errors }
+		 * Unauthorized (401): { error: 'Unauthorized' }
+		 */
 		.get('/errors', async ({ query, cookie, set }) => {
 			const check = requireAdmin({ cookie, set })
 			if (check) return check
@@ -190,6 +214,11 @@ export const adminRoutes = (cookieSecret: string) =>
 		})
 
 		// Get metrics (protected)
+		/**
+		 * GET /api/admin/metrics
+		 * Success: { overall, mainApp, hostingService, timeWindow }
+		 * Unauthorized (401): { error: 'Unauthorized' }
+		 */
 		.get('/metrics', async ({ query, cookie, set }) => {
 			const check = requireAdmin({ cookie, set })
 			if (check) return check
@@ -239,6 +268,11 @@ export const adminRoutes = (cookieSecret: string) =>
 		})
 
 		// Get database stats (protected)
+		/**
+		 * GET /api/admin/database
+		 * Success: { stats, recentSites, recentDomains }
+		 * Failure (500): { error, message }
+		 */
 		.get('/database', async ({ cookie, set }) => {
 			const check = requireAdmin({ cookie, set })
 			if (check) return check
@@ -292,6 +326,11 @@ export const adminRoutes = (cookieSecret: string) =>
 		})
 
 		// Get cache stats (protected)
+		/**
+		 * GET /api/admin/cache
+		 * Success: hosting service cache stats payload.
+		 * Failure (503|500): { error, message }
+		 */
 		.get('/cache', async ({ cookie, set }) => {
 			const check = requireAdmin({ cookie, set })
 			if (check) return check
@@ -327,6 +366,11 @@ export const adminRoutes = (cookieSecret: string) =>
 		})
 
 		// Get sites listing (protected)
+		/**
+		 * GET /api/admin/sites
+		 * Success: { sites, customDomains }
+		 * Failure (500): { error, message }
+		 */
 		.get('/sites', async ({ query, cookie, set }) => {
 			const check = requireAdmin({ cookie, set })
 			if (check) return check
@@ -381,6 +425,11 @@ export const adminRoutes = (cookieSecret: string) =>
 		})
 
 		// Get system health (protected)
+		/**
+		 * GET /api/admin/health
+		 * Success: { uptime, memory, timestamp }
+		 * Unauthorized (401): { error: 'Unauthorized' }
+		 */
 		.get('/health', ({ cookie, set }) => {
 			const check = requireAdmin({ cookie, set })
 			if (check) return check
@@ -405,4 +454,3 @@ export const adminRoutes = (cookieSecret: string) =>
 				sign: ['admin_session']
 			})
 		})
-
