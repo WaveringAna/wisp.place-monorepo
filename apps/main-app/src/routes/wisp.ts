@@ -861,6 +861,12 @@ export const wispRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
             const auth = await requireAuth(client, cookie)
             return { auth }
         })
+        /**
+         * GET /wisp/upload-progress/:jobId
+         * SSE stream of upload progress events for the current user.
+         * 404: { error: 'Job not found' }
+         * 403: { error: 'Unauthorized' }
+         */
         .get(
             '/upload-progress/:jobId',
             async ({ params: { jobId }, auth, set }) => {
@@ -951,6 +957,12 @@ export const wispRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
                 return new Response(stream);
             }
         )
+        /**
+         * POST /wisp/upload-files
+         * Success (empty upload): { success: true, uri, cid, fileCount: 0, siteName }
+         * Success (async upload): { success: true, jobId, message }
+         * Failure: throws error with message "Failed to upload files: ..."
+         */
         .post(
             '/upload-files',
             async ({ body, auth }) => {

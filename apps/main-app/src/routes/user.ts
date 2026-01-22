@@ -21,6 +21,10 @@ export const userRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 			const auth = await requireAuth(client, cookie)
 			return { auth }
 		})
+		/**
+		 * GET /api/user/status
+		 * Success: { did, hasSites, hasDomain, domain, sitesCount }
+		 */
 		.get('/status', async ({ auth }) => {
 			try {
 				// Check if user has any sites
@@ -41,6 +45,10 @@ export const userRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				throw new Error('Failed to get user status')
 			}
 		})
+		/**
+		 * GET /api/user/info
+		 * Success: { did, handle }
+		 */
 		.get('/info', async ({ auth }) => {
 			try {
 				let handle = 'unknown'
@@ -65,6 +73,10 @@ export const userRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				throw new Error('Failed to get user info')
 			}
 		})
+		/**
+		 * GET /api/user/sites
+		 * Success: { sites }
+		 */
 		.get('/sites', async ({ auth }) => {
 			try {
 				const sites = await getSitesByDid(auth.did)
@@ -74,6 +86,10 @@ export const userRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				throw new Error('Failed to get sites')
 			}
 		})
+		/**
+		 * GET /api/user/domains
+		 * Success: { wispDomains: [{ domain, rkey }], customDomains }
+		 */
 		.get('/domains', async ({ auth }) => {
 			try {
 				// Get all wisp.place subdomains with mappings (up to 3)
@@ -94,6 +110,10 @@ export const userRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				throw new Error('Failed to get domains')
 			}
 		})
+		/**
+		 * POST /api/user/sync
+		 * Success: { success: true, synced, errors }
+		 */
 		.post('/sync', async ({ auth }) => {
 			try {
 				logger.debug('[User] Manual sync requested for', { did: auth.did })
@@ -109,6 +129,10 @@ export const userRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				throw new Error('Failed to sync sites')
 			}
 		})
+		/**
+		 * GET /api/user/site/:rkey/domains
+		 * Success: { rkey, domains }
+		 */
 		.get('/site/:rkey/domains', async ({ auth, params }) => {
 			try {
 				const { rkey } = params

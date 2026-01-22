@@ -13,6 +13,11 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) => new
 			sign: ['did']
 		}
 	})
+	/**
+	 * GET /api/auth/login
+	 * 302 redirect to the AT Protocol OAuth authorize URL.
+	 * On error, redirects to /?error=missing_handle or /?error=auth_failed.
+	 */
 	.get('/api/auth/login', async (c) => {
 		// GET endpoint for initiating OAuth via atproto.wisp.place entryway
 		// Accepts: login_hint (handle) or pds (server)
@@ -42,6 +47,11 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) => new
 			return c.redirect('/?error=auth_failed')
 		}
 	})
+	/**
+	 * POST /api/auth/signin
+	 * Success: { url } where url is the OAuth authorize URL.
+	 * Failure: { error, details }.
+	 */
 	.post('/api/auth/signin', async (c) => {
 		let handle = 'unknown'
 		try {
@@ -58,6 +68,11 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) => new
 			return  { error: 'Authentication failed', details: err instanceof Error ? err.message : String(err) }
 		}
 	})
+	/**
+	 * GET /api/auth/callback
+	 * 302 redirect to /onboarding (new users) or /editor (existing users).
+	 * On error, redirects to /?error=auth_failed.
+	 */
 	.get('/api/auth/callback', async (c) => {
 		try {
 			const params = new URLSearchParams(c.query)
@@ -111,6 +126,11 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) => new
 			return c.redirect('/?error=auth_failed')
 		}
 	})
+	/**
+	 * POST /api/auth/logout
+	 * Success: { success: true }
+	 * Failure: { error: 'Logout failed' }
+	 */
 	.post('/api/auth/logout', async (c) => {
 		try {
 			const cookieSession = c.cookie
@@ -136,6 +156,11 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) => new
 			return { error: 'Logout failed' }
 		}
 	})
+	/**
+	 * GET /api/auth/status
+	 * Authenticated: { authenticated: true, did }
+	 * Not authenticated: { authenticated: false }
+	 */
 	.get('/api/auth/status', async (c) => {
 		try {
 			const auth = await authenticateRequest(client, c.cookie)

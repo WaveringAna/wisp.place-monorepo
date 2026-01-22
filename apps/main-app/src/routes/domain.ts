@@ -35,6 +35,11 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		}
 	})
 		// Public endpoints (no auth required)
+		/**
+		 * GET /api/domain/check
+		 * Success: { available, domain } or { available: false, reason: 'invalid' }.
+		 * Failure: { available: false }.
+		 */
 		.get('/check', async ({ query }) => {
 			try {
 				const handle = (query.handle || "")
@@ -60,6 +65,12 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				};
 			}
 		})
+		/**
+		 * GET /api/domain/registered
+		 * 200: { registered: true, type: 'wisp' | 'custom', domain, did, rkey, verified? }
+		 * 404: { registered: false }
+		 * 400: { error: 'Domain parameter required' }
+		 */
 		.get('/registered', async ({ query, set }) => {
 			try {
 				const domain = (query.domain || "").trim().toLowerCase();
@@ -90,6 +101,10 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 			const auth = await requireAuth(client, cookie)
 			return { auth }
 		})
+		/**
+		 * POST /api/domain/claim
+		 * Success: { success: true, domain }
+		 */
 		.post('/claim', async ({ body, auth }) => {
 			try {
 				const { handle } = body as { handle?: string };
@@ -133,6 +148,10 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				throw new Error(`Failed to claim: ${err instanceof Error ? err.message : 'Unknown error'}`);
 			}
 		})
+		/**
+		 * POST /api/domain/update
+		 * Success: { success: true, domain }
+		 */
 		.post('/update', async ({ body, auth }) => {
 			try {
 				const { handle } = body as { handle?: string };
@@ -175,6 +194,10 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				throw new Error(`Failed to update: ${err instanceof Error ? err.message : 'Unknown error'}`);
 			}
 		})
+		/**
+		 * POST /api/domain/custom/add
+		 * Success: { success: true, id, domain, verified: false }
+		 */
 		.post('/custom/add', async ({ body, auth }) => {
 			try {
 				const { domain } = body as { domain: string };
@@ -266,6 +289,10 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				throw new Error(`Failed to add domain: ${err instanceof Error ? err.message : 'Unknown error'}`);
 			}
 		})
+		/**
+		 * POST /api/domain/custom/verify
+		 * Success: { success: true, verified, error, found }
+		 */
 		.post('/custom/verify', async ({ body, auth }) => {
 			try {
 				const { id } = body as { id: string };
@@ -294,6 +321,10 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				throw new Error(`Failed to verify domain: ${err instanceof Error ? err.message : 'Unknown error'}`);
 			}
 		})
+		/**
+		 * DELETE /api/domain/custom/:id
+		 * Success: { success: true }
+		 */
 		.delete('/custom/:id', async ({ params, auth }) => {
 			try {
 				const { id } = params;
@@ -317,6 +348,10 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				throw new Error(`Failed to delete domain: ${err instanceof Error ? err.message : 'Unknown error'}`);
 			}
 		})
+		/**
+		 * POST /api/domain/wisp/map-site
+		 * Success: { success: true }
+		 */
 		.post('/wisp/map-site', async ({ body, auth }) => {
 			try {
 				const { domain, siteRkey } = body as { domain: string; siteRkey: string | null };
@@ -334,6 +369,10 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				throw new Error(`Failed to map site: ${err instanceof Error ? err.message : 'Unknown error'}`);
 			}
 		})
+		/**
+		 * DELETE /api/domain/wisp/:domain
+		 * Success: { success: true }
+		 */
 		.delete('/wisp/:domain', async ({ params, auth }) => {
 			try {
 				const { domain } = params;
@@ -373,6 +412,10 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				throw new Error(`Failed to delete domain: ${err instanceof Error ? err.message : 'Unknown error'}`);
 			}
 		})
+		/**
+		 * POST /api/domain/custom/:id/map-site
+		 * Success: { success: true }
+		 */
 		.post('/custom/:id/map-site', async ({ params, body, auth }) => {
 			try {
 				const { id } = params;

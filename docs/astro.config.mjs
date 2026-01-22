@@ -30,6 +30,10 @@ export default defineConfig({
 						{ label: 'Redirects & Rewrites', slug: 'redirects' },
 					],
 				},
+				{
+					label: 'Reference',
+					autogenerate: { directory: 'reference' },
+				},
 			],
 			customCss: ['./src/styles/custom.css'],
 		}),

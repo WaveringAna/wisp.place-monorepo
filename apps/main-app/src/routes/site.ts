@@ -20,6 +20,11 @@ export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 			const auth = await requireAuth(client, cookie)
 			return { auth }
 		})
+		/**
+		 * DELETE /api/site/:rkey
+		 * Success: { success: true, message }
+		 * Failure: { success: false, error }
+		 */
 		.delete('/:rkey', async ({ params, auth }) => {
 			const { rkey } = params
 
@@ -120,6 +125,11 @@ export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				}
 			}
 		})
+		/**
+		 * GET /api/site/:rkey/settings
+		 * Success: place.wisp.settings record or default settings object.
+		 * Failure: { success: false, error }
+		 */
 		.get('/:rkey/settings', async ({ params, auth }) => {
 			const { rkey } = params
 
@@ -171,6 +181,11 @@ export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				}
 			}
 		})
+		/**
+		 * POST /api/site/:rkey/settings
+		 * Success: { success: true, uri, cid }
+		 * Failure: { success: false, error }
+		 */
 		.post('/:rkey/settings', async ({ params, body, auth }) => {
 			const { rkey } = params
 
