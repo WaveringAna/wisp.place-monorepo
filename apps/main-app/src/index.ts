@@ -132,229 +132,287 @@ export const app = new Elysia({
 
 		set.headers['Content-Type'] = 'text/html; charset=utf-8'
 
-		return `<!doctype html>
+		return `<!DOCTYPE html>
 <html lang="en">
-    <head>
-        <meta charset="UTF-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>wisp.place</title>
-        <meta name="description" content="Host static websites directly in your AT Protocol account. Keep full ownership and control with fast CDN distribution. Built on Bluesky's decentralized network." />
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>wisp.place</title>
+    <meta name="description" content="Host static websites directly in your AT Protocol account. Keep full ownership and control with fast CDN distribution. Built on Bluesky's decentralized network." />
 
-        <!-- Open Graph / Facebook -->
-        <meta property="og:type" content="website" />
-        <meta property="og:url" content="https://wisp.place/" />
-        <meta property="og:title" content="wisp.place - Decentralized Static Site Hosting" />
-        <meta property="og:description" content="Host static websites directly in your AT Protocol account. Keep full ownership and control with fast CDN distribution." />
-        <meta property="og:site_name" content="wisp.place" />
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://wisp.place/" />
+    <meta property="og:title" content="wisp.place - Decentralized Static Site Hosting" />
+    <meta property="og:description" content="Host static websites directly in your AT Protocol account. Keep full ownership and control with fast CDN distribution." />
+    <meta property="og:site_name" content="wisp.place" />
 
-        <!-- Twitter -->
-        <meta name="twitter:card" content="summary_large_image" />
-        <meta name="twitter:url" content="https://wisp.place/" />
-        <meta name="twitter:title" content="wisp.place - Decentralized Static Site Hosting" />
-        <meta name="twitter:description" content="Host static websites directly in your AT Protocol account. Keep full ownership and control with fast CDN distribution." />
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:url" content="https://wisp.place/" />
+    <meta name="twitter:title" content="wisp.place - Decentralized Static Site Hosting" />
+    <meta name="twitter:description" content="Host static websites directly in your AT Protocol account. Keep full ownership and control with fast CDN distribution." />
 
-        <!-- Theme -->
-        <meta name="theme-color" content="#7c3aed" />
+    <!-- Theme -->
+    <meta name="theme-color" content="#000000" />
 
-        <link rel="icon" type="image/x-icon" href="./favicon.ico">
-        <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32x32.png">
-        <link rel="icon" type="image/png" sizes="16x16" href="./favicon-16x16.png">
-        <link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png">
-        <link rel="manifest" href="./site.webmanifest">
+    <link rel="icon" type="image/x-icon" href="./favicon.ico">
+    <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="./favicon-16x16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png">
+    <link rel="manifest" href="./site.webmanifest">
 
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-        <link
-            href="https://fonts.googleapis.com/css2?family=Fira+Mono:wght@400;500;700&display=swap"
-            rel="stylesheet"
-        />
-        <style>
-            * {
-                margin: 0;
-                padding: 0;
-                box-sizing: border-box;
-            }
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg: #fafafa;
+            --text: #000;
+            --text-muted: #666;
+            --text-subtle: #999;
+            --border: #ddd;
+            --cta-bg: #000;
+            --cta-text: #fff;
+            --cta-hover-bg: #fff;
+            --cta-hover-text: #000;
+            --code-bg: #000;
+            --code-text: #0f0;
+            --link: #000;
+        }
+
+        @media (prefers-color-scheme: dark) {
             :root {
-                --bg: #ffffff;
-                --text: #1a1a1a;
-                --text-muted: #666;
-                --link: #0066cc;
-                --link-hover: #0052a3;
-                --terminal-bg: #1a1a1a;
-                --terminal-text: #e0e0e0;
-                --terminal-cyan: #5fdfdf;
+                --bg: #0a0a0a;
+                --text: #fafafa;
+                --text-muted: #999;
+                --text-subtle: #666;
+                --border: #333;
+                --cta-bg: #fff;
+                --cta-text: #000;
+                --cta-hover-bg: #0a0a0a;
+                --cta-hover-text: #fff;
+                --code-bg: #111;
+                --code-text: #0f0;
+                --link: #fff;
             }
+        }
 
-            @media (prefers-color-scheme: dark) {
-                :root {
-                    --bg: #121212;
-                    --text: #e0e0e0;
-                    --text-muted: #888;
-                    --link: #5fdfdf;
-                    --link-hover: #7fffff;
-                    --terminal-bg: #0a0a0a;
-                    --terminal-text: #e0e0e0;
-                }
-            }
+        body {
+            font-family: "Fira Mono", monospace;
+            font-weight: 400;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            padding-top: 6rem;
+        }
 
-            body {
-                font-family: "Fira Mono", monospace;
-                font-weight: 400;
-                font-style: normal;
-                font-size: 18px;
-                line-height: 1.6;
-                padding: 60px 40px;
-                max-width: 80%;
-                color: var(--text);
-                background: var(--bg);
-                transition:
-                    background 0.2s,
-                    color 0.2s;
-            }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 0 2rem;
+            width: 100%;
+        }
 
+        main {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .hero {
+            text-align: center;
+            padding: 4rem 0;
+        }
+
+        h1 {
+            font-size: 5rem;
+            font-weight: 700;
+            margin-bottom: 4rem;
+            letter-spacing: -0.02em;
+            color: #4a4a4a;
+            text-shadow:
+                1px 1px 0 #fff,
+                -1px -1px 0 #2a2a2a,
+                2px 2px 3px rgba(0, 0, 0, 0.3);
+        }
+
+        @media (prefers-color-scheme: dark) {
             h1 {
-                font-size: 1.1em;
-                font-weight: normal;
-                margin-bottom: 2em;
+                color: #888;
+                text-shadow:
+                    1px 1px 0 #222,
+                    -1px -1px 0 #000,
+                    2px 2px 3px rgba(0, 0, 0, 0.5);
+            }
+        }
+
+        h1::after {
+            content: '_';
+            animation: blink 1s infinite;
+        }
+
+        @keyframes blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0; }
+        }
+
+        .cta {
+            display: inline-block;
+            background: var(--cta-bg);
+            color: var(--cta-text);
+            padding: 2rem 4rem;
+            font-size: 1.5rem;
+            text-decoration: none;
+            border: 3px solid var(--cta-bg);
+            transition: all 0.1s;
+            font-weight: 700;
+            margin-bottom: 3rem;
+        }
+
+        .cta:hover {
+            background: var(--cta-hover-bg);
+            color: var(--cta-hover-text);
+            border-color: var(--cta-bg);
+        }
+
+        .tagline {
+            font-size: 1.2rem;
+            color: var(--text-muted);
+            margin-bottom: 6rem;
+        }
+
+        .secondary {
+            border-top: 1px solid var(--border);
+            padding-top: 3rem;
+            margin-top: 4rem;
+        }
+
+        .secondary h2 {
+            font-size: 1rem;
+            margin-bottom: 1.5rem;
+            font-weight: 700;
+            text-transform: lowercase;
+        }
+
+        .code-block {
+            background: var(--code-bg);
+            color: var(--code-text);
+            padding: 1.5rem;
+            margin: 1rem 0;
+            font-size: 0.9rem;
+            overflow-x: auto;
+        }
+
+        .code-block code {
+            font-family: "Fira Mono", monospace;
+        }
+
+        .secondary p {
+            color: var(--text-muted);
+            margin-bottom: 1rem;
+            font-size: 0.95rem;
+        }
+
+        .secondary a {
+            color: var(--link);
+            text-decoration: none;
+            border-bottom: 1px solid var(--link);
+        }
+
+        .secondary a:hover {
+            border-bottom: 2px solid var(--link);
+        }
+
+        footer {
+            border-top: 1px solid var(--border);
+            padding: 3rem 0;
+            text-align: center;
+            margin-top: 6rem;
+        }
+
+        .quote {
+            font-size: 0.85rem;
+            color: var(--text-subtle);
+            font-style: italic;
+        }
+
+        .links {
+            margin-top: 2rem;
+            font-size: 0.85rem;
+        }
+
+        .links a {
+            color: var(--text-muted);
+            text-decoration: none;
+            margin: 0 1rem;
+        }
+
+        .links a:hover {
+            color: var(--text);
+        }
+
+        @media (max-width: 768px) {
+            h1 {
+                font-size: 3rem;
             }
 
-            .cursor {
-                display: inline-block;
-                width: 2px;
-                height: 1.1em;
-                background: var(--text);
-                margin-left: 2px;
-                vertical-align: text-bottom;
-                animation: blink 1s step-end infinite;
+            .cta {
+                padding: 1.5rem 3rem;
+                font-size: 1.2rem;
             }
 
-            @keyframes blink {
-                0%,
-                100% {
-                    opacity: 1;
-                }
-                50% {
-                    opacity: 0;
-                }
+            .tagline {
+                font-size: 1rem;
             }
+        }
+    </style>
+</head>
+<body>
+    <main>
+        <div class="container">
+            <div class="hero">
+                <h1>wisp.place</h1>
 
-            p {
-                margin-bottom: 0.3em;
-            }
+                <a href="${atprotoLoginUrl}" class="cta">SIGN IN WITH AT PROTOCOL</a>
 
-            section {
-                margin-bottom: 2.5em;
-            }
+                <p class="tagline">Drop files. They're live.</p>
 
-            a {
-                color: var(--link);
-                text-decoration: underline;
-                text-underline-offset: 2px;
-            }
-
-            a:hover {
-                color: var(--link-hover);
-            }
-
-            .click-hint {
-                color: var(--link);
-                margin-left: 0.5em;
-                display: inline-flex;
-                align-items: center;
-            }
-
-            .click-hint .arrow {
-                display: inline-block;
-                width: 1.2em;
-                text-align: center;
-                animation: nudge 1.2s ease-in-out infinite;
-            }
-
-            @keyframes nudge {
-                0%,
-                100% {
-                    transform: translateX(0);
-                }
-                50% {
-                    transform: translateX(-4px);
-                }
-            }
-
-            .terminal-section {
-                margin-top: 2em;
-            }
-
-            .terminal-label {
-                margin-bottom: 0.8em;
-            }
-
-            .cmd {
-                font-family:
-                    ui-monospace, "SF Mono", "Cascadia Code", "Source Code Pro",
-                    Menlo, Consolas, monospace;
-                font-size: 0.85em;
-                background: var(--terminal-bg);
-                color: var(--terminal-text);
-                border-radius: 4px;
-                padding: 12px 16px;
-                display: table;
-                white-space: nowrap;
-                margin-bottom: 0.5em;
-            }
-
-            .cmd .highlight {
-                color: var(--terminal-cyan);
-            }
-
-            .hosting-options {
-                margin-top: 2.5em;
-            }
-
-            .hosting-options p {
-                margin-bottom: 0.2em;
-            }
-        </style>
-    </head>
-    <body>
-        <h1>wisp.place<span class="cursor"></span></h1>
-
-        <section>
-            <p>the easiest way to get static html going</p>
-            <p>
-                just drag n' drop into the dashboard with your
-                <a href="${atprotoLoginUrl}">AT Protocol account</a>.
-                <span class="click-hint"
-                    ><span class="arrow">←</span> click me!</span
-                >
-            </p>
-        </section>
-
-        <section class="terminal-section">
-            <p class="terminal-label">are you a terminal nerd?</p>
-            <code class="cmd"
-                >curl
-                <span class="highlight"
-                    >https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-x86_64-linux</span
-                >
-                -o wisp-cli</code
-            >
-            <code class="cmd"
-                >wisp-cli
-                <span class="highlight">alice.bsky.social</span> --site
-                MyBlog</code
-            >
-        </section>
-
-        <div class="hosting-options">
-            <p>host on our infrastructure for free</p>
-            <p>
-                or use wisp-cli to host on your own infra with seamless
-                deployments
-            </p>
-            <p>need docs? <a href="https://docs.wisp.place">docs.wisp.place</a></p>
+                <div class="secondary">
+                    <h2>are you a terminal nerd?</h2>
+                    <div class="code-block">
+                        <code>curl https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-x86_64-linux -o wisp-cli</code>
+                    </div>
+                    <div class="code-block">
+                        <code>wisp-cli alice.bsky.social --site MyBlog</code>
+                    </div>
+                    <p>host on our infrastructure for free<br>
+                    or use wisp-cli to host on your own infra with seamless deployments</p>
+                    <p>need docs? <a href="https://docs.wisp.place">docs.wisp.place</a></p>
+                </div>
+            </div>
         </div>
-    </body>
+    </main>
+
+    <footer>
+        <div class="container">
+            <p class="quote">"The easiest way to get static HTML going."</p>
+            <div class="links">
+                <a href="https://docs.wisp.place">docs</a>
+            </div>
+        </div>
+    </footer>
+</body>
 </html>`
 	})
 	.use(authRoutes(client, cookieSecret))
