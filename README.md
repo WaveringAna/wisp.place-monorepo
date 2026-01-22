@@ -42,7 +42,20 @@ Your site appears at `https://sites.wisp.place/{your-did}/{site-name}` or your c
 # bun install will install packages across the monorepo
 bun install
 bun run dev
+```
+.env file for local dev
 
+```env
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/wisp
+
+NODE_ENV=development
+DOMAIN=https://wisp.place
+CLIENT_NAME=Wisp.Place
+LOCAL_DEV=true
+```
+
+
+```bash
 # Hosting service
 bun run hosting:dev
 
