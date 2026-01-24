@@ -427,7 +427,7 @@ export const app = new Elysia({
 			prefix: '/'
 		})
 	)
-	.get('/client-metadata.json', () => {
+	.get('/oauth-client-metadata.json', () => {
 		return createClientMetadata(config)
 	})
 	.get('/jwks.json', async ({ set }) => {

@@ -228,7 +228,7 @@ Wisp.place uses AT Protocol OAuth. Your instance needs to be publicly accessible
 
 Required endpoints:
 - `/.well-known/atproto-did` - Returns your DID for lexicon resolution
-- `/client-metadata.json` - OAuth client metadata
+- `/oauth-client-metadata.json` - OAuth client metadata
 - `/jwks.json` - OAuth signing keys
 
 These are automatically served by the backend.
