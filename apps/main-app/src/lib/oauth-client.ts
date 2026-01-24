@@ -134,7 +134,7 @@ export const createClientMetadata = (config: { domain: `http://${string}` | `htt
 
     // Production client with private_key_jwt
     return {
-        client_id: `${config.domain}/client-metadata.json`,
+        client_id: `${config.domain}/oauth-client-metadata.json`,
         client_name: config.clientName,
         client_uri: `https://wisp.place`,
         logo_uri: `${config.domain}/logo.png`,
