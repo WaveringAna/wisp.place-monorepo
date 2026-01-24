@@ -1,5 +1,5 @@
 ---
-title: Wisp CLI 0.4.1 (alpha)
+title: Wisp CLI 0.5.0 (alpha)
 description: Command-line tool for deploying static sites to the AT Protocol
 ---
 
@@ -19,7 +19,7 @@ The Wisp CLI is a command-line tool for deploying static websites directly to yo
 
 <div class="downloads">
 
-<h2>Download v0.4.1</h2>
+<h2>Download v0.5.0</h2>
 
 <a href="https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-aarch64-darwin" class="download-link" download="">
 
@@ -48,11 +48,11 @@ The Wisp CLI is a command-line tool for deploying static websites directly to yo
 <h3 style="margin-top: 1.5rem; margin-bottom: 0.5rem;">SHA-1 Checksums</h3>
 
 <pre style="font-size: 0.75rem; padding: 1rem;" class="language-bash" tabindex="0"><code class="language-bash">
-69de880e160a2f26e3c26b7c28030457913754dc  wisp-cli-aarch64-darwin
+912f8f99c2b55ca6ad75e0a89903688bd2c1cb4b  wisp-cli-aarch64-darwin
 
-026189f2c10077a2be4705102e169e66cb207f84  wisp-cli-aarch64-linux
+ef1992d8850f8fef1d719e4e8fab5431475c352e  wisp-cli-aarch64-linux
 
-4777cff07558906717402484a3313359880eae96  wisp-cli-x86_64-linux
+3018dde8fec495abcae044079564ced93cdeb4f8  wisp-cli-x86_64-linux
 
 d6bc789d7fd7c787e5520eb476cee70c97ccb3ce  wisp-cli-x86_64-windows.exe
 </code></pre>
@@ -117,11 +117,11 @@ steps:
 
 ```bash
 # Download and make executable
-curl -O https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-macos-arm64
-chmod +x wisp-cli-macos-arm64
+curl -O https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-aarch64-darwin
+chmod +x wisp-cli-aarch64-darwin
 
 # Deploy your site
-./wisp-cli-macos-arm64 deploy your-handle.bsky.social \
+./wisp-cli-aarch64-darwin deploy your-handle.bsky.social \
   --path ./dist \
   --site my-site
 ```
