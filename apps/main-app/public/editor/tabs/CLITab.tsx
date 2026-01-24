@@ -71,7 +71,7 @@ export function CLITab() {
                 </a>
                 <div className="text-xs text-muted-foreground">
                   <span className="font-mono">
-                    SHA-1: 69de880e160a2f26e3c26b7c28030457913754dc
+                    SHA-1: 912f8f99c2b55ca6ad75e0a89903688bd2c1cb4b
                   </span>
                 </div>
               </div>
@@ -87,7 +87,7 @@ export function CLITab() {
                 </a>
                 <div className="text-xs text-muted-foreground">
                   <span className="font-mono">
-                    SHA-1: 026189f2c10077a2be4705102e169e66cb207f84
+                    SHA-1: ef1992d8850f8fef1d719e4e8fab5431475c352e
                   </span>
                 </div>
               </div>
@@ -103,7 +103,7 @@ export function CLITab() {
                 </a>
                 <div className="text-xs text-muted-foreground">
                   <span className="font-mono">
-                    SHA-1: 4777cff07558906717402484a3313359880eae96
+                    SHA-1: 3018dde8fec495abcae044079564ced93cdeb4f8
                   </span>
                 </div>
               </div>
