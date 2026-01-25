@@ -17,7 +17,7 @@ export function CLITab() {
           <div className="flex items-center gap-2 mb-2">
             <CardTitle>Wisp CLI Tool</CardTitle>
             <Badge variant="secondary" className="text-xs">
-              v0.4.1
+              v0.5.0
             </Badge>
             <Badge variant="outline" className="text-xs">
               Alpha
@@ -55,8 +55,26 @@ export function CLITab() {
           </div>
 
           <div className="space-y-3">
-            <h3 className="text-sm font-semibold">Download v0.4.1</h3>
+            <h3 className="text-sm font-semibold">Download v0.5.0</h3>
             <div className="grid gap-2">
+              <div className="p-3 bg-muted/50 hover:bg-muted rounded-lg transition-colors border border-border">
+                <a
+                  href="https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-darwin-universal"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center justify-between mb-2"
+                >
+                  <span className="font-mono text-sm">
+                    macOS (Universal)
+                  </span>
+                  <ExternalLink className="w-4 h-4 text-muted-foreground" />
+                </a>
+                <div className="text-xs text-muted-foreground">
+                  <span className="font-mono">
+                    SHA-1: 7d0cc968d2a130158c3b204d9a15bcc29b8af252
+                  </span>
+                </div>
+              </div>
               <div className="p-3 bg-muted/50 hover:bg-muted rounded-lg transition-colors border border-border">
                 <a
                   href="https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-aarch64-darwin"
@@ -72,6 +90,24 @@ export function CLITab() {
                 <div className="text-xs text-muted-foreground">
                   <span className="font-mono">
                     SHA-1: 912f8f99c2b55ca6ad75e0a89903688bd2c1cb4b
+                  </span>
+                </div>
+              </div>
+              <div className="p-3 bg-muted/50 hover:bg-muted rounded-lg transition-colors border border-border">
+                <a
+                  href="https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-darwin-x86_64"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center justify-between mb-2"
+                >
+                  <span className="font-mono text-sm">
+                    macOS (Intel)
+                  </span>
+                  <ExternalLink className="w-4 h-4 text-muted-foreground" />
+                </a>
+                <div className="text-xs text-muted-foreground">
+                  <span className="font-mono">
+                    SHA-1: 40d26d4a9c058e42e7911a195c3e078e8a4b5e82
                   </span>
                 </div>
               </div>
