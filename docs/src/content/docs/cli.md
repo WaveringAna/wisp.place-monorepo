@@ -21,9 +21,21 @@ The Wisp CLI is a command-line tool for deploying static websites directly to yo
 
 <h2>Download v0.5.0</h2>
 
+<a href="https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-darwin-universal" class="download-link" download="">
+
+<span class="platform">macOS (Universal):</span> wisp-cli-darwin-universal
+
+</a>
+
 <a href="https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-aarch64-darwin" class="download-link" download="">
 
 <span class="platform">macOS (Apple Silicon):</span> wisp-cli-aarch64-darwin
+
+</a>
+
+<a href="https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-darwin-x86_64" class="download-link" download="">
+
+<span class="platform">macOS (Intel):</span> wisp-cli-darwin-x86_64
 
 </a>
 
@@ -48,7 +60,11 @@ The Wisp CLI is a command-line tool for deploying static websites directly to yo
 <h3 style="margin-top: 1.5rem; margin-bottom: 0.5rem;">SHA-1 Checksums</h3>
 
 <pre style="font-size: 0.75rem; padding: 1rem;" class="language-bash" tabindex="0"><code class="language-bash">
+7d0cc968d2a130158c3b204d9a15bcc29b8af252  wisp-cli-darwin-universal
+
 912f8f99c2b55ca6ad75e0a89903688bd2c1cb4b  wisp-cli-aarch64-darwin
+
+40d26d4a9c058e42e7911a195c3e078e8a4b5e82  wisp-cli-darwin-x86_64
 
 ef1992d8850f8fef1d719e4e8fab5431475c352e  wisp-cli-aarch64-linux
 
