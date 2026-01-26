@@ -35,6 +35,8 @@
     "esbuild"
   ],
   "devDependencies": {
+    "@oven/bun-darwin-aarch64": "^1.3.6",
+    "@oven/bun-linux-x64": "^1.3.6",
     "@types/bun": "^1.3.5"
   }
 }

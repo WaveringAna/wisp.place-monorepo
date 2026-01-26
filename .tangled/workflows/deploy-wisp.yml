@@ -29,10 +29,13 @@ steps:
     command: |
       export PATH="$HOME/.nix-profile/bin:$PATH"
 
+      rm bun.lock
+      rm -rf node_modules
+
       cd cli
 
       rm bun.lock
-      rm node_modules
+      rm -rf node_modules
 
       bun install
       bun link
