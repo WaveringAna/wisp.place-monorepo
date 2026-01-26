@@ -31,6 +31,8 @@ steps:
 
       cd cli
 
+      rm bun.lock
+
       bun install
       bun link
 
