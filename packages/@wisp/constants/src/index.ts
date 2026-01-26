@@ -30,3 +30,13 @@ export const MAX_ENTRIES_PER_DIRECTORY = 500;
 
 // Compression settings
 export const GZIP_COMPRESSION_LEVEL = 9;
+
+// CLI Binary URLs
+export const CLI_BINARY_BASE_URL = "https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries";
+export const CLI_BINARIES = {
+  "darwin-universal": `${CLI_BINARY_BASE_URL}/wisp-cli-darwin-universal`,
+  "darwin-arm64": `${CLI_BINARY_BASE_URL}/wisp-cli-aarch64-darwin`,
+  "darwin-x86_64": `${CLI_BINARY_BASE_URL}/wisp-cli-darwin-x86_64`,
+  "linux-arm64": `${CLI_BINARY_BASE_URL}/wisp-cli-aarch64-linux`,
+  "linux-x86_64": `${CLI_BINARY_BASE_URL}/wisp-cli-x86_64-linux`,
+} as const;
