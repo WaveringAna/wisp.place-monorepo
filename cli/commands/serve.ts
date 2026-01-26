@@ -1,9 +1,9 @@
-import { AtpAgent } from '@atproto/api';
 import { IdResolver } from '@atproto/identity';
 import { Firehose } from '@atproto/sync';
 import { Hono } from 'hono';
 import { serve as honoNodeServe } from '@hono/node-server';
 import type { Record as SettingsRecord } from '@wisp/lexicons/types/place/wisp/settings';
+import { resolveDid, getPdsForDid } from '@wisp/atproto-utils';
 import { existsSync, readFileSync, statSync, readdirSync } from 'fs';
 import { join, extname } from 'path';
 import { lookup } from 'mime-types';
@@ -26,39 +26,6 @@ interface SiteState {
   siteDir: string;
   settings: SettingsRecord | null;
   redirectRules: RedirectRule[];
-}
-
-async function resolveDid(identifier: string): Promise<string | null> {
-  if (identifier.startsWith('did:')) {
-    return identifier;
-  }
-  const agent = new AtpAgent({ service: 'https://public.api.bsky.app' });
-  const response = await agent.resolveHandle({ handle: identifier });
-  return response.data.did;
-}
-
-async function getPdsForDid(did: string): Promise<string | null> {
-  let doc: { service?: Array<{ id: string; serviceEndpoint?: string }> };
-
-  if (did.startsWith('did:plc:')) {
-    const res = await fetch(`https://plc.directory/${encodeURIComponent(did)}`);
-    doc = await res.json() as typeof doc;
-  } else if (did.startsWith('did:web:')) {
-    const didParts = did.split(':');
-    const domain = didParts[2];
-    const pathParts = didParts.slice(3);
-    const url = pathParts.length === 0
-      ? `https://${domain}/.well-known/did.json`
-      : `https://${domain}/${pathParts.join('/')}/did.json`;
-    const res = await fetch(url);
-    doc = await res.json() as typeof doc;
-  } else {
-    return null;
-  }
-
-  const services = doc.service || [];
-  const pdsService = services.find((s) => s.id === '#atproto_pds');
-  return pdsService?.serviceEndpoint || null;
 }
 
 async function fetchSettings(pdsEndpoint: string, did: string, rkey: string): Promise<SettingsRecord | null> {
