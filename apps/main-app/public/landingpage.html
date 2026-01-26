@@ -250,6 +250,11 @@
             border-radius: 4px;
         }
 
+        .hero-cmd code .prompt {
+            color: var(--text-muted);
+            user-select: none;
+        }
+
         /* How it works */
         .how-it-works {
             padding: 6rem 2rem;
@@ -667,7 +672,7 @@
                     <a href="{{ATPROTO_LOGIN_URL}}" class="cta-primary">Start Deploying</a>
                     <a href="https://docs.wisp.place" target="_blank" class="cta-secondary">Read Docs</a>
                 </div>
-                <p class="hero-cmd">or <code>$ npx create-wisp</code></p>
+                <p class="hero-cmd">or <code><span class="prompt">$</span> npx create-wisp</code></p>
             </div>
         </div>
     </section>
