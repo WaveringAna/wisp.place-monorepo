@@ -24,11 +24,11 @@
     }
   },
   "dependencies": {
-    "@atproto/api": "^0.14.1",
+    "@atproto/api": "^0.18.17",
     "@wisp/lexicons": "workspace:*",
     "multiformats": "^13.3.1"
   },
   "devDependencies": {
-    "@atproto/lexicon": "^0.5.2"
+    "@atproto/lexicon": "^0.6.1"
   }
 }

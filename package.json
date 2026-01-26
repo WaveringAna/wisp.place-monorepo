@@ -5,7 +5,8 @@
   "workspaces": [
     "packages/@wisp/*",
     "apps/main-app",
-    "apps/hosting-service"
+    "apps/hosting-service",
+    "cli"
   ],
   "dependencies": {
     "@tailwindcss/cli": "^4.1.17",

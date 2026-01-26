@@ -1,4 +1,4 @@
-import type { BlobRef } from "@atproto/lexicon";
+import type { BlobRef } from "@atproto/api";
 import type { Directory, File } from "@wisp/lexicons/types/place/wisp/fs";
 import { CID } from 'multiformats/cid';
 import { sha256 } from 'multiformats/hashes/sha2';
