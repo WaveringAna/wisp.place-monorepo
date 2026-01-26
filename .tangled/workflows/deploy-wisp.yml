@@ -14,10 +14,7 @@ clone:
 dependencies:
   nixpkgs:
     - git
-    - gcc
   github:NixOS/nixpkgs/nixpkgs-unstable:
-    - rustc
-    - cargo
     - bun
 environment:
   WISP_HANDLE: wisp.place
@@ -31,19 +28,8 @@ steps:
     command: |
       cd cli
 
-      export PATH="$HOME/.nix-profile/bin:$PATH"
-
-      nix-channel --add https://nixos.org/channels/nixpkgs-unstable nixpkgs
-
-      nix-channel --update
-
-      nix-shell -p pkg-config openssl --run '
-        export PKG_CONFIG_PATH="$(pkg-config --variable pc_path pkg-config)"
-        export OPENSSL_DIR="$(nix-build --no-out-link "<nixpkgs>" -A openssl.dev)"
-        export OPENSSL_NO_VENDOR=1
-        export OPENSSL_LIB_DIR="$(nix-build --no-out-link "<nixpkgs>" -A openssl.out)/lib"
-        cargo build --release
-      '
+      bun install
+      bun link
 
       cd ..
   - name: Build docs
@@ -54,8 +40,7 @@ steps:
       bun run build
   - name: Deploy to Wisp.place
     command: |
-      ./cli/target/release/wisp-cli \
-        "$WISP_HANDLE" \
+      wispctl "$WISP_HANDLE" \
         --path "$SITE_PATH" \
         --site "$SITE_NAME" \
         --password "$WISP_APP_PASSWORD"
