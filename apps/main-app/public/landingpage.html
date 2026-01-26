@@ -3,21 +3,21 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>wisp.place</title>
-    <meta name="description" content="Host static websites directly in your AT Protocol account. Keep full ownership and control with fast CDN distribution. Built on Bluesky's decentralized network." />
+    <title>wisp.place - Static Hosting on AT Protocol</title>
+    <meta name="description" content="Deploy static sites on AT Protocol. Your site lives in your PDS. Global CDN included. Push updates instantly. Forever free." />
 
     <!-- Open Graph / Facebook -->
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://wisp.place/" />
-    <meta property="og:title" content="wisp.place - Decentralized Static Site Hosting" />
-    <meta property="og:description" content="Host static websites directly in your AT Protocol account. Keep full ownership and control with fast CDN distribution." />
+    <meta property="og:title" content="wisp.place - Static Hosting on AT Protocol" />
+    <meta property="og:description" content="Deploy static sites on AT Protocol. Your site lives in your PDS. Global CDN included. Push updates instantly. Forever free." />
     <meta property="og:site_name" content="wisp.place" />
 
     <!-- Twitter -->
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:url" content="https://wisp.place/" />
-    <meta name="twitter:title" content="wisp.place - Decentralized Static Site Hosting" />
-    <meta name="twitter:description" content="Host static websites directly in your AT Protocol account. Keep full ownership and control with fast CDN distribution." />
+    <meta name="twitter:title" content="wisp.place - Static Hosting on AT Protocol" />
+    <meta name="twitter:description" content="Deploy static sites on AT Protocol. Your site lives in your PDS. Global CDN included. Push updates instantly. Forever free." />
 
     <!-- Theme -->
     <meta name="theme-color" content="#000000" />
@@ -30,7 +30,7 @@
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Fira+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 
     <style>
         * {
@@ -40,268 +40,795 @@
         }
 
         :root {
-            --bg: #fafafa;
-            --text: #000;
-            --text-muted: #666;
-            --text-subtle: #999;
-            --border: #ddd;
-            --cta-bg: #000;
-            --cta-text: #fff;
-            --cta-hover-bg: #fff;
-            --cta-hover-text: #000;
-            --code-bg: #000;
-            --code-text: #0f0;
-            --link: #000;
+            --bg: oklch(0.92 0.012 35);
+            --bg-alt: oklch(0.88 0.01 35);
+            --text: oklch(0.15 0.015 30);
+            --text-muted: oklch(0.35 0.02 30);
+            --text-subtle: oklch(0.50 0.02 30);
+            --border: oklch(0.30 0.025 35);
+            --border-light: oklch(0.65 0.02 30);
+            --accent: oklch(0.65 0.18 345);
+            --accent-muted: oklch(0.75 0.14 345);
+            --cta-bg: oklch(0.30 0.025 35);
+            --cta-text: oklch(0.96 0.008 35);
+            --code-bg: oklch(0.95 0.008 35);
+            --success: oklch(0.65 0.20 145);
         }
 
         @media (prefers-color-scheme: dark) {
             :root {
-                --bg: #0a0a0a;
-                --text: #fafafa;
-                --text-muted: #999;
-                --text-subtle: #666;
-                --border: #333;
-                --cta-bg: #fff;
-                --cta-text: #000;
-                --cta-hover-bg: #0a0a0a;
-                --cta-hover-text: #fff;
-                --code-bg: #111;
-                --code-text: #0f0;
-                --link: #fff;
+                --bg: oklch(0.23 0.015 285);
+                --bg-alt: oklch(0.20 0.015 285);
+                --text: oklch(0.90 0.005 285);
+                --text-muted: oklch(0.72 0.01 285);
+                --text-subtle: oklch(0.55 0.01 285);
+                --border: oklch(0.90 0.005 285);
+                --border-light: oklch(0.38 0.02 285);
+                --accent: oklch(0.85 0.08 5);
+                --accent-muted: oklch(0.70 0.10 295);
+                --cta-bg: oklch(0.70 0.10 295);
+                --cta-text: oklch(0.23 0.015 285);
+                --code-bg: oklch(0.28 0.015 285);
             }
         }
 
+        html {
+            scroll-behavior: smooth;
+        }
+
         body {
-            font-family: "Fira Mono", monospace;
-            font-weight: 400;
+            font-family: "JetBrains Mono", monospace;
             background: var(--bg);
             color: var(--text);
             min-height: 100vh;
             display: flex;
             flex-direction: column;
-            padding-top: 6rem;
+            line-height: 1.6;
         }
 
-        .container {
-            max-width: 800px;
+        /* Header */
+        header {
+            position: sticky;
+            top: 0;
+            background: var(--bg);
+            border-bottom: 1px solid var(--border-light);
+            padding: 1rem 2rem;
+            z-index: 100;
+        }
+
+        .header-inner {
+            max-width: 1100px;
             margin: 0 auto;
-            padding: 0 2rem;
-            width: 100%;
-        }
-
-        main {
-            flex: 1;
             display: flex;
+            justify-content: space-between;
             align-items: center;
-            justify-content: center;
         }
 
-        .hero {
-            text-align: center;
-            padding: 4rem 0;
-        }
-
-        h1 {
-            font-size: 5rem;
+        .logo {
             font-weight: 700;
-            margin-bottom: 4rem;
+            font-size: 1.125rem;
+            text-decoration: none;
+            color: var(--text);
             letter-spacing: -0.02em;
-            color: #4a4a4a;
-            text-shadow:
-                1px 1px 0 #fff,
-                -1px -1px 0 #2a2a2a,
-                2px 2px 3px rgba(0, 0, 0, 0.3);
         }
 
-        @media (prefers-color-scheme: dark) {
-            h1 {
-                color: #888;
-                text-shadow:
-                    1px 1px 0 #222,
-                    -1px -1px 0 #000,
-                    2px 2px 3px rgba(0, 0, 0, 0.5);
-            }
+        nav {
+            display: flex;
+            gap: 2rem;
+            align-items: center;
         }
 
-        h1::after {
-            content: '_';
-            animation: blink 1s infinite;
-        }
-
-        @keyframes blink {
-            0%, 50% { opacity: 1; }
-            51%, 100% { opacity: 0; }
-        }
-
-        .cta {
-            display: inline-block;
-            background: var(--cta-bg);
-            color: var(--cta-text);
-            padding: 2rem 4rem;
-            font-size: 1.5rem;
-            text-decoration: none;
-            border: 3px solid var(--cta-bg);
-            transition: all 0.1s;
-            font-weight: 700;
-            margin-bottom: 3rem;
-        }
-
-        .cta:hover {
-            background: var(--cta-hover-bg);
-            color: var(--cta-hover-text);
-            border-color: var(--cta-bg);
-        }
-
-        .tagline {
-            font-size: 1.2rem;
+        nav a {
             color: var(--text-muted);
-            margin-bottom: 6rem;
-        }
-
-        .secondary {
-            border-top: 1px solid var(--border);
-            padding-top: 3rem;
-            margin-top: 4rem;
-        }
-
-        .secondary h2 {
+            text-decoration: none;
             font-size: 1rem;
-            margin-bottom: 1.5rem;
-            font-weight: 700;
-            text-transform: lowercase;
+            transition: color 0.15s;
         }
 
-        .code-block {
-            background: var(--code-bg);
-            color: var(--code-text);
-            padding: 1.5rem;
-            margin: 1rem 0;
-            font-size: 0.9rem;
-            overflow-x: auto;
-        }
-
-        .code-block code {
-            font-family: "Fira Mono", monospace;
-        }
-
-        .secondary p {
-            color: var(--text-muted);
-            margin-bottom: 1rem;
-            font-size: 0.95rem;
-        }
-
-        .secondary a {
-            color: var(--link);
-            text-decoration: none;
-            border-bottom: 1px solid var(--link);
-        }
-
-        .secondary a:hover {
-            border-bottom: 2px solid var(--link);
-        }
-
-        footer {
-            border-top: 1px solid var(--border);
-            padding: 3rem 0;
-            text-align: center;
-            margin-top: 6rem;
-        }
-
-        .quote {
-            font-size: 0.85rem;
-            color: var(--text-subtle);
-            font-style: italic;
-        }
-
-        .links {
-            margin-top: 2rem;
-            font-size: 0.85rem;
-        }
-
-        .links a {
-            color: var(--text-muted);
-            text-decoration: none;
-            margin: 0 1rem;
-        }
-
-        .links a:hover {
+        nav a:hover {
             color: var(--text);
         }
 
+        .nav-cta {
+            background: var(--cta-bg);
+            color: var(--cta-text);
+            padding: 0.5rem 1rem;
+            border: 1px solid var(--border);
+            font-weight: 600;
+            font-size: 0.875rem;
+            text-decoration: none;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            transition: all 0.15s;
+        }
+
+        .nav-cta:hover {
+            background: var(--bg);
+            color: var(--text);
+        }
+
+        /* Hero */
+        .hero {
+            padding: 8rem 2rem 6rem;
+            text-align: center;
+        }
+
+        .hero-inner {
+            max-width: 700px;
+            margin: 0 auto;
+        }
+
+        .hero-badge {
+            display: inline-block;
+            color: var(--accent);
+            font-size: 0.875rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            margin-bottom: 2rem;
+            padding: 0.5rem 1rem;
+            border: 1px solid var(--accent);
+        }
+
+        h1 {
+            font-size: clamp(2.75rem, 7vw, 4.25rem);
+            font-weight: 700;
+            line-height: 1.1;
+            margin-bottom: 1.5rem;
+            letter-spacing: -0.03em;
+            text-align: center;
+        }
+
+        .hero-desc {
+            font-size: 1.25rem;
+            color: var(--text-muted);
+            max-width: 500px;
+            margin: 0 auto 3rem;
+            line-height: 1.7;
+        }
+
+        .cta-group {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 1.5rem;
+        }
+
+        .cta-buttons {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .cta-primary {
+            background: var(--cta-bg);
+            color: var(--cta-text);
+            padding: 1rem 2rem;
+            border: 2px solid var(--border);
+            font-weight: 600;
+            font-size: 1rem;
+            text-decoration: none;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            transition: all 0.15s;
+        }
+
+        .cta-primary:hover {
+            background: var(--bg);
+            color: var(--text);
+        }
+
+        .cta-secondary {
+            background: transparent;
+            color: var(--text);
+            padding: 1rem 2rem;
+            border: 2px solid var(--border);
+            font-weight: 600;
+            font-size: 1rem;
+            text-decoration: none;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            transition: all 0.15s;
+        }
+
+        .cta-secondary:hover {
+            background: var(--cta-bg);
+            color: var(--cta-text);
+        }
+
+        .hero-cmd {
+            color: var(--text-subtle);
+            font-size: 1rem;
+        }
+
+        .hero-cmd code {
+            color: var(--text);
+            background: var(--code-bg);
+            padding: 0.5rem 0.75rem;
+            border: 1px solid var(--border-light);
+            border-radius: 4px;
+        }
+
+        /* How it works */
+        .how-it-works {
+            padding: 6rem 2rem;
+            background: var(--bg-alt);
+        }
+
+        .how-it-works-inner {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .section-label {
+            color: var(--accent);
+            font-size: 0.875rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            margin-bottom: 1rem;
+        }
+
+        .section-title {
+            font-size: 2rem;
+            font-weight: 700;
+            margin-bottom: 4rem;
+            letter-spacing: -0.02em;
+        }
+
+        .steps {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 3rem;
+        }
+
+        .step {
+            position: relative;
+        }
+
+        .step-number {
+            font-size: 3.25rem;
+            font-weight: 700;
+            color: var(--border-light);
+            margin-bottom: 1rem;
+            line-height: 1;
+        }
+
+        .step h3 {
+            font-size: 1.125rem;
+            font-weight: 600;
+            margin-bottom: 0.75rem;
+        }
+
+        .step p {
+            font-size: 1rem;
+            color: var(--text-muted);
+            line-height: 1.7;
+        }
+
+        .step code {
+            display: block;
+            margin-top: 1rem;
+            font-size: 0.875rem;
+            color: var(--accent);
+            background: var(--code-bg);
+            padding: 0.75rem;
+            border: 1px solid var(--border-light);
+            text-align: center;
+        }
+
+        /* Terminal Demo */
+        .demo {
+            padding: 6rem 2rem;
+        }
+
+        .demo-inner {
+            max-width: 700px;
+            margin: 0 auto;
+        }
+
+        .terminal {
+            border: 1px solid var(--border);
+            background: #0d1117;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+        }
+
+        .terminal-header {
+            background: #161b22;
+            padding: 0.75rem 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .terminal-dots {
+            display: flex;
+            gap: 6px;
+        }
+
+        .terminal-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .terminal-dot.red { background: #ff5f56; }
+        .terminal-dot.yellow { background: #ffbd2e; }
+        .terminal-dot.green { background: #27ca40; }
+
+        .terminal-title {
+            color: #666;
+            font-size: 0.875rem;
+            margin-left: auto;
+        }
+
+        .terminal-body {
+            padding: 1.5rem;
+            font-size: 1rem;
+            line-height: 1.8;
+            color: #c9d1d9;
+        }
+
+        .terminal-line {
+            margin-bottom: 0.25rem;
+        }
+
+        .t-prompt { color: #7c7cff; }
+        .t-cmd { color: #c9d1d9; }
+        .t-muted { color: #666; }
+        .t-success { color: #27ca40; }
+        .t-cyan { color: #58a6ff; }
+        .t-output { color: #8b949e; padding-left: 1rem; display: block; }
+
+        .terminal-spacer {
+            height: 1rem;
+        }
+
+        /* Features */
+        .features {
+            padding: 6rem 2rem;
+            background: var(--bg-alt);
+        }
+
+        .features-inner {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 1px;
+            background: var(--border-light);
+            border: 1px solid var(--border-light);
+            margin-top: 3rem;
+        }
+
+        .feature {
+            background: var(--bg);
+            padding: 2rem;
+        }
+
+        .feature-icon {
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .feature h3 {
+            font-size: 1.125rem;
+            font-weight: 600;
+            margin-bottom: 0.75rem;
+        }
+
+        .feature p {
+            font-size: 1rem;
+            color: var(--text-muted);
+            line-height: 1.7;
+        }
+
+        /* CLI Section */
+        .cli-section {
+            padding: 6rem 2rem;
+        }
+
+        .cli-inner {
+            max-width: 700px;
+            margin: 0 auto;
+            text-align: center;
+        }
+
+        .cli-section .section-title {
+            margin-bottom: 1rem;
+        }
+
+        .cli-desc {
+            color: var(--text-muted);
+            margin-bottom: 3rem;
+            font-size: 1.125rem;
+        }
+
+        .cli-features {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 1.5rem;
+            text-align: left;
+            margin-bottom: 3rem;
+        }
+
+        .cli-feature {
+            padding: 1.5rem;
+            border: 1px solid var(--border-light);
+            background: var(--bg);
+        }
+
+        .cli-feature h4 {
+            font-size: 1rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+
+        .cli-feature p {
+            font-size: 0.9375rem;
+            color: var(--text-muted);
+            line-height: 1.6;
+        }
+
+        /* Final CTA */
+        .final-cta {
+            padding: 8rem 2rem;
+            text-align: center;
+            background: var(--bg-alt);
+        }
+
+        .final-cta-inner {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        .final-cta h2 {
+            font-size: 2.25rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+            letter-spacing: -0.02em;
+        }
+
+        .final-cta p {
+            color: var(--text-muted);
+            margin-bottom: 2rem;
+        }
+
+        /* Footer */
+        footer {
+            padding: 4rem 2rem 2rem;
+            border-top: 1px solid var(--border-light);
+            margin-top: auto;
+        }
+
+        .footer-inner {
+            max-width: 1100px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 2fr repeat(3, 1fr);
+            gap: 3rem;
+        }
+
+        .footer-brand p:first-child {
+            font-weight: 700;
+            margin-bottom: 0.75rem;
+        }
+
+        .footer-brand p:last-child {
+            color: var(--text-muted);
+            font-size: 1rem;
+            line-height: 1.6;
+        }
+
+        .footer-col h4 {
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: var(--text-subtle);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 1rem;
+        }
+
+        .footer-col ul {
+            list-style: none;
+        }
+
+        .footer-col li {
+            margin-bottom: 0.5rem;
+        }
+
+        .footer-col a {
+            color: var(--text-muted);
+            text-decoration: none;
+            font-size: 1rem;
+            transition: color 0.15s;
+        }
+
+        .footer-col a:hover {
+            color: var(--text);
+        }
+
+        .footer-bottom {
+            max-width: 1100px;
+            margin: 3rem auto 0;
+            padding-top: 2rem;
+            border-top: 1px solid var(--border-light);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .footer-bottom p {
+            color: var(--text-subtle);
+            font-size: 0.875rem;
+        }
+
+        .footer-bottom nav {
+            gap: 1.5rem;
+        }
+
+        .footer-bottom a {
+            color: var(--text-subtle);
+            text-decoration: none;
+            font-size: 0.875rem;
+            transition: color 0.15s;
+        }
+
+        .footer-bottom a:hover {
+            color: var(--text);
+        }
+
+        /* Responsive */
         @media (max-width: 768px) {
-            h1 {
-                font-size: 3rem;
+            .hero {
+                padding: 5rem 1.5rem 4rem;
             }
 
-            .cta {
-                padding: 1.5rem 3rem;
-                font-size: 1.2rem;
+            nav a:not(.nav-cta) {
+                display: none;
             }
 
-            .tagline {
-                font-size: 1rem;
+            .steps {
+                grid-template-columns: 1fr;
+                gap: 2rem;
+            }
+
+            .features-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .cli-features {
+                grid-template-columns: 1fr;
+            }
+
+            .footer-inner {
+                grid-template-columns: 1fr 1fr;
+            }
+
+            .footer-brand {
+                grid-column: span 2;
+            }
+
+            .footer-bottom {
+                flex-direction: column;
+                gap: 1rem;
+                text-align: center;
+            }
+
+            .cta-buttons {
+                flex-direction: column;
+                width: 100%;
+            }
+
+            .cta-primary, .cta-secondary {
+                width: 100%;
+                text-align: center;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .footer-inner {
+                grid-template-columns: 1fr;
+            }
+
+            .footer-brand {
+                grid-column: span 1;
             }
         }
     </style>
 </head>
 <body>
-    <main>
-        <div class="container">
-            <div class="hero">
-                <h1>wisp.place</h1>
+    <header>
+        <div class="header-inner">
+            <a href="/" class="logo">wisp.place</a>
+            <nav>
+                <a href="https://docs.wisp.place" target="_blank">Docs</a>
+                <a href="https://status.wisp.place" target="_blank">Status</a>
+                <a href="{{ATPROTO_LOGIN_URL}}" class="nav-cta">Sign In</a>
+            </nav>
+        </div>
+    </header>
 
-                <a href="{{ATPROTO_LOGIN_URL}}" class="cta">SIGN IN WITH AT PROTOCOL</a>
+    <section class="hero">
+        <div class="hero-inner">
+            <span class="hero-badge">Deploy static sites in seconds</span>
+            <h1>Ship fast without complexity</h1>
+            <p class="hero-desc">
+                Static hosting for developers who value simplicity. Your data, your PDS, your rules.
+            </p>
+            <div class="cta-group">
+                <div class="cta-buttons">
+                    <a href="{{ATPROTO_LOGIN_URL}}" class="cta-primary">Start Deploying</a>
+                    <a href="https://docs.wisp.place" target="_blank" class="cta-secondary">Read Docs</a>
+                </div>
+                <p class="hero-cmd">or <code>$ npx create-wisp</code></p>
+            </div>
+        </div>
+    </section>
 
-                <p class="tagline">Deploy static sites like it's localhost.</p>
-
-                <div class="secondary">
-                    <h2>are you a nerd? From your terminal to your server, nothing in between.</h2>
-                    <div id="cli-download" class="code-block">
-                        <code>curl https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-x86_64-linux -o wisp-cli</code>
-                    </div>
-                    <div class="code-block">
-                        <code>wisp-cli deploy alice.bsky.social --site MyBlog</code>
-                    </div>
-                    <p>host on our infrastructure for free<br>
-                    or use wisp-cli to host on your own infra with seamless deployments</p>
-                    <p>need docs? <a href="https://docs.wisp.place">docs.wisp.place</a></p>
+    <section class="how-it-works">
+        <div class="how-it-works-inner">
+            <p class="section-label">How it works</p>
+            <h2 class="section-title">Three steps. No config files.</h2>
+            <div class="steps">
+                <div class="step">
+                    <div class="step-number">01</div>
+                    <h3>Sign in with Bluesky</h3>
+                    <p>Authenticate with your AT Protocol identity. No new accounts needed.</p>
+                </div>
+                <div class="step">
+                    <div class="step-number">02</div>
+                    <h3>Upload your files</h3>
+                    <p>Drag and drop or use the CLI. Your site data goes directly to your PDS.</p>
+                    <code>npx wispctl deploy</code>
+                </div>
+                <div class="step">
+                    <div class="step-number">03</div>
+                    <h3>You're live</h3>
+                    <p>Instantly available on our global CDN. Add a custom domain anytime.</p>
                 </div>
             </div>
         </div>
-    </main>
+    </section>
 
-    <footer>
-        <div class="container">
-            <p class="quote">"The easiest way to get static HTML going."</p>
-            <div class="links">
-                <a href="https://docs.wisp.place">docs</a>
+    <section class="demo">
+        <div class="demo-inner">
+            <div class="terminal">
+                <div class="terminal-header">
+                    <div class="terminal-dots">
+                        <span class="terminal-dot red"></span>
+                        <span class="terminal-dot yellow"></span>
+                        <span class="terminal-dot green"></span>
+                    </div>
+                    <span class="terminal-title">terminal</span>
+                </div>
+                <div class="terminal-body">
+                    <div class="terminal-line"><span class="t-prompt">$</span> <span class="t-cmd">npx wispctl deploy</span></div>
+                    <div class="terminal-spacer"></div>
+                    <div class="terminal-line"><span class="t-muted">◇</span> Authenticated as <span class="t-cyan">@nekomimi.pet</span></div>
+                    <div class="terminal-line"><span class="t-muted">◇</span> Found 12 files (24 KB)</div>
+                    <div class="terminal-line"><span class="t-muted">◇</span> Uploading to PDS...</div>
+                    <div class="terminal-spacer"></div>
+                    <div class="terminal-line"><span class="t-success">✓</span> <span class="t-success">Deployed successfully</span></div>
+                    <div class="terminal-line t-output">https://sites.wisp.place/nekomimi.pet/mysite</div>
+                </div>
             </div>
         </div>
+    </section>
+
+    <section class="features">
+        <div class="features-inner">
+            <p class="section-label">Features</p>
+            <h2 class="section-title">Everything you need. Nothing you don't.</h2>
+            <div class="features-grid">
+                <div class="feature">
+                    <div class="feature-icon">⚡</div>
+                    <h3>Global CDN</h3>
+                    <p>Sites cached at edge locations worldwide. Sub-100ms latency everywhere.</p>
+                </div>
+                <div class="feature">
+                    <div class="feature-icon">🔒</div>
+                    <h3>Custom Domains</h3>
+                    <p>Point your domain with automatic SSL. Just add a CNAME record.</p>
+                </div>
+                <div class="feature">
+                    <div class="feature-icon">📦</div>
+                    <h3>Full Ownership</h3>
+                    <p>Your site data lives in your PDS. Export or migrate anytime.</p>
+                </div>
+                <div class="feature">
+                    <div class="feature-icon">🚀</div>
+                    <h3>Instant Updates</h3>
+                    <p>Push and it's live. No build queues, no waiting around.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="cli-section">
+        <div class="cli-inner">
+            <p class="section-label">For power users</p>
+            <h2 class="section-title">Command line first</h2>
+            <p class="cli-desc">Full control from your terminal. Integrates with your existing workflow.</p>
+
+            <div class="cli-features">
+                <div class="cli-feature">
+                    <h4>Deploy from anywhere</h4>
+                    <p>Git hooks, CI/CD pipelines, makefiles. Drop in one command.</p>
+                </div>
+                <div class="cli-feature">
+                    <h4>Self-host option</h4>
+                    <p>Run your own server. Watches the firehose, pulls updates automatically.</p>
+                </div>
+                <div class="cli-feature">
+                    <h4>Zero config</h4>
+                    <p>No YAML, no JSON. Sensible defaults that just work.</p>
+                </div>
+                <div class="cli-feature">
+                    <h4>Local preview</h4>
+                    <p>Serve any wisp site locally for development and testing.</p>
+                </div>
+            </div>
+
+            <div class="cta-buttons">
+                <a href="https://docs.wisp.place/cli/" target="_blank" class="cta-secondary">Install CLI</a>
+            </div>
+        </div>
+    </section>
+
+    <section class="final-cta">
+        <div class="final-cta-inner">
+            <h2>Ready to deploy?</h2>
+            <p>Free forever. No credit card required.</p>
+            <div class="cta-buttons">
+                <a href="{{ATPROTO_LOGIN_URL}}" class="cta-primary">Start Deploying</a>
+            </div>
+        </div>
+    </section>
+
+    <footer>
+        <div class="footer-inner">
+            <div class="footer-brand">
+                <p>wisp.place</p>
+                <p>Static hosting on AT Protocol.<br>Your data, your PDS, your rules.</p>
+            </div>
+            <div class="footer-col">
+                <h4>Product</h4>
+                <ul>
+                    <li><a href="/editor">Dashboard</a></li>
+                    <li><a href="https://docs.wisp.place" target="_blank">Documentation</a></li>
+                    <li><a href="https://status.wisp.place" target="_blank">Status</a></li>
+                </ul>
+            </div>
+            <div class="footer-col">
+                <h4>Resources</h4>
+                <ul>
+                    <li><a href="https://docs.wisp.place/cli/" target="_blank">CLI Guide</a></li>
+                    <li><a href="https://docs.wisp.place/api/" target="_blank">API Reference</a></li>
+                    <li><a href="https://github.com/modder4869/wisp.place" target="_blank">GitHub</a></li>
+                </ul>
+            </div>
+            <div class="footer-col">
+                <h4>Contact</h4>
+                <ul>
+                    <li><a href="https://bsky.app/profile/nekomimi.pet" target="_blank">@nekomimi.pet</a></li>
+                    <li><a href="mailto:contact@wisp.place">contact@wisp.place</a></li>
+                </ul>
+            </div>
+        </div>
+        <div class="footer-bottom">
+            <p>Built by @nekomimi.pet</p>
+            <nav>
+                <a href="/acceptable-use">Acceptable Use</a>
+                <a href="https://bsky.app/profile/wisp.place" target="_blank">Bluesky</a>
+            </nav>
+        </div>
     </footer>
-
-    <script>
-        const CLI_BASE = 'https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries';
-
-        function detectOS() {
-            const ua = navigator.userAgent.toLowerCase();
-            const platform = navigator.platform.toLowerCase();
-            if (platform.includes('mac') || ua.includes('mac')) return 'macos';
-            return 'linux';
-        }
-
-        function updateCurlCommand() {
-            const container = document.getElementById('cli-download');
-            const os = detectOS();
-
-            if (os === 'macos') {
-                container.innerHTML = `<code>curl ${CLI_BASE}/wisp-cli-darwin-universal -o wisp-cli</code>`;
-            } else {
-                container.innerHTML = `<code>curl ${CLI_BASE}/wisp-cli-x86_64-linux -o wisp-cli</code>
-<code># ARM: curl ${CLI_BASE}/wisp-cli-aarch64-linux -o wisp-cli</code>`;
-            }
-        }
-
-        updateCurlCommand();
-    </script>
 </body>
 </html>

@@ -1,12 +1,11 @@
 {
-  "name": "create-wisp",
-  "version": "1.0.5",
+  "name": "wispctl",
+  "version": "1.0.6",
   "description": "CLI for wisp.place - deploy static sites to the AT Protocol",
   "type": "module",
   "main": "./dist/index.js",
   "bin": {
-    "create-wisp": "dist/index.js",
-    "wisp-cli": "dist/index.js"
+    "wispctl": "dist/index.js"
   },
   "files": [
     "dist"

@@ -9,7 +9,7 @@ import { join, extname } from 'path';
 import { lookup } from 'mime-types';
 import { pull } from './pull.ts';
 import { createSpinner, pc } from '../lib/progress.ts';
-import { parseRedirectsFile, matchRedirectRule, parseQueryString, type RedirectRule } from '../lib/redirects.ts';
+import { parseRedirectsFile, matchRedirectRule, parseQueryString, type RedirectRule } from '@wisp/fs-utils';
 import { isBun } from '../lib/runtime.ts';
 import { BunFirehose } from '../lib/firehose.ts';
 
@@ -373,10 +373,10 @@ export async function serve(
   let firehoseHandle: { destroy: () => void };
 
   if (isBun) {
-    // Use BunFirehose for Bun (native WebSocket)
+    // Use BunFirehose for Bun
     const bunFirehose = new BunFirehose({
       idResolver,
-      service: pdsEndpoint.replace('https://', 'wss://').replace('http://', 'ws://'),
+      service: pdsEndpoint,
       filterCollections: ['place.wisp.fs', 'place.wisp.settings'],
       handleEvent: firehoseHandleEvent,
       onError: firehoseOnError,
@@ -384,10 +384,10 @@ export async function serve(
     bunFirehose.start();
     firehoseHandle = { destroy: () => bunFirehose.destroy() };
   } else {
-    // Use @atproto/sync Firehose for Node.js (uses ws library)
+    // Use @atproto/sync Firehose for Node.js
     const nodeFirehose = new Firehose({
       idResolver,
-      service: pdsEndpoint.replace('https://', 'wss://').replace('http://', 'ws://'),
+      service: pdsEndpoint,
       filterCollections: ['place.wisp.fs', 'place.wisp.settings'],
       handleEvent: firehoseHandleEvent,
       onError: firehoseOnError,

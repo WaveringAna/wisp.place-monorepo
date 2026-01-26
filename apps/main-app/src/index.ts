@@ -132,7 +132,7 @@ export const app = new Elysia({
 		set.headers['Content-Type'] = 'text/html; charset=utf-8'
 
 		const html = await Bun.file('./apps/main-app/public/landingpage.html').text()
-		return html.replace('{{ATPROTO_LOGIN_URL}}', atprotoLoginUrl)
+		return html.replaceAll('{{ATPROTO_LOGIN_URL}}', atprotoLoginUrl)
 	})
 	.use(authRoutes(client, cookieSecret))
 	.use(wispRoutes(client, cookieSecret))
