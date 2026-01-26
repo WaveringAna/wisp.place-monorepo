@@ -1,0 +1,15 @@
+{
+  "name": "create-wisp",
+  "version": "1.0.6",
+  "description": "CLI for wisp.place - deploy static sites to the AT Protocol",
+  "type": "module",
+  "bin": {
+    "create-wisp": "bin.js"
+  },
+  "files": [
+    "bin.js"
+  ],
+  "dependencies": {
+    "wispctl": "^1.0.6"
+  }
+}

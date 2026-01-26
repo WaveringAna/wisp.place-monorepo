@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'bun:test'
+import { describe, it, expect } from 'bun:test';
 import { parseRedirectsFile, matchRedirectRule } from './redirects';
 
 describe('parseRedirectsFile', () => {
@@ -185,31 +185,29 @@ describe('matchRedirectRule', () => {
 /jobs/* /careers/:splat
 `;
     const rules = parseRedirectsFile(content);
-    
+
     const match1 = matchRedirectRule('/jobs/customer-ninja', rules);
     expect(match1?.targetPath).toBe('/careers/support');
-    
+
     const match2 = matchRedirectRule('/jobs/developer', rules);
     expect(match2?.targetPath).toBe('/careers/developer');
   });
 
   it('should handle SPA routing pattern', () => {
     const rules = parseRedirectsFile('/* /index.html 200');
-    
-    // Should match any path
+
     const match1 = matchRedirectRule('/about', rules);
     expect(match1).toBeTruthy();
     expect(match1?.targetPath).toBe('/index.html');
     expect(match1?.status).toBe(200);
-    
+
     const match2 = matchRedirectRule('/users/123/profile', rules);
     expect(match2).toBeTruthy();
     expect(match2?.targetPath).toBe('/index.html');
     expect(match2?.status).toBe(200);
-    
+
     const match3 = matchRedirectRule('/', rules);
     expect(match3).toBeTruthy();
     expect(match3?.targetPath).toBe('/index.html');
   });
 });
-

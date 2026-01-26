@@ -1,4 +1,5 @@
 test-site
+.wisp-serve
 # dependencies (bun install)
 node_modules
 

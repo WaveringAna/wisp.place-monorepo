@@ -24,7 +24,8 @@ Your site appears at `https://sites.wisp.place/{your-did}/{site-name}` or your c
 
 - **`/apps/main-app`** - Main backend (OAuth, site management, custom domains)
 - **`/apps/hosting-service`** - Microservice that serves cached sites from disk
-- **`/cli`** - Rust CLI for direct PDS uploads
+- **`/cli`** - CLI for direct PDS uploads as well as serving with firehose updates
+- **`/rust-cli`** - Deprecated Rust CLI for direct PDS uploads with firehose updates
 - **`/apps/main-app/public`** - React frontend
 - **`/packages`** - Shared packages
 
@@ -61,7 +62,10 @@ bun run hosting:dev
 
 # CLI
 cd cli
-cargo build
+bun install
+bun run index.ts
+bun build
+node dist/index.js
 ```
 
 ## Features

@@ -25,6 +25,10 @@
     "./subfs-split": {
       "types": "./src/subfs-split.ts",
       "default": "./src/subfs-split.ts"
+    },
+    "./redirects": {
+      "types": "./src/redirects.ts",
+      "default": "./src/redirects.ts"
     }
   },
   "dependencies": {

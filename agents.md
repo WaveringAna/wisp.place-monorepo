@@ -97,7 +97,7 @@ The main differences between place.wisp.fs and place.wisp.subfs:
   - place.wisp.fs has a required site field
   - place.wisp.fs#subfs has an optional flat field that place.wisp.subfs#subfs doesn't have
 
-The project is a monorepo. The package handler it uses for the typescript side is Bun. For the Rust cli, it is cargo.
+The project is a monorepo. The package handler it uses is bun. Please when you want to add a package, which is never unless told to, do bun add ..., please do not try to edit package.json yourself.
 
 ### Typescript Bun Workspace Layout
 
@@ -133,7 +133,7 @@ There are two typescript apps
 
 ### CLI
 
-**`cli/`** - Rust CLI using Jacquard (AT Protocol library)
+**`cli/`** - TypeScript CLI using commander, clack. 
 - Direct PDS uploads without interacting with main-app
 - Can also do the same firehose watching, caching, and serving hosting-service does, just without domain management
 

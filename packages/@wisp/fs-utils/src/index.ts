@@ -10,3 +10,7 @@ export { createManifest } from './manifest';
 
 // Subfs splitting utilities
 export { estimateDirectorySize, findLargeDirectories, replaceDirectoryWithSubfs, splitDirectoryIntoChunks } from './subfs-split';
+
+// Redirects parsing and matching
+export type { RedirectRule, RedirectMatch, MatchRedirectContext } from './redirects';
+export { parseRedirectsFile, matchRedirectRule, parseCookies, parseQueryString } from './redirects';
