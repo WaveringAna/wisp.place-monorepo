@@ -14,7 +14,7 @@ clone:
 dependencies:
   nixpkgs:
     - git
-    - npm
+    - nodejs
   github:NixOS/nixpkgs/nixpkgs-unstable:
     - bun
 environment:
