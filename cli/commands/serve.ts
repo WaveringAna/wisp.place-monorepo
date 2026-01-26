@@ -1,6 +1,8 @@
 import { AtpAgent } from '@atproto/api';
 import { IdResolver } from '@atproto/identity';
-import { BunFirehose } from '../lib/firehose';
+import { Firehose } from '@atproto/sync';
+import { Hono } from 'hono';
+import { serve as honoNodeServe } from '@hono/node-server';
 import type { Record as SettingsRecord } from '@wisp/lexicons/types/place/wisp/settings';
 import { existsSync, readFileSync, statSync, readdirSync } from 'fs';
 import { join, extname } from 'path';
@@ -8,6 +10,8 @@ import { lookup } from 'mime-types';
 import { pull } from './pull.ts';
 import { createSpinner, pc } from '../lib/progress.ts';
 import { parseRedirectsFile, matchRedirectRule, parseQueryString, type RedirectRule } from '../lib/redirects.ts';
+import { isBun } from '../lib/runtime.ts';
+import { BunFirehose } from '../lib/firehose.ts';
 
 export interface ServeOptions {
   site: string;
@@ -308,57 +312,95 @@ export async function serve(
     redirectRules
   };
 
-  // 5. Start HTTP server
-  const server = Bun.serve({
-    port,
-    fetch(req) {
-      return handleRequest(req, state);
-    }
+  // 5. Start HTTP server with Hono (works on both Bun and Node)
+  const app = new Hono();
+
+  app.all('*', (c) => {
+    const req = c.req.raw;
+    return handleRequest(req, state);
   });
+
+  let serverHandle: { close: () => void };
+
+  if (isBun) {
+    // @ts-ignore - Bun global
+    const bunServer = Bun.serve({
+      port,
+      fetch: app.fetch,
+    });
+    serverHandle = { close: () => bunServer.stop() };
+  } else {
+    const nodeServer = honoNodeServe({
+      fetch: app.fetch,
+      port,
+    });
+    serverHandle = { close: () => nodeServer.close() };
+  }
 
   console.log(pc.green(`\n✓ Server running at http://localhost:${port}\n`));
   console.log(pc.dim('Watching for updates via firehose...\n'));
 
-  // 6. Connect to firehose for live updates
+  // 6. Connect to firehose for live updates (runtime-aware)
   const idResolver = new IdResolver();
-  const firehose = new BunFirehose({
-    idResolver,
-    service: pdsEndpoint.replace('https://', 'wss://').replace('http://', 'ws://'),
-    filterCollections: ['place.wisp.fs', 'place.wisp.settings'],
-    handleEvent: async (evt) => {
-      // Only handle commit events for this DID
-      if (evt.event !== 'create' && evt.event !== 'update' && evt.event !== 'delete') return;
-      if (evt.did !== did) return;
-      if (evt.rkey !== site) return;
 
-      if (evt.collection === 'place.wisp.fs') {
-        console.log(pc.yellow('\nSite updated, re-pulling...\n'));
-        await pull(identifier, { site, path: outputPath });
+  const firehoseHandleEvent = async (evt: any) => {
+    // Only handle commit events for this DID
+    if (evt.event !== 'create' && evt.event !== 'update' && evt.event !== 'delete') return;
+    if (evt.did !== did) return;
+    if (evt.rkey !== site) return;
 
-        // Reload redirects
-        state.redirectRules = loadRedirectRules(outputPath);
-        console.log(pc.green('✓ Site reloaded\n'));
-      } else if (evt.collection === 'place.wisp.settings') {
-        console.log(pc.yellow('\nSettings updated...\n'));
-        state.settings = await fetchSettings(pdsEndpoint, did, site);
-        console.log(pc.green('✓ Settings reloaded\n'));
-      }
-    },
-    onError: (err: Error) => {
-      console.error(pc.red('Firehose error:'), err.message);
-      if (err.cause) {
-        console.error(pc.red('  Cause:'), err.cause);
-      }
+    if (evt.collection === 'place.wisp.fs') {
+      console.log(pc.yellow('\nSite updated, re-pulling...\n'));
+      await pull(identifier, { site, path: outputPath });
+
+      // Reload redirects
+      state.redirectRules = loadRedirectRules(outputPath);
+      console.log(pc.green('✓ Site reloaded\n'));
+    } else if (evt.collection === 'place.wisp.settings') {
+      console.log(pc.yellow('\nSettings updated...\n'));
+      state.settings = await fetchSettings(pdsEndpoint, did, site);
+      console.log(pc.green('✓ Settings reloaded\n'));
     }
-  });
+  };
 
-  firehose.start();
+  const firehoseOnError = (err: Error) => {
+    console.error(pc.red('Firehose error:'), err.message);
+    if (err.cause) {
+      console.error(pc.red('  Cause:'), err.cause);
+    }
+  };
+
+  let firehoseHandle: { destroy: () => void };
+
+  if (isBun) {
+    // Use BunFirehose for Bun (native WebSocket)
+    const bunFirehose = new BunFirehose({
+      idResolver,
+      service: pdsEndpoint.replace('https://', 'wss://').replace('http://', 'ws://'),
+      filterCollections: ['place.wisp.fs', 'place.wisp.settings'],
+      handleEvent: firehoseHandleEvent,
+      onError: firehoseOnError,
+    });
+    bunFirehose.start();
+    firehoseHandle = { destroy: () => bunFirehose.destroy() };
+  } else {
+    // Use @atproto/sync Firehose for Node.js (uses ws library)
+    const nodeFirehose = new Firehose({
+      idResolver,
+      service: pdsEndpoint.replace('https://', 'wss://').replace('http://', 'ws://'),
+      filterCollections: ['place.wisp.fs', 'place.wisp.settings'],
+      handleEvent: firehoseHandleEvent,
+      onError: firehoseOnError,
+    });
+    nodeFirehose.start();
+    firehoseHandle = { destroy: () => nodeFirehose.destroy() };
+  }
 
   // Handle shutdown
   process.on('SIGINT', () => {
     console.log(pc.dim('\nShutting down...'));
-    firehose.destroy();
-    server.stop();
+    firehoseHandle.destroy();
+    serverHandle.close();
     process.exit(0);
   });
 

@@ -23,7 +23,7 @@ interface ErrorFrameBody {
 }
 
 function decodeFrame(bytes: Uint8Array): { header: FrameHeader; body: unknown } {
-  const decoded = decodeAll(bytes);
+  const decoded = [...decodeAll(bytes)];
   if (decoded.length < 2) {
     throw new Error('Invalid frame: missing header or body');
   }

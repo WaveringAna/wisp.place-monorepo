@@ -9,6 +9,7 @@ import {
   estimateDirectorySize,
   findLargeDirectories,
   replaceDirectoryWithSubfs,
+  splitDirectoryIntoChunks,
   countFilesInDirectory,
   type UploadedFile,
   type FileUploadResult
@@ -281,6 +282,7 @@ async function splitIntoSubfs(
   const subfsRkeys: string[] = [];
   let currentDir = directory;
   let iteration = 0;
+  let chunkCounter = 0;
 
   while (
     (estimateDirectorySize(currentDir) > MAX_MANIFEST_SIZE ||
@@ -297,13 +299,62 @@ async function splitIntoSubfs(
     if (largeDirs.length === 0) break;
 
     const largest = largeDirs[0]!;
-    const subfsRkey = `${siteRkey}-subfs-${iteration}`;
-
     spinner.text = `Creating subfs ${iteration} for ${largest.path} (${formatBytes(largest.size)})`;
 
-    // Create subfs record for this directory
-    const subfsUri = await createSubfsRecord(agent, did, largest.directory, subfsRkey);
-    subfsRkeys.push(subfsRkey);
+    let subfsUri: string;
+
+    // Check if directory is too large for a single subfs record
+    if (largest.size > MAX_SUBFS_SIZE) {
+      // Split into chunks
+      console.log(pc.dim(`\n    → Directory too large (${formatBytes(largest.size)}), splitting into chunks...`));
+      const chunks = splitDirectoryIntoChunks(largest.directory, MAX_SUBFS_SIZE);
+      console.log(pc.dim(`    → Created ${chunks.length} chunks`));
+
+      // Upload each chunk as a subfs record
+      const chunkUris: string[] = [];
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i]!;
+        const chunkRkey = `${siteRkey}-chunk-${chunkCounter++}`;
+        const chunkSize = estimateDirectorySize(chunk);
+        const chunkFileCount = countFilesInDirectory(chunk);
+
+        console.log(pc.dim(`    → Uploading chunk ${i + 1}/${chunks.length} (${chunkFileCount} files, ${formatBytes(chunkSize)})...`));
+
+        const chunkUri = await createSubfsRecord(agent, did, chunk, chunkRkey);
+        chunkUris.push(chunkUri);
+        subfsRkeys.push(chunkRkey);
+      }
+
+      // Create parent subfs that references all chunks with flat: true
+      console.log(pc.dim(`    → Creating parent subfs with ${chunkUris.length} chunk references...`));
+
+      const parentEntries = chunkUris.map((uri, i) => ({
+        name: `chunk${i}`,
+        node: {
+          $type: 'place.wisp.fs#subfs' as const,
+          type: 'subfs' as const,
+          subject: uri,
+          flat: true // Merge chunk contents into parent
+        }
+      }));
+
+      const parentDirectory: Directory = {
+        $type: 'place.wisp.fs#directory' as const,
+        type: 'directory' as const,
+        entries: parentEntries
+      };
+
+      const parentRkey = `${siteRkey}-subfs-${iteration}`;
+      subfsUri = await createSubfsRecord(agent, did, parentDirectory, parentRkey);
+      subfsRkeys.push(parentRkey);
+
+      console.log(pc.green(`    ✓ Created parent subfs with ${chunks.length} chunks`));
+    } else {
+      // Directory fits in a single subfs record
+      const subfsRkey = `${siteRkey}-subfs-${iteration}`;
+      subfsUri = await createSubfsRecord(agent, did, largest.directory, subfsRkey);
+      subfsRkeys.push(subfsRkey);
+    }
 
     // Replace directory with subfs reference
     currentDir = replaceDirectoryWithSubfs(currentDir, largest.path, subfsUri);
