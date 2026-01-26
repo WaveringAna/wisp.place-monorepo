@@ -36,6 +36,7 @@ steps:
       cd cli
 
       bun install
+      bun build
       bun link
 
       cd ..
