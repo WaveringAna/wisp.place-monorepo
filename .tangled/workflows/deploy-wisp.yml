@@ -39,11 +39,11 @@ steps:
       export PATH="$HOME/.nix-profile/bin:$PATH"
       bun install
       bun run build
+
+      cd ..
   - name: Deploy to Wisp.place
     command: |
-      export PATH="$HOME/.nix-profile/bin:$PATH"
-
-      wispctl "$WISP_HANDLE" \
+      bun run ./cli/dist/index.js "$WISP_HANDLE" \
         --path "$SITE_PATH" \
         --site "$SITE_NAME" \
         --password "$WISP_APP_PASSWORD"
