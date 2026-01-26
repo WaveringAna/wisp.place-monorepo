@@ -27,6 +27,8 @@ steps:
       git submodule update --init --recursive
   - name: Build wisp-cli
     command: |
+      export PATH="$HOME/.nix-profile/bin:$PATH"
+
       cd cli
 
       bun install
@@ -35,11 +37,11 @@ steps:
       cd ..
   - name: Build docs
     command: |
-      cd docs
       export PATH="$HOME/.nix-profile/bin:$PATH"
+
+      cd docs
       bun install
       bun run build
-
   - name: Deploy to Wisp.place
     command: |
       export PATH="$HOME/.nix-profile/bin:$PATH"
