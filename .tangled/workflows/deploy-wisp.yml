@@ -14,6 +14,7 @@ clone:
 dependencies:
   nixpkgs:
     - git
+    - npm
   github:NixOS/nixpkgs/nixpkgs-unstable:
     - bun
 environment:
@@ -40,6 +41,8 @@ steps:
       bun run build
   - name: Deploy to Wisp.place
     command: |
+      export PATH="$HOME/.nix-profile/bin:$PATH"
+
       wispctl "$WISP_HANDLE" \
         --path "$SITE_PATH" \
         --site "$SITE_NAME" \
