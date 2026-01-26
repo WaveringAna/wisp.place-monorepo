@@ -4,7 +4,7 @@
  */
 
 import { IdResolver } from '@atproto/identity';
-import { cborToLexRecord, readCar, verifyProofs, parseDataKey, formatDataKey } from '@atproto/repo';
+import { cborToLexRecord, readCar, verifyProofs, parseDataKey, formatDataKey, BlockMap } from '@atproto/repo';
 import { CID } from 'multiformats/cid';
 import { AtUri } from '@atproto/syntax';
 import { BunSubscription } from './subscription';
@@ -14,7 +14,7 @@ export interface CommitMeta {
   seq: number;
   time: string;
   commit: CID;
-  blocks: Map<string, Uint8Array>;
+  blocks: BlockMap;
   rev: string;
   uri: AtUri;
   did: string;

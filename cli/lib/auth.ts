@@ -1,9 +1,12 @@
 import { NodeOAuthClient, type NodeSavedSession, type NodeSavedState, type NodeSavedStateStore, type NodeSavedSessionStore } from "@atproto/oauth-client-node";
 import { Agent, CredentialSession } from "@atproto/api";
+import { Hono } from "hono";
+import { serve as honoNodeServe } from "@hono/node-server";
 import open from "open";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "fs";
 import { dirname, join } from "path";
 import { homedir } from "os";
+import { isBun } from "./runtime";
 
 // OAuth scope for CLI
 const OAUTH_SCOPE = 'atproto repo:place.wisp.fs repo:place.wisp.subfs repo:place.wisp.settings blob:*/*';
@@ -148,42 +151,55 @@ export async function authenticateOAuth(
 
   // Create loopback server to receive callback
   const callbackPromise = new Promise<{ params: URLSearchParams }>((resolve, reject) => {
-    const server = Bun.serve({
-      port: LOOPBACK_PORT,
-      hostname: LOOPBACK_HOST,
-      fetch(req) {
-        const url = new URL(req.url);
+    const app = new Hono();
+    let serverHandle: { close: () => void } | null = null;
 
-        if (url.pathname === '/oauth/callback') {
-          const params = new URLSearchParams(url.search);
+    const successHtml = `
+      <html>
+        <head><title>Wisp CLI - Authentication Successful</title></head>
+        <body style="font-family: system-ui; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0;">
+          <div style="text-align: center;">
+            <h1>Authentication Successful</h1>
+            <p>You can close this window and return to the CLI.</p>
+          </div>
+        </body>
+      </html>
+    `;
 
-          // Close server after receiving callback
-          setTimeout(() => server.stop(), 100);
+    app.get('/oauth/callback', (c) => {
+      const params = new URLSearchParams(c.req.url.split('?')[1] || '');
 
-          resolve({ params });
+      // Close server after receiving callback
+      setTimeout(() => serverHandle?.close(), 100);
 
-          return new Response(`
-            <html>
-              <head><title>Wisp CLI - Authentication Successful</title></head>
-              <body style="font-family: system-ui; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0;">
-                <div style="text-align: center;">
-                  <h1>Authentication Successful</h1>
-                  <p>You can close this window and return to the CLI.</p>
-                </div>
-              </body>
-            </html>
-          `, {
-            headers: { 'Content-Type': 'text/html' }
-          });
-        }
+      resolve({ params });
 
-        return new Response('Not found', { status: 404 });
-      },
+      return c.html(successHtml);
     });
+
+    app.all('*', (c) => c.text('Not found', 404));
+
+    // Start server based on runtime
+    if (isBun) {
+      // @ts-ignore - Bun global
+      const bunServer = Bun.serve({
+        port: LOOPBACK_PORT,
+        hostname: LOOPBACK_HOST,
+        fetch: app.fetch,
+      });
+      serverHandle = { close: () => bunServer.stop() };
+    } else {
+      const nodeServer = honoNodeServe({
+        fetch: app.fetch,
+        port: LOOPBACK_PORT,
+        hostname: LOOPBACK_HOST,
+      });
+      serverHandle = { close: () => nodeServer.close() };
+    }
 
     // Timeout after 5 minutes
     setTimeout(() => {
-      server.stop();
+      serverHandle?.close();
       reject(new Error('OAuth callback timeout'));
     }, 5 * 60 * 1000);
   });

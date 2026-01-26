@@ -3,7 +3,7 @@ import type { Directory, Entry, File, Record as FsRecord } from '@wisp/lexicons/
 import type { Record as SubfsRecord } from '@wisp/lexicons/types/place/wisp/subfs';
 import { extractBlobCid } from '@wisp/atproto-utils';
 import { sanitizePath } from '@wisp/fs-utils';
-import { existsSync, mkdirSync, writeFileSync, rmSync, renameSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, rmSync, renameSync, readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { gunzipSync } from 'zlib';
 import { createSpinner, formatBytes, pc } from '../lib/progress.ts';
@@ -364,8 +364,8 @@ export async function pull(
 
           if (existsSync(srcPath)) {
             mkdirSync(dirname(destPath), { recursive: true });
-            const content = Bun.file(srcPath).arrayBuffer();
-            writeFileSync(destPath, Buffer.from(await content));
+            const content = readFileSync(srcPath);
+            writeFileSync(destPath, content);
           }
         }
       }
