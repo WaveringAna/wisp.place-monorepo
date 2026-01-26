@@ -1,7 +1,6 @@
-import { AtpAgent } from '@atproto/api';
 import type { Directory, Entry, File, Record as FsRecord } from '@wisp/lexicons/types/place/wisp/fs';
 import type { Record as SubfsRecord } from '@wisp/lexicons/types/place/wisp/subfs';
-import { extractBlobCid } from '@wisp/atproto-utils';
+import { extractBlobCid, resolveDid, getPdsForDid } from '@wisp/atproto-utils';
 import { sanitizePath } from '@wisp/fs-utils';
 import { existsSync, mkdirSync, writeFileSync, rmSync, renameSync, readFileSync } from 'fs';
 import { dirname, join } from 'path';
@@ -14,40 +13,6 @@ const MAX_CONCURRENT_DOWNLOADS = 20;
 export interface PullOptions {
   site: string;
   path: string;
-}
-
-async function resolveDid(identifier: string): Promise<string | null> {
-  if (identifier.startsWith('did:')) {
-    return identifier;
-  }
-
-  const agent = new AtpAgent({ service: 'https://public.api.bsky.app' });
-  const response = await agent.resolveHandle({ handle: identifier });
-  return response.data.did;
-}
-
-async function getPdsForDid(did: string): Promise<string | null> {
-  let doc: { service?: Array<{ id: string; serviceEndpoint?: string }> };
-
-  if (did.startsWith('did:plc:')) {
-    const res = await fetch(`https://plc.directory/${encodeURIComponent(did)}`);
-    doc = await res.json() as typeof doc;
-  } else if (did.startsWith('did:web:')) {
-    const didParts = did.split(':');
-    const domain = didParts[2];
-    const pathParts = didParts.slice(3);
-    const url = pathParts.length === 0
-      ? `https://${domain}/.well-known/did.json`
-      : `https://${domain}/${pathParts.join('/')}/did.json`;
-    const res = await fetch(url);
-    doc = await res.json() as typeof doc;
-  } else {
-    return null;
-  }
-
-  const services = doc.service || [];
-  const pdsService = services.find((s) => s.id === '#atproto_pds');
-  return pdsService?.serviceEndpoint || null;
 }
 
 async function fetchRecord(pdsEndpoint: string, did: string, collection: string, rkey: string): Promise<any> {

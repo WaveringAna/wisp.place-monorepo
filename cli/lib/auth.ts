@@ -1,5 +1,6 @@
 import { NodeOAuthClient, type NodeSavedSession, type NodeSavedState, type NodeSavedStateStore, type NodeSavedSessionStore } from "@atproto/oauth-client-node";
 import { Agent, CredentialSession } from "@atproto/api";
+import { resolvePdsFromHandle } from "@wisp/atproto-utils";
 import { Hono } from "hono";
 import { serve as honoNodeServe } from "@hono/node-server";
 import open from "open";
@@ -236,7 +237,14 @@ export async function authenticateAppPassword(
   password: string,
   pdsUrl?: string
 ): Promise<{ agent: Agent; did: string }> {
-  const serviceUrl = pdsUrl || 'https://bsky.social';
+  let serviceUrl = pdsUrl;
+
+  if (!serviceUrl) {
+    // Resolve the handle to find the correct PDS
+    console.log(`Resolving PDS for ${identifier}...`);
+    serviceUrl = await resolvePdsFromHandle(identifier);
+    console.log(`Found PDS: ${serviceUrl}`);
+  }
 
   const credSession = new CredentialSession(new URL(serviceUrl));
   await credSession.login({ identifier, password });

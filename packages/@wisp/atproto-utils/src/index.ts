@@ -6,3 +6,13 @@ export { shouldCompressFile, shouldCompressMimeType, compressFile } from './comp
 
 // Subfs utilities
 export { extractSubfsUris } from './subfs';
+
+// Identity utilities
+export {
+  resolveDid,
+  getPdsForDid,
+  getDidDocument,
+  getHandleForDid,
+  didWebToHttps,
+  resolvePdsFromHandle
+} from './identity';

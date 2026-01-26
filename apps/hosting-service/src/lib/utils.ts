@@ -1,4 +1,3 @@
-import { AtpAgent } from '@atproto/api';
 import type { Record as WispFsRecord, Directory, Entry, File } from '@wisp/lexicons/types/place/wisp/fs';
 import type { Record as SubfsRecord } from '@wisp/lexicons/types/place/wisp/subfs';
 import type { Record as WispSettings } from '@wisp/lexicons/types/place/wisp/settings';
@@ -7,14 +6,14 @@ import { writeFile, readFile, rename } from 'fs/promises';
 import { Readable } from 'stream';
 import { safeFetchJson, safeFetchBlob } from '@wisp/safe-fetch';
 import { CID } from 'multiformats';
-import { extractBlobCid } from '@wisp/atproto-utils';
+import { extractBlobCid, resolveDid, getPdsForDid, didWebToHttps } from '@wisp/atproto-utils';
 import { sanitizePath, collectFileCidsFromEntries, countFilesInDirectory } from '@wisp/fs-utils';
 import { shouldCompressMimeType } from '@wisp/atproto-utils/compression';
 import { MAX_BLOB_SIZE, MAX_FILE_COUNT, MAX_SITE_SIZE } from '@wisp/constants';
 import { storage } from './storage';
 
 // Re-export shared utilities for local usage and tests
-export { extractBlobCid, sanitizePath };
+export { extractBlobCid, sanitizePath, resolveDid, getPdsForDid, didWebToHttps };
 
 const CACHE_DIR = process.env.CACHE_DIR || './cache/sites';
 const CACHE_TTL = 14 * 24 * 60 * 60 * 1000; // 14 days cache TTL
@@ -30,64 +29,6 @@ interface CacheMetadata {
   settings?: WispSettings | null;
 }
 
-
-export async function resolveDid(identifier: string): Promise<string | null> {
-  try {
-    // If it's already a DID, return it
-    if (identifier.startsWith('did:')) {
-      return identifier;
-    }
-
-    // Otherwise, resolve the handle using agent's built-in method
-    const agent = new AtpAgent({ service: 'https://public.api.bsky.app' });
-    const response = await agent.resolveHandle({ handle: identifier });
-    return response.data.did;
-  } catch (err) {
-    console.error('Failed to resolve identifier', identifier, err);
-    return null;
-  }
-}
-
-export async function getPdsForDid(did: string): Promise<string | null> {
-  try {
-    let doc;
-
-    if (did.startsWith('did:plc:')) {
-      doc = await safeFetchJson(`https://plc.directory/${encodeURIComponent(did)}`);
-    } else if (did.startsWith('did:web:')) {
-      const didUrl = didWebToHttps(did);
-      doc = await safeFetchJson(didUrl);
-    } else {
-      console.error('Unsupported DID method', did);
-      return null;
-    }
-
-    const services = doc.service || [];
-    const pdsService = services.find((s: any) => s.id === '#atproto_pds');
-
-    return pdsService?.serviceEndpoint || null;
-  } catch (err) {
-    console.error('Failed to get PDS for DID', did, err);
-    return null;
-  }
-}
-
-function didWebToHttps(did: string): string {
-  const didParts = did.split(':');
-  if (didParts.length < 3 || didParts[0] !== 'did' || didParts[1] !== 'web') {
-    throw new Error('Invalid did:web format');
-  }
-
-  const domain = didParts[2];
-  const pathParts = didParts.slice(3);
-
-  if (pathParts.length === 0) {
-    return `https://${domain}/.well-known/did.json`;
-  } else {
-    const path = pathParts.join('/');
-    return `https://${domain}/${path}/did.json`;
-  }
-}
 
 export async function fetchSiteRecord(did: string, rkey: string): Promise<{ record: WispFsRecord; cid: string } | null> {
   try {

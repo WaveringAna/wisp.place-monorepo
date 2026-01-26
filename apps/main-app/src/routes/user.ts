@@ -4,10 +4,9 @@ import { NodeOAuthClient } from '@atproto/oauth-client-node'
 import { getSitesByDid, getDomainByDid, getCustomDomainsByDid, getWispDomainInfo, getDomainsBySite, getAllWispDomains } from '../lib/db'
 import { syncSitesFromPDS } from '../lib/sync-sites'
 import { createLogger } from '@wisp/observability'
-import { createDidResolver, extractAtprotoData } from '@atproto-labs/did-resolver'
+import { getHandleForDid } from '@wisp/atproto-utils'
 
 const logger = createLogger('main-app')
-const didResolver = createDidResolver({})
 
 export const userRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 	new Elysia({
@@ -53,14 +52,11 @@ export const userRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 			try {
 				let handle = 'unknown'
 				try {
-					const didDoc = await didResolver.resolve(auth.did)
-					const atprotoData = extractAtprotoData(didDoc)
-
-					if (atprotoData.aka) {
-						handle = atprotoData.aka
+					const resolvedHandle = await getHandleForDid(auth.did)
+					if (resolvedHandle) {
+						handle = resolvedHandle
 					}
 				} catch (err) {
-
 					logger.error('[User] Failed to resolve DID', err)
 				}
 
