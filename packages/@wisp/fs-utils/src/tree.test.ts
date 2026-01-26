@@ -241,4 +241,65 @@ describe('processUploadedFiles', () => {
 		// Should NOT have 'build-output' directory
 		expect(result.directory.entries.find(e => e.name === 'build-output')).toBeFalsy()
 	})
+
+	test('should preserve full paths with skipNormalization option (CLI use case)', () => {
+		// CLI passes paths already relative to site directory, without a folder prefix
+		const files: UploadedFile[] = [
+			{
+				name: 'index.html',
+				content: Buffer.from('<html>'),
+				mimeType: 'text/html',
+				size: 6
+			},
+			{
+				name: 'assets/readme.txt',
+				content: Buffer.from('readme'),
+				mimeType: 'text/plain',
+				size: 6
+			},
+			{
+				name: 'assets/images/logo.txt',
+				content: Buffer.from('logo'),
+				mimeType: 'text/plain',
+				size: 4
+			},
+			{
+				name: 'assets/scripts/main.js',
+				content: Buffer.from('console.log()'),
+				mimeType: 'application/javascript',
+				size: 13
+			}
+		]
+
+		const result = processUploadedFiles(files, { skipNormalization: true })
+
+		expect(result.fileCount).toBe(4)
+
+		// index.html at root
+		expect(result.directory.entries.find(e => e.name === 'index.html')).toBeTruthy()
+
+		// assets directory should exist (NOT be stripped)
+		const assetsEntry = result.directory.entries.find(e => e.name === 'assets')
+		expect(assetsEntry).toBeTruthy()
+		expect('type' in assetsEntry!.node && assetsEntry!.node.type).toBe('directory')
+
+		if ('entries' in assetsEntry!.node) {
+			const assetsDir = assetsEntry!.node
+			// Should have readme.txt, images/, scripts/
+			expect(assetsDir.entries.find(e => e.name === 'readme.txt')).toBeTruthy()
+			expect(assetsDir.entries.find(e => e.name === 'images')).toBeTruthy()
+			expect(assetsDir.entries.find(e => e.name === 'scripts')).toBeTruthy()
+
+			// Check nested directories have files
+			const imagesEntry = assetsDir.entries.find(e => e.name === 'images')
+			if (imagesEntry && 'entries' in imagesEntry.node) {
+				expect(imagesEntry.node.entries.find(e => e.name === 'logo.txt')).toBeTruthy()
+			}
+
+			const scriptsEntry = assetsDir.entries.find(e => e.name === 'scripts')
+			if (scriptsEntry && 'entries' in scriptsEntry.node) {
+				expect(scriptsEntry.node.entries.find(e => e.name === 'main.js')).toBeTruthy()
+			}
+		}
+	})
 })

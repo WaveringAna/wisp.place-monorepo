@@ -111,3 +111,42 @@ export function replaceDirectoryWithSubfs(
 		entries: newEntries
 	};
 }
+
+/**
+ * Split a large directory into multiple smaller chunks that each fit within maxSize
+ * Used when a single directory is too large for one subfs record
+ */
+export function splitDirectoryIntoChunks(directory: Directory, maxSize: number): Directory[] {
+	const chunks: Directory[] = [];
+	let currentChunkEntries: Directory['entries'] = [];
+	let currentChunkSize = 100; // Base size for directory structure overhead
+
+	for (const entry of directory.entries) {
+		const entrySize = JSON.stringify(entry).length;
+
+		// If adding this entry would exceed max size, start a new chunk
+		if (currentChunkEntries.length > 0 && currentChunkSize + entrySize > maxSize) {
+			chunks.push({
+				$type: 'place.wisp.fs#directory' as const,
+				type: 'directory' as const,
+				entries: currentChunkEntries
+			});
+			currentChunkEntries = [];
+			currentChunkSize = 100;
+		}
+
+		currentChunkEntries.push(entry);
+		currentChunkSize += entrySize;
+	}
+
+	// Add the last chunk if it has entries
+	if (currentChunkEntries.length > 0) {
+		chunks.push({
+			$type: 'place.wisp.fs#directory' as const,
+			type: 'directory' as const,
+			entries: currentChunkEntries
+		});
+	}
+
+	return chunks;
+}

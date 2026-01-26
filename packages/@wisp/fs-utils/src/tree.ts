@@ -24,10 +24,20 @@ export interface ProcessedDirectory {
 	fileCount: number;
 }
 
+export interface ProcessUploadedFilesOptions {
+	/**
+	 * Skip path normalization (stripping first folder segment).
+	 * Use true for CLI where paths are already relative to site directory.
+	 * Use false (default) for web uploads where paths include the folder name.
+	 */
+	skipNormalization?: boolean;
+}
+
 /**
  * Process uploaded files into a directory structure
  */
-export function processUploadedFiles(files: UploadedFile[]): ProcessedDirectory {
+export function processUploadedFiles(files: UploadedFile[], options?: ProcessUploadedFilesOptions): ProcessedDirectory {
+	const { skipNormalization = false } = options || {};
 	const entries: Entry[] = [];
 	let fileCount = 0;
 
@@ -41,8 +51,9 @@ export function processUploadedFiles(files: UploadedFile[]): ProcessedDirectory 
 			continue;
 		}
 
-		// Remove any base folder name from the path
-		const normalizedPath = file.name.replace(/^[^\/]*\//, '');
+		// Remove any base folder name from the path (for web uploads)
+		// Skip if paths are already relative (CLI use case)
+		const normalizedPath = skipNormalization ? file.name : file.name.replace(/^[^\/]*\//, '');
 
 		// Skip files in .git directories
 		if (normalizedPath.startsWith('.git/') || normalizedPath === '.git') {
@@ -136,6 +147,14 @@ export function processUploadedFiles(files: UploadedFile[]): ProcessedDirectory 
 	return result;
 }
 
+export interface UpdateFileBlobsOptions {
+	/**
+	 * Skip path normalization when matching files.
+	 * Use true for CLI where paths are already relative to site directory.
+	 */
+	skipNormalization?: boolean;
+}
+
 /**
  * Update file blobs in directory structure after upload
  * Uses path-based matching to correctly match files in nested directories
@@ -146,8 +165,10 @@ export function updateFileBlobs(
 	uploadResults: FileUploadResult[],
 	filePaths: string[],
 	currentPath: string = '',
-	successfulPaths?: Set<string>
+	successfulPaths?: Set<string>,
+	options?: UpdateFileBlobsOptions
 ): Directory {
+	const { skipNormalization = false } = options || {};
 	const updatedEntries = directory.entries.map(entry => {
 		if ('type' in entry.node && entry.node.type === 'file') {
 			// Build the full path for this file
@@ -158,9 +179,13 @@ export function updateFileBlobs(
 				return null; // Filter out failed files
 			}
 
-			// Find exact match in filePaths (need to handle normalized paths)
+			// Find exact match in filePaths
 			const fileIndex = filePaths.findIndex((path) => {
-				// Normalize both paths by removing leading base folder
+				if (skipNormalization) {
+					// Direct match for CLI use case
+					return path === fullPath;
+				}
+				// Normalize both paths by removing leading base folder (web upload case)
 				const normalizedUploadPath = path.replace(/^[^\/]*\//, '');
 				const normalizedEntryPath = fullPath;
 				return normalizedUploadPath === normalizedEntryPath || path === fullPath;
@@ -189,7 +214,7 @@ export function updateFileBlobs(
 			const dirPath = currentPath ? `${currentPath}/${entry.name}` : entry.name;
 			return {
 				...entry,
-				node: updateFileBlobs(entry.node as Directory, uploadResults, filePaths, dirPath, successfulPaths)
+				node: updateFileBlobs(entry.node as Directory, uploadResults, filePaths, dirPath, successfulPaths, options)
 			};
 		}
 		return entry;
