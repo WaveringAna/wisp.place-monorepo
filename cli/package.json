@@ -1,21 +1,22 @@
 {
-  "name": "wisp-cli",
-  "version": "1.0.0",
+  "name": "create-wisp",
+  "version": "1.0.5",
   "description": "CLI for wisp.place - deploy static sites to the AT Protocol",
   "type": "module",
   "main": "./dist/index.js",
   "bin": {
-    "wisp-cli": "./dist/index.js"
+    "create-wisp": "dist/index.js",
+    "wisp-cli": "dist/index.js"
   },
   "files": [
     "dist"
   ],
   "scripts": {
     "dev": "bun run index.ts",
-    "build": "bun build ./index.ts --outdir ./dist --target node --sourcemap=linked --minify",
+    "build": "bun build ./index.ts --outdir ./dist --target node --sourcemap=linked && sed -i '' '1s|#!/usr/bin/env bun|#!/usr/bin/env node|' ./dist/index.js",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {
+  "devDependencies": {
     "@atproto/api": "^0.18.17",
     "@atproto/identity": "^0.4.10",
     "@atproto/lex-cbor": "^0.0.9",
@@ -36,14 +37,10 @@
     "ignore": "^7.0.5",
     "mime-types": "^3.0.2",
     "open": "^11.0.0",
-    "picocolors": "^1.1.1"
-  },
-  "devDependencies": {
+    "picocolors": "^1.1.1",
     "@types/bun": "latest",
     "@types/mime-types": "^3.0.1",
-    "@types/node": "^22.0.0"
-  },
-  "peerDependencies": {
+    "@types/node": "^22.0.0",
     "typescript": "^5"
   }
 }
