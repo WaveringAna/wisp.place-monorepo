@@ -32,6 +32,7 @@ steps:
       cd cli
 
       rm bun.lock
+      rm node_modules
 
       bun install
       bun link
