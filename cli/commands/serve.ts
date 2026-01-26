@@ -1,5 +1,6 @@
 import { AtpAgent } from '@atproto/api';
-import { Firehose } from '@atproto/sync';
+import { IdResolver } from '@atproto/identity';
+import { BunFirehose } from '../lib/firehose';
 import type { Record as SettingsRecord } from '@wisp/lexicons/types/place/wisp/settings';
 import { existsSync, readFileSync, statSync, readdirSync } from 'fs';
 import { join, extname } from 'path';
@@ -319,36 +320,35 @@ export async function serve(
   console.log(pc.dim('Watching for updates via firehose...\n'));
 
   // 6. Connect to firehose for live updates
-  const firehose = new Firehose({
+  const idResolver = new IdResolver();
+  const firehose = new BunFirehose({
+    idResolver,
     service: pdsEndpoint.replace('https://', 'wss://').replace('http://', 'ws://'),
-    handleEvent: async (evt: any) => {
-      if (evt.event !== 'commit') return;
+    filterCollections: ['place.wisp.fs', 'place.wisp.settings'],
+    handleEvent: async (evt) => {
+      // Only handle commit events for this DID
+      if (evt.event !== 'create' && evt.event !== 'update' && evt.event !== 'delete') return;
+      if (evt.did !== did) return;
+      if (evt.rkey !== site) return;
 
-      const commit = evt.commit;
-      if (!commit || commit.repo !== did) return;
+      if (evt.collection === 'place.wisp.fs') {
+        console.log(pc.yellow('\nSite updated, re-pulling...\n'));
+        await pull(identifier, { site, path: outputPath });
 
-      for (const op of commit.ops || []) {
-        const collection = op.path?.split('/')[0];
-        const rkey = op.path?.split('/')[1];
-
-        if (rkey !== site) continue;
-
-        if (collection === 'place.wisp.fs') {
-          console.log(pc.yellow('\nSite updated, re-pulling...\n'));
-          await pull(identifier, { site, path: outputPath });
-
-          // Reload redirects
-          state.redirectRules = loadRedirectRules(outputPath);
-          console.log(pc.green('✓ Site reloaded\n'));
-        } else if (collection === 'place.wisp.settings') {
-          console.log(pc.yellow('\nSettings updated...\n'));
-          state.settings = await fetchSettings(pdsEndpoint, did, site);
-          console.log(pc.green('✓ Settings reloaded\n'));
-        }
+        // Reload redirects
+        state.redirectRules = loadRedirectRules(outputPath);
+        console.log(pc.green('✓ Site reloaded\n'));
+      } else if (evt.collection === 'place.wisp.settings') {
+        console.log(pc.yellow('\nSettings updated...\n'));
+        state.settings = await fetchSettings(pdsEndpoint, did, site);
+        console.log(pc.green('✓ Settings reloaded\n'));
       }
     },
     onError: (err: Error) => {
       console.error(pc.red('Firehose error:'), err.message);
+      if (err.cause) {
+        console.error(pc.red('  Cause:'), err.cause);
+      }
     }
   });
 

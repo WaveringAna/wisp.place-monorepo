@@ -12,8 +12,15 @@
   },
   "dependencies": {
     "@atproto/api": "^0.18.17",
+    "@atproto/identity": "^0.4.10",
+    "@atproto/lex-cbor": "^0.0.9",
+    "@atproto/lex-data": "^0.0.9",
     "@atproto/oauth-client-node": "^0.3.15",
+    "@atproto/repo": "^0.8.12",
     "@atproto/sync": "^0.1.39",
+    "@atproto/syntax": "^0.4.3",
+    "multiformats": "^13.4.2",
+    "@clack/prompts": "^0.10.0",
     "@wisp/atproto-utils": "workspace:*",
     "@wisp/constants": "workspace:*",
     "@wisp/fs-utils": "workspace:*",
@@ -22,7 +29,6 @@
     "ignore": "^7.0.5",
     "mime-types": "^3.0.2",
     "open": "^11.0.0",
-    "ora": "^9.1.0",
     "picocolors": "^1.1.1"
   },
   "devDependencies": {

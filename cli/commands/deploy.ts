@@ -407,9 +407,10 @@ export async function deploy(
   );
 
   // 5. Build directory structure
-  const { directory: rawDirectory, fileCount } = processUploadedFiles(uploadedFiles);
+  // CLI paths are already relative to site directory, so skip normalization
+  const { directory: rawDirectory, fileCount } = processUploadedFiles(uploadedFiles, { skipNormalization: true });
   const successfulPaths = new Set(filePaths);
-  const directory = updateFileBlobs(rawDirectory, uploadResults, filePaths, '', successfulPaths);
+  const directory = updateFileBlobs(rawDirectory, uploadResults, filePaths, '', successfulPaths, { skipNormalization: true });
 
   // 6. Split into subfs if needed
   let finalDirectory = directory;
@@ -463,10 +464,6 @@ export async function deploy(
 
   const uri = `at://${did}/place.wisp.fs/${siteName}`;
   const url = `https://sites.wisp.place/${did}/${siteName}`;
-
-  console.log(pc.green(`\n✓ Deployed successfully!`));
-  console.log(pc.dim(`  URI: ${uri}`));
-  console.log(pc.cyan(`  URL: ${url}\n`));
 
   return { uri, url };
 }

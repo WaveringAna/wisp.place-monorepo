@@ -1,7 +1,7 @@
-import ora, { type Ora } from 'ora';
+import { spinner } from '@clack/prompts';
 import pc from 'picocolors';
 
-export { ora, pc };
+export { pc };
 
 export function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B';
@@ -11,6 +11,43 @@ export function formatBytes(bytes: number): string {
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i] ?? 'TB'}`;
 }
 
-export function createSpinner(text: string): Ora {
-  return ora({ text, color: 'cyan' });
+// Adapter to provide ora-like interface using clack spinner
+export interface SpinnerLike {
+  text: string;
+  start(): SpinnerLike;
+  succeed(text?: string): SpinnerLike;
+  fail(text?: string): SpinnerLike;
+}
+
+export function createSpinner(text: string): SpinnerLike {
+  const s = spinner();
+  let currentText = text;
+  let started = false;
+
+  return {
+    get text() {
+      return currentText;
+    },
+    set text(newText: string) {
+      currentText = newText;
+      if (started) {
+        s.message(newText);
+      }
+    },
+    start() {
+      started = true;
+      s.start(currentText);
+      return this;
+    },
+    succeed(message?: string) {
+      s.stop(pc.green('✓ ') + (message ?? currentText));
+      started = false;
+      return this;
+    },
+    fail(message?: string) {
+      s.stop(pc.red('✗ ') + (message ?? currentText));
+      started = false;
+      return this;
+    }
+  };
 }
