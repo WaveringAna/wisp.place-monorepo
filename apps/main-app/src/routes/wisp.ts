@@ -1,4 +1,4 @@
-import { Elysia } from 'elysia'
+import { Elysia, t } from 'elysia'
 import { requireAuth, type AuthenticatedContext } from '../lib/wisp-auth'
 import { NodeOAuthClient } from '@atproto/oauth-client-node'
 import { Agent } from '@atproto/api'

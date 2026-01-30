@@ -13,6 +13,7 @@ COPY tsconfig.json ./
 COPY packages ./packages
 COPY apps/hosting-service ./apps/hosting-service
 COPY apps/main-app/package.json ./apps/main-app/package.json
+COPY cli/package.json ./cli/package.json
 
 # Install dependencies
 RUN bun install --frozen-lockfile

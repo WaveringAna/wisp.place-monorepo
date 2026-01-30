@@ -1,4 +1,4 @@
-import { Elysia } from 'elysia'
+import { Elysia, t } from 'elysia'
 import { requireAuth } from '../lib/wisp-auth'
 import { NodeOAuthClient } from '@atproto/oauth-client-node'
 import { Agent } from '@atproto/api'
@@ -25,10 +25,11 @@ export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		 * Success: { success: true, message }
 		 * Failure: { success: false, error }
 		 */
-		.delete('/:rkey', async ({ params, auth }) => {
+		.delete('/:rkey', async ({ params, auth, set }) => {
 			const { rkey } = params
 
 			if (!rkey) {
+				set.status = 400
 				return {
 					success: false,
 					error: 'Site rkey is required'
@@ -119,6 +120,7 @@ export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				}
 			} catch (err) {
 				logger.error('[Site] Delete error', err)
+				set.status = 500
 				return {
 					success: false,
 					error: err instanceof Error ? err.message : 'Failed to delete site'
@@ -130,10 +132,11 @@ export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		 * Success: place.wisp.settings record or default settings object.
 		 * Failure: { success: false, error }
 		 */
-		.get('/:rkey/settings', async ({ params, auth }) => {
+		.get('/:rkey/settings', async ({ params, auth, set }) => {
 			const { rkey } = params
 
 			if (!rkey) {
+				set.status = 400
 				return {
 					success: false,
 					error: 'Site rkey is required'
@@ -175,6 +178,7 @@ export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				}
 			} catch (err) {
 				logger.error('[Site] Get settings error', err)
+				set.status = 500
 				return {
 					success: false,
 					error: err instanceof Error ? err.message : 'Failed to fetch settings'
@@ -186,10 +190,11 @@ export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		 * Success: { success: true, uri, cid }
 		 * Failure: { success: false, error }
 		 */
-		.post('/:rkey/settings', async ({ params, body, auth }) => {
+		.post('/:rkey/settings', async ({ params, body, auth, set }) => {
 			const { rkey } = params
 
 			if (!rkey) {
+				set.status = 400
 				return {
 					success: false,
 					error: 'Site rkey is required'
@@ -207,6 +212,7 @@ export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 			].filter(Boolean)
 
 			if (modes.length > 1) {
+				set.status = 400
 				return {
 					success: false,
 					error: 'Only one of spaMode, directoryListing, or custom404 can be enabled'
@@ -237,6 +243,7 @@ export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				}
 			} catch (err) {
 				logger.error('[Site] Save settings error', err)
+				set.status = 500
 				return {
 					success: false,
 					error: err instanceof Error ? err.message : 'Failed to save settings'

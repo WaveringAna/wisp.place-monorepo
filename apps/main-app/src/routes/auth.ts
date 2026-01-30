@@ -65,7 +65,8 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) => new
 		} catch (err) {
 			logger.error('Signin error', err, { handle })
 			console.error('[Auth] Full error:', err)
-			return  { error: 'Authentication failed', details: err instanceof Error ? err.message : String(err) }
+			c.set.status = 401
+			return { error: 'Authentication failed', details: err instanceof Error ? err.message : String(err) }
 		}
 	})
 	/**
@@ -153,8 +154,13 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) => new
 			return { success: true }
 		} catch (err) {
 			logger.error('[Auth] Logout error', err)
+			c.set.status = 500
 			return { error: 'Logout failed' }
 		}
+	}, {
+		cookie: t.Cookie({
+			did: t.Optional(t.String())
+		})
 	})
 	/**
 	 * GET /api/auth/status
@@ -179,4 +185,8 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) => new
 			c.cookie.did.remove()
 			return { authenticated: false }
 		}
+	}, {
+		cookie: t.Cookie({
+			did: t.Optional(t.String())
+		})
 	})
