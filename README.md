@@ -13,9 +13,9 @@ Host static sites in your AT Protocol repo, served with CDN distribution. Your P
 Visit https://wisp.place and sign in
 
 # Or use the CLI
-cd cli
-cargo build --release
-./target/release/wisp-cli your-handle.bsky.social --path ./my-site --site my-site
+npm install -g wispctl
+# or
+npm create wisp
 ```
 
 Your site appears at `https://sites.wisp.place/{your-did}/{site-name}` or your custom domain.

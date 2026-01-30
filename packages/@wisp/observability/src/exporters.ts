@@ -6,9 +6,10 @@
 import type { LogEntry, ErrorEntry, MetricEntry } from './core'
 import { metrics, type MeterProvider, type Counter, type Histogram } from '@opentelemetry/api'
 import { MeterProvider as SdkMeterProvider, PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics'
-import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-http'
+import { OTLPMetricExporter as OTLPMetricExporterHTTP } from '@opentelemetry/exporter-metrics-otlp-http'
+import { OTLPMetricExporter as OTLPMetricExporterProto } from '@opentelemetry/exporter-metrics-otlp-proto'
 import type { CompressionAlgorithm } from '@opentelemetry/otlp-exporter-base'
-import { Resource } from '@opentelemetry/resources'
+import { resourceFromAttributes } from '@opentelemetry/resources'
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions'
 import os from 'node:os'
 import { gzipSync } from 'node:zlib'
@@ -30,6 +31,7 @@ export interface GrafanaConfig {
 		password?: string
 		bearerToken?: string
 	}
+	prometheusEncoding?: 'protobuf' | 'json'
 	serviceName?: string
 	serviceVersion?: string
 	batchSize?: number
@@ -321,20 +323,29 @@ class MetricsExporter {
 
 		if (!this.config.enabled || !this.config.prometheusUrl) return
 
+		// Get encoding preference (default to protobuf for VictoriaMetrics compatibility)
+		const encoding = this.config.prometheusEncoding ||
+			(process.env.GRAFANA_PROMETHEUS_ENCODING as 'protobuf' | 'json') ||
+			'protobuf'
+
 		// Create OTLP exporter with Prometheus endpoint
 		const prometheusPath = process.env.GRAFANA_PROMETHEUS_PATH || '/v1/metrics'
-		const exporter = new OTLPMetricExporter({
+		const exporterConfig = {
 			url: `${this.config.prometheusUrl}${prometheusPath}`,
 			headers: this.getAuthHeaders(),
 			timeoutMillis: 10000,
 			compression: 'gzip' as CompressionAlgorithm
-		})
+		}
+
+		const exporter = encoding === 'protobuf'
+			? new OTLPMetricExporterProto(exporterConfig)
+			: new OTLPMetricExporterHTTP(exporterConfig)
 
 		// Create meter provider with periodic exporting
 		const hostname = os.hostname()
 		const serviceName = this.config.serviceName || 'wisp-app'
 		const meterProvider = new SdkMeterProvider({
-			resource: new Resource({
+			resource: resourceFromAttributes({
 				[ATTR_SERVICE_NAME]: serviceName,
 				[ATTR_SERVICE_VERSION]: this.config.serviceVersion || '1.0.0',
 				'instance': `${serviceName}-${hostname}`
