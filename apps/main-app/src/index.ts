@@ -1,7 +1,7 @@
 // Fix for Elysia issue with Bun, (see https://github.com/oven-sh/bun/issues/12161)
 process.getBuiltinModule = require;
 
-import { Elysia } from 'elysia'
+import { Elysia, t } from 'elysia'
 import type { Context } from 'elysia'
 import { cors } from '@elysiajs/cors'
 import { staticPlugin } from '@elysiajs/static'
@@ -119,7 +119,55 @@ export const app = new Elysia({
 		set.headers['X-XSS-Protection'] = '1; mode=block'
 		set.headers['Permissions-Policy'] = 'geolocation=(), microphone=(), camera=()'
 	})
-	.onError(observabilityMiddleware('main-app').onError)
+	.onError((context) => {
+		// Call observability error handler first
+		observabilityMiddleware('main-app').onError(context)
+
+		const { error, set, code } = context as any
+
+		// Determine appropriate status code
+		let statusCode = 500
+		let errorMessage = 'Internal server error'
+
+		if (error instanceof Error) {
+			errorMessage = error.message
+
+			// Map common error patterns to status codes
+			if (errorMessage.includes('not found') || errorMessage.includes('Not found')) {
+				statusCode = 404
+			} else if (errorMessage.includes('Unauthorized') || errorMessage.includes('unauthorized')) {
+				statusCode = 401
+			} else if (errorMessage.includes('Forbidden') || errorMessage.includes('forbidden')) {
+				statusCode = 403
+			} else if (errorMessage.includes('Invalid') || errorMessage.includes('required') ||
+					   errorMessage.includes('validation') || errorMessage.includes('bad request')) {
+				statusCode = 400
+			} else if ((error as any).status) {
+				statusCode = (error as any).status
+			}
+		}
+
+		// Handle Elysia error codes
+		if (code === 'NOT_FOUND') {
+			statusCode = 404
+			errorMessage = 'Not found'
+		} else if (code === 'VALIDATION') {
+			statusCode = 400
+			errorMessage = error instanceof Error ? error.message : 'Validation error'
+		} else if (code === 'PARSE') {
+			statusCode = 400
+			errorMessage = 'Invalid request format'
+		}
+
+		set.status = statusCode
+		set.headers['Content-Type'] = 'application/json'
+
+		return {
+			success: false,
+			error: errorMessage,
+			statusCode
+		}
+	})
 	.use(csrfProtection())
 	.get('/', async ({ set }) => {
 		// Build dynamic login URL for AT Protocol OAuth entryway
@@ -146,6 +194,41 @@ export const app = new Elysia({
 			prefix: '/'
 		})
 	)
+	// Production only: serve built assets from dist
+	.use(
+		Bun.env.NODE_ENV === 'production'
+			? await staticPlugin({
+					assets: './apps/main-app/dist',
+					prefix: '/dist'
+				})
+			: (app) => app
+	)
+	.use(
+		Bun.env.NODE_ENV === 'production'
+			? await staticPlugin({
+					assets: './apps/main-app/dist/editor',
+					prefix: '/editor'
+				})
+			: (app) => app
+	)
+	// Production only: serve built HTML for /editor
+	.use(
+		Bun.env.NODE_ENV === 'production'
+			? new Elysia()
+				.get('/editor', async ({ set }) => {
+					set.headers['Content-Type'] = 'text/html; charset=utf-8'
+					return await Bun.file('./apps/main-app/dist/editor/index.html').text()
+				})
+				.get('/editor/*', async ({ set }) => {
+					set.headers['Content-Type'] = 'text/html; charset=utf-8'
+					return await Bun.file('./apps/main-app/dist/editor/index.html').text()
+				})
+			: (app) => app
+	)
+	// Redirect old acceptable-use URL to new SPA route
+	.get('/acceptable-use', ({ set }) => {
+		set.redirect = '/editor/acceptable-use'
+	})
 	.get('/oauth-client-metadata.json', () => {
 		return createClientMetadata(config)
 	})

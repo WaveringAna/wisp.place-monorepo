@@ -392,6 +392,34 @@
             height: 1rem;
         }
 
+        /* Light mode terminal */
+        @media (prefers-color-scheme: light) {
+            .terminal {
+                background: #f6f8fa;
+                border: 1px solid var(--border-light);
+                box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.15);
+            }
+
+            .terminal-header {
+                background: #eaeef2;
+            }
+
+            .terminal-title {
+                color: #57606a;
+            }
+
+            .terminal-body {
+                color: #1f2328;
+            }
+
+            .t-prompt { color: #6639ba; }
+            .t-cmd { color: #1f2328; }
+            .t-muted { color: #656d76; }
+            .t-success { color: #1a7f37; }
+            .t-cyan { color: #0969da; }
+            .t-output { color: #656d76; }
+        }
+
         /* Features */
         .features {
             padding: 6rem 2rem;
@@ -665,7 +693,7 @@
             <span class="hero-badge">Deploy static sites in seconds</span>
             <h1>Ship fast without complexity</h1>
             <p class="hero-desc">
-                Static hosting for developers who value simplicity. Your data, your PDS, your rules.
+                Static hosting for developers who value simplicity. Powered by ATProto!
             </p>
             <div class="cta-group">
                 <div class="cta-buttons">
@@ -684,8 +712,8 @@
             <div class="steps">
                 <div class="step">
                     <div class="step-number">01</div>
-                    <h3>Sign in with Bluesky</h3>
-                    <p>Authenticate with your AT Protocol identity. No new accounts needed.</p>
+                    <h3>Sign in with your AT</h3>
+                    <p>Your Bluesky account is one! Don't have an AT?<br><a href="{{ATPROTO_LOGIN_URL}}" target="_blank">Make one here ^.^!</a></p>
                 </div>
                 <div class="step">
                     <div class="step-number">02</div>
@@ -757,7 +785,7 @@
     </section>
 
     <section class="cli-section">
-        <div class="cli-inner">
+        <div class="cli-inner" style="max-width: 1100px; text-align: left;">
             <p class="section-label">For power users</p>
             <h2 class="section-title">Command line first</h2>
             <p class="cli-desc">Full control from your terminal. Integrates with your existing workflow.</p>
@@ -781,8 +809,38 @@
                 </div>
             </div>
 
-            <div class="cta-buttons">
-                <a href="https://docs.wisp.place/cli/" target="_blank" class="cta-secondary">Install CLI</a>
+            <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 3rem; align-items: center; margin-top: 3rem;">
+                <div>
+                    <h3 style="font-size: 1.5rem; font-weight: 600; margin-bottom: 1rem;">Self-host anywhere</h3>
+                    <p style="color: var(--text-muted); margin-bottom: 1.5rem;">Deploy your own server anywhere in the world. The CLI watches the firehose and automatically pulls updates when you push changes—complete control over your hosting infrastructure.</p>
+                    <div style="display: flex; align-items: center; gap: 1.5rem;">
+                        <a href="https://docs.wisp.place/cli/" target="_blank" class="cta-secondary">Install CLI</a>
+                        <code style="color: var(--text); background: var(--code-bg); padding: 0.5rem 0.75rem; border: 1px solid var(--border-light); border-radius: 4px; font-size: 0.875rem;">npm install -g wispctl</code>
+                    </div>
+                </div>
+                <div>
+                    <div class="terminal">
+                        <div class="terminal-header">
+                            <div class="terminal-dots">
+                                <span class="terminal-dot red"></span>
+                                <span class="terminal-dot yellow"></span>
+                                <span class="terminal-dot green"></span>
+                            </div>
+                            <span class="terminal-title">terminal</span>
+                        </div>
+                        <div class="terminal-body">
+                            <div class="terminal-line"><span class="t-prompt">$</span> <span class="t-cmd">wispctl serve nekomimi.pet -s myblog</span></div>
+                            <div class="terminal-spacer"></div>
+                            <div class="terminal-line"><span class="t-muted">◇</span> Serving myblog from nekomimi.pet</div>
+                            <div class="terminal-line"><span class="t-success">✓</span> <span class="t-success">Server running at http://localhost:8080</span></div>
+                            <div class="terminal-line"><span class="t-muted">◇</span> Watching for updates via firehose...</div>
+                            <div class="terminal-spacer"></div>
+                            <div class="terminal-line"><span class="t-muted">◇</span> Site update received, re-pulling...</div>
+                            <div class="terminal-line"><span class="t-muted">◇</span> Files to download: 1, unchanged: 4</div>
+                            <div class="terminal-line"><span class="t-success">✓</span> <span class="t-success">Site reloaded</span></div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </section>

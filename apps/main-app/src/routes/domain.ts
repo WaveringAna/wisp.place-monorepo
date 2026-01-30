@@ -1,4 +1,4 @@
-import { Elysia } from 'elysia'
+import { Elysia, t } from 'elysia'
 import { requireAuth, type AuthenticatedContext } from '../lib/wisp-auth'
 import { NodeOAuthClient } from '@atproto/oauth-client-node'
 import { Agent } from '@atproto/api'
@@ -105,12 +105,13 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		 * POST /api/domain/claim
 		 * Success: { success: true, domain }
 		 */
-		.post('/claim', async ({ body, auth }) => {
+		.post('/claim', async ({ body, auth, set }) => {
 			try {
 				const { handle } = body as { handle?: string };
 				const normalizedHandle = (handle || "").trim().toLowerCase();
 
 				if (!isValidHandle(normalizedHandle)) {
+					set.status = 400
 					throw new Error("Invalid handle");
 				}
 
@@ -122,8 +123,10 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				} catch (err) {
 					const message = err instanceof Error ? err.message : 'Unknown error';
 					if (message === 'domain_limit_reached') {
+						set.status = 400
 						throw new Error("Domain limit reached: You can only claim up to 3 wisp.place domains");
 					}
+					set.status = 409
 					throw new Error("Handle taken or error claiming domain");
 				}
 
@@ -152,18 +155,19 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		 * POST /api/domain/update
 		 * Success: { success: true, domain }
 		 */
-		.post('/update', async ({ body, auth }) => {
+		.post('/update', async ({ body, auth, set }) => {
 			try {
 				const { handle } = body as { handle?: string };
 				const normalizedHandle = (handle || "").trim().toLowerCase();
-				
+
 				if (!isValidHandle(normalizedHandle)) {
+					set.status = 400
 					throw new Error("Invalid handle");
 				}
 
 				const desiredDomain = toDomain(normalizedHandle);
 				const current = await getDomainByDid(auth.did);
-				
+
 				if (current === desiredDomain) {
 					return { success: true, domain: current };
 				}
@@ -172,6 +176,7 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				try {
 					domain = await updateDomain(auth.did, normalizedHandle);
 				} catch (err) {
+					set.status = 409
 					throw new Error("Handle taken");
 				}
 
@@ -198,7 +203,7 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		 * POST /api/domain/custom/add
 		 * Success: { success: true, id, domain, verified: false }
 		 */
-		.post('/custom/add', async ({ body, auth }) => {
+		.post('/custom/add', async ({ body, auth, set }) => {
 			try {
 				const { domain } = body as { domain: string };
 				const domainLower = domain.toLowerCase().trim();
@@ -206,6 +211,7 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				// Enhanced domain validation
 				// 1. Length check (RFC 1035: labels 1-63 chars, total max 253)
 				if (!domainLower || domainLower.length < 3 || domainLower.length > 253) {
+					set.status = 400
 					throw new Error('Invalid domain: must be 3-253 characters');
 				}
 
@@ -215,6 +221,7 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				// - No consecutive dots, no leading/trailing dots or hyphens
 				const domainPattern = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
 				if (!domainPattern.test(domainLower)) {
+					set.status = 400
 					throw new Error('Invalid domain format');
 				}
 
@@ -222,9 +229,11 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				const labels = domainLower.split('.');
 				for (const label of labels) {
 					if (label.length === 0 || label.length > 63) {
+						set.status = 400
 						throw new Error('Invalid domain: label length must be 1-63 characters');
 					}
 					if (label.startsWith('-') || label.endsWith('-')) {
+						set.status = 400
 						throw new Error('Invalid domain: labels cannot start or end with hyphen');
 					}
 				}
@@ -232,12 +241,14 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				// 4. TLD validation (require valid TLD, block single-char TLDs and numeric TLDs)
 				const tld = labels[labels.length - 1];
 				if (tld.length < 2 || /^\d+$/.test(tld)) {
+					set.status = 400
 					throw new Error('Invalid domain: TLD must be at least 2 characters and not all numeric');
 				}
 
 				// 5. Homograph attack protection - block domains with mixed scripts or confusables
 				// Block non-ASCII characters (Punycode domains should be pre-converted)
 				if (!/^[a-z0-9.-]+$/.test(domainLower)) {
+					set.status = 400
 					throw new Error('Invalid domain: only ASCII alphanumeric, dots, and hyphens allowed');
 				}
 
@@ -257,11 +268,13 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				];
 
 				if (blockedDomains.includes(domainLower)) {
+					set.status = 400
 					throw new Error('Invalid domain: reserved or blocked domain');
 				}
 
 				for (const pattern of blockedPatterns) {
 					if (pattern.test(domainLower)) {
+						set.status = 400
 						throw new Error('Invalid domain: IP addresses not allowed');
 					}
 				}
@@ -269,6 +282,7 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				// Check if already exists and is verified
 				const existing = await getCustomDomainInfo(domainLower);
 				if (existing && existing.verified) {
+					set.status = 409
 					throw new Error('Domain already verified and claimed');
 				}
 
@@ -293,13 +307,14 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		 * POST /api/domain/custom/verify
 		 * Success: { success: true, verified, error, found }
 		 */
-		.post('/custom/verify', async ({ body, auth }) => {
+		.post('/custom/verify', async ({ body, auth, set }) => {
 			try {
 				const { id } = body as { id: string };
 
 				// Get domain from database
 				const domainInfo = await getCustomDomainById(id);
 				if (!domainInfo) {
+					set.status = 404
 					throw new Error('Domain not found');
 				}
 
@@ -325,17 +340,19 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		 * DELETE /api/domain/custom/:id
 		 * Success: { success: true }
 		 */
-		.delete('/custom/:id', async ({ params, auth }) => {
+		.delete('/custom/:id', async ({ params, auth, set }) => {
 			try {
 				const { id } = params;
 
 				// Verify ownership before deleting
 				const domainInfo = await getCustomDomainById(id);
 				if (!domainInfo) {
+					set.status = 404
 					throw new Error('Domain not found');
 				}
 
 				if (domainInfo.did !== auth.did) {
+					set.status = 403
 					throw new Error('Unauthorized: You do not own this domain');
 				}
 
@@ -352,11 +369,12 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		 * POST /api/domain/wisp/map-site
 		 * Success: { success: true }
 		 */
-		.post('/wisp/map-site', async ({ body, auth }) => {
+		.post('/wisp/map-site', async ({ body, auth, set }) => {
 			try {
 				const { domain, siteRkey } = body as { domain: string; siteRkey: string | null };
 
 				if (!domain) {
+					set.status = 400
 					throw new Error('Domain parameter required');
 				}
 
@@ -373,7 +391,7 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		 * DELETE /api/domain/wisp/:domain
 		 * Success: { success: true }
 		 */
-		.delete('/wisp/:domain', async ({ params, auth }) => {
+		.delete('/wisp/:domain', async ({ params, auth, set }) => {
 			try {
 				const { domain } = params;
 
@@ -382,10 +400,12 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				const info = await isDomainRegistered(domainLower);
 
 				if (!info.registered || info.type !== 'wisp') {
+					set.status = 404
 					throw new Error('Domain not found');
 				}
 
 				if (info.did !== auth.did) {
+					set.status = 403
 					throw new Error('Unauthorized: You do not own this domain');
 				}
 
@@ -416,7 +436,7 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		 * POST /api/domain/custom/:id/map-site
 		 * Success: { success: true }
 		 */
-		.post('/custom/:id/map-site', async ({ params, body, auth }) => {
+		.post('/custom/:id/map-site', async ({ params, body, auth, set }) => {
 			try {
 				const { id } = params;
 				const { siteRkey } = body as { siteRkey: string | null };
@@ -424,10 +444,12 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				// Verify ownership before updating
 				const domainInfo = await getCustomDomainById(id);
 				if (!domainInfo) {
+					set.status = 404
 					throw new Error('Domain not found');
 				}
 
 				if (domainInfo.did !== auth.did) {
+					set.status = 403
 					throw new Error('Unauthorized: You do not own this domain');
 				}
 
