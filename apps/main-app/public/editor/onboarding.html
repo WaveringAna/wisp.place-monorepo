@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Get Started - wisp.place</title>
+    <link rel="icon" type="image/x-icon" href="../favicon.ico">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        :root {
+            --bg: oklch(0.92 0.012 35);
+            --bg-alt: oklch(0.88 0.01 35);
+            --text: oklch(0.15 0.015 30);
+            --text-muted: oklch(0.35 0.02 30);
+            --text-subtle: oklch(0.50 0.02 30);
+            --border: oklch(0.30 0.025 35);
+            --border-light: oklch(0.65 0.02 30);
+            --accent: oklch(0.65 0.18 345);
+            --cta-bg: oklch(0.30 0.025 35);
+            --cta-text: oklch(0.96 0.008 35);
+            --code-bg: oklch(0.95 0.008 35);
+            --success: oklch(0.65 0.20 145);
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: oklch(0.23 0.015 285);
+                --bg-alt: oklch(0.20 0.015 285);
+                --text: oklch(0.90 0.005 285);
+                --text-muted: oklch(0.72 0.01 285);
+                --text-subtle: oklch(0.55 0.01 285);
+                --border: oklch(0.90 0.005 285);
+                --border-light: oklch(0.38 0.02 285);
+                --accent: oklch(0.85 0.08 5);
+                --cta-bg: oklch(0.70 0.10 295);
+                --cta-text: oklch(0.23 0.015 285);
+                --code-bg: oklch(0.28 0.015 285);
+            }
+        }
+
+        body {
+            font-family: "JetBrains Mono", monospace;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+        }
+        .container { max-width: 600px; margin: 0 auto; padding: 3rem 1rem; }
+        header {
+            border-bottom: 1px solid var(--border-light);
+            padding: 1rem 2rem;
+            background: var(--bg);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        .logo { font-size: 1.125rem; font-weight: 700; color: var(--text); letter-spacing: -0.02em; }
+        .progress { display: flex; justify-content: center; align-items: center; gap: 1rem; margin-bottom: 2rem; }
+        .step-indicator {
+            width: 2rem; height: 2rem; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            background: var(--bg-alt); color: var(--text-subtle);
+            font-weight: 600;
+        }
+        .step-indicator.active { background: var(--cta-bg); color: var(--cta-text); }
+        .step-indicator.complete { background: var(--success); color: var(--bg); }
+        .progress-line { width: 4rem; height: 2px; background: var(--border-light); }
+        .card {
+            background: var(--bg-alt);
+            border: 1px solid var(--border-light);
+            border-radius: 0.5rem;
+            padding: 1.5rem;
+        }
+        h1 { font-size: 1.5rem; margin-bottom: 0.5rem; text-align: center; color: var(--text); }
+        h2 { font-size: 1.25rem; margin-bottom: 1rem; color: var(--text); }
+        p { color: var(--text-muted); margin-bottom: 1rem; }
+        .text-center { text-align: center; }
+        .text-muted { color: var(--text-muted); font-size: 0.875rem; }
+        label { display: block; margin-bottom: 0.5rem; font-size: 0.875rem; font-weight: 500; color: var(--text); }
+        input {
+            width: 100%;
+            padding: 0.5rem 0.75rem;
+            background: var(--bg);
+            border: 1px solid var(--border-light);
+            border-radius: 0.375rem;
+            color: var(--text);
+            font-size: 0.875rem;
+            font-family: "JetBrains Mono", monospace;
+        }
+        input:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+        button {
+            width: 100%;
+            padding: 0.5rem 1rem;
+            background: var(--cta-bg);
+            color: var(--cta-text);
+            border: none;
+            border-radius: 0.375rem;
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 0.875rem;
+            font-family: "JetBrains Mono", monospace;
+        }
+        button:hover { opacity: 0.9; }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        button.outline {
+            background: transparent;
+            color: var(--text);
+            border: 1px solid var(--border-light);
+        }
+        .input-wrapper { position: relative; margin-bottom: 1rem; }
+        .input-icon {
+            position: absolute;
+            right: 0.75rem;
+            top: 50%;
+            transform: translateY(-50%);
+        }
+        .spinner {
+            display: inline-block;
+            width: 1rem; height: 1rem;
+            border: 2px solid var(--border-light);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .success { color: var(--success); }
+        .error { color: var(--accent); }
+        .hidden { display: none; }
+        .mb-1 { margin-bottom: 0.5rem; }
+        .mb-2 { margin-bottom: 1rem; }
+        .mb-4 { margin-bottom: 1.5rem; }
+        .mt-4 { margin-top: 1.5rem; }
+        .flex { display: flex; }
+        .gap-2 { gap: 0.5rem; }
+        .upload-zone {
+            border: 2px dashed var(--border-light);
+            border-radius: 0.5rem;
+            padding: 2rem;
+            text-align: center;
+            cursor: pointer;
+            transition: border-color 0.2s;
+        }
+        .upload-zone:hover { border-color: var(--accent); }
+        .alert {
+            padding: 1rem;
+            border-radius: 0.5rem;
+            margin-bottom: 1rem;
+        }
+        .alert-success { background: var(--code-bg); border: 1px solid var(--border-light); color: var(--success); }
+        .alert-info { background: var(--code-bg); color: var(--text-muted); }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="logo">wisp.place</div>
+    </header>
+
+    <div class="container">
+        <div class="progress mb-4">
+            <div class="step-indicator" id="step1">1</div>
+            <div class="progress-line"></div>
+            <div class="step-indicator" id="step2">2</div>
+        </div>
+
+        <h1 id="stepTitle">Claim Your Free Domain</h1>
+        <p class="text-center text-muted mb-4" id="stepDesc">Choose a subdomain on wisp.place</p>
+
+        <!-- Step 1: Domain -->
+        <div id="domainStep" class="card">
+            <h2>Choose Your Domain</h2>
+            <p class="text-muted mb-2">Pick a unique handle for your free *.wisp.place subdomain</p>
+
+            <label for="handle">Your Handle</label>
+            <div class="input-wrapper">
+                <input type="text" id="handle" placeholder="my-awesome-site">
+                <span class="input-icon" id="availabilityIcon"></span>
+            </div>
+            <p class="text-muted mb-2 hidden" id="domainPreview"></p>
+            <p class="text-muted error mb-2 hidden" id="domainError"></p>
+
+            <button id="claimBtn" disabled>Claim Domain</button>
+        </div>
+
+        <!-- Step 2: Upload -->
+        <div id="uploadStep" class="card hidden">
+            <h2>Deploy Your Site</h2>
+            <p class="text-muted mb-4">Upload your static site files or start with an empty site</p>
+
+            <div class="alert alert-success mb-4">
+                <strong>✓ Domain claimed:</strong> <span id="claimedDomain"></span>
+            </div>
+
+            <label for="siteName">Site Name</label>
+            <input type="text" id="siteName" placeholder="my-site" class="mb-1">
+            <p class="text-muted mb-4">A unique identifier for this site in your account</p>
+
+            <label>Upload Files (Optional)</label>
+            <div class="upload-zone mb-1" id="uploadZone">
+                <p>📤</p>
+                <p class="mb-2">Choose Folder</p>
+                <p class="text-muted" id="fileCount"></p>
+            </div>
+            <input type="file" id="fileInput" multiple webkitdirectory directory class="hidden">
+            <p class="text-muted mb-2">Supported: HTML, CSS, JS, images, fonts, and more</p>
+            <p class="text-muted mb-4">Limits: 100MB per file, 300MB total</p>
+
+            <div id="uploadProgress" class="alert alert-info mb-4 hidden">
+                <div class="flex gap-2">
+                    <span class="spinner"></span>
+                    <span id="progressText"></span>
+                </div>
+            </div>
+
+            <div class="flex gap-2">
+                <button id="skipBtn" class="outline">Skip for Now</button>
+                <button id="uploadBtn" disabled>Create Empty Site</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let state = {
+            step: 'domain',
+            handle: '',
+            isAvailable: null,
+            domain: '',
+            claimedDomain: '',
+            siteName: '',
+            files: null,
+            checkTimeout: null
+        };
+
+        // DOM elements
+        const step1 = document.getElementById('step1');
+        const step2 = document.getElementById('step2');
+        const stepTitle = document.getElementById('stepTitle');
+        const stepDesc = document.getElementById('stepDesc');
+        const domainStep = document.getElementById('domainStep');
+        const uploadStep = document.getElementById('uploadStep');
+        const handleInput = document.getElementById('handle');
+        const availabilityIcon = document.getElementById('availabilityIcon');
+        const domainPreview = document.getElementById('domainPreview');
+        const domainError = document.getElementById('domainError');
+        const claimBtn = document.getElementById('claimBtn');
+        const claimedDomainEl = document.getElementById('claimedDomain');
+        const siteNameInput = document.getElementById('siteName');
+        const uploadZone = document.getElementById('uploadZone');
+        const fileInput = document.getElementById('fileInput');
+        const fileCount = document.getElementById('fileCount');
+        const uploadProgress = document.getElementById('uploadProgress');
+        const progressText = document.getElementById('progressText');
+        const skipBtn = document.getElementById('skipBtn');
+        const uploadBtn = document.getElementById('uploadBtn');
+
+        // Handle input
+        handleInput.addEventListener('input', (e) => {
+            state.handle = e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '');
+            handleInput.value = state.handle;
+
+            clearTimeout(state.checkTimeout);
+
+            if (state.handle.length < 3) {
+                state.isAvailable = null;
+                availabilityIcon.innerHTML = '';
+                domainPreview.classList.add('hidden');
+                domainError.classList.add('hidden');
+                claimBtn.disabled = true;
+                return;
+            }
+
+            availabilityIcon.innerHTML = '<span class="spinner"></span>';
+            state.checkTimeout = setTimeout(checkAvailability, 500);
+        });
+
+        async function checkAvailability() {
+            try {
+                const res = await fetch(`/api/domain/check?handle=${encodeURIComponent(state.handle)}`);
+                const data = await res.json();
+                state.isAvailable = data.available;
+                state.domain = data.domain || '';
+
+                if (state.isAvailable) {
+                    availabilityIcon.innerHTML = '<span class="success">✓</span>';
+                    domainPreview.textContent = `Your domain will be: ${state.domain}`;
+                    domainPreview.classList.remove('hidden');
+                    domainError.classList.add('hidden');
+                    claimBtn.disabled = false;
+                } else {
+                    availabilityIcon.innerHTML = '<span class="error">✗</span>';
+                    domainError.textContent = 'This handle is not available or invalid';
+                    domainError.classList.remove('hidden');
+                    domainPreview.classList.add('hidden');
+                    claimBtn.disabled = true;
+                }
+            } catch (err) {
+                console.error(err);
+                state.isAvailable = false;
+                availabilityIcon.innerHTML = '<span class="error">✗</span>';
+                claimBtn.disabled = true;
+            }
+        }
+
+        // Claim domain
+        claimBtn.addEventListener('click', async () => {
+            if (!state.isAvailable) return;
+
+            claimBtn.disabled = true;
+            claimBtn.textContent = 'Claiming...';
+
+            try {
+                const res = await fetch('/api/domain/claim', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ handle: state.handle })
+                });
+                const data = await res.json();
+
+                if (data.success) {
+                    state.claimedDomain = data.domain;
+                    state.step = 'upload';
+                    renderStep();
+                } else {
+                    throw new Error(data.error || 'Failed to claim domain');
+                }
+            } catch (err) {
+                const msg = err.message;
+                if (msg.includes('Already claimed')) {
+                    alert('You have already claimed a wisp.place subdomain. Redirecting to editor...');
+                    window.location.href = '/editor';
+                } else {
+                    alert(`Failed to claim domain: ${msg}`);
+                    claimBtn.disabled = false;
+                    claimBtn.textContent = 'Claim Domain';
+                }
+            }
+        });
+
+        // Upload zone
+        uploadZone.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', (e) => {
+            state.files = e.target.files;
+            if (state.files && state.files.length > 0) {
+                fileCount.textContent = `${state.files.length} files selected`;
+                uploadBtn.textContent = 'Upload & Deploy';
+            }
+        });
+
+        // Site name
+        siteNameInput.addEventListener('input', (e) => {
+            state.siteName = e.target.value;
+            uploadBtn.disabled = !state.siteName;
+        });
+
+        // Skip
+        skipBtn.addEventListener('click', () => {
+            window.location.href = '/editor';
+        });
+
+        // Upload
+        uploadBtn.addEventListener('click', async () => {
+            if (!state.siteName) return;
+
+            uploadBtn.disabled = true;
+            skipBtn.disabled = true;
+            uploadProgress.classList.remove('hidden');
+            progressText.textContent = 'Preparing files...';
+
+            try {
+                const formData = new FormData();
+                formData.append('siteName', state.siteName);
+
+                if (state.files) {
+                    for (let i = 0; i < state.files.length; i++) {
+                        formData.append('files', state.files[i]);
+                    }
+                }
+
+                progressText.textContent = 'Uploading to AT Protocol...';
+                const res = await fetch('/wisp/upload-files', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await res.json();
+
+                if (data.success) {
+                    progressText.textContent = 'Upload complete!';
+                    setTimeout(() => {
+                        window.location.href = `https://${state.claimedDomain}`;
+                    }, 1500);
+                } else {
+                    throw new Error(data.error || 'Upload failed');
+                }
+            } catch (err) {
+                alert(`Upload failed: ${err.message}`);
+                uploadBtn.disabled = false;
+                skipBtn.disabled = false;
+                uploadProgress.classList.add('hidden');
+            }
+        });
+
+        function renderStep() {
+            if (state.step === 'domain') {
+                step1.classList.add('active');
+                step2.classList.remove('active', 'complete');
+                stepTitle.textContent = 'Claim Your Free Domain';
+                stepDesc.textContent = 'Choose a subdomain on wisp.place';
+                domainStep.classList.remove('hidden');
+                uploadStep.classList.add('hidden');
+            } else {
+                step1.classList.remove('active');
+                step1.classList.add('complete');
+                step1.textContent = '✓';
+                step2.classList.add('active');
+                stepTitle.textContent = 'Deploy Your First Site';
+                stepDesc.textContent = 'Upload your site or start with an empty one';
+                domainStep.classList.add('hidden');
+                uploadStep.classList.remove('hidden');
+                claimedDomainEl.textContent = state.claimedDomain;
+            }
+        }
+    </script>
+</body>
+</html>

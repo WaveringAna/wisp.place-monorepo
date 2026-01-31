@@ -229,6 +229,14 @@ export const app = new Elysia({
 	.get('/acceptable-use', ({ set }) => {
 		set.redirect = '/editor/acceptable-use'
 	})
+	.get('/onboarding', async ({ set }) => {
+		set.headers['Content-Type'] = 'text/html; charset=utf-8'
+		return await Bun.file('./apps/main-app/public/editor/onboarding.html').text()
+	})
+	.get('/editor/onboarding', async ({ set }) => {
+		set.headers['Content-Type'] = 'text/html; charset=utf-8'
+		return await Bun.file('./apps/main-app/public/editor/onboarding.html').text()
+	})
 	.get('/oauth-client-metadata.json', () => {
 		return createClientMetadata(config)
 	})
