@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Acceptable Use Policy - wisp.place</title>
+    <link rel="icon" type="image/x-icon" href="../favicon.ico">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        :root {
+            --bg: oklch(0.92 0.012 35);
+            --bg-alt: oklch(0.88 0.01 35);
+            --text: oklch(0.15 0.015 30);
+            --text-muted: oklch(0.35 0.02 30);
+            --text-subtle: oklch(0.50 0.02 30);
+            --border: oklch(0.30 0.025 35);
+            --border-light: oklch(0.65 0.02 30);
+            --accent: oklch(0.65 0.18 345);
+            --cta-bg: oklch(0.30 0.025 35);
+            --cta-text: oklch(0.96 0.008 35);
+            --code-bg: oklch(0.95 0.008 35);
+            --success: oklch(0.65 0.20 145);
+            --red: oklch(0.60 0.20 25);
+            --yellow: oklch(0.70 0.15 85);
+            --blue: oklch(0.60 0.15 240);
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: oklch(0.23 0.015 285);
+                --bg-alt: oklch(0.20 0.015 285);
+                --text: oklch(0.90 0.005 285);
+                --text-muted: oklch(0.72 0.01 285);
+                --text-subtle: oklch(0.55 0.01 285);
+                --border: oklch(0.90 0.005 285);
+                --border-light: oklch(0.38 0.02 285);
+                --accent: oklch(0.85 0.08 5);
+                --cta-bg: oklch(0.70 0.10 295);
+                --cta-text: oklch(0.23 0.015 285);
+                --code-bg: oklch(0.28 0.015 285);
+                --success: oklch(0.65 0.20 145);
+                --red: oklch(0.65 0.20 25);
+                --yellow: oklch(0.75 0.15 85);
+                --blue: oklch(0.65 0.18 240);
+            }
+        }
+
+        body {
+            font-family: "JetBrains Mono", monospace;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        header {
+            border-bottom: 1px solid var(--border-light);
+            padding: 1rem 2rem;
+            background: var(--bg);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .header-inner {
+            max-width: 1100px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-size: 1.125rem;
+            font-weight: 700;
+            color: var(--text);
+            letter-spacing: -0.02em;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .logo img { width: 2rem; height: 2rem; }
+
+        .back-link {
+            color: var(--text-muted);
+            text-decoration: none;
+            font-size: 0.875rem;
+        }
+
+        .back-link:hover { color: var(--text); }
+
+        .hero {
+            background: linear-gradient(to bottom, var(--code-bg), var(--bg));
+            border-bottom: 1px solid var(--border-light);
+            padding: 4rem 1rem;
+            text-align: center;
+        }
+
+        .hero-content { max-width: 900px; margin: 0 auto; }
+
+        .hero-icon {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 4rem;
+            height: 4rem;
+            border-radius: 50%;
+            background: var(--code-bg);
+            margin-bottom: 1.5rem;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            margin-bottom: 1.5rem;
+            color: var(--text);
+        }
+
+        .meta {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 1.5rem;
+            font-size: 0.875rem;
+            color: var(--text-muted);
+        }
+
+        .meta-divider {
+            width: 1px;
+            height: 1rem;
+            background: var(--border-light);
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 3rem 1rem;
+        }
+
+        article { margin-bottom: 3rem; }
+
+        section { margin-bottom: 3rem; }
+
+        h2 {
+            font-size: 1.875rem;
+            margin-bottom: 1.5rem;
+            color: var(--text);
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        h3 {
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+            color: var(--text);
+        }
+
+        p {
+            color: var(--text-muted);
+            margin-bottom: 1rem;
+            font-size: 1rem;
+            line-height: 1.7;
+        }
+
+        strong { color: var(--text); font-weight: 600; }
+
+        .card {
+            background: var(--bg-alt);
+            border: 1px solid var(--border-light);
+            border-radius: 0.5rem;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .card.success {
+            background: color-mix(in oklch, var(--success) 5%, var(--bg-alt));
+            border-color: color-mix(in oklch, var(--success) 20%, transparent);
+        }
+
+        .card.danger {
+            background: color-mix(in oklch, var(--red) 5%, var(--bg-alt));
+            border-color: color-mix(in oklch, var(--red) 30%, transparent);
+            border-width: 2px;
+        }
+
+        .card.info {
+            background: color-mix(in oklch, var(--blue) 5%, var(--bg-alt));
+            border-color: color-mix(in oklch, var(--blue) 20%, transparent);
+        }
+
+        .card.thick { border-width: 2px; }
+
+        .card-flex {
+            display: flex;
+            gap: 1rem;
+            align-items: start;
+        }
+
+        .card-icon {
+            flex-shrink: 0;
+            width: 2rem;
+            height: 2rem;
+        }
+
+        ul {
+            list-style: none;
+            margin: 1rem 0;
+        }
+
+        li {
+            display: flex;
+            align-items: start;
+            gap: 0.75rem;
+            margin-bottom: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        .bullet {
+            flex-shrink: 0;
+            margin-top: 0.25rem;
+        }
+
+        .bullet.red { color: var(--red); }
+        .bullet.green { color: var(--success); }
+        .bullet.yellow { color: var(--yellow); }
+        .bullet.accent { color: var(--accent); }
+
+        .alert {
+            background: var(--code-bg);
+            border-left: 4px solid var(--red);
+            padding: 1rem;
+            border-radius: 0.25rem;
+            margin: 1rem 0;
+        }
+
+        .alert p { margin: 0; }
+
+        ol {
+            list-style: none;
+            counter-reset: item;
+            margin: 1rem 0;
+        }
+
+        ol li {
+            counter-increment: item;
+        }
+
+        ol li::before {
+            content: counter(item) ".";
+            font-weight: 700;
+            color: var(--accent);
+            margin-right: 0.75rem;
+        }
+
+        a {
+            color: var(--accent);
+            text-decoration: none;
+            font-weight: 500;
+        }
+
+        a:hover { opacity: 0.8; }
+
+        footer {
+            border-top: 1px solid var(--border-light);
+            background: var(--bg-alt);
+            padding: 2rem 1rem;
+            margin-top: auto;
+            text-align: center;
+            font-size: 0.875rem;
+            color: var(--text-muted);
+        }
+
+        footer p { margin-bottom: 0.5rem; }
+
+        @media (max-width: 768px) {
+            h1 { font-size: 2rem; }
+            h2 { font-size: 1.5rem; }
+            h3 { font-size: 1.25rem; }
+            .meta { flex-direction: column; gap: 0.5rem; }
+            .meta-divider { display: none; }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="header-inner">
+            <div class="logo">
+                <img src="/transparent-full-size-ico.png" alt="wisp.place">
+                <span>wisp.place</span>
+            </div>
+            <a href="/editor" class="back-link">← Back to Dashboard</a>
+        </div>
+    </header>
+
+    <div class="hero">
+        <div class="hero-content">
+            <div class="hero-icon">
+                🛡️
+            </div>
+            <h1>Acceptable Use Policy</h1>
+            <div class="meta">
+                <div><strong>Effective:</strong> November 10, 2025</div>
+                <div class="meta-divider"></div>
+                <div><strong>Last Updated:</strong> November 10, 2025</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <article>
+            <section>
+                <h2>Our Philosophy</h2>
+                <p>
+                    wisp.place exists to give you a corner of the internet that's truly yours—a place to create, experiment, and express yourself freely. We believe in the open web and the fundamental importance of free expression. We're not here to police your thoughts, moderate your aesthetics, or judge your taste.
+                </p>
+                <p>
+                    That said, we're also real people running real servers in real jurisdictions (the United States and the Netherlands), and there are legal and practical limits to what we can host. This policy aims to be as permissive as possible while keeping the lights on and staying on the right side of the law.
+                </p>
+            </section>
+
+            <div class="card success">
+                <div class="card-flex">
+                    <div class="card-icon">✓</div>
+                    <div>
+                        <h2 style="margin-top: 0;">What You Can Do</h2>
+                        <p>
+                            <strong>Almost anything.</strong> Seriously. Build weird art projects. Write controversial essays. Create spaces that would make corporate platforms nervous. Express unpopular opinions. Make things that are strange, provocative, uncomfortable, or just plain yours.
+                        </p>
+                        <p style="margin-bottom: 0;">
+                            We support creative and personal expression in all its forms, including adult content, political speech, counter-cultural work, and experimental projects.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <section>
+                <h2>⚠️ What You Can't Do</h2>
+
+                <div class="card thick">
+                    <h3>Illegal Content</h3>
+                    <p>
+                        Don't host content that's illegal in the United States or the Netherlands. This includes but isn't limited to:
+                    </p>
+                    <ul>
+                        <li>
+                            <span class="bullet red">•</span>
+                            <span><strong>Child sexual abuse material (CSAM)</strong> involving real minors in any form</span>
+                        </li>
+                        <li>
+                            <span class="bullet red">•</span>
+                            <span><strong>Realistic or AI-generated depictions</strong> of minors in sexual contexts, including photorealistic renders, deepfakes, or AI-generated imagery</span>
+                        </li>
+                        <li>
+                            <span class="bullet red">•</span>
+                            <span><strong>Non-consensual intimate imagery</strong> (revenge porn, deepfakes, hidden camera footage, etc.)</span>
+                        </li>
+                        <li>
+                            <span class="bullet red">•</span>
+                            <span>Content depicting or facilitating human trafficking, sexual exploitation, or sexual violence</span>
+                        </li>
+                        <li>
+                            <span class="bullet red">•</span>
+                            <span>Instructions for manufacturing explosives, biological weapons, or other instruments designed for mass harm</span>
+                        </li>
+                        <li>
+                            <span class="bullet red">•</span>
+                            <span>Content that facilitates imminent violence or terrorism</span>
+                        </li>
+                        <li>
+                            <span class="bullet red">•</span>
+                            <span>Stolen financial information, credentials, or personal data used for fraud</span>
+                        </li>
+                    </ul>
+                </div>
+
+                <div class="card thick">
+                    <h3>Intellectual Property Violations</h3>
+                    <p>
+                        Don't host content that clearly violates someone else's copyright, trademark, or other intellectual property rights. We're required to respond to valid DMCA takedown notices.
+                    </p>
+                    <p>
+                        We understand that copyright law is complicated and sometimes ridiculous. We're not going to proactively scan your site or nitpick over fair use. But if we receive a legitimate legal complaint, we'll have to act on it.
+                    </p>
+                </div>
+
+                <div class="card danger">
+                    <h3>Hate Content</h3>
+                    <p>
+                        You can express controversial ideas. You can be offensive. You can make people uncomfortable. But pure hate—content that exists solely to dehumanize, threaten, or incite violence against people based on race, ethnicity, religion, gender, sexual orientation, disability, or similar characteristics—isn't welcome here.
+                    </p>
+                    <p>
+                        There's a difference between "I have deeply unpopular opinions about X" and "People like X should be eliminated." The former is protected expression. The latter isn't.
+                    </p>
+                    <div class="alert">
+                        <p>
+                            <strong>A note on enforcement:</strong> While we're generally permissive and believe in giving people the benefit of the doubt, hate content is where we draw a hard line. I will be significantly more aggressive in moderating this type of content than anything else on this list. If your site exists primarily to spread hate or recruit people into hateful ideologies, you will be removed swiftly and without extensive appeals. This is non-negotiable.
+                        </p>
+                    </div>
+                </div>
+
+                <div class="card thick">
+                    <h3>Adult Content Guidelines</h3>
+                    <p>
+                        Adult content is allowed. This includes sexually explicit material, erotica, adult artwork, and NSFW creative expression.
+                    </p>
+                    <p><strong>However:</strong></p>
+                    <ul>
+                        <li>
+                            <span class="bullet red">•</span>
+                            <span>No content involving real minors in any sexual context whatsoever</span>
+                        </li>
+                        <li>
+                            <span class="bullet red">•</span>
+                            <span>No photorealistic, AI-generated, or otherwise realistic depictions of minors in sexual contexts</span>
+                        </li>
+                        <li>
+                            <span class="bullet green">•</span>
+                            <span>Clearly stylized drawings and written fiction are permitted, provided they remain obviously non-photographic in nature</span>
+                        </li>
+                        <li>
+                            <span class="bullet red">•</span>
+                            <span>No non-consensual content (revenge porn, voyeurism, etc.)</span>
+                        </li>
+                        <li>
+                            <span class="bullet red">•</span>
+                            <span>No content depicting illegal sexual acts (bestiality, necrophilia, etc.)</span>
+                        </li>
+                        <li>
+                            <span class="bullet yellow">•</span>
+                            <span>Adult content should be clearly marked as such if discoverable through public directories or search</span>
+                        </li>
+                    </ul>
+                </div>
+
+                <div class="card thick">
+                    <h3>Malicious Technical Activity</h3>
+                    <p>Don't use your site to:</p>
+                    <ul>
+                        <li>
+                            <span class="bullet red">•</span>
+                            <span>Distribute malware, viruses, or exploits</span>
+                        </li>
+                        <li>
+                            <span class="bullet red">•</span>
+                            <span>Conduct phishing or social engineering attacks</span>
+                        </li>
+                        <li>
+                            <span class="bullet red">•</span>
+                            <span>Launch DDoS attacks or network abuse</span>
+                        </li>
+                        <li>
+                            <span class="bullet red">•</span>
+                            <span>Mine cryptocurrency without explicit user consent</span>
+                        </li>
+                        <li>
+                            <span class="bullet red">•</span>
+                            <span>Scrape, spam, or abuse other services</span>
+                        </li>
+                    </ul>
+                </div>
+            </section>
+
+            <section>
+                <h2>⚖️ Our Approach to Enforcement</h2>
+                <p>
+                    <strong>We actively monitor for obvious violations.</strong> Not to censor your creativity or police your opinions, but to catch the clear-cut stuff that threatens the service's existence and makes this a worse place for everyone. We're looking for the blatantly illegal, the obviously harmful—the stuff that would get servers seized and communities destroyed.
+                </p>
+                <p>
+                    We're not reading your blog posts looking for wrongthink. We're making sure this platform doesn't become a haven for the kind of content that ruins good things.
+                </p>
+
+                <div class="card">
+                    <p style="font-weight: 600; margin-bottom: 1rem;">We take action when:</p>
+                    <ol>
+                        <li>We identify content that clearly violates this policy during routine monitoring</li>
+                        <li>We receive a valid legal complaint (DMCA, court order, etc.)</li>
+                        <li>Someone reports content that violates this policy and we can verify the violation</li>
+                        <li>Your site is causing technical problems for the service or other users</li>
+                    </ol>
+                </div>
+
+                <div class="card">
+                    <p style="font-weight: 600; margin-bottom: 1rem;">When we do need to take action, we'll try to:</p>
+                    <ul>
+                        <li>
+                            <span class="bullet accent">•</span>
+                            <span>Contact you first when legally and practically possible</span>
+                        </li>
+                        <li>
+                            <span class="bullet accent">•</span>
+                            <span>Be transparent about what's happening and why</span>
+                        </li>
+                        <li>
+                            <span class="bullet accent">•</span>
+                            <span>Give you an opportunity to address the issue if appropriate</span>
+                        </li>
+                    </ul>
+                </div>
+
+                <p>
+                    For serious or repeated violations, we may suspend or terminate your account.
+                </p>
+            </section>
+
+            <div class="card info">
+                <h2 style="margin-top: 0;">Regional Compliance</h2>
+                <p style="margin-bottom: 0;">
+                    Our servers are located in the United States and the Netherlands. Content hosted on wisp.place must comply with the laws of both jurisdictions. While we aim to provide broad creative freedom, these legal requirements are non-negotiable.
+                </p>
+            </div>
+
+            <section>
+                <h2>Changes to This Policy</h2>
+                <p>
+                    We may update this policy as legal requirements or service realities change. If we make significant changes, we'll notify active users.
+                </p>
+            </section>
+
+            <section>
+                <h2>Questions or Reports</h2>
+                <p>
+                    If you have questions about this policy or need to report a violation, contact us at <a href="mailto:contact@wisp.place">contact@wisp.place</a>.
+                </p>
+            </section>
+
+            <div class="card thick" style="border-color: var(--accent);">
+                <p style="font-size: 1.125rem; line-height: 1.7; margin-bottom: 0;">
+                    <strong>Remember:</strong> This policy exists to keep the service running and this community healthy, not to limit your creativity. When in doubt, ask yourself: "Is this likely to get real-world authorities knocking on doors or make this place worse for everyone?" If the answer is yes, it probably doesn't belong here. Everything else? Go wild.
+                </p>
+            </div>
+        </article>
+    </div>
+
+    <footer>
+        <p>
+            Built by <a href="https://bsky.app/profile/nekomimi.pet" target="_blank">@nekomimi.pet</a> •
+            Contact: <a href="mailto:contact@wisp.place">contact@wisp.place</a> •
+            Legal/DMCA: <a href="mailto:legal@wisp.place">legal@wisp.place</a>
+        </p>
+        <p>
+            <a href="/editor">Back to Dashboard</a>
+        </p>
+    </footer>
+</body>
+</html>

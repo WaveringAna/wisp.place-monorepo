@@ -225,9 +225,13 @@ export const app = new Elysia({
 				})
 			: (app) => app
 	)
-	// Redirect old acceptable-use URL to new SPA route
-	.get('/acceptable-use', ({ set }) => {
-		set.redirect = '/editor/acceptable-use'
+	.get('/acceptable-use', async ({ set }) => {
+		set.headers['Content-Type'] = 'text/html; charset=utf-8'
+		return await Bun.file('./apps/main-app/public/editor/acceptable-use.html').text()
+	})
+	.get('/editor/acceptable-use', async ({ set }) => {
+		set.headers['Content-Type'] = 'text/html; charset=utf-8'
+		return await Bun.file('./apps/main-app/public/editor/acceptable-use.html').text()
 	})
 	.get('/onboarding', async ({ set }) => {
 		set.headers['Content-Type'] = 'text/html; charset=utf-8'
