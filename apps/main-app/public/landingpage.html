@@ -31,122 +31,9 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/wisp.css">
 
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        :root {
-            --bg: oklch(0.92 0.012 35);
-            --bg-alt: oklch(0.88 0.01 35);
-            --text: oklch(0.15 0.015 30);
-            --text-muted: oklch(0.35 0.02 30);
-            --text-subtle: oklch(0.50 0.02 30);
-            --border: oklch(0.30 0.025 35);
-            --border-light: oklch(0.65 0.02 30);
-            --accent: oklch(0.65 0.18 345);
-            --accent-muted: oklch(0.75 0.14 345);
-            --cta-bg: oklch(0.30 0.025 35);
-            --cta-text: oklch(0.96 0.008 35);
-            --code-bg: oklch(0.95 0.008 35);
-            --success: oklch(0.65 0.20 145);
-        }
-
-        @media (prefers-color-scheme: dark) {
-            :root {
-                --bg: oklch(0.23 0.015 285);
-                --bg-alt: oklch(0.20 0.015 285);
-                --text: oklch(0.90 0.005 285);
-                --text-muted: oklch(0.72 0.01 285);
-                --text-subtle: oklch(0.55 0.01 285);
-                --border: oklch(0.90 0.005 285);
-                --border-light: oklch(0.38 0.02 285);
-                --accent: oklch(0.85 0.08 5);
-                --accent-muted: oklch(0.70 0.10 295);
-                --cta-bg: oklch(0.70 0.10 295);
-                --cta-text: oklch(0.23 0.015 285);
-                --code-bg: oklch(0.28 0.015 285);
-            }
-        }
-
-        html {
-            scroll-behavior: smooth;
-        }
-
-        body {
-            font-family: "JetBrains Mono", monospace;
-            background: var(--bg);
-            color: var(--text);
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-            line-height: 1.6;
-        }
-
-        /* Header */
-        header {
-            position: sticky;
-            top: 0;
-            background: var(--bg);
-            border-bottom: 1px solid var(--border-light);
-            padding: 1rem 2rem;
-            z-index: 100;
-        }
-
-        .header-inner {
-            max-width: 1100px;
-            margin: 0 auto;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        .logo {
-            font-weight: 700;
-            font-size: 1.125rem;
-            text-decoration: none;
-            color: var(--text);
-            letter-spacing: -0.02em;
-        }
-
-        nav {
-            display: flex;
-            gap: 2rem;
-            align-items: center;
-        }
-
-        nav a {
-            color: var(--text-muted);
-            text-decoration: none;
-            font-size: 1rem;
-            transition: color 0.15s;
-        }
-
-        nav a:hover {
-            color: var(--text);
-        }
-
-        .nav-cta {
-            background: var(--cta-bg);
-            color: var(--cta-text);
-            padding: 0.5rem 1rem;
-            border: 1px solid var(--border);
-            font-weight: 600;
-            font-size: 0.875rem;
-            text-decoration: none;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            transition: all 0.15s;
-        }
-
-        .nav-cta:hover {
-            background: var(--bg);
-            color: var(--text);
-        }
-
         /* Hero */
         .hero {
             padding: 8rem 2rem 6rem;
@@ -170,12 +57,8 @@
             border: 1px solid var(--accent);
         }
 
-        h1 {
+        .hero h1 {
             font-size: clamp(2.75rem, 7vw, 4.25rem);
-            font-weight: 700;
-            line-height: 1.1;
-            margin-bottom: 1.5rem;
-            letter-spacing: -0.03em;
             text-align: center;
         }
 
@@ -199,42 +82,6 @@
             gap: 1rem;
             flex-wrap: wrap;
             justify-content: center;
-        }
-
-        .cta-primary {
-            background: var(--cta-bg);
-            color: var(--cta-text);
-            padding: 1rem 2rem;
-            border: 2px solid var(--border);
-            font-weight: 600;
-            font-size: 1rem;
-            text-decoration: none;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            transition: all 0.15s;
-        }
-
-        .cta-primary:hover {
-            background: var(--bg);
-            color: var(--text);
-        }
-
-        .cta-secondary {
-            background: transparent;
-            color: var(--text);
-            padding: 1rem 2rem;
-            border: 2px solid var(--border);
-            font-weight: 600;
-            font-size: 1rem;
-            text-decoration: none;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            transition: all 0.15s;
-        }
-
-        .cta-secondary:hover {
-            background: var(--cta-bg);
-            color: var(--cta-text);
         }
 
         .hero-cmd {
@@ -533,98 +380,10 @@
             margin-bottom: 2rem;
         }
 
-        /* Footer */
-        footer {
-            padding: 4rem 2rem 2rem;
-            border-top: 1px solid var(--border-light);
-            margin-top: auto;
-        }
-
-        .footer-inner {
-            max-width: 1100px;
-            margin: 0 auto;
-            display: grid;
-            grid-template-columns: 2fr repeat(3, 1fr);
-            gap: 3rem;
-        }
-
-        .footer-brand p:first-child {
-            font-weight: 700;
-            margin-bottom: 0.75rem;
-        }
-
-        .footer-brand p:last-child {
-            color: var(--text-muted);
-            font-size: 1rem;
-            line-height: 1.6;
-        }
-
-        .footer-col h4 {
-            font-size: 0.875rem;
-            font-weight: 600;
-            color: var(--text-subtle);
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            margin-bottom: 1rem;
-        }
-
-        .footer-col ul {
-            list-style: none;
-        }
-
-        .footer-col li {
-            margin-bottom: 0.5rem;
-        }
-
-        .footer-col a {
-            color: var(--text-muted);
-            text-decoration: none;
-            font-size: 1rem;
-            transition: color 0.15s;
-        }
-
-        .footer-col a:hover {
-            color: var(--text);
-        }
-
-        .footer-bottom {
-            max-width: 1100px;
-            margin: 3rem auto 0;
-            padding-top: 2rem;
-            border-top: 1px solid var(--border-light);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        .footer-bottom p {
-            color: var(--text-subtle);
-            font-size: 0.875rem;
-        }
-
-        .footer-bottom nav {
-            gap: 1.5rem;
-        }
-
-        .footer-bottom a {
-            color: var(--text-subtle);
-            text-decoration: none;
-            font-size: 0.875rem;
-            transition: color 0.15s;
-        }
-
-        .footer-bottom a:hover {
-            color: var(--text);
-        }
-
         /* Responsive */
         @media (max-width: 768px) {
             .hero {
                 padding: 5rem 1.5rem 4rem;
-            }
-
-            nav a:not(.nav-cta) {
-                display: none;
             }
 
             .steps {
@@ -640,20 +399,6 @@
                 grid-template-columns: 1fr;
             }
 
-            .footer-inner {
-                grid-template-columns: 1fr 1fr;
-            }
-
-            .footer-brand {
-                grid-column: span 2;
-            }
-
-            .footer-bottom {
-                flex-direction: column;
-                gap: 1rem;
-                text-align: center;
-            }
-
             .cta-buttons {
                 flex-direction: column;
                 width: 100%;
@@ -662,16 +407,6 @@
             .cta-primary, .cta-secondary {
                 width: 100%;
                 text-align: center;
-            }
-        }
-
-        @media (max-width: 480px) {
-            .footer-inner {
-                grid-template-columns: 1fr;
-            }
-
-            .footer-brand {
-                grid-column: span 1;
             }
         }
     </style>

@@ -49,8 +49,9 @@ export function observabilityMiddleware(service: string) {
 				service
 			)
 
-			// Don't log 404 errors
-			if (statusCode !== 404) {
+			// Don't log 404 errors or expected auth failures
+			const isAuthError = error?.message === 'Authentication required'
+			if (statusCode !== 404 && !isAuthError) {
 				logCollector.error(
 					`Request failed: ${request.method} ${url.pathname}`,
 					service,

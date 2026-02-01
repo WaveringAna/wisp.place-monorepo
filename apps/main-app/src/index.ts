@@ -25,6 +25,7 @@ import { csrfProtection } from './lib/csrf'
 import { DNSVerificationWorker } from './lib/dns-verification-worker'
 import { createLogger, logCollector, initializeGrafanaExporters } from '@wisp/observability'
 import { observabilityMiddleware } from '@wisp/observability/middleware/elysia'
+import { css as wispCss } from '@wisp/css'
 import { promptAdminSetup } from './lib/admin-auth'
 import { adminRoutes } from './routes/admin'
 
@@ -225,6 +226,11 @@ export const app = new Elysia({
 				})
 			: (app) => app
 	)
+	.get('/wisp.css', ({ set }) => {
+		set.headers['Content-Type'] = 'text/css; charset=utf-8'
+		set.headers['Cache-Control'] = 'public, max-age=86400'
+		return wispCss
+	})
 	.get('/acceptable-use', async ({ set }) => {
 		set.headers['Content-Type'] = 'text/html; charset=utf-8'
 		return await Bun.file('./apps/main-app/public/editor/acceptable-use.html').text()

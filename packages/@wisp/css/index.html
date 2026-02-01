@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>wisp.css - Example</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="./wisp.css">
+</head>
+<body>
+    <header>
+        <div class="header-inner">
+            <a href="#" class="logo">wisp.css</a>
+            <nav>
+                <a href="#typography">Typography</a>
+                <a href="#components">Components</a>
+                <a href="#utilities">Utilities</a>
+                <button id="theme-toggle" class="outline" style="padding: 0.4rem 0.75rem;">
+                    <span id="theme-icon">◐</span> <span id="theme-label">System</span>
+                </button>
+            </nav>
+        </div>
+    </header>
+
+    <div class="container">
+        <!-- Hero Section -->
+        <section class="text-center mb-6">
+            <h1>wisp.css</h1>
+            <p class="text-lg">A minimal, monospace-first CSS stylesheet with automatic light/dark mode.</p>
+            <div class="flex justify-center gap-3 mt-4">
+                <a href="#" class="cta-primary">Get Started</a>
+                <a href="#" class="cta-secondary">View Source</a>
+            </div>
+        </section>
+
+        <!-- Typography -->
+        <section id="typography" class="mb-6">
+            <h2>Typography</h2>
+
+            <div class="card">
+                <h1>Heading 1</h1>
+                <h2>Heading 2</h2>
+                <h3>Heading 3</h3>
+                <h4>Heading 4</h4>
+                <p>This is a paragraph with <strong>bold text</strong> and <a href="#">a link</a>. The stylesheet uses JetBrains Mono for that clean monospace aesthetic.</p>
+                <p><small>This is small text for captions or metadata.</small></p>
+                <p>Here's some <code>inline code</code> in a sentence.</p>
+                <pre><code>// Code block
+const greeting = "Hello, wisp.css!";
+console.log(greeting);</code></pre>
+            </div>
+        </section>
+
+        <!-- Buttons -->
+        <section id="buttons" class="mb-6">
+            <h2>Buttons</h2>
+
+            <div class="card">
+                <h3>Standard Buttons</h3>
+                <div class="flex gap-3 flex-wrap mb-4">
+                    <button>Primary</button>
+                    <button class="outline">Outline</button>
+                    <button disabled>Disabled</button>
+                </div>
+
+                <h3>CTA Buttons</h3>
+                <div class="flex gap-3 flex-wrap mb-4">
+                    <a href="#" class="cta-primary">CTA Primary</a>
+                    <a href="#" class="cta-secondary">CTA Secondary</a>
+                </div>
+
+                <h3>Button Sizes</h3>
+                <div class="flex gap-3 items-center flex-wrap">
+                    <button>Default</button>
+                    <button class="btn-lg">Large</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Cards -->
+        <section id="components" class="mb-6">
+            <h2>Cards</h2>
+
+            <div class="card">
+                <h3>Default Card</h3>
+                <p class="mb-0">This is a basic card component with some content inside.</p>
+            </div>
+
+            <div class="card success">
+                <h3>Success Card</h3>
+                <p class="mb-0">Use this for positive feedback or confirmations.</p>
+            </div>
+
+            <div class="card danger">
+                <h3>Danger Card</h3>
+                <p class="mb-0">Use this for errors or destructive actions.</p>
+            </div>
+
+            <div class="card warning">
+                <h3>Warning Card</h3>
+                <p class="mb-0">Use this for warnings or important notices.</p>
+            </div>
+
+            <div class="card info">
+                <h3>Info Card</h3>
+                <p class="mb-0">Use this for informational messages.</p>
+            </div>
+
+            <div class="card thick">
+                <div class="card-flex">
+                    <div class="card-icon">💡</div>
+                    <div>
+                        <h3 class="mt-0">Card with Icon</h3>
+                        <p class="mb-0">Use <code>card-flex</code> and <code>card-icon</code> for icon layouts.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Alerts -->
+        <section id="alerts" class="mb-6">
+            <h2>Alerts</h2>
+
+            <div class="alert alert-success">
+                <strong>Success!</strong> Your changes have been saved.
+            </div>
+
+            <div class="alert alert-info">
+                <strong>Info:</strong> This is some helpful information.
+            </div>
+
+            <div class="alert alert-warning">
+                <strong>Warning:</strong> Please review before continuing.
+            </div>
+
+            <div class="alert alert-danger">
+                <strong>Error:</strong> Something went wrong. Please try again.
+            </div>
+        </section>
+
+        <!-- Forms -->
+        <section id="forms" class="mb-6">
+            <h2>Forms</h2>
+
+            <div class="card">
+                <div class="mb-4">
+                    <label for="name">Name</label>
+                    <input type="text" id="name" placeholder="Enter your name">
+                </div>
+
+                <div class="mb-4">
+                    <label for="email">Email</label>
+                    <input type="email" id="email" placeholder="you@example.com">
+                </div>
+
+                <div class="mb-4">
+                    <label for="message">Message</label>
+                    <textarea id="message" rows="4" placeholder="Write your message..."></textarea>
+                </div>
+
+                <div class="flex gap-3">
+                    <button>Submit</button>
+                    <button class="outline">Cancel</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Lists -->
+        <section id="lists" class="mb-6">
+            <h2>Lists</h2>
+
+            <div class="card">
+                <h3>Ordered List</h3>
+                <ol>
+                    <li>First item with automatic numbering</li>
+                    <li>Second item in the list</li>
+                    <li>Third item completes the set</li>
+                </ol>
+
+                <h3>Unordered List with Bullets</h3>
+                <ul>
+                    <li class="flex gap-2"><span class="bullet green">•</span> Success item</li>
+                    <li class="flex gap-2"><span class="bullet red">•</span> Danger item</li>
+                    <li class="flex gap-2"><span class="bullet yellow">•</span> Warning item</li>
+                    <li class="flex gap-2"><span class="bullet accent">•</span> Accent item</li>
+                </ul>
+            </div>
+        </section>
+
+        <!-- Spinner -->
+        <section id="spinner" class="mb-6">
+            <h2>Spinners</h2>
+
+            <div class="card">
+                <div class="flex gap-4 items-center">
+                    <span class="spinner"></span>
+                    <span>Default spinner</span>
+                </div>
+                <div class="flex gap-4 items-center mt-4">
+                    <span class="spinner spinner-lg"></span>
+                    <span>Large spinner</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Utilities -->
+        <section id="utilities" class="mb-6">
+            <h2>Utility Classes</h2>
+
+            <div class="card">
+                <h3>Text Colors</h3>
+                <p class="text-muted mb-2">text-muted - Secondary text</p>
+                <p class="text-subtle mb-2">text-subtle - Tertiary text</p>
+                <p class="text-accent mb-2">text-accent - Accent color</p>
+                <p class="text-success mb-2">text-success - Success state</p>
+                <p class="text-danger mb-2">text-danger - Danger state</p>
+                <p class="text-warning mb-0">text-warning - Warning state</p>
+            </div>
+
+            <div class="card">
+                <h3>Text Alignment</h3>
+                <p class="text-left border p-2 mb-2">text-left</p>
+                <p class="text-center border p-2 mb-2">text-center</p>
+                <p class="text-right border p-2 mb-0">text-right</p>
+            </div>
+
+            <div class="card">
+                <h3>Flexbox</h3>
+                <div class="flex justify-between items-center border p-3 mb-3">
+                    <span>justify-between</span>
+                    <span>items-center</span>
+                </div>
+                <div class="flex flex-col gap-2 border p-3">
+                    <span>flex-col</span>
+                    <span>with gap-2</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>Spacing</h3>
+                <div class="bg-alt p-4 mb-2">p-4 (padding)</div>
+                <div class="bg-alt p-2 mb-4">p-2 with mb-4 (margin-bottom)</div>
+                <div class="flex gap-4">
+                    <div class="bg-alt p-2">gap-4</div>
+                    <div class="bg-alt p-2">between</div>
+                    <div class="bg-alt p-2">items</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Color Palette -->
+        <section id="colors" class="mb-6">
+            <h2>Color Palette</h2>
+            <p>Colors automatically adapt to light/dark mode via CSS custom properties.</p>
+
+            <div class="grid gap-3" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));" id="color-grid">
+                <div class="card text-center" data-color="--wisp-bg">
+                    <div class="p-4 rounded mb-2 color-swatch" style="background: var(--wisp-bg); border: 1px solid var(--wisp-border-light);">bg</div>
+                    <small>--wisp-bg</small><br>
+                    <code class="hex-code text-sm"></code>
+                </div>
+                <div class="card text-center" data-color="--wisp-bg-alt">
+                    <div class="p-4 rounded mb-2 color-swatch" style="background: var(--wisp-bg-alt);">bg-alt</div>
+                    <small>--wisp-bg-alt</small><br>
+                    <code class="hex-code text-sm"></code>
+                </div>
+                <div class="card text-center" data-color="--wisp-text">
+                    <div class="p-4 rounded mb-2 color-swatch" style="background: var(--wisp-text); color: var(--wisp-bg);">text</div>
+                    <small>--wisp-text</small><br>
+                    <code class="hex-code text-sm"></code>
+                </div>
+                <div class="card text-center" data-color="--wisp-accent">
+                    <div class="p-4 rounded mb-2 color-swatch" style="background: var(--wisp-accent); color: white;">accent</div>
+                    <small>--wisp-accent</small><br>
+                    <code class="hex-code text-sm"></code>
+                </div>
+                <div class="card text-center" data-color="--wisp-success">
+                    <div class="p-4 rounded mb-2 color-swatch" style="background: var(--wisp-success); color: white;">success</div>
+                    <small>--wisp-success</small><br>
+                    <code class="hex-code text-sm"></code>
+                </div>
+                <div class="card text-center" data-color="--wisp-danger">
+                    <div class="p-4 rounded mb-2 color-swatch" style="background: var(--wisp-danger); color: white;">danger</div>
+                    <small>--wisp-danger</small><br>
+                    <code class="hex-code text-sm"></code>
+                </div>
+                <div class="card text-center" data-color="--wisp-warning">
+                    <div class="p-4 rounded mb-2 color-swatch" style="background: var(--wisp-warning); color: black;">warning</div>
+                    <small>--wisp-warning</small><br>
+                    <code class="hex-code text-sm"></code>
+                </div>
+                <div class="card text-center" data-color="--wisp-info">
+                    <div class="p-4 rounded mb-2 color-swatch" style="background: var(--wisp-info); color: white;">info</div>
+                    <small>--wisp-info</small><br>
+                    <code class="hex-code text-sm"></code>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <footer>
+        <div class="footer-inner">
+            <div class="footer-brand">
+                <p>wisp.css</p>
+                <p>A minimal CSS stylesheet for developers who appreciate monospace aesthetics.</p>
+            </div>
+            <div class="footer-col">
+                <h4>Docs</h4>
+                <ul>
+                    <li><a href="#typography">Typography</a></li>
+                    <li><a href="#components">Components</a></li>
+                    <li><a href="#utilities">Utilities</a></li>
+                </ul>
+            </div>
+            <div class="footer-col">
+                <h4>Resources</h4>
+                <ul>
+                    <li><a href="#">GitHub</a></li>
+                    <li><a href="#">npm</a></li>
+                    <li><a href="#">CDN</a></li>
+                </ul>
+            </div>
+            <div class="footer-col">
+                <h4>More</h4>
+                <ul>
+                    <li><a href="#">wisp.place</a></li>
+                    <li><a href="#">AT Protocol</a></li>
+                </ul>
+            </div>
+        </div>
+        <div class="footer-bottom">
+            <p>MIT License</p>
+            <nav>
+                <a href="#">GitHub</a>
+            </nav>
+        </div>
+    </footer>
+
+    <script>
+        // Theme switcher
+        const themes = ['system', 'light', 'dark']
+        const icons = { system: '◐', light: '☀', dark: '☾' }
+        const labels = { system: 'System', light: 'Light', dark: 'Dark' }
+        let currentTheme = localStorage.getItem('wisp-theme') || 'system'
+
+        function applyTheme(theme) {
+            if (theme === 'system') {
+                document.documentElement.removeAttribute('data-theme')
+            } else {
+                document.documentElement.setAttribute('data-theme', theme)
+            }
+            document.getElementById('theme-icon').textContent = icons[theme]
+            document.getElementById('theme-label').textContent = labels[theme]
+            localStorage.setItem('wisp-theme', theme)
+            setTimeout(updateHexCodes, 50)
+        }
+
+        document.getElementById('theme-toggle').addEventListener('click', () => {
+            const idx = themes.indexOf(currentTheme)
+            currentTheme = themes[(idx + 1) % themes.length]
+            applyTheme(currentTheme)
+        })
+
+        applyTheme(currentTheme)
+
+        // Hex code display
+        function rgbToHex(r, g, b) {
+            return '#' + [r, g, b].map(x => {
+                const hex = Math.round(x).toString(16)
+                return hex.length === 1 ? '0' + hex : hex
+            }).join('')
+        }
+
+        function parseColor(color) {
+            const canvas = document.createElement('canvas')
+            canvas.width = canvas.height = 1
+            const ctx = canvas.getContext('2d')
+            ctx.fillStyle = color
+            ctx.fillRect(0, 0, 1, 1)
+            const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data
+            return rgbToHex(r, g, b)
+        }
+
+        function updateHexCodes() {
+            document.querySelectorAll('[data-color]').forEach(card => {
+                const varName = card.dataset.color
+                const computed = getComputedStyle(document.documentElement).getPropertyValue(varName)
+                const hex = parseColor(computed.trim())
+                card.querySelector('.hex-code').textContent = hex.toUpperCase()
+            })
+        }
+
+        // Update hex codes on load and theme change
+        updateHexCodes()
+        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', updateHexCodes)
+    </script>
+</body>
+</html>

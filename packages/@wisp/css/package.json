@@ -1,0 +1,25 @@
+{
+  "name": "@wisp/css",
+  "version": "1.0.0",
+  "description": "A minimal, monospace-first CSS stylesheet with automatic light/dark mode",
+  "main": "index.ts",
+  "types": "index.ts",
+  "style": "wisp.css",
+  "files": [
+    "index.ts",
+    "wisp.css"
+  ],
+  "keywords": [
+    "css",
+    "stylesheet",
+    "monospace",
+    "dark-mode",
+    "minimal"
+  ],
+  "author": "nekomimi.pet",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nekomimi-pet/wisp.place-monorepo"
+  }
+}
