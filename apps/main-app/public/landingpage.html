@@ -677,6 +677,18 @@
     </style>
 </head>
 <body>
+    <script>
+        // Check if user is already signed in and redirect to editor
+        fetch('/api/user/info')
+            .then(response => {
+                if (response.ok) {
+                    window.location.href = '/editor';
+                }
+            })
+            .catch(() => {
+                // Not signed in, stay on landing page
+            });
+    </script>
     <header>
         <div class="header-inner">
             <a href="/" class="logo">wisp.place</a>

@@ -55,6 +55,10 @@ export function UploadTab({
     const [uploadedCount, setUploadedCount] = useState(0)
     const [fileProgressList, setFileProgressList] = useState<FileProgress[]>([])
     const [showFileProgress, setShowFileProgress] = useState(false)
+    const [isDragging, setIsDragging] = useState(false)
+
+    // Ref for the drop zone
+    const dropZoneRef = useRef<HTMLDivElement>(null)
 
     // Keep SSE connection alive across tab switches
     const eventSourceRef = useRef<EventSource | null>(null)
@@ -78,6 +82,113 @@ export function UploadTab({
     const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files && e.target.files.length > 0) {
             setSelectedFiles(e.target.files)
+        }
+    }
+
+    // Recursively read all files from a directory entry
+    const readDirectory = async (entry: FileSystemDirectoryEntry): Promise<File[]> => {
+        const files: File[] = []
+        const reader = entry.createReader()
+
+        const readEntries = (): Promise<FileSystemEntry[]> => {
+            return new Promise((resolve, reject) => {
+                reader.readEntries(resolve, reject)
+            })
+        }
+
+        const getFile = (fileEntry: FileSystemFileEntry): Promise<File> => {
+            return new Promise((resolve, reject) => {
+                fileEntry.file(resolve, reject)
+            })
+        }
+
+        // Read all entries (readEntries may need to be called multiple times)
+        let entries: FileSystemEntry[] = []
+        let batch: FileSystemEntry[]
+        do {
+            batch = await readEntries()
+            entries = entries.concat(batch)
+        } while (batch.length > 0)
+
+        for (const childEntry of entries) {
+            if (childEntry.isFile) {
+                const file = await getFile(childEntry as FileSystemFileEntry)
+                // Create a new File with the full path
+                const fullPath = childEntry.fullPath.startsWith('/')
+                    ? childEntry.fullPath.slice(1)
+                    : childEntry.fullPath
+                const fileWithPath = new File([file], fullPath, { type: file.type })
+                files.push(fileWithPath)
+            } else if (childEntry.isDirectory) {
+                const subFiles = await readDirectory(childEntry as FileSystemDirectoryEntry)
+                files.push(...subFiles)
+            }
+        }
+
+        return files
+    }
+
+    // Handle dropped items (files or directories)
+    const handleDrop = async (e: React.DragEvent<HTMLDivElement>) => {
+        e.preventDefault()
+        e.stopPropagation()
+        setIsDragging(false)
+
+        if (isUploading) return
+
+        const items = e.dataTransfer.items
+        if (!items || items.length === 0) return
+
+        const allFiles: File[] = []
+
+        // Process all dropped items
+        for (let i = 0; i < items.length; i++) {
+            const item = items[i]
+            const entry = item.webkitGetAsEntry()
+
+            if (entry) {
+                if (entry.isFile) {
+                    const file = await new Promise<File>((resolve, reject) => {
+                        (entry as FileSystemFileEntry).file(resolve, reject)
+                    })
+                    allFiles.push(file)
+                } else if (entry.isDirectory) {
+                    const dirFiles = await readDirectory(entry as FileSystemDirectoryEntry)
+                    allFiles.push(...dirFiles)
+                }
+            }
+        }
+
+        if (allFiles.length > 0) {
+            // Create a DataTransfer to build a FileList
+            const dataTransfer = new DataTransfer()
+            allFiles.forEach(file => dataTransfer.items.add(file))
+            setSelectedFiles(dataTransfer.files)
+        }
+    }
+
+    const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+        e.preventDefault()
+        e.stopPropagation()
+        if (!isUploading) {
+            setIsDragging(true)
+        }
+    }
+
+    const handleDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
+        e.preventDefault()
+        e.stopPropagation()
+        if (!isUploading) {
+            setIsDragging(true)
+        }
+    }
+
+    const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+        e.preventDefault()
+        e.stopPropagation()
+        // Only set isDragging to false if we're leaving the drop zone entirely
+        if (dropZoneRef.current && !dropZoneRef.current.contains(e.relatedTarget as Node)) {
+            setIsDragging(false)
         }
     }
 
@@ -395,15 +506,30 @@ export function UploadTab({
                     </div>
 
                     <div className="grid md:grid-cols-2 gap-4">
-                        <Card className="border-2 border-dashed hover:border-accent transition-colors cursor-pointer">
+                        <Card
+                            ref={dropZoneRef}
+                            className={`border-2 border-dashed transition-colors cursor-pointer ${
+                                isDragging
+                                    ? 'border-accent bg-accent/10'
+                                    : 'hover:border-accent'
+                            } ${isUploading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                            onDrop={handleDrop}
+                            onDragOver={handleDragOver}
+                            onDragEnter={handleDragEnter}
+                            onDragLeave={handleDragLeave}
+                        >
                             <CardContent className="flex flex-col items-center justify-center p-8 text-center">
-                                <Upload className="w-12 h-12 text-muted-foreground mb-4" />
+                                <Upload className={`w-12 h-12 mb-4 transition-colors ${
+                                    isDragging ? 'text-accent' : 'text-muted-foreground'
+                                }`} />
                                 <h3 className="font-semibold mb-2">
                                     Upload Folder
                                 </h3>
                                 <p className="text-sm text-muted-foreground mb-4">
-                                    Drag and drop or click to upload your
-                                    static site files
+                                    {isDragging
+                                        ? 'Drop your files here...'
+                                        : 'Drag and drop or click to upload your static site files'
+                                    }
                                 </p>
                                 <input
                                     type="file"
@@ -429,7 +555,7 @@ export function UploadTab({
                                     </Button>
                                 </label>
                                 {selectedFiles && selectedFiles.length > 0 && (
-                                    <p className="text-sm text-muted-foreground mt-3">
+                                    <p className="text-sm text-accent mt-3 font-medium">
                                         {selectedFiles.length} files selected
                                     </p>
                                 )}

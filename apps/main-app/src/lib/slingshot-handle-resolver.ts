@@ -10,7 +10,7 @@ import { logger } from './logger';
  * Uses: https://slingshot.wisp.place/xrpc/com.atproto.identity.resolveHandle
  */
 export class SlingshotHandleResolver implements HandleResolver {
-    private readonly endpoint = 'https://slingshot.wisp.place/xrpc/com.atproto.identity.resolveHandle';
+    private readonly endpoint = 'https://slingshot.microcosm.blue/xrpc/com.atproto.identity.resolveHandle';
 
     async resolve(handle: string, options?: ResolveHandleOptions): Promise<ResolvedHandle> {
         try {
