@@ -5,8 +5,8 @@
 
 import { readFile } from 'fs/promises';
 import { lookup } from 'mime-types';
-import type { Record as WispSettings } from '@wisp/lexicons/types/place/wisp/settings';
-import { shouldCompressMimeType } from '@wisp/atproto-utils/compression';
+import type { Record as WispSettings } from '@wispplace/lexicons/types/place/wisp/settings';
+import { shouldCompressMimeType } from '@wispplace/atproto-utils/compression';
 import { rewrittenHtmlCache, getCacheKey, isSiteBeingCached } from './cache';
 import { getCachedFilePath, getCachedSettings } from './utils';
 import { loadRedirectRules, matchRedirectRule, parseCookies, parseQueryString } from './redirects';

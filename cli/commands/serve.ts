@@ -2,14 +2,14 @@ import { IdResolver } from '@atproto/identity';
 import { Firehose } from '@atproto/sync';
 import { Hono } from 'hono';
 import { serve as honoNodeServe } from '@hono/node-server';
-import type { Record as SettingsRecord } from '@wisp/lexicons/types/place/wisp/settings';
-import { resolveDid, getPdsForDid } from '@wisp/atproto-utils';
+import type { Record as SettingsRecord } from '@wispplace/lexicons/types/place/wisp/settings';
+import { resolveDid, getPdsForDid } from '@wispplace/atproto-utils';
 import { existsSync, readFileSync, statSync, readdirSync } from 'fs';
 import { join, extname } from 'path';
 import { lookup } from 'mime-types';
 import { pull } from './pull.ts';
 import { createSpinner, pc } from '../lib/progress.ts';
-import { parseRedirectsFile, matchRedirectRule, parseQueryString, type RedirectRule } from '@wisp/fs-utils';
+import { parseRedirectsFile, matchRedirectRule, parseQueryString, type RedirectRule } from '@wispplace/fs-utils';
 import { isBun } from '../lib/runtime.ts';
 import { BunFirehose } from '../lib/firehose.ts';
 

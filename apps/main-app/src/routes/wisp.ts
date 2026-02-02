@@ -11,21 +11,21 @@ import {
     findLargeDirectories,
     replaceDirectoryWithSubfs,
     estimateDirectorySize
-} from '@wisp/fs-utils'
+} from '@wispplace/fs-utils'
 import {
     shouldCompressFile,
     compressFile,
     computeCID,
     extractBlobMap,
     extractSubfsUris
-} from '@wisp/atproto-utils'
-import { createManifest } from '@wisp/fs-utils'
+} from '@wispplace/atproto-utils'
+import { createManifest } from '@wispplace/fs-utils'
 import { upsertSite } from '../lib/db'
-import { createLogger } from '@wisp/observability'
-// import { validateRecord, type Directory } from '@wisp/lexicons/types/place/wisp/fs'
-import { type Directory } from '@wisp/lexicons/types/place/wisp/fs'
-// import { validateRecord as validateSubfsRecord } from '@wisp/lexicons/types/place/wisp/subfs'
-import { MAX_SITE_SIZE, MAX_FILE_SIZE, MAX_FILE_COUNT } from '@wisp/constants'
+import { createLogger } from '@wispplace/observability'
+// import { validateRecord, type Directory } from '@wispplace/lexicons/types/place/wisp/fs'
+import { type Directory } from '@wispplace/lexicons/types/place/wisp/fs'
+// import { validateRecord as validateSubfsRecord } from '@wispplace/lexicons/types/place/wisp/subfs'
+import { MAX_SITE_SIZE, MAX_FILE_SIZE, MAX_FILE_COUNT } from '@wispplace/constants'
 import {
     createUploadJob,
     getUploadJob,

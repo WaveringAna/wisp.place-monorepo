@@ -1,5 +1,5 @@
 import type { BlobRef } from "@atproto/api";
-import type { Directory, File } from "@wisp/lexicons/types/place/wisp/fs";
+import type { Directory, File } from "@wispplace/lexicons/types/place/wisp/fs";
 import { CID } from 'multiformats/cid';
 import { sha256 } from 'multiformats/hashes/sha2';
 import * as raw from 'multiformats/codecs/raw';

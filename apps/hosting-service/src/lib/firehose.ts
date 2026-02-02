@@ -5,9 +5,9 @@ import {
 	fetchSiteRecord
 } from './utils'
 import { upsertSite, tryAcquireLock, releaseLock } from './db'
-import { safeFetch } from '@wisp/safe-fetch'
-// import { isRecord, validateRecord } from '@wisp/lexicons/types/place/wisp/fs'
-import { isRecord } from '@wisp/lexicons/types/place/wisp/fs'
+import { safeFetch } from '@wispplace/safe-fetch'
+// import { isRecord, validateRecord } from '@wispplace/lexicons/types/place/wisp/fs'
+import { isRecord } from '@wispplace/lexicons/types/place/wisp/fs'
 import { Firehose } from '@atproto/sync'
 import { IdResolver } from '@atproto/identity'
 import { invalidateSiteCache, markSiteAsBeingCached, unmarkSiteAsBeingCached } from './cache'

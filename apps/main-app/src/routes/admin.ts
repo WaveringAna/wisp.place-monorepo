@@ -1,7 +1,7 @@
 // Admin API routes
 import { Elysia, t } from 'elysia'
 import { adminAuth, requireAdmin } from '../lib/admin-auth'
-import { logCollector, errorTracker, metricsCollector } from '@wisp/observability'
+import { logCollector, errorTracker, metricsCollector } from '@wispplace/observability'
 import { db } from '../lib/db'
 
 export const adminRoutes = (cookieSecret: string) =>

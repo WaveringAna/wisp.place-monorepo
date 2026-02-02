@@ -1,6 +1,6 @@
 import { getAllSites } from './db';
 import { fetchSiteRecord, getPdsForDid, downloadAndCacheSite, isCached } from './utils';
-import { createLogger } from '@wisp/observability';
+import { createLogger } from '@wispplace/observability';
 import { markSiteAsBeingCached, unmarkSiteAsBeingCached } from './cache';
 import { clearRedirectRulesCache } from './site-cache';
 

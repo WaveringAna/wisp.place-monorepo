@@ -1,6 +1,6 @@
 import postgres from 'postgres';
 import { createHash } from 'crypto';
-import type { DomainLookup, CustomDomainLookup } from '@wisp/database';
+import type { DomainLookup, CustomDomainLookup } from '@wispplace/database';
 
 // Global cache-only mode flag (set by index.ts)
 let cacheOnlyMode = false;

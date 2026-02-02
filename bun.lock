@@ -25,13 +25,13 @@
         "@atproto/sync": "^0.1.36",
         "@atproto/xrpc": "^0.7.5",
         "@hono/node-server": "^1.19.6",
-        "@wisp/atproto-utils": "workspace:*",
-        "@wisp/constants": "workspace:*",
-        "@wisp/database": "workspace:*",
-        "@wisp/fs-utils": "workspace:*",
-        "@wisp/lexicons": "workspace:*",
-        "@wisp/observability": "workspace:*",
-        "@wisp/safe-fetch": "workspace:*",
+        "@wispplace/atproto-utils": "workspace:*",
+        "@wispplace/constants": "workspace:*",
+        "@wispplace/database": "workspace:*",
+        "@wispplace/fs-utils": "workspace:*",
+        "@wispplace/lexicons": "workspace:*",
+        "@wispplace/observability": "workspace:*",
+        "@wispplace/safe-fetch": "workspace:*",
         "hono": "^4.10.4",
         "mime-types": "^2.1.35",
         "multiformats": "^13.4.1",
@@ -47,7 +47,7 @@
       },
     },
     "apps/main-app": {
-      "name": "@wisp/main-app",
+      "name": "@wispplace/main-app",
       "version": "1.0.50",
       "dependencies": {
         "@atproto-labs/did-resolver": "^0.2.4",
@@ -69,13 +69,13 @@
         "@radix-ui/react-slot": "^1.2.3",
         "@radix-ui/react-tabs": "^1.1.13",
         "@tanstack/react-query": "^5.90.2",
-        "@wisp/atproto-utils": "workspace:*",
-        "@wisp/constants": "workspace:*",
-        "@wisp/css": "workspace:*",
-        "@wisp/database": "workspace:*",
-        "@wisp/fs-utils": "workspace:*",
-        "@wisp/lexicons": "workspace:*",
-        "@wisp/observability": "workspace:*",
+        "@wispplace/atproto-utils": "workspace:*",
+        "@wispplace/constants": "workspace:*",
+        "@wispplace/css": "workspace:*",
+        "@wispplace/database": "workspace:*",
+        "@wispplace/fs-utils": "workspace:*",
+        "@wispplace/lexicons": "workspace:*",
+        "@wispplace/observability": "workspace:*",
         "actor-typeahead": "^0.1.1",
         "atproto-ui": "^0.12.0",
         "bun-plugin-tailwind": "^0.1.2",
@@ -127,10 +127,10 @@
         "@types/bun": "latest",
         "@types/mime-types": "^3.0.1",
         "@types/node": "^22.0.0",
-        "@wisp/atproto-utils": "workspace:*",
-        "@wisp/constants": "workspace:*",
-        "@wisp/fs-utils": "workspace:*",
-        "@wisp/lexicons": "workspace:*",
+        "@wispplace/atproto-utils": "workspace:*",
+        "@wispplace/constants": "workspace:*",
+        "@wispplace/fs-utils": "workspace:*",
+        "@wispplace/lexicons": "workspace:*",
         "commander": "^14.0.2",
         "hono": "^4.7.4",
         "ignore": "^7.0.5",
@@ -141,43 +141,43 @@
         "typescript": "^5",
       },
     },
-    "packages/@wisp/atproto-utils": {
-      "name": "@wisp/atproto-utils",
+    "packages/@wispplace/atproto-utils": {
+      "name": "@wispplace/atproto-utils",
       "version": "1.0.0",
       "dependencies": {
         "@atproto/api": "^0.18.17",
-        "@wisp/lexicons": "workspace:*",
+        "@wispplace/lexicons": "workspace:*",
         "multiformats": "^13.3.1",
       },
       "devDependencies": {
         "@atproto/lexicon": "^0.6.1",
       },
     },
-    "packages/@wisp/constants": {
-      "name": "@wisp/constants",
+    "packages/@wispplace/constants": {
+      "name": "@wispplace/constants",
       "version": "1.0.0",
     },
-    "packages/@wisp/css": {
-      "name": "@wisp/css",
+    "packages/@wispplace/css": {
+      "name": "@wispplace/css",
       "version": "1.0.0",
     },
-    "packages/@wisp/database": {
-      "name": "@wisp/database",
+    "packages/@wispplace/database": {
+      "name": "@wispplace/database",
       "version": "1.0.0",
       "dependencies": {
         "postgres": "^3.4.5",
       },
     },
-    "packages/@wisp/fs-utils": {
-      "name": "@wisp/fs-utils",
+    "packages/@wispplace/fs-utils": {
+      "name": "@wispplace/fs-utils",
       "version": "1.0.0",
       "dependencies": {
         "@atproto/api": "^0.18.17",
-        "@wisp/lexicons": "workspace:*",
+        "@wispplace/lexicons": "workspace:*",
       },
     },
-    "packages/@wisp/lexicons": {
-      "name": "@wisp/lexicons",
+    "packages/@wispplace/lexicons": {
+      "name": "@wispplace/lexicons",
       "version": "1.0.0",
       "dependencies": {
         "@atproto/lexicon": "^0.5.1",
@@ -188,8 +188,8 @@
         "multiformats": "^13.4.1",
       },
     },
-    "packages/@wisp/observability": {
-      "name": "@wisp/observability",
+    "packages/@wispplace/observability": {
+      "name": "@wispplace/observability",
       "version": "1.0.0",
       "dependencies": {
         "@opentelemetry/api": "^1.9.0",
@@ -214,8 +214,8 @@
         "hono",
       ],
     },
-    "packages/@wisp/safe-fetch": {
-      "name": "@wisp/safe-fetch",
+    "packages/@wispplace/safe-fetch": {
+      "name": "@wispplace/safe-fetch",
       "version": "1.0.0",
     },
   },
@@ -838,23 +838,23 @@
 
     "@types/shimmer": ["@types/shimmer@1.2.0", "", {}, "sha512-UE7oxhQLLd9gub6JKIAhDq06T0F6FnztwMNRvYgjeQSBeMc1ZG/tA47EwfduvkuQS8apbkM/lpLpWsaCeYsXVg=="],
 
-    "@wisp/atproto-utils": ["@wisp/atproto-utils@workspace:packages/@wisp/atproto-utils"],
+    "@wispplace/atproto-utils": ["@wispplace/atproto-utils@workspace:packages/@wispplace/atproto-utils"],
 
-    "@wisp/constants": ["@wisp/constants@workspace:packages/@wisp/constants"],
+    "@wispplace/constants": ["@wispplace/constants@workspace:packages/@wispplace/constants"],
 
-    "@wisp/css": ["@wisp/css@workspace:packages/@wisp/css"],
+    "@wispplace/css": ["@wispplace/css@workspace:packages/@wispplace/css"],
 
-    "@wisp/database": ["@wisp/database@workspace:packages/@wisp/database"],
+    "@wispplace/database": ["@wispplace/database@workspace:packages/@wispplace/database"],
 
-    "@wisp/fs-utils": ["@wisp/fs-utils@workspace:packages/@wisp/fs-utils"],
+    "@wispplace/fs-utils": ["@wispplace/fs-utils@workspace:packages/@wispplace/fs-utils"],
 
-    "@wisp/lexicons": ["@wisp/lexicons@workspace:packages/@wisp/lexicons"],
+    "@wispplace/lexicons": ["@wispplace/lexicons@workspace:packages/@wispplace/lexicons"],
 
-    "@wisp/main-app": ["@wisp/main-app@workspace:apps/main-app"],
+    "@wispplace/main-app": ["@wispplace/main-app@workspace:apps/main-app"],
 
-    "@wisp/observability": ["@wisp/observability@workspace:packages/@wisp/observability"],
+    "@wispplace/observability": ["@wispplace/observability@workspace:packages/@wispplace/observability"],
 
-    "@wisp/safe-fetch": ["@wisp/safe-fetch@workspace:packages/@wisp/safe-fetch"],
+    "@wispplace/safe-fetch": ["@wispplace/safe-fetch@workspace:packages/@wispplace/safe-fetch"],
 
     "abort-controller": ["abort-controller@3.0.0", "", { "dependencies": { "event-target-shim": "^5.0.0" } }, "sha512-h8lQ8tacZYnR3vNQTgibj+tODHI5/+l06Au2Pcriv/Gmet0eaj4TwWH41sO9wnHDiQsEj19q0drzdWdeAHtweg=="],
 
@@ -1538,9 +1538,9 @@
 
     "@types/bun/bun-types": ["bun-types@1.3.6", "", { "dependencies": { "@types/node": "*" } }, "sha512-OlFwHcnNV99r//9v5IIOgQ9Uk37gZqrNMCcqEaExdkVq3Avwqok1bJFmvGMCkCE0FqzdY8VMOZpfpR3lwI+CsQ=="],
 
-    "@wisp/lexicons/@atproto/lexicon": ["@atproto/lexicon@0.5.2", "", { "dependencies": { "@atproto/common-web": "^0.4.4", "@atproto/syntax": "^0.4.1", "iso-datestring-validator": "^2.2.2", "multiformats": "^9.9.0", "zod": "^3.23.8" } }, "sha512-lRmJgMA8f5j7VB5Iu5cp188ald5FuI4FlmZ7nn6EBrk1dgOstWVrI5Ft6K3z2vjyLZRG6nzknlsw+tDP63p7bQ=="],
+    "@wispplace/lexicons/@atproto/lexicon": ["@atproto/lexicon@0.5.2", "", { "dependencies": { "@atproto/common-web": "^0.4.4", "@atproto/syntax": "^0.4.1", "iso-datestring-validator": "^2.2.2", "multiformats": "^9.9.0", "zod": "^3.23.8" } }, "sha512-lRmJgMA8f5j7VB5Iu5cp188ald5FuI4FlmZ7nn6EBrk1dgOstWVrI5Ft6K3z2vjyLZRG6nzknlsw+tDP63p7bQ=="],
 
-    "@wisp/main-app/@atproto/api": ["@atproto/api@0.17.7", "", { "dependencies": { "@atproto/common-web": "^0.4.3", "@atproto/lexicon": "^0.5.1", "@atproto/syntax": "^0.4.1", "@atproto/xrpc": "^0.7.5", "await-lock": "^2.2.2", "multiformats": "^9.9.0", "tlds": "^1.234.0", "zod": "^3.23.8" } }, "sha512-V+OJBZq9chcrD21xk1bUa6oc5DSKfQj5DmUPf5rmZncqL1w9ZEbS38H5cMyqqdhfgo2LWeDRdZHD0rvNyJsIaw=="],
+    "@wispplace/main-app/@atproto/api": ["@atproto/api@0.17.7", "", { "dependencies": { "@atproto/common-web": "^0.4.3", "@atproto/lexicon": "^0.5.1", "@atproto/syntax": "^0.4.1", "@atproto/xrpc": "^0.7.5", "await-lock": "^2.2.2", "multiformats": "^9.9.0", "tlds": "^1.234.0", "zod": "^3.23.8" } }, "sha512-V+OJBZq9chcrD21xk1bUa6oc5DSKfQj5DmUPf5rmZncqL1w9ZEbS38H5cMyqqdhfgo2LWeDRdZHD0rvNyJsIaw=="],
 
     "express/cookie": ["cookie@0.7.2", "", {}, "sha512-yki5XnKuf750l50uGTllt6kKILY4nQ1eNIQatoXEByZ5dWgnKqbnqmTrBE5B4N7lrMJKQ2ytWMiTO2o0v6Ew/w=="],
 
@@ -1563,6 +1563,8 @@
     "wisp-hosting-service/@atproto/api": ["@atproto/api@0.17.7", "", { "dependencies": { "@atproto/common-web": "^0.4.3", "@atproto/lexicon": "^0.5.1", "@atproto/syntax": "^0.4.1", "@atproto/xrpc": "^0.7.5", "await-lock": "^2.2.2", "multiformats": "^9.9.0", "tlds": "^1.234.0", "zod": "^3.23.8" } }, "sha512-V+OJBZq9chcrD21xk1bUa6oc5DSKfQj5DmUPf5rmZncqL1w9ZEbS38H5cMyqqdhfgo2LWeDRdZHD0rvNyJsIaw=="],
 
     "wisp-hosting-service/@atproto/lexicon": ["@atproto/lexicon@0.5.2", "", { "dependencies": { "@atproto/common-web": "^0.4.4", "@atproto/syntax": "^0.4.1", "iso-datestring-validator": "^2.2.2", "multiformats": "^9.9.0", "zod": "^3.23.8" } }, "sha512-lRmJgMA8f5j7VB5Iu5cp188ald5FuI4FlmZ7nn6EBrk1dgOstWVrI5Ft6K3z2vjyLZRG6nzknlsw+tDP63p7bQ=="],
+
+    "wispctl/@types/bun": ["@types/bun@1.3.8", "", { "dependencies": { "bun-types": "1.3.8" } }, "sha512-3LvWJ2q5GerAXYxO2mffLTqOzEu5qnhEAlh48Vnu8WQfnmSwbgagjGZV6BoHKJztENYEDn6QmVd949W4uESRJA=="],
 
     "wispctl/@types/mime-types": ["@types/mime-types@3.0.1", "", {}, "sha512-xRMsfuQbnRq1Ef+C+RKaENOxXX87Ygl38W1vDfPHRku02TgQr+Qd8iivLtAMcR0KF5/29xlnFihkTlbqFrGOVQ=="],
 
@@ -1628,11 +1630,11 @@
 
     "@tokenizer/inflate/debug/ms": ["ms@2.1.3", "", {}, "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA=="],
 
-    "@wisp/lexicons/@atproto/lexicon/multiformats": ["multiformats@9.9.0", "", {}, "sha512-HoMUjhH9T8DDBNT+6xzkrd9ga/XiBI4xLr58LJACwK6G3HTOPeMz4nB4KJs33L2BelrIJa7P0VuNaVF3hMYfjg=="],
+    "@wispplace/lexicons/@atproto/lexicon/multiformats": ["multiformats@9.9.0", "", {}, "sha512-HoMUjhH9T8DDBNT+6xzkrd9ga/XiBI4xLr58LJACwK6G3HTOPeMz4nB4KJs33L2BelrIJa7P0VuNaVF3hMYfjg=="],
 
-    "@wisp/main-app/@atproto/api/@atproto/lexicon": ["@atproto/lexicon@0.5.2", "", { "dependencies": { "@atproto/common-web": "^0.4.4", "@atproto/syntax": "^0.4.1", "iso-datestring-validator": "^2.2.2", "multiformats": "^9.9.0", "zod": "^3.23.8" } }, "sha512-lRmJgMA8f5j7VB5Iu5cp188ald5FuI4FlmZ7nn6EBrk1dgOstWVrI5Ft6K3z2vjyLZRG6nzknlsw+tDP63p7bQ=="],
+    "@wispplace/main-app/@atproto/api/@atproto/lexicon": ["@atproto/lexicon@0.5.2", "", { "dependencies": { "@atproto/common-web": "^0.4.4", "@atproto/syntax": "^0.4.1", "iso-datestring-validator": "^2.2.2", "multiformats": "^9.9.0", "zod": "^3.23.8" } }, "sha512-lRmJgMA8f5j7VB5Iu5cp188ald5FuI4FlmZ7nn6EBrk1dgOstWVrI5Ft6K3z2vjyLZRG6nzknlsw+tDP63p7bQ=="],
 
-    "@wisp/main-app/@atproto/api/multiformats": ["multiformats@9.9.0", "", {}, "sha512-HoMUjhH9T8DDBNT+6xzkrd9ga/XiBI4xLr58LJACwK6G3HTOPeMz4nB4KJs33L2BelrIJa7P0VuNaVF3hMYfjg=="],
+    "@wispplace/main-app/@atproto/api/multiformats": ["multiformats@9.9.0", "", {}, "sha512-HoMUjhH9T8DDBNT+6xzkrd9ga/XiBI4xLr58LJACwK6G3HTOPeMz4nB4KJs33L2BelrIJa7P0VuNaVF3hMYfjg=="],
 
     "pino-abstract-transport/readable-stream/buffer": ["buffer@6.0.3", "", { "dependencies": { "base64-js": "^1.3.1", "ieee754": "^1.2.1" } }, "sha512-FTiCpNxtwiZZHEZbcbTIcZjERVICn9yq/pDFkTl95/AxzD1naBctN7YO68riM/gLSDY7sdrMby8hofADYuuqOA=="],
 

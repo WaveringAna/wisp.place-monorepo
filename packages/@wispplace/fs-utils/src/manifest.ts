@@ -1,5 +1,5 @@
-import type { Record, Directory } from "@wisp/lexicons/types/place/wisp/fs";
-// import { validateRecord } from "@wisp/lexicons/types/place/wisp/fs";
+import type { Record, Directory } from "@wispplace/lexicons/types/place/wisp/fs";
+// import { validateRecord } from "@wispplace/lexicons/types/place/wisp/fs";
 
 /**
  * Create the manifest record for a site

@@ -1,6 +1,6 @@
 import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
-import { parseRedirectsFile, type RedirectRule } from '@wisp/fs-utils';
+import { parseRedirectsFile, type RedirectRule } from '@wispplace/fs-utils';
 
 // Re-export everything from the shared package
 export {
@@ -11,7 +11,7 @@ export {
   type RedirectRule,
   type RedirectMatch,
   type MatchRedirectContext,
-} from '@wisp/fs-utils';
+} from '@wispplace/fs-utils';
 
 /**
  * Load redirect rules from a cached site

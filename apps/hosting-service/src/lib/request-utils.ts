@@ -2,7 +2,7 @@
  * Request utilities for validation and helper functions
  */
 
-import type { Record as WispSettings } from '@wisp/lexicons/types/place/wisp/settings';
+import type { Record as WispSettings } from '@wispplace/lexicons/types/place/wisp/settings';
 import { access } from 'fs/promises';
 
 /**

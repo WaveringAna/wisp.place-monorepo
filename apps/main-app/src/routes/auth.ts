@@ -3,7 +3,7 @@ import { NodeOAuthClient } from '@atproto/oauth-client-node'
 import { getSitesByDid, getDomainByDid, getCookieSecret } from '../lib/db'
 import { syncSitesFromPDS } from '../lib/sync-sites'
 import { authenticateRequest } from '../lib/wisp-auth'
-import { createLogger } from '@wisp/observability'
+import { createLogger } from '@wispplace/observability'
 
 const logger = createLogger('main-app')
 

@@ -1,7 +1,7 @@
 import type { Agent, BlobRef } from '@atproto/api';
-import type { Directory, Record as FsRecord } from '@wisp/lexicons/types/place/wisp/fs';
-import type { Record as SubfsRecord } from '@wisp/lexicons/types/place/wisp/subfs';
-import type { Record as SettingsRecord } from '@wisp/lexicons/types/place/wisp/settings';
+import type { Directory, Record as FsRecord } from '@wispplace/lexicons/types/place/wisp/fs';
+import type { Record as SubfsRecord } from '@wispplace/lexicons/types/place/wisp/subfs';
+import type { Record as SettingsRecord } from '@wispplace/lexicons/types/place/wisp/settings';
 import {
   processUploadedFiles,
   updateFileBlobs,
@@ -13,9 +13,9 @@ import {
   countFilesInDirectory,
   type UploadedFile,
   type FileUploadResult
-} from '@wisp/fs-utils';
-import { computeCID, extractBlobMap, shouldCompressFile, compressFile, extractSubfsUris } from '@wisp/atproto-utils';
-import { MAX_SITE_SIZE, MAX_FILE_COUNT, MAX_FILE_SIZE } from '@wisp/constants';
+} from '@wispplace/fs-utils';
+import { computeCID, extractBlobMap, shouldCompressFile, compressFile, extractSubfsUris } from '@wispplace/atproto-utils';
+import { MAX_SITE_SIZE, MAX_FILE_COUNT, MAX_FILE_SIZE } from '@wispplace/constants';
 import { readdirSync, statSync, readFileSync, existsSync } from 'fs';
 import { join, relative, basename } from 'path';
 import ignore, { type Ignore } from 'ignore';

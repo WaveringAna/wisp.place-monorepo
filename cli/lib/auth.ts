@@ -1,6 +1,6 @@
 import { NodeOAuthClient, type NodeSavedSession, type NodeSavedState, type NodeSavedStateStore, type NodeSavedSessionStore } from "@atproto/oauth-client-node";
 import { Agent, CredentialSession } from "@atproto/api";
-import { resolvePdsFromHandle } from "@wisp/atproto-utils";
+import { resolvePdsFromHandle } from "@wispplace/atproto-utils";
 import { Hono } from "hono";
 import { serve as honoNodeServe } from "@hono/node-server";
 import open from "open";

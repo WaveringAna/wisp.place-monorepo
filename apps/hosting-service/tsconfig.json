@@ -28,7 +28,7 @@
 		/* Workspace Paths */
 		"baseUrl": ".",
 		"paths": {
-			"@wisp/*": ["../../packages/@wisp/*/src"]
+			"@wispplace/*": ["../../packages/@wispplace/*/src"]
 		}
 	},
 	"include": ["src/**/*"],

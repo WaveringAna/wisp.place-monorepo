@@ -1,7 +1,7 @@
 import app from './server';
 import { serve } from '@hono/node-server';
 import { FirehoseWorker } from './lib/firehose';
-import { createLogger, initializeGrafanaExporters } from '@wisp/observability';
+import { createLogger, initializeGrafanaExporters } from '@wispplace/observability';
 import { mkdirSync, existsSync } from 'fs';
 import { backfillCache } from './lib/backfill';
 import { startDomainCacheCleanup, stopDomainCacheCleanup, setCacheOnlyMode, closeDatabase } from './lib/db';

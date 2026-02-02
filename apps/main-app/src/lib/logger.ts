@@ -1,9 +1,9 @@
 /**
- * Main app logger using @wisp/observability
+ * Main app logger using @wispplace/observability
  *
  * Note: This file is kept for backward compatibility.
- * New code should import createLogger from @wisp/observability directly.
+ * New code should import createLogger from @wispplace/observability directly.
  */
-import { createLogger } from '@wisp/observability'
+import { createLogger } from '@wispplace/observability'
 
 export const logger = createLogger('main-app')

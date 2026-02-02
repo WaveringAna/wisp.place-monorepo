@@ -29,7 +29,7 @@
     // Workspace paths
     "baseUrl": ".",
     "paths": {
-      "@wisp/*": ["../packages/@wisp/*/src"]
+      "@wispplace/*": ["../packages/@wispplace/*/src"]
     },
     "types": ["bun"]
   },

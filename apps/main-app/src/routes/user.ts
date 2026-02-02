@@ -3,8 +3,8 @@ import { requireAuth } from '../lib/wisp-auth'
 import { NodeOAuthClient } from '@atproto/oauth-client-node'
 import { getSitesByDid, getDomainByDid, getCustomDomainsByDid, getWispDomainInfo, getDomainsBySite, getAllWispDomains } from '../lib/db'
 import { syncSitesFromPDS } from '../lib/sync-sites'
-import { createLogger } from '@wisp/observability'
-import { getHandleForDid } from '@wisp/atproto-utils'
+import { createLogger } from '@wispplace/observability'
+import { getHandleForDid } from '@wispplace/atproto-utils'
 
 const logger = createLogger('main-app')
 

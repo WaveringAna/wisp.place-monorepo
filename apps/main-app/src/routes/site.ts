@@ -3,8 +3,8 @@ import { requireAuth } from '../lib/wisp-auth'
 import { NodeOAuthClient } from '@atproto/oauth-client-node'
 import { Agent } from '@atproto/api'
 import { deleteSite } from '../lib/db'
-import { createLogger } from '@wisp/observability'
-import { extractSubfsUris } from '@wisp/atproto-utils'
+import { createLogger } from '@wispplace/observability'
+import { extractSubfsUris } from '@wispplace/atproto-utils'
 
 const logger = createLogger('main-app')
 

@@ -1,5 +1,5 @@
 {
-  "name": "@wisp/atproto-utils",
+  "name": "@wispplace/atproto-utils",
   "version": "1.0.0",
   "private": true,
   "type": "module",
@@ -25,7 +25,7 @@
   },
   "dependencies": {
     "@atproto/api": "^0.18.17",
-    "@wisp/lexicons": "workspace:*",
+    "@wispplace/lexicons": "workspace:*",
     "multiformats": "^13.3.1"
   },
   "devDependencies": {

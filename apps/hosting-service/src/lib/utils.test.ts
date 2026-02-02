@@ -8,15 +8,15 @@ import type {
 	Entry as FsEntry,
 	File as FsFile,
 	Subfs as FsSubfs,
-} from '@wisp/lexicons/types/place/wisp/fs'
+} from '@wispplace/lexicons/types/place/wisp/fs'
 import type {
 	Record as SubfsRecord,
 	Directory as SubfsDirectory,
 	Entry as SubfsEntry,
 	File as SubfsFile,
 	Subfs as SubfsSubfs,
-} from '@wisp/lexicons/types/place/wisp/subfs'
-import type { $Typed } from '@wisp/lexicons/util'
+} from '@wispplace/lexicons/types/place/wisp/subfs'
+import type { $Typed } from '@wispplace/lexicons/util'
 
 describe('sanitizePath', () => {
 	test('allows normal file paths', () => {

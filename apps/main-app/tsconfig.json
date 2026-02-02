@@ -6,7 +6,7 @@
       "@server": ["./src/index.ts"],
       "@server/*": ["./src/*"],
       "@public/*": ["./public/*"],
-      "@wisp/*": ["../../packages/@wisp/*/src"]
+      "@wispplace/*": ["../../packages/@wispplace/*/src"]
     }
   },
   "include": ["src/**/*", "public/**/*", "scripts/**/*"],

@@ -1,4 +1,4 @@
-import type { Directory } from "@wisp/lexicons/types/place/wisp/fs";
+import type { Directory } from "@wispplace/lexicons/types/place/wisp/fs";
 
 /**
  * Estimate the JSON size of a directory tree

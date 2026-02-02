@@ -1,15 +1,15 @@
-import type { Record as WispFsRecord, Directory, Entry, File } from '@wisp/lexicons/types/place/wisp/fs';
-import type { Record as SubfsRecord } from '@wisp/lexicons/types/place/wisp/subfs';
-import type { Record as WispSettings } from '@wisp/lexicons/types/place/wisp/settings';
+import type { Record as WispFsRecord, Directory, Entry, File } from '@wispplace/lexicons/types/place/wisp/fs';
+import type { Record as SubfsRecord } from '@wispplace/lexicons/types/place/wisp/subfs';
+import type { Record as WispSettings } from '@wispplace/lexicons/types/place/wisp/settings';
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'fs';
 import { writeFile, readFile, rename } from 'fs/promises';
 import { Readable } from 'stream';
-import { safeFetchJson, safeFetchBlob } from '@wisp/safe-fetch';
+import { safeFetchJson, safeFetchBlob } from '@wispplace/safe-fetch';
 import { CID } from 'multiformats';
-import { extractBlobCid, resolveDid, getPdsForDid, didWebToHttps } from '@wisp/atproto-utils';
-import { sanitizePath, collectFileCidsFromEntries, countFilesInDirectory } from '@wisp/fs-utils';
-import { shouldCompressMimeType } from '@wisp/atproto-utils/compression';
-import { MAX_BLOB_SIZE, MAX_FILE_COUNT, MAX_SITE_SIZE } from '@wisp/constants';
+import { extractBlobCid, resolveDid, getPdsForDid, didWebToHttps } from '@wispplace/atproto-utils';
+import { sanitizePath, collectFileCidsFromEntries, countFilesInDirectory } from '@wispplace/fs-utils';
+import { shouldCompressMimeType } from '@wispplace/atproto-utils/compression';
+import { MAX_BLOB_SIZE, MAX_FILE_COUNT, MAX_SITE_SIZE } from '@wispplace/constants';
 import { storage } from './storage';
 
 // Re-export shared utilities for local usage and tests

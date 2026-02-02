@@ -1,9 +1,9 @@
 {
-  "name": "@wisp/monorepo",
+  "name": "@wispplace/monorepo",
   "version": "1.0.50",
   "private": true,
   "workspaces": [
-    "packages/@wisp/*",
+    "packages/@wispplace/*",
     "apps/main-app",
     "apps/hosting-service",
     "cli"

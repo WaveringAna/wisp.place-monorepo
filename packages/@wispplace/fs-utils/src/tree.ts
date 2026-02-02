@@ -1,5 +1,5 @@
 import type { BlobRef } from "@atproto/api";
-import type { Directory, Entry, File } from "@wisp/lexicons/types/place/wisp/fs";
+import type { Directory, Entry, File } from "@wispplace/lexicons/types/place/wisp/fs";
 
 export interface UploadedFile {
 	name: string;

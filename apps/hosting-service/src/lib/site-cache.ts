@@ -2,7 +2,7 @@
  * Site caching management utilities
  */
 
-import { createLogger } from '@wisp/observability';
+import { createLogger } from '@wispplace/observability';
 import { fetchSiteRecord, getPdsForDid, downloadAndCacheSite, isCached } from './utils';
 import { markSiteAsBeingCached, unmarkSiteAsBeingCached, LRUCache } from './cache';
 import type { RedirectRule } from './redirects';

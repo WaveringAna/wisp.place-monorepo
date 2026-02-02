@@ -1,5 +1,5 @@
 import { SQL } from "bun";
-import { BASE_HOST } from "@wisp/constants";
+import { BASE_HOST } from "@wispplace/constants";
 
 export const db = new SQL(
     process.env.NODE_ENV === 'production'

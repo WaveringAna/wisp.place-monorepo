@@ -22,7 +22,7 @@ import {
 } from '../lib/db'
 import { createHash } from 'crypto'
 import { verifyCustomDomain } from '../lib/dns-verify'
-import { createLogger } from '@wisp/observability'
+import { createLogger } from '@wispplace/observability'
 
 const logger = createLogger('main-app')
 

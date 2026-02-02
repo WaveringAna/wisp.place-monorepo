@@ -1,5 +1,5 @@
 /**
- * @wisp/observability
+ * @wispplace/observability
  * Framework-agnostic observability package with Elysia and Hono middleware
  */
 
@@ -15,5 +15,5 @@ export {
 } from './exporters'
 
 // Note: Middleware should be imported from specific subpaths:
-// - import { observabilityMiddleware } from '@wisp/observability/middleware/elysia'
-// - import { observabilityMiddleware, observabilityErrorHandler } from '@wisp/observability/middleware/hono'
+// - import { observabilityMiddleware } from '@wispplace/observability/middleware/elysia'
+// - import { observabilityMiddleware, observabilityErrorHandler } from '@wispplace/observability/middleware/hono'

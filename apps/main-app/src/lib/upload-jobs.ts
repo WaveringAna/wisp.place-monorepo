@@ -1,4 +1,4 @@
-import { createLogger } from '@wisp/observability';
+import { createLogger } from '@wispplace/observability';
 
 const logger = createLogger('main-app');
 

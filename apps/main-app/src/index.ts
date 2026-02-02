@@ -7,7 +7,7 @@ import { cors } from '@elysiajs/cors'
 import { staticPlugin } from '@elysiajs/static'
 
 import type { Config } from './lib/types'
-import { BASE_HOST } from '@wisp/constants'
+import { BASE_HOST } from '@wispplace/constants'
 import {
 	createClientMetadata,
 	getOAuthClient,
@@ -23,9 +23,9 @@ import { userRoutes } from './routes/user'
 import { siteRoutes } from './routes/site'
 import { csrfProtection } from './lib/csrf'
 import { DNSVerificationWorker } from './lib/dns-verification-worker'
-import { createLogger, logCollector, initializeGrafanaExporters } from '@wisp/observability'
-import { observabilityMiddleware } from '@wisp/observability/middleware/elysia'
-import { css as wispCss } from '@wisp/css'
+import { createLogger, logCollector, initializeGrafanaExporters } from '@wispplace/observability'
+import { observabilityMiddleware } from '@wispplace/observability/middleware/elysia'
+import { css as wispCss } from '@wispplace/css'
 import { promptAdminSetup } from './lib/admin-auth'
 import { adminRoutes } from './routes/admin'
 

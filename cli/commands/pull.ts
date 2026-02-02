@@ -1,7 +1,7 @@
-import type { Directory, Entry, File, Record as FsRecord } from '@wisp/lexicons/types/place/wisp/fs';
-import type { Record as SubfsRecord } from '@wisp/lexicons/types/place/wisp/subfs';
-import { extractBlobCid, resolveDid, getPdsForDid } from '@wisp/atproto-utils';
-import { sanitizePath } from '@wisp/fs-utils';
+import type { Directory, Entry, File, Record as FsRecord } from '@wispplace/lexicons/types/place/wisp/fs';
+import type { Record as SubfsRecord } from '@wispplace/lexicons/types/place/wisp/subfs';
+import { extractBlobCid, resolveDid, getPdsForDid } from '@wispplace/atproto-utils';
+import { sanitizePath } from '@wispplace/fs-utils';
 import { existsSync, mkdirSync, writeFileSync, rmSync, renameSync, readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { gunzipSync } from 'zlib';

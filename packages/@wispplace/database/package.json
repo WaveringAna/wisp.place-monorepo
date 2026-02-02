@@ -1,5 +1,5 @@
 {
-  "name": "@wisp/constants",
+  "name": "@wispplace/database",
   "version": "1.0.0",
   "private": true,
   "type": "module",
@@ -9,6 +9,13 @@
     ".": {
       "types": "./src/index.ts",
       "default": "./src/index.ts"
+    },
+    "./types": {
+      "types": "./src/types.ts",
+      "default": "./src/types.ts"
     }
+  },
+  "dependencies": {
+    "postgres": "^3.4.5"
   }
 }

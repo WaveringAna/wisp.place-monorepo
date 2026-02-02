@@ -1,4 +1,4 @@
-import type { Directory } from "@wisp/lexicons/types/place/wisp/fs";
+import type { Directory } from "@wispplace/lexicons/types/place/wisp/fs";
 
 /**
  * Extract all subfs URIs from a directory tree with their mount paths
