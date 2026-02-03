@@ -7,7 +7,7 @@ import open from "open";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "fs";
 import { dirname, join } from "path";
 import { homedir } from "os";
-import { isBun } from "./runtime";
+import { isBun } from "@wispplace/bun-firehose";
 
 // OAuth scope for CLI
 const OAUTH_SCOPE = 'atproto repo:place.wisp.fs repo:place.wisp.subfs repo:place.wisp.settings blob:*/*';

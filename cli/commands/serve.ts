@@ -10,8 +10,7 @@ import { lookup } from 'mime-types';
 import { pull } from './pull.ts';
 import { createSpinner, pc } from '../lib/progress.ts';
 import { parseRedirectsFile, matchRedirectRule, parseQueryString, type RedirectRule } from '@wispplace/fs-utils';
-import { isBun } from '../lib/runtime.ts';
-import { BunFirehose } from '../lib/firehose.ts';
+import { isBun, BunFirehose } from '@wispplace/bun-firehose';
 
 export interface ServeOptions {
   site: string;
