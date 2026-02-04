@@ -22,6 +22,7 @@ program
   .option('-s, --site <name>', 'Site name (defaults to directory name)')
   .option('--directory', 'Enable directory listing')
   .option('--spa', 'Enable SPA mode (serve index.html for all routes)')
+  .option('-c, --concurrency <n>', 'Number of concurrent uploads (backs off to 2 on rate limit)', '3')
   .option('--password <password>', 'App password for headless authentication')
   .option('--store <path>', 'OAuth session store path')
   .option('-y, --yes', 'Skip confirmation prompts')
@@ -101,7 +102,8 @@ program
         site: resolvedSite,
         directory: options.directory,
         spa: options.spa,
-        yes: options.yes
+        yes: options.yes,
+        concurrency: parseInt(options.concurrency, 10)
       });
 
       console.log();

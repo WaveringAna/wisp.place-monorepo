@@ -25,8 +25,10 @@ import { createSpinner, formatBytes, pc } from '../lib/progress.ts';
 // Constants for manifest splitting
 const MAX_MANIFEST_SIZE = 140 * 1024; // 140KB (PDS limit is 150KB)
 const FILE_COUNT_THRESHOLD = 250;
+const TARGET_FILE_COUNT = 200;
 const MAX_SUBFS_SIZE = 75 * 1024; // 75KB per subfs
-const MAX_CONCURRENT_UPLOADS = 5;
+const DEFAULT_CONCURRENT_UPLOADS = 3;
+const RATELIMITED_CONCURRENT_UPLOADS = 2;
 
 export interface DeployOptions {
   path: string;
@@ -34,6 +36,7 @@ export interface DeployOptions {
   directory?: boolean;
   spa?: boolean;
   yes?: boolean;
+  concurrency?: number;
 }
 
 interface FileInfo {
@@ -141,7 +144,8 @@ async function uploadBlob(
   agent: Agent,
   content: Buffer,
   mimeType: string,
-  retries = 3
+  retries = 3,
+  onRateLimit?: () => void
 ): Promise<BlobRef> {
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
@@ -154,6 +158,7 @@ async function uploadBlob(
 
       // Handle rate limits
       if (err?.status === 429) {
+        onRateLimit?.();
         const delay = Math.pow(2, attempt) * 2000;
         await new Promise(r => setTimeout(r, delay));
       } else {
@@ -168,7 +173,8 @@ async function uploadBlob(
 async function processAndUploadFiles(
   agent: Agent,
   files: FileInfo[],
-  existingBlobMap: Map<string, { blobRef: BlobRef; cid: string }>
+  existingBlobMap: Map<string, { blobRef: BlobRef; cid: string }>,
+  concurrency: number
 ): Promise<{ uploadedFiles: UploadedFile[]; uploadResults: FileUploadResult[]; filePaths: string[] }> {
   const spinner = createSpinner(`Processing ${files.length} files...`).start();
 
@@ -178,10 +184,19 @@ async function processAndUploadFiles(
 
   let uploaded = 0;
   let reused = 0;
+  let currentConcurrency = concurrency;
+
+  const onRateLimit = () => {
+    const reduced = Math.min(currentConcurrency, RATELIMITED_CONCURRENT_UPLOADS);
+    if (reduced < currentConcurrency) {
+      currentConcurrency = reduced;
+      spinner.text = `Rate limited — reducing concurrency to ${currentConcurrency}`;
+    }
+  };
 
   // Process in batches for concurrency
-  for (let i = 0; i < files.length; i += MAX_CONCURRENT_UPLOADS) {
-    const batch = files.slice(i, i + MAX_CONCURRENT_UPLOADS);
+  for (let i = 0; i < files.length; i += currentConcurrency) {
+    const batch = files.slice(i, i + currentConcurrency);
 
     await Promise.all(batch.map(async (file) => {
       const content = readFileSync(file.path);
@@ -216,7 +231,7 @@ async function processAndUploadFiles(
         reused++;
       } else {
         // Upload new blob
-        blobRef = await uploadBlob(agent, processedContent, 'application/octet-stream');
+        blobRef = await uploadBlob(agent, processedContent, 'application/octet-stream', 3, onRateLimit);
         uploaded++;
       }
 
@@ -281,83 +296,134 @@ async function splitIntoSubfs(
   const spinner = createSpinner('Splitting large site into subfs records...').start();
   const subfsRkeys: string[] = [];
   let currentDir = directory;
+  let currentFileCount = countFilesInDirectory(currentDir);
   let iteration = 0;
   let chunkCounter = 0;
 
-  while (
-    (estimateDirectorySize(currentDir) > MAX_MANIFEST_SIZE ||
-      countFilesInDirectory(currentDir) > FILE_COUNT_THRESHOLD) &&
-    iteration < 50
-  ) {
+  let manifest = createManifest(siteRkey, currentDir, currentFileCount);
+  let manifestSize = JSON.stringify(manifest).length;
+
+  while ((manifestSize > MAX_MANIFEST_SIZE || currentFileCount > TARGET_FILE_COUNT) && iteration < 100) {
     iteration++;
 
-    // Find largest directories
-    const largeDirs = findLargeDirectories(currentDir)
-      .filter(d => d.size > 1000) // Only consider dirs with meaningful size
-      .sort((a, b) => b.size - a.size);
+    // Find all directories sorted by size (largest first)
+    const directories = findLargeDirectories(currentDir);
+    directories.sort((a, b) => b.size - a.size);
 
-    if (largeDirs.length === 0) break;
+    if (directories.length > 0) {
+      const largest = directories[0]!;
+      spinner.text = `Split #${iteration}: ${largest.path} (${largest.fileCount} files, ${formatBytes(largest.size)})`;
 
-    const largest = largeDirs[0]!;
-    spinner.text = `Creating subfs ${iteration} for ${largest.path} (${formatBytes(largest.size)})`;
+      let subfsUri: string;
 
-    let subfsUri: string;
+      // Check if directory is too large for a single subfs record
+      if (largest.size > MAX_SUBFS_SIZE) {
+        // Split into chunks
+        console.log(pc.dim(`\n    → Directory too large (${formatBytes(largest.size)}), splitting into chunks...`));
+        const chunks = splitDirectoryIntoChunks(largest.directory, MAX_SUBFS_SIZE);
+        console.log(pc.dim(`    → Created ${chunks.length} chunks`));
 
-    // Check if directory is too large for a single subfs record
-    if (largest.size > MAX_SUBFS_SIZE) {
-      // Split into chunks
-      console.log(pc.dim(`\n    → Directory too large (${formatBytes(largest.size)}), splitting into chunks...`));
-      const chunks = splitDirectoryIntoChunks(largest.directory, MAX_SUBFS_SIZE);
-      console.log(pc.dim(`    → Created ${chunks.length} chunks`));
+        // Upload each chunk as a subfs record
+        const chunkUris: string[] = [];
+        for (let i = 0; i < chunks.length; i++) {
+          const chunk = chunks[i]!;
+          const chunkRkey = `${siteRkey}-chunk-${chunkCounter++}`;
+          const chunkSize = estimateDirectorySize(chunk);
+          const chunkFileCount = countFilesInDirectory(chunk);
 
-      // Upload each chunk as a subfs record
-      const chunkUris: string[] = [];
-      for (let i = 0; i < chunks.length; i++) {
-        const chunk = chunks[i]!;
-        const chunkRkey = `${siteRkey}-chunk-${chunkCounter++}`;
-        const chunkSize = estimateDirectorySize(chunk);
-        const chunkFileCount = countFilesInDirectory(chunk);
+          console.log(pc.dim(`    → Uploading chunk ${i + 1}/${chunks.length} (${chunkFileCount} files, ${formatBytes(chunkSize)})...`));
 
-        console.log(pc.dim(`    → Uploading chunk ${i + 1}/${chunks.length} (${chunkFileCount} files, ${formatBytes(chunkSize)})...`));
+          const chunkUri = await createSubfsRecord(agent, did, chunk, chunkRkey);
+          chunkUris.push(chunkUri);
+          subfsRkeys.push(chunkRkey);
+        }
 
-        const chunkUri = await createSubfsRecord(agent, did, chunk, chunkRkey);
-        chunkUris.push(chunkUri);
-        subfsRkeys.push(chunkRkey);
+        // Create parent subfs that references all chunks with flat: true
+        console.log(pc.dim(`    → Creating parent subfs with ${chunkUris.length} chunk references...`));
+
+        const parentEntries = chunkUris.map((uri, i) => ({
+          name: `chunk${i}`,
+          node: {
+            $type: 'place.wisp.fs#subfs' as const,
+            type: 'subfs' as const,
+            subject: uri,
+            flat: true
+          }
+        }));
+
+        const parentDirectory: Directory = {
+          $type: 'place.wisp.fs#directory' as const,
+          type: 'directory' as const,
+          entries: parentEntries
+        };
+
+        const parentRkey = `${siteRkey}-subfs-${iteration}`;
+        subfsUri = await createSubfsRecord(agent, did, parentDirectory, parentRkey);
+        subfsRkeys.push(parentRkey);
+
+        console.log(pc.green(`    ✓ Created parent subfs with ${chunks.length} chunks`));
+      } else {
+        // Directory fits in a single subfs record
+        const subfsRkey = `${siteRkey}-subfs-${iteration}`;
+        subfsUri = await createSubfsRecord(agent, did, largest.directory, subfsRkey);
+        subfsRkeys.push(subfsRkey);
       }
 
-      // Create parent subfs that references all chunks with flat: true
-      console.log(pc.dim(`    → Creating parent subfs with ${chunkUris.length} chunk references...`));
+      // Replace directory with subfs reference
+      currentDir = replaceDirectoryWithSubfs(currentDir, largest.path, subfsUri);
+      currentFileCount -= largest.fileCount;
+    } else {
+      // No subdirectories — split flat files at root level
+      const rootFiles = currentDir.entries.filter(e => 'type' in e.node && e.node.type === 'file');
 
-      const parentEntries = chunkUris.map((uri, i) => ({
-        name: `chunk${i}`,
+      if (rootFiles.length === 0) {
+        spinner.fail(`Cannot split further — no files or directories available (${currentFileCount} files, ${(manifestSize / 1024).toFixed(1)}KB)`);
+        break;
+      }
+
+      // Take a chunk of ~100 files
+      const CHUNK_SIZE = 100;
+      const chunkFiles = rootFiles.slice(0, Math.min(CHUNK_SIZE, rootFiles.length));
+      spinner.text = `Split #${iteration}: flat root (${chunkFiles.length} files)`;
+
+      // Create a directory with just these files
+      const chunkDirectory: Directory = {
+        $type: 'place.wisp.fs#directory' as const,
+        type: 'directory' as const,
+        entries: chunkFiles
+      };
+
+      const subfsRkey = `${siteRkey}-subfs-${iteration}`;
+      const subfsUri = await createSubfsRecord(agent, did, chunkDirectory, subfsRkey);
+      subfsRkeys.push(subfsRkey);
+
+      // Remove chunked files and add a flat subfs entry
+      const remainingEntries = currentDir.entries.filter(
+        e => !chunkFiles.some(cf => cf.name === e.name)
+      );
+
+      remainingEntries.push({
+        name: `__subfs_${iteration}`,
         node: {
           $type: 'place.wisp.fs#subfs' as const,
           type: 'subfs' as const,
-          subject: uri,
-          flat: true // Merge chunk contents into parent
+          subject: subfsUri,
+          flat: true
         }
-      }));
+      });
 
-      const parentDirectory: Directory = {
+      currentDir = {
         $type: 'place.wisp.fs#directory' as const,
         type: 'directory' as const,
-        entries: parentEntries
+        entries: remainingEntries
       };
 
-      const parentRkey = `${siteRkey}-subfs-${iteration}`;
-      subfsUri = await createSubfsRecord(agent, did, parentDirectory, parentRkey);
-      subfsRkeys.push(parentRkey);
-
-      console.log(pc.green(`    ✓ Created parent subfs with ${chunks.length} chunks`));
-    } else {
-      // Directory fits in a single subfs record
-      const subfsRkey = `${siteRkey}-subfs-${iteration}`;
-      subfsUri = await createSubfsRecord(agent, did, largest.directory, subfsRkey);
-      subfsRkeys.push(subfsRkey);
+      currentFileCount -= chunkFiles.length;
     }
 
-    // Replace directory with subfs reference
-    currentDir = replaceDirectoryWithSubfs(currentDir, largest.path, subfsUri);
+    // Recreate manifest and check new size
+    manifest = createManifest(siteRkey, currentDir, currentFileCount);
+    manifestSize = JSON.stringify(manifest).length;
   }
 
   spinner.succeed(`Created ${subfsRkeys.length} subfs records`);
@@ -454,7 +520,8 @@ export async function deploy(
   const { uploadedFiles, uploadResults, filePaths } = await processAndUploadFiles(
     agent,
     files,
-    existingBlobMap
+    existingBlobMap,
+    options.concurrency ?? DEFAULT_CONCURRENT_UPLOADS
   );
 
   // 5. Build directory structure
@@ -467,9 +534,10 @@ export async function deploy(
   let finalDirectory = directory;
   let subfsRkeys: string[] = [];
 
+  const initialManifest = createManifest(siteName, directory, fileCount);
   if (
-    estimateDirectorySize(directory) > MAX_MANIFEST_SIZE ||
-    fileCount > FILE_COUNT_THRESHOLD
+    fileCount >= FILE_COUNT_THRESHOLD ||
+    JSON.stringify(initialManifest).length > MAX_MANIFEST_SIZE
   ) {
     const result = await splitIntoSubfs(agent, did, directory, siteName);
     finalDirectory = result.directory;

@@ -10,7 +10,9 @@ import {
     updateFileBlobs,
     findLargeDirectories,
     replaceDirectoryWithSubfs,
-    estimateDirectorySize
+    estimateDirectorySize,
+    splitDirectoryIntoChunks,
+    countFilesInDirectory
 } from '@wispplace/fs-utils'
 import {
     shouldCompressFile,
@@ -615,6 +617,7 @@ async function processUploadInBackground(
         const MAX_MANIFEST_SIZE = 140 * 1024; // 140KB to be safe (PDS limit is 150KB)
         const FILE_COUNT_THRESHOLD = 250; // Start splitting at this many files
         const TARGET_FILE_COUNT = 200; // Try to keep main manifest under this many files
+        const MAX_SUBFS_SIZE = 75 * 1024; // 75KB per subfs record
         const subfsRecords: Array<{ uri: string; path: string }> = [];
         let workingDirectory = updatedDirectory;
         let currentFileCount = actualFileCount;
@@ -645,33 +648,89 @@ async function processUploadInBackground(
                     const largestDir = directories[0];
                     console.log(`  Split #${attempts}: ${largestDir.path} (${largestDir.fileCount} files, ${(largestDir.size / 1024).toFixed(1)}KB)`);
 
-                    // Create a subfs record for this directory
-                    const subfsRkey = TID.nextStr();
-                    const subfsManifest = {
-                        $type: 'place.wisp.subfs' as const,
-                        root: largestDir.directory,
-                        fileCount: largestDir.fileCount,
-                        createdAt: new Date().toISOString()
-                    };
+                    let subfsUri: string;
 
-                    // Validate subfs record
-                    // const subfsValidation = validateSubfsRecord(subfsManifest);
-                    // if (!subfsValidation.success) {
-                    //     throw new Error(`Invalid subfs manifest: ${subfsValidation.error?.message || 'Validation failed'}`);
-                    // }
+                    if (largestDir.size > MAX_SUBFS_SIZE) {
+                        // Directory too large for a single subfs — split into chunks
+                        console.log(`    → Directory too large (${(largestDir.size / 1024).toFixed(1)}KB), splitting into chunks...`);
+                        const chunks = splitDirectoryIntoChunks(largestDir.directory, MAX_SUBFS_SIZE);
+                        console.log(`    → Created ${chunks.length} chunks`);
 
-                    // Upload subfs record to PDS
-                    const subfsRecord = await agent.com.atproto.repo.putRecord({
-                        repo: did,
-                        collection: 'place.wisp.subfs',
-                        rkey: subfsRkey,
-                        record: subfsManifest
-                    });
+                        const chunkUris: string[] = [];
+                        for (let i = 0; i < chunks.length; i++) {
+                            const chunk = chunks[i]!;
+                            const chunkRkey = TID.nextStr();
+                            const chunkFileCount = countFilesInDirectory(chunk);
+                            console.log(`    → Uploading chunk ${i + 1}/${chunks.length} (${chunkFileCount} files)...`);
 
-                    const subfsUri = subfsRecord.data.uri;
+                            const chunkRecord = await agent.com.atproto.repo.putRecord({
+                                repo: did,
+                                collection: 'place.wisp.subfs',
+                                rkey: chunkRkey,
+                                record: {
+                                    $type: 'place.wisp.subfs' as const,
+                                    root: chunk,
+                                    fileCount: chunkFileCount,
+                                    createdAt: new Date().toISOString()
+                                }
+                            });
+
+                            chunkUris.push(chunkRecord.data.uri);
+                        }
+
+                        // Create parent subfs referencing all chunks with flat: true
+                        console.log(`    → Creating parent subfs with ${chunkUris.length} chunk references...`);
+                        const parentDirectory: Directory = {
+                            $type: 'place.wisp.fs#directory' as const,
+                            type: 'directory' as const,
+                            entries: chunkUris.map((uri, i) => ({
+                                name: `chunk${i}`,
+                                node: {
+                                    $type: 'place.wisp.fs#subfs' as const,
+                                    type: 'subfs' as const,
+                                    subject: uri,
+                                    flat: true
+                                }
+                            }))
+                        };
+
+                        const parentRkey = TID.nextStr();
+                        const parentRecord = await agent.com.atproto.repo.putRecord({
+                            repo: did,
+                            collection: 'place.wisp.subfs',
+                            rkey: parentRkey,
+                            record: {
+                                $type: 'place.wisp.subfs' as const,
+                                root: parentDirectory,
+                                fileCount: largestDir.fileCount,
+                                createdAt: new Date().toISOString()
+                            }
+                        });
+
+                        subfsUri = parentRecord.data.uri;
+                        console.log(`    ✓ Created parent subfs with ${chunks.length} chunks`);
+                        logger.info(`Created chunked subfs for ${largestDir.path}: ${subfsUri} (${chunks.length} chunks)`);
+                    } else {
+                        // Directory fits in a single subfs record
+                        const subfsRkey = TID.nextStr();
+                        const subfsRecord = await agent.com.atproto.repo.putRecord({
+                            repo: did,
+                            collection: 'place.wisp.subfs',
+                            rkey: subfsRkey,
+                            record: {
+                                $type: 'place.wisp.subfs' as const,
+                                root: largestDir.directory,
+                                fileCount: largestDir.fileCount,
+                                createdAt: new Date().toISOString()
+                            }
+                        });
+
+                        subfsUri = subfsRecord.data.uri;
+                        console.log(`  ✅ Created subfs: ${subfsUri}`);
+                        logger.info(`Created subfs record for ${largestDir.path}: ${subfsUri}`);
+                    }
+
                     subfsRecords.push({ uri: subfsUri, path: largestDir.path });
-                    console.log(`  ✅ Created subfs: ${subfsUri}`);
-                    logger.info(`Created subfs record for ${largestDir.path}: ${subfsUri}`);
 
                     // Replace directory with subfs node in the main tree
                     workingDirectory = replaceDirectoryWithSubfs(workingDirectory, largestDir.path, subfsUri);

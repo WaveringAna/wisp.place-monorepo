@@ -256,9 +256,10 @@ export function collectFileCidsFromEntries(entries: Entry[], pathPrefix: string,
 			collectFileCidsFromEntries(node.entries, currentPath, fileCids);
 		} else if ('type' in node && node.type === 'file' && 'blob' in node) {
 			const fileNode = node as File;
-			// Extract CID from blob ref
 			if (fileNode.blob && fileNode.blob.ref) {
-				const cid = fileNode.blob.ref.toString();
+				const ref = fileNode.blob.ref;
+			// Handle both CID instances (CBOR/firehose) and IPLD link objects { $link } (JSON API)
+			const cid = (typeof ref === 'object' && '$link' in ref) ? (ref as { $link: string }).$link : ref.toString();
 				fileCids[currentPath] = cid;
 			}
 		}
