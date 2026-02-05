@@ -3,18 +3,21 @@
  * Handles file retrieval, caching, redirects, and HTML rewriting
  */
 
-import { readFile } from 'fs/promises';
 import { lookup } from 'mime-types';
+import { gunzipSync } from 'zlib';
 import type { Record as WispSettings } from '@wispplace/lexicons/types/place/wisp/settings';
 import { shouldCompressMimeType } from '@wispplace/atproto-utils/compression';
-import { rewrittenHtmlCache, getCacheKey, isSiteBeingCached } from './cache';
-import { getCachedFilePath, getCachedSettings } from './utils';
+import { getCachedSettings } from './utils';
 import { loadRedirectRules, matchRedirectRule, parseCookies, parseQueryString } from './redirects';
-import { rewriteHtmlPaths, isHtmlContent } from './html-rewriter';
-import { generate404Page, generateDirectoryListing, siteUpdatingResponse } from './page-generators';
-import { getIndexFiles, applyCustomHeaders, fileExists } from './request-utils';
+import { isHtmlContent } from './html-rewriter';
+import { generate404Page, generateDirectoryListing } from './page-generators';
+import { getIndexFiles, applyCustomHeaders } from './request-utils';
 import { getRedirectRulesFromCache, setRedirectRulesInCache } from './site-cache';
 import { storage } from './storage';
+import { getSiteCache } from './db';
+import { enqueueRevalidate } from './revalidate-queue';
+import { recordStorageMiss } from './revalidate-metrics';
+import { normalizeFileCids } from '@wispplace/fs-utils';
 
 /**
  * Helper to retrieve a file with metadata from tiered storage
@@ -35,6 +38,114 @@ async function getFileWithMetadata(did: string, rkey: string, filePath: string) 
   }
 
   return result;
+}
+
+function buildStorageKey(did: string, rkey: string, filePath: string): string {
+  const normalized = filePath.startsWith('/') ? filePath.slice(1) : filePath;
+  return `${did}/${rkey}/${normalized}`;
+}
+
+async function storageExists(did: string, rkey: string, filePath: string): Promise<boolean> {
+  const key = buildStorageKey(did, rkey, filePath);
+  return storage.exists(key);
+}
+
+function buildStorageMissResponse(): Response {
+  return new Response('Storage temporarily unavailable', {
+    status: 503,
+    headers: {
+      'Cache-Control': 'no-store',
+      'Retry-After': '5',
+    },
+  });
+}
+
+async function listDirectoryEntries(
+  did: string,
+  rkey: string,
+  requestPath: string
+): Promise<Array<{ name: string; isDirectory: boolean }>> {
+  const prefix = buildStorageKey(did, rkey, requestPath ? `${requestPath}/` : '');
+  const entries = new Map<string, boolean>();
+
+  for await (const key of storage.listKeys(prefix)) {
+    const relative = key.slice(prefix.length);
+    if (!relative) continue;
+    if (relative.startsWith('.rewritten/')) continue;
+
+    const [name, ...rest] = relative.split('/');
+    if (!name || name === '.metadata.json' || name.endsWith('.meta')) continue;
+
+    const isDirectory = rest.length > 0;
+    const existing = entries.get(name);
+    if (existing === undefined || (isDirectory && !existing)) {
+      entries.set(name, isDirectory);
+    }
+  }
+
+  return Array.from(entries.entries()).map(([name, isDirectory]) => ({ name, isDirectory }));
+}
+
+async function getFileForRequest(
+  did: string,
+  rkey: string,
+  filePath: string,
+  preferRewrittenHtml: boolean
+): Promise<{ result: Awaited<ReturnType<typeof storage.getWithMetadata>>; filePath: string } | null> {
+  const mimeTypeGuess = lookup(filePath) || 'application/octet-stream';
+  if (preferRewrittenHtml && isHtmlContent(filePath, mimeTypeGuess)) {
+    const rewrittenPath = `.rewritten/${filePath}`;
+    const rewritten = await getFileWithMetadata(did, rkey, rewrittenPath);
+    if (rewritten) {
+      return { result: rewritten, filePath };
+    }
+  }
+
+  const result = await getFileWithMetadata(did, rkey, filePath);
+  if (!result) return null;
+  return { result, filePath };
+}
+
+function buildResponseFromStorageResult(
+  result: Awaited<ReturnType<typeof storage.getWithMetadata>>,
+  filePath: string,
+  settings: WispSettings | null,
+  requestHeaders?: Record<string, string>
+): Response {
+  const content = Buffer.from(result.data);
+  const meta = result.metadata.customMetadata as { encoding?: string; mimeType?: string } | undefined;
+  const mimeType = meta?.mimeType || lookup(filePath) || 'application/octet-stream';
+
+  const headers: Record<string, string> = {
+    'Content-Type': mimeType,
+    'Cache-Control': mimeType.startsWith('text/html')
+      ? 'public, max-age=300'
+      : 'public, max-age=31536000, immutable',
+    'X-Cache-Tier': result.source,
+  };
+
+  if (meta?.encoding === 'gzip') {
+    const shouldServeCompressed = shouldCompressMimeType(mimeType);
+    const acceptEncoding = requestHeaders?.['accept-encoding'] ?? '';
+    const clientAcceptsGzip = acceptEncoding.includes('gzip');
+    const hasGzipMagic = content.length >= 2 && content[0] === 0x1f && content[1] === 0x8b;
+
+    if (!clientAcceptsGzip || !shouldServeCompressed) {
+      if (hasGzipMagic) {
+        const decompressed = gunzipSync(content);
+        applyCustomHeaders(headers, filePath, settings);
+        return new Response(decompressed, { headers });
+      }
+      console.warn(`File ${filePath} marked as gzipped but lacks magic bytes, serving as-is`);
+      applyCustomHeaders(headers, filePath, settings);
+      return new Response(content, { headers });
+    }
+
+    headers['Content-Encoding'] = 'gzip';
+  }
+
+  applyCustomHeaders(headers, filePath, settings);
+  return new Response(content, { headers });
 }
 
 /**
@@ -83,12 +194,11 @@ export async function serveFromCache(
           checkPath += indexFiles[0] || 'index.html';
         }
 
-        const cachedFile = getCachedFilePath(did, rkey, checkPath);
-        const fileExistsOnDisk = await fileExists(cachedFile);
+        const fileExistsInStorage = await storageExists(did, rkey, checkPath);
 
         // If file exists and redirect is not forced, serve the file normally
-        if (fileExistsOnDisk) {
-          return serveFileInternal(did, rkey, filePath, settings);
+        if (fileExistsInStorage) {
+          return serveFileInternal(did, rkey, filePath, settings, headers);
         }
       }
 
@@ -97,7 +207,7 @@ export async function serveFromCache(
         // Rewrite: serve different content but keep URL the same
         // Remove leading slash for internal path resolution
         const rewritePath = targetPath.startsWith('/') ? targetPath.slice(1) : targetPath;
-        return serveFileInternal(did, rkey, rewritePath, settings);
+        return serveFileInternal(did, rkey, rewritePath, settings, headers);
       } else if (status === 301 || status === 302) {
         // External redirect: change the URL
         return new Response(null, {
@@ -110,7 +220,7 @@ export async function serveFromCache(
       } else if (status === 404) {
         // Custom 404 page from _redirects (wins over settings.custom404)
         const custom404Path = targetPath.startsWith('/') ? targetPath.slice(1) : targetPath;
-        const response = await serveFileInternal(did, rkey, custom404Path, settings);
+        const response = await serveFileInternal(did, rkey, custom404Path, settings, headers);
         // Override status to 404
         return new Response(response.body, {
           status: 404,
@@ -121,7 +231,7 @@ export async function serveFromCache(
   }
 
   // No redirect matched, serve normally with settings
-  return serveFileInternal(did, rkey, filePath, settings);
+  return serveFileInternal(did, rkey, filePath, settings, headers);
 }
 
 /**
@@ -131,12 +241,39 @@ export async function serveFileInternal(
   did: string,
   rkey: string,
   filePath: string,
-  settings: WispSettings | null = null
+  settings: WispSettings | null = null,
+  requestHeaders?: Record<string, string>
 ): Promise<Response> {
-  // Check if site is currently being cached - if so, return updating response
-  if (isSiteBeingCached(did, rkey)) {
-    return siteUpdatingResponse();
-  }
+  let expectedFileCids: Record<string, string> | null | undefined;
+  let expectedMissPath: string | null = null;
+
+  const getExpectedFileCids = async (): Promise<Record<string, string> | null> => {
+    if (expectedFileCids !== undefined) return expectedFileCids;
+    const siteCache = await getSiteCache(did, rkey);
+    if (!siteCache) {
+      expectedFileCids = null;
+      return null;
+    }
+    expectedFileCids = normalizeFileCids(siteCache.file_cids).value;
+    return expectedFileCids;
+  };
+
+  const markExpectedMiss = async (path: string) => {
+    if (expectedMissPath) return;
+    const fileCids = await getExpectedFileCids();
+    if (!fileCids) return;
+    const normalized = path.startsWith('/') ? path.slice(1) : path;
+    if (fileCids[normalized]) {
+      expectedMissPath = normalized;
+    }
+  };
+
+  const maybeReturnStorageMiss = async (): Promise<Response | null> => {
+    if (!expectedMissPath) return null;
+    recordStorageMiss(expectedMissPath);
+    await enqueueRevalidate(did, rkey, `storage-miss:${expectedMissPath}`);
+    return buildStorageMissResponse();
+  };
 
   const indexFiles = getIndexFiles(settings);
 
@@ -146,54 +283,30 @@ export async function serveFileInternal(
     requestPath = requestPath.slice(0, -1);
   }
 
-  // Check if this path is a directory first
-  const directoryPath = getCachedFilePath(did, rkey, requestPath);
-  if (await fileExists(directoryPath)) {
-    const { stat, readdir } = await import('fs/promises');
-    try {
-      const stats = await stat(directoryPath);
-      if (stats.isDirectory()) {
-        // It's a directory, try each index file in order
-        for (const indexFile of indexFiles) {
-          const indexPath = requestPath ? `${requestPath}/${indexFile}` : indexFile;
-          const indexFilePath = getCachedFilePath(did, rkey, indexPath);
-          if (await fileExists(indexFilePath)) {
-            return serveFileInternal(did, rkey, indexPath, settings);
-          }
-        }
-        // No index file found - check if directory listing is enabled
-        if (settings?.directoryListing) {
-          const { stat } = await import('fs/promises');
-          const entries = await readdir(directoryPath);
-          // Filter out .meta files and other hidden files
-          const visibleEntries = entries.filter(entry => !entry.endsWith('.meta') && entry !== '.metadata.json');
-
-          // Check which entries are directories
-          const entriesWithType = await Promise.all(
-            visibleEntries.map(async (name) => {
-              try {
-                const entryPath = `${directoryPath}/${name}`;
-                const stats = await stat(entryPath);
-                return { name, isDirectory: stats.isDirectory() };
-              } catch {
-                return { name, isDirectory: false };
-              }
-            })
-          );
-
-          const html = generateDirectoryListing(requestPath, entriesWithType);
-          return new Response(html, {
-            headers: {
-              'Content-Type': 'text/html; charset=utf-8',
-              'Cache-Control': 'public, max-age=300',
-            },
-          });
-        }
-        // Fall through to 404/SPA handling
+  // Check if this path is a directory first (best-effort via prefix scan)
+  const directoryEntries = await listDirectoryEntries(did, rkey, requestPath);
+  if (directoryEntries.length > 0) {
+    // It's a directory, try each index file in order
+    for (const indexFile of indexFiles) {
+      const indexPath = requestPath ? `${requestPath}/${indexFile}` : indexFile;
+      if (await storageExists(did, rkey, indexPath)) {
+        return serveFileInternal(did, rkey, indexPath, settings, requestHeaders);
       }
-    } catch (err) {
-      // If stat fails, continue with normal flow
+      await markExpectedMiss(indexPath);
     }
+    // No index file found - check if directory listing is enabled
+    if (settings?.directoryListing) {
+      const missResponse = await maybeReturnStorageMiss();
+      if (missResponse) return missResponse;
+      const html = generateDirectoryListing(requestPath, directoryEntries);
+      return new Response(html, {
+        headers: {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Cache-Control': 'public, max-age=300',
+        },
+      });
+    }
+    // Fall through to 404/SPA handling
   }
 
   // Not a directory, try to serve as a file
@@ -203,55 +316,9 @@ export async function serveFileInternal(
   const result = await getFileWithMetadata(did, rkey, fileRequestPath);
 
   if (result) {
-    const content = Buffer.from(result.data);
-    const meta = result.metadata.customMetadata as { encoding?: string; mimeType?: string } | undefined;
-
-    // Build headers with caching
-    const headers: Record<string, string> = {
-      'X-Cache-Tier': result.source,
-    };
-
-    if (meta?.encoding === 'gzip' && meta.mimeType) {
-      const shouldServeCompressed = shouldCompressMimeType(meta.mimeType);
-
-      if (!shouldServeCompressed) {
-        // Verify content is actually gzipped before attempting decompression
-        const isGzipped = content.length >= 2 && content[0] === 0x1f && content[1] === 0x8b;
-        if (isGzipped) {
-          const { gunzipSync } = await import('zlib');
-          const decompressed = gunzipSync(content);
-          headers['Content-Type'] = meta.mimeType;
-          headers['Cache-Control'] = 'public, max-age=31536000, immutable';
-          applyCustomHeaders(headers, fileRequestPath, settings);
-          return new Response(decompressed, { headers });
-        } else {
-          // Meta says gzipped but content isn't - serve as-is
-          console.warn(`File ${filePath} has gzip encoding in meta but content lacks gzip magic bytes`);
-          headers['Content-Type'] = meta.mimeType;
-          headers['Cache-Control'] = 'public, max-age=31536000, immutable';
-          applyCustomHeaders(headers, fileRequestPath, settings);
-          return new Response(content, { headers });
-        }
-      }
-
-      headers['Content-Type'] = meta.mimeType;
-      headers['Content-Encoding'] = 'gzip';
-      headers['Cache-Control'] = meta.mimeType.startsWith('text/html')
-        ? 'public, max-age=300'
-        : 'public, max-age=31536000, immutable';
-      applyCustomHeaders(headers, fileRequestPath, settings);
-      return new Response(content, { headers });
-    }
-
-    // Non-compressed files
-    const mimeType = meta?.mimeType || lookup(fileRequestPath) || 'application/octet-stream';
-    headers['Content-Type'] = mimeType;
-    headers['Cache-Control'] = mimeType.startsWith('text/html')
-      ? 'public, max-age=300'
-      : 'public, max-age=31536000, immutable';
-    applyCustomHeaders(headers, fileRequestPath, settings);
-    return new Response(content, { headers });
+    return buildResponseFromStorageResult(result, fileRequestPath, settings, requestHeaders);
   }
+  await markExpectedMiss(fileRequestPath);
 
   // Try index files for directory-like paths
   if (!fileRequestPath.includes('.')) {
@@ -277,105 +344,84 @@ export async function serveFileInternal(
         applyCustomHeaders(headers, indexPath, settings);
         return new Response(indexContent, { headers });
       }
+      await markExpectedMiss(indexPath);
     }
   }
 
   // Try clean URLs: /about -> /about.html
   if (settings?.cleanUrls && !fileRequestPath.includes('.')) {
     const htmlPath = `${fileRequestPath}.html`;
-    const htmlFile = getCachedFilePath(did, rkey, htmlPath);
-    if (await fileExists(htmlFile)) {
-      return serveFileInternal(did, rkey, htmlPath, settings);
+    if (await storageExists(did, rkey, htmlPath)) {
+      return serveFileInternal(did, rkey, htmlPath, settings, requestHeaders);
     }
+    await markExpectedMiss(htmlPath);
 
     // Also try /about/index.html
     for (const indexFileName of indexFiles) {
       const indexPath = fileRequestPath ? `${fileRequestPath}/${indexFileName}` : indexFileName;
-      const indexFile = getCachedFilePath(did, rkey, indexPath);
-      if (await fileExists(indexFile)) {
-        return serveFileInternal(did, rkey, indexPath, settings);
+      if (await storageExists(did, rkey, indexPath)) {
+        return serveFileInternal(did, rkey, indexPath, settings, requestHeaders);
       }
+      await markExpectedMiss(indexPath);
     }
   }
 
   // SPA mode: serve SPA file for all non-existing routes (wins over custom404 but loses to _redirects)
   if (settings?.spaMode) {
     const spaFile = settings.spaMode;
-    const spaFilePath = getCachedFilePath(did, rkey, spaFile);
-    if (await fileExists(spaFilePath)) {
-      return serveFileInternal(did, rkey, spaFile, settings);
+    if (await storageExists(did, rkey, spaFile)) {
+      return serveFileInternal(did, rkey, spaFile, settings, requestHeaders);
     }
+    await markExpectedMiss(spaFile);
   }
 
   // Custom 404: serve custom 404 file if configured (wins conflict battle)
   if (settings?.custom404) {
     const custom404File = settings.custom404;
-    const custom404Path = getCachedFilePath(did, rkey, custom404File);
-    if (await fileExists(custom404Path)) {
-      const response: Response = await serveFileInternal(did, rkey, custom404File, settings);
+    if (await storageExists(did, rkey, custom404File)) {
+      const response: Response = await serveFileInternal(did, rkey, custom404File, settings, requestHeaders);
       // Override status to 404
       return new Response(response.body, {
         status: 404,
         headers: response.headers,
       });
     }
+    await markExpectedMiss(custom404File);
   }
 
   // Autodetect 404 pages (GitHub Pages: 404.html, Neocities/Nekoweb: not_found.html)
   const auto404Pages = ['404.html', 'not_found.html'];
   for (const auto404Page of auto404Pages) {
-    const auto404Path = getCachedFilePath(did, rkey, auto404Page);
-    if (await fileExists(auto404Path)) {
-      const response: Response = await serveFileInternal(did, rkey, auto404Page, settings);
+    if (await storageExists(did, rkey, auto404Page)) {
+      const response: Response = await serveFileInternal(did, rkey, auto404Page, settings, requestHeaders);
       // Override status to 404
       return new Response(response.body, {
         status: 404,
         headers: response.headers,
       });
     }
+    await markExpectedMiss(auto404Page);
   }
 
   // Directory listing fallback: if enabled, show root directory listing on 404
   if (settings?.directoryListing) {
-    const rootPath = getCachedFilePath(did, rkey, '');
-    if (await fileExists(rootPath)) {
-      const { stat, readdir } = await import('fs/promises');
-      try {
-        const stats = await stat(rootPath);
-        if (stats.isDirectory()) {
-          const entries = await readdir(rootPath);
-          // Filter out .meta files and metadata
-          const visibleEntries = entries.filter(entry =>
-            !entry.endsWith('.meta') && entry !== '.metadata.json'
-          );
-
-          // Check which entries are directories
-          const entriesWithType = await Promise.all(
-            visibleEntries.map(async (name) => {
-              try {
-                const entryPath = `${rootPath}/${name}`;
-                const entryStats = await stat(entryPath);
-                return { name, isDirectory: entryStats.isDirectory() };
-              } catch {
-                return { name, isDirectory: false };
-              }
-            })
-          );
-
-          const html = generateDirectoryListing('', entriesWithType);
-          return new Response(html, {
-            status: 404,
-            headers: {
-              'Content-Type': 'text/html; charset=utf-8',
-              'Cache-Control': 'public, max-age=300',
-            },
-          });
-        }
-      } catch (err) {
-        // If directory listing fails, fall through to 404
-      }
+    const rootEntries = await listDirectoryEntries(did, rkey, '');
+    if (rootEntries.length > 0) {
+      const missResponse = await maybeReturnStorageMiss();
+      if (missResponse) return missResponse;
+      const html = generateDirectoryListing('', rootEntries);
+      return new Response(html, {
+        status: 404,
+        headers: {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Cache-Control': 'public, max-age=300',
+        },
+      });
     }
   }
+
+  const missResponse = await maybeReturnStorageMiss();
+  if (missResponse) return missResponse;
 
   // Default styled 404 page
   const html = generate404Page();
@@ -435,12 +481,11 @@ export async function serveFromCacheWithRewrite(
           checkPath += indexFiles[0] || 'index.html';
         }
 
-        const cachedFile = getCachedFilePath(did, rkey, checkPath);
-        const fileExistsOnDisk = await fileExists(cachedFile);
+        const fileExistsInStorage = await storageExists(did, rkey, checkPath);
 
         // If file exists and redirect is not forced, serve the file normally
-        if (fileExistsOnDisk) {
-          return serveFileInternalWithRewrite(did, rkey, filePath, basePath, settings);
+        if (fileExistsInStorage) {
+          return serveFileInternalWithRewrite(did, rkey, filePath, basePath, settings, headers);
         }
       }
 
@@ -448,7 +493,7 @@ export async function serveFromCacheWithRewrite(
       if (status === 200) {
         // Rewrite: serve different content but keep URL the same
         const rewritePath = targetPath.startsWith('/') ? targetPath.slice(1) : targetPath;
-        return serveFileInternalWithRewrite(did, rkey, rewritePath, basePath, settings);
+        return serveFileInternalWithRewrite(did, rkey, rewritePath, basePath, settings, headers);
       } else if (status === 301 || status === 302) {
         // External redirect: change the URL
         // For sites.wisp.place, we need to adjust the target path to include the base path
@@ -467,7 +512,7 @@ export async function serveFromCacheWithRewrite(
       } else if (status === 404) {
         // Custom 404 page from _redirects (wins over settings.custom404)
         const custom404Path = targetPath.startsWith('/') ? targetPath.slice(1) : targetPath;
-        const response = await serveFileInternalWithRewrite(did, rkey, custom404Path, basePath, settings);
+        const response = await serveFileInternalWithRewrite(did, rkey, custom404Path, basePath, settings, headers);
         // Override status to 404
         return new Response(response.body, {
           status: 404,
@@ -478,7 +523,7 @@ export async function serveFromCacheWithRewrite(
   }
 
   // No redirect matched, serve normally with settings
-  return serveFileInternalWithRewrite(did, rkey, filePath, basePath, settings);
+  return serveFileInternalWithRewrite(did, rkey, filePath, basePath, settings, headers);
 }
 
 /**
@@ -489,12 +534,39 @@ export async function serveFileInternalWithRewrite(
   rkey: string,
   filePath: string,
   basePath: string,
-  settings: WispSettings | null = null
+  settings: WispSettings | null = null,
+  requestHeaders?: Record<string, string>
 ): Promise<Response> {
-  // Check if site is currently being cached - if so, return updating response
-  if (isSiteBeingCached(did, rkey)) {
-    return siteUpdatingResponse();
-  }
+  let expectedFileCids: Record<string, string> | null | undefined;
+  let expectedMissPath: string | null = null;
+
+  const getExpectedFileCids = async (): Promise<Record<string, string> | null> => {
+    if (expectedFileCids !== undefined) return expectedFileCids;
+    const siteCache = await getSiteCache(did, rkey);
+    if (!siteCache) {
+      expectedFileCids = null;
+      return null;
+    }
+    expectedFileCids = normalizeFileCids(siteCache.file_cids).value;
+    return expectedFileCids;
+  };
+
+  const markExpectedMiss = async (path: string) => {
+    if (expectedMissPath) return;
+    const fileCids = await getExpectedFileCids();
+    if (!fileCids) return;
+    const normalized = path.startsWith('/') ? path.slice(1) : path;
+    if (fileCids[normalized]) {
+      expectedMissPath = normalized;
+    }
+  };
+
+  const maybeReturnStorageMiss = async (): Promise<Response | null> => {
+    if (!expectedMissPath) return null;
+    recordStorageMiss(expectedMissPath);
+    await enqueueRevalidate(did, rkey, `storage-miss:${expectedMissPath}`);
+    return buildStorageMissResponse();
+  };
 
   const indexFiles = getIndexFiles(settings);
 
@@ -504,328 +576,127 @@ export async function serveFileInternalWithRewrite(
     requestPath = requestPath.slice(0, -1);
   }
 
-  // Check if this path is a directory first
-  const directoryPath = getCachedFilePath(did, rkey, requestPath);
-  if (await fileExists(directoryPath)) {
-    const { stat, readdir } = await import('fs/promises');
-    try {
-      const stats = await stat(directoryPath);
-      if (stats.isDirectory()) {
-        // It's a directory, try each index file in order
-        for (const indexFile of indexFiles) {
-          const indexPath = requestPath ? `${requestPath}/${indexFile}` : indexFile;
-          const indexFilePath = getCachedFilePath(did, rkey, indexPath);
-          if (await fileExists(indexFilePath)) {
-            return serveFileInternalWithRewrite(did, rkey, indexPath, basePath, settings);
-          }
-        }
-        // No index file found - check if directory listing is enabled
-        if (settings?.directoryListing) {
-          const { stat } = await import('fs/promises');
-          const entries = await readdir(directoryPath);
-          // Filter out .meta files and other hidden files
-          const visibleEntries = entries.filter(entry => !entry.endsWith('.meta') && entry !== '.metadata.json');
-
-          // Check which entries are directories
-          const entriesWithType = await Promise.all(
-            visibleEntries.map(async (name) => {
-              try {
-                const entryPath = `${directoryPath}/${name}`;
-                const stats = await stat(entryPath);
-                return { name, isDirectory: stats.isDirectory() };
-              } catch {
-                return { name, isDirectory: false };
-              }
-            })
-          );
-
-          const html = generateDirectoryListing(requestPath, entriesWithType);
-          return new Response(html, {
-            headers: {
-              'Content-Type': 'text/html; charset=utf-8',
-              'Cache-Control': 'public, max-age=300',
-            },
-          });
-        }
-        // Fall through to 404/SPA handling
+  // Check if this path is a directory first (best-effort via prefix scan)
+  const directoryEntries = await listDirectoryEntries(did, rkey, requestPath);
+  if (directoryEntries.length > 0) {
+    // It's a directory, try each index file in order
+    for (const indexFile of indexFiles) {
+      const indexPath = requestPath ? `${requestPath}/${indexFile}` : indexFile;
+      if (await storageExists(did, rkey, indexPath)) {
+        return serveFileInternalWithRewrite(did, rkey, indexPath, basePath, settings, requestHeaders);
       }
-    } catch (err) {
-      // If stat fails, continue with normal flow
+      await markExpectedMiss(indexPath);
     }
+    // No index file found - check if directory listing is enabled
+    if (settings?.directoryListing) {
+      const missResponse = await maybeReturnStorageMiss();
+      if (missResponse) return missResponse;
+      const html = generateDirectoryListing(requestPath, directoryEntries);
+      return new Response(html, {
+        headers: {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Cache-Control': 'public, max-age=300',
+        },
+      });
+    }
+    // Fall through to 404/SPA handling
   }
 
   // Not a directory, try to serve as a file
   const fileRequestPath: string = requestPath || indexFiles[0] || 'index.html';
 
-  // Check for rewritten HTML in cache first (if it's HTML)
-  const mimeTypeGuess = lookup(fileRequestPath) || 'application/octet-stream';
-  if (isHtmlContent(fileRequestPath, mimeTypeGuess)) {
-    const rewrittenKey = getCacheKey(did, rkey, fileRequestPath, `rewritten:${basePath}`);
-    const rewrittenContent = rewrittenHtmlCache.get(rewrittenKey);
-    if (rewrittenContent) {
-      console.log(`[HTML Rewrite] Serving from rewritten cache: ${rewrittenKey}`);
-      const headers: Record<string, string> = {
-        'Content-Type': 'text/html; charset=utf-8',
-        'Content-Encoding': 'gzip',
-        'Cache-Control': 'public, max-age=300',
-        'X-Cache-Tier': 'local', // Rewritten HTML is stored locally
-      };
-      applyCustomHeaders(headers, fileRequestPath, settings);
-      return new Response(rewrittenContent, { headers });
-    }
+  const fileResult = await getFileForRequest(did, rkey, fileRequestPath, true);
+  if (fileResult) {
+    return buildResponseFromStorageResult(fileResult.result, fileRequestPath, settings, requestHeaders);
   }
-
-  // Retrieve from tiered storage
-  const result = await getFileWithMetadata(did, rkey, fileRequestPath);
-
-  if (result) {
-    const content = Buffer.from(result.data);
-    const meta = result.metadata.customMetadata as { encoding?: string; mimeType?: string } | undefined;
-    const mimeType = meta?.mimeType || lookup(fileRequestPath) || 'application/octet-stream';
-    const isGzipped = meta?.encoding === 'gzip';
-
-    console.log(`[File Serve] Serving ${fileRequestPath}, mimeType: ${mimeType}, isHTML: ${isHtmlContent(fileRequestPath, mimeType)}, basePath: ${basePath}`);
-
-    // Check if this is HTML content that needs rewriting
-    if (isHtmlContent(fileRequestPath, mimeType)) {
-      console.log(`[HTML Rewrite] Processing ${fileRequestPath}, basePath: ${basePath}, mimeType: ${mimeType}, isGzipped: ${isGzipped}`);
-      let htmlContent: string;
-      if (isGzipped) {
-        // Verify content is actually gzipped
-        const hasGzipMagic = content.length >= 2 && content[0] === 0x1f && content[1] === 0x8b;
-        if (hasGzipMagic) {
-          const { gunzipSync } = await import('zlib');
-          htmlContent = gunzipSync(content).toString('utf-8');
-        } else {
-          console.warn(`File ${fileRequestPath} marked as gzipped but lacks magic bytes, serving as-is`);
-          htmlContent = content.toString('utf-8');
-        }
-      } else {
-        htmlContent = content.toString('utf-8');
-      }
-      // Check for <base> tag which can override paths
-      const baseTagMatch = htmlContent.match(/<base\s+[^>]*href=["'][^"']+["'][^>]*>/i);
-      if (baseTagMatch) {
-        console.warn(`[HTML Rewrite] WARNING: <base> tag found: ${baseTagMatch[0]} - this may override path rewrites`);
-      }
-
-      // Find src/href attributes (quoted and unquoted) to debug
-      const allMatches = htmlContent.match(/(?:src|href)\s*=\s*["']?\/[^"'\s>]+/g);
-      console.log(`[HTML Rewrite] Found ${allMatches ? allMatches.length : 0} local path attrs`);
-      if (allMatches && allMatches.length > 0) {
-        console.log(`[HTML Rewrite] Sample paths: ${allMatches.slice(0, 5).join(', ')}`);
-      }
-
-      const rewritten = rewriteHtmlPaths(htmlContent, basePath, fileRequestPath);
-
-      const rewrittenMatches = rewritten.match(/(?:src|href)\s*=\s*["']?\/[^"'\s>]+/g);
-      console.log(`[HTML Rewrite] After rewrite, found ${rewrittenMatches ? rewrittenMatches.length : 0} local paths`);
-      if (rewrittenMatches && rewrittenMatches.length > 0) {
-        console.log(`[HTML Rewrite] Sample rewritten: ${rewrittenMatches.slice(0, 5).join(', ')}`);
-      }
-
-      // Recompress and cache the rewritten HTML
-      const { gzipSync } = await import('zlib');
-      const recompressed = gzipSync(Buffer.from(rewritten, 'utf-8'));
-
-      const rewrittenKey = getCacheKey(did, rkey, fileRequestPath, `rewritten:${basePath}`);
-      rewrittenHtmlCache.set(rewrittenKey, recompressed, recompressed.length);
-
-      const htmlHeaders: Record<string, string> = {
-        'Content-Type': 'text/html; charset=utf-8',
-        'Content-Encoding': 'gzip',
-        'Cache-Control': 'public, max-age=300',
-        'X-Cache-Tier': result.source,
-      };
-      applyCustomHeaders(htmlHeaders, fileRequestPath, settings);
-      return new Response(recompressed, { headers: htmlHeaders });
-    }
-
-    // Non-HTML files: serve as-is
-    const headers: Record<string, string> = {
-      'Content-Type': mimeType,
-      'Cache-Control': 'public, max-age=31536000, immutable',
-      'X-Cache-Tier': result.source,
-    };
-
-    if (isGzipped) {
-      const shouldServeCompressed = shouldCompressMimeType(mimeType);
-      if (!shouldServeCompressed) {
-        // Verify content is actually gzipped
-        const hasGzipMagic = content.length >= 2 && content[0] === 0x1f && content[1] === 0x8b;
-        if (hasGzipMagic) {
-          const { gunzipSync } = await import('zlib');
-          const decompressed = gunzipSync(content);
-          applyCustomHeaders(headers, fileRequestPath, settings);
-          return new Response(decompressed, { headers });
-        } else {
-          console.warn(`File ${fileRequestPath} marked as gzipped but lacks magic bytes, serving as-is`);
-          applyCustomHeaders(headers, fileRequestPath, settings);
-          return new Response(content, { headers });
-        }
-      }
-      headers['Content-Encoding'] = 'gzip';
-    }
-
-    applyCustomHeaders(headers, fileRequestPath, settings);
-    return new Response(content, { headers });
-  }
+  await markExpectedMiss(fileRequestPath);
 
   // Try index files for directory-like paths
   if (!fileRequestPath.includes('.')) {
     for (const indexFileName of indexFiles) {
       const indexPath = fileRequestPath ? `${fileRequestPath}/${indexFileName}` : indexFileName;
-
-      // Check for rewritten index file in cache
-      const rewrittenKey = getCacheKey(did, rkey, indexPath, `rewritten:${basePath}`);
-      const rewrittenContent = rewrittenHtmlCache.get(rewrittenKey);
-      if (rewrittenContent) {
-        const headers: Record<string, string> = {
-          'Content-Type': 'text/html; charset=utf-8',
-          'Content-Encoding': 'gzip',
-          'Cache-Control': 'public, max-age=300',
-          'X-Cache-Tier': 'local', // Rewritten HTML is stored locally
-        };
-        applyCustomHeaders(headers, indexPath, settings);
-        return new Response(rewrittenContent, { headers });
-      }
-
-      const indexResult = await getFileWithMetadata(did, rkey, indexPath);
-
+      const indexResult = await getFileForRequest(did, rkey, indexPath, true);
       if (indexResult) {
-        const indexContent = Buffer.from(indexResult.data);
-        const indexMeta = indexResult.metadata.customMetadata as { encoding?: string; mimeType?: string } | undefined;
-        const isGzipped = indexMeta?.encoding === 'gzip';
-
-        let htmlContent: string;
-        if (isGzipped) {
-          // Verify content is actually gzipped
-          const hasGzipMagic = indexContent.length >= 2 && indexContent[0] === 0x1f && indexContent[1] === 0x8b;
-          if (hasGzipMagic) {
-            const { gunzipSync } = await import('zlib');
-            htmlContent = gunzipSync(indexContent).toString('utf-8');
-          } else {
-            console.warn(`Index file marked as gzipped but lacks magic bytes, serving as-is`);
-            htmlContent = indexContent.toString('utf-8');
-          }
-        } else {
-          htmlContent = indexContent.toString('utf-8');
-        }
-        const rewritten = rewriteHtmlPaths(htmlContent, basePath, indexPath);
-
-        const { gzipSync } = await import('zlib');
-        const recompressed = gzipSync(Buffer.from(rewritten, 'utf-8'));
-
-        rewrittenHtmlCache.set(rewrittenKey, recompressed, recompressed.length);
-
-        const headers: Record<string, string> = {
-          'Content-Type': 'text/html; charset=utf-8',
-          'Content-Encoding': 'gzip',
-          'Cache-Control': 'public, max-age=300',
-          'X-Cache-Tier': indexResult.source,
-        };
-        applyCustomHeaders(headers, indexPath, settings);
-        return new Response(recompressed, { headers });
+        return buildResponseFromStorageResult(indexResult.result, indexPath, settings, requestHeaders);
       }
+      await markExpectedMiss(indexPath);
     }
   }
 
   // Try clean URLs: /about -> /about.html
   if (settings?.cleanUrls && !fileRequestPath.includes('.')) {
     const htmlPath = `${fileRequestPath}.html`;
-    const htmlFile = getCachedFilePath(did, rkey, htmlPath);
-    if (await fileExists(htmlFile)) {
-      return serveFileInternalWithRewrite(did, rkey, htmlPath, basePath, settings);
+    if (await storageExists(did, rkey, htmlPath)) {
+      return serveFileInternalWithRewrite(did, rkey, htmlPath, basePath, settings, requestHeaders);
     }
+    await markExpectedMiss(htmlPath);
 
     // Also try /about/index.html
     for (const indexFileName of indexFiles) {
       const indexPath = fileRequestPath ? `${fileRequestPath}/${indexFileName}` : indexFileName;
-      const indexFile = getCachedFilePath(did, rkey, indexPath);
-      if (await fileExists(indexFile)) {
-        return serveFileInternalWithRewrite(did, rkey, indexPath, basePath, settings);
+      if (await storageExists(did, rkey, indexPath)) {
+        return serveFileInternalWithRewrite(did, rkey, indexPath, basePath, settings, requestHeaders);
       }
+      await markExpectedMiss(indexPath);
     }
   }
 
   // SPA mode: serve SPA file for all non-existing routes
   if (settings?.spaMode) {
     const spaFile = settings.spaMode;
-    const spaFilePath = getCachedFilePath(did, rkey, spaFile);
-    if (await fileExists(spaFilePath)) {
-      return serveFileInternalWithRewrite(did, rkey, spaFile, basePath, settings);
+    if (await storageExists(did, rkey, spaFile)) {
+      return serveFileInternalWithRewrite(did, rkey, spaFile, basePath, settings, requestHeaders);
     }
+    await markExpectedMiss(spaFile);
   }
 
   // Custom 404: serve custom 404 file if configured (wins conflict battle)
   if (settings?.custom404) {
     const custom404File = settings.custom404;
-    const custom404Path = getCachedFilePath(did, rkey, custom404File);
-    if (await fileExists(custom404Path)) {
-      const response: Response = await serveFileInternalWithRewrite(did, rkey, custom404File, basePath, settings);
+    if (await storageExists(did, rkey, custom404File)) {
+      const response: Response = await serveFileInternalWithRewrite(did, rkey, custom404File, basePath, settings, requestHeaders);
       // Override status to 404
       return new Response(response.body, {
         status: 404,
         headers: response.headers,
       });
     }
+    await markExpectedMiss(custom404File);
   }
 
   // Autodetect 404 pages (GitHub Pages: 404.html, Neocities/Nekoweb: not_found.html)
   const auto404Pages = ['404.html', 'not_found.html'];
   for (const auto404Page of auto404Pages) {
-    const auto404Path = getCachedFilePath(did, rkey, auto404Page);
-    if (await fileExists(auto404Path)) {
-      const response: Response = await serveFileInternalWithRewrite(did, rkey, auto404Page, basePath, settings);
+    if (await storageExists(did, rkey, auto404Page)) {
+      const response: Response = await serveFileInternalWithRewrite(did, rkey, auto404Page, basePath, settings, requestHeaders);
       // Override status to 404
       return new Response(response.body, {
         status: 404,
         headers: response.headers,
       });
     }
+    await markExpectedMiss(auto404Page);
   }
 
   // Directory listing fallback: if enabled, show root directory listing on 404
   if (settings?.directoryListing) {
-    const rootPath = getCachedFilePath(did, rkey, '');
-    if (await fileExists(rootPath)) {
-      const { stat, readdir } = await import('fs/promises');
-      try {
-        const stats = await stat(rootPath);
-        if (stats.isDirectory()) {
-          const entries = await readdir(rootPath);
-          // Filter out .meta files and metadata
-          const visibleEntries = entries.filter(entry =>
-            !entry.endsWith('.meta') && entry !== '.metadata.json'
-          );
-
-          // Check which entries are directories
-          const entriesWithType = await Promise.all(
-            visibleEntries.map(async (name) => {
-              try {
-                const entryPath = `${rootPath}/${name}`;
-                const entryStats = await stat(entryPath);
-                return { name, isDirectory: entryStats.isDirectory() };
-              } catch {
-                return { name, isDirectory: false };
-              }
-            })
-          );
-
-          const html = generateDirectoryListing('', entriesWithType);
-          return new Response(html, {
-            status: 404,
-            headers: {
-              'Content-Type': 'text/html; charset=utf-8',
-              'Cache-Control': 'public, max-age=300',
-            },
-          });
-        }
-      } catch (err) {
-        // If directory listing fails, fall through to 404
-      }
+    const rootEntries = await listDirectoryEntries(did, rkey, '');
+    if (rootEntries.length > 0) {
+      const missResponse = await maybeReturnStorageMiss();
+      if (missResponse) return missResponse;
+      const html = generateDirectoryListing('', rootEntries);
+      return new Response(html, {
+        status: 404,
+        headers: {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Cache-Control': 'public, max-age=300',
+        },
+      });
     }
   }
+
+  const missResponse = await maybeReturnStorageMiss();
+  if (missResponse) return missResponse;
 
   // Default styled 404 page
   const html = generate404Page();

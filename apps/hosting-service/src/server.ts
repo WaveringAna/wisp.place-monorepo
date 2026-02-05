@@ -10,11 +10,9 @@ import { resolveDid } from './lib/utils';
 import { logCollector, errorTracker, metricsCollector } from '@wispplace/observability';
 import { observabilityMiddleware, observabilityErrorHandler } from '@wispplace/observability/middleware/hono';
 import { sanitizePath } from '@wispplace/fs-utils';
-import { isSiteBeingCached } from './lib/cache';
 import { isValidRkey, extractHeaders } from './lib/request-utils';
-import { siteUpdatingResponse } from './lib/page-generators';
-import { ensureSiteCached } from './lib/site-cache';
 import { serveFromCache, serveFromCacheWithRewrite } from './lib/file-serving';
+import { getRevalidateMetrics } from './lib/revalidate-metrics';
 
 const BASE_HOST = process.env.BASE_HOST || 'wisp.place';
 
@@ -40,11 +38,11 @@ app.onError(observabilityErrorHandler('hosting-service'));
 app.get('/*', async (c) => {
   const url = new URL(c.req.url);
   const hostname = c.req.header('host') || '';
+  const hostnameWithoutPort = hostname.split(':')[0];
   const rawPath = url.pathname.replace(/^\//, '');
   const path = sanitizePath(rawPath);
 
   // Check if this is sites.wisp.place subdomain (strip port for comparison)
-  const hostnameWithoutPort = hostname.split(':')[0];
   if (hostnameWithoutPort === `sites.${BASE_HOST}`) {
     // Sanitize the path FIRST to prevent path traversal
     const sanitizedFullPath = sanitizePath(rawPath);
@@ -82,17 +80,6 @@ app.get('/*', async (c) => {
 
     console.log(`[Server] sites.wisp.place request: identifier=${identifier}, site=${site}, filePath=${filePath}`);
 
-    // Check if site is currently being cached - return updating response early
-    if (isSiteBeingCached(did, site)) {
-      return siteUpdatingResponse();
-    }
-
-    // Ensure site is cached
-    const cached = await ensureSiteCached(did, site);
-    if (!cached) {
-      return c.text('Site not found', 404);
-    }
-
     // Serve with HTML path rewriting to handle absolute paths
     const basePath = `/${identifier}/${site}/`;
     console.log(`[Server] Serving with basePath: ${basePath}`);
@@ -128,23 +115,13 @@ app.get('/*', async (c) => {
       return c.text('Invalid site configuration', 500);
     }
 
-    // Check if site is currently being cached - return updating response early
-    if (isSiteBeingCached(customDomain.did, rkey)) {
-      return siteUpdatingResponse();
-    }
-
-    const cached = await ensureSiteCached(customDomain.did, rkey);
-    if (!cached) {
-      return c.text('Site not found', 404);
-    }
-
     const headers = extractHeaders(c.req.raw.headers);
     return serveFromCache(customDomain.did, rkey, path, c.req.url, headers);
   }
 
   // Route 2: Registered subdomains - /*.wisp.place/*
-  if (hostname.endsWith(`.${BASE_HOST}`)) {
-    const domainInfo = await getWispDomain(hostname);
+  if (hostnameWithoutPort.endsWith(`.${BASE_HOST}`)) {
+    const domainInfo = await getWispDomain(hostnameWithoutPort);
     if (!domainInfo) {
       return c.text('Subdomain not registered', 404);
     }
@@ -158,22 +135,12 @@ app.get('/*', async (c) => {
       return c.text('Invalid site configuration', 500);
     }
 
-    // Check if site is currently being cached - return updating response early
-    if (isSiteBeingCached(domainInfo.did, rkey)) {
-      return siteUpdatingResponse();
-    }
-
-    const cached = await ensureSiteCached(domainInfo.did, rkey);
-    if (!cached) {
-      return c.text('Site not found', 404);
-    }
-
     const headers = extractHeaders(c.req.raw.headers);
     return serveFromCache(domainInfo.did, rkey, path, c.req.url, headers);
   }
 
   // Route 1: Custom domains - /*
-  const customDomain = await getCustomDomain(hostname);
+  const customDomain = await getCustomDomain(hostnameWithoutPort);
   if (!customDomain) {
     return c.text('Custom domain not found or not verified', 404);
   }
@@ -185,16 +152,6 @@ app.get('/*', async (c) => {
   const rkey = customDomain.rkey;
   if (!isValidRkey(rkey)) {
     return c.text('Invalid site configuration', 500);
-  }
-
-  // Check if site is currently being cached - return updating response early
-  if (isSiteBeingCached(customDomain.did, rkey)) {
-    return siteUpdatingResponse();
-  }
-
-  const cached = await ensureSiteCached(customDomain.did, rkey);
-  if (!cached) {
-    return c.text('Site not found', 404);
   }
 
   const headers = extractHeaders(c.req.raw.headers);
@@ -225,7 +182,7 @@ app.get('/__internal__/observability/metrics', (c) => {
   const query = c.req.query();
   const timeWindow = query.timeWindow ? parseInt(query.timeWindow as string) : 3600000;
   const stats = metricsCollector.getStats('hosting-service', timeWindow);
-  return c.json({ stats, timeWindow });
+  return c.json({ stats, revalidate: getRevalidateMetrics(), timeWindow });
 });
 
 app.get('/__internal__/observability/cache', async (c) => {

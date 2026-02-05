@@ -5,6 +5,10 @@ export { sanitizePath, normalizePath } from './path';
 export type { UploadedFile, FileUploadResult, ProcessedDirectory, ProcessUploadedFilesOptions, UpdateFileBlobsOptions } from './tree';
 export { processUploadedFiles, updateFileBlobs, countFilesInDirectory, collectFileCidsFromEntries } from './tree';
 
+// File CID normalization
+export type { FileCidsNormalization, FileCidsNormalizationSource } from './file-cids';
+export { normalizeFileCids } from './file-cids';
+
 // Manifest creation
 export { createManifest } from './manifest';
 

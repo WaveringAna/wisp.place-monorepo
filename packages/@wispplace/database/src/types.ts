@@ -73,6 +73,7 @@ export interface SiteCache {
  */
 export interface SiteSettingsCache {
 	did: string;
+	rkey: string;
 	record_cid: string;
 	directory_listing: boolean;
 	spa_mode: string | null;

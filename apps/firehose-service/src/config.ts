@@ -23,6 +23,11 @@ export const config = {
   // Health check server
   healthPort: parseInt(process.env.HEALTH_PORT || '3001', 10),
 
+  // Redis revalidation queue
+  redisUrl: process.env.REDIS_URL,
+  revalidateStream: process.env.WISP_REVALIDATE_STREAM || 'wisp:revalidate',
+  revalidateGroup: process.env.WISP_REVALIDATE_GROUP || 'firehose-service',
+
   // Mode
   isBackfill: process.argv.includes('--backfill'),
 } as const;

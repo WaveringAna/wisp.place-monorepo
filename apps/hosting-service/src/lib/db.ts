@@ -2,16 +2,6 @@ import postgres from 'postgres';
 import { createHash } from 'crypto';
 import type { DomainLookup, CustomDomainLookup, SiteCache, SiteSettingsCache } from '@wispplace/database';
 
-// Global cache-only mode flag (set by index.ts)
-let cacheOnlyMode = false;
-
-export function setCacheOnlyMode(enabled: boolean) {
-  cacheOnlyMode = enabled;
-  if (enabled) {
-    console.log('[DB] Cache-only mode enabled - database writes will be skipped');
-  }
-}
-
 const sql = postgres(
   process.env.DATABASE_URL || 'postgres://postgres:postgres@localhost:5432/wisp',
   {
@@ -126,30 +116,7 @@ export async function getCustomDomainByHash(hash: string): Promise<CustomDomainL
 }
 
 export async function upsertSite(did: string, rkey: string, displayName?: string) {
-  // Skip database writes in cache-only mode
-  if (cacheOnlyMode) {
-    console.log('[DB] Skipping upsertSite (cache-only mode)', { did, rkey });
-    return;
-  }
-
-  try {
-    // Only set display_name if provided (not undefined/null/empty)
-    const cleanDisplayName = displayName && displayName.trim() ? displayName.trim() : null;
-
-    await sql`
-      INSERT INTO sites (did, rkey, display_name, created_at, updated_at)
-      VALUES (${did}, ${rkey}, ${cleanDisplayName}, EXTRACT(EPOCH FROM NOW()), EXTRACT(EPOCH FROM NOW()))
-      ON CONFLICT (did, rkey)
-      DO UPDATE SET
-        display_name = CASE
-          WHEN EXCLUDED.display_name IS NOT NULL THEN EXCLUDED.display_name
-          ELSE sites.display_name
-        END,
-        updated_at = EXTRACT(EPOCH FROM NOW())
-    `;
-  } catch (err) {
-    console.error('Failed to upsert site', err);
-  }
+  console.log('[DB] Read-only mode: skipping upsertSite', { did, rkey, displayName });
 }
 
 export interface SiteRecord {
@@ -256,11 +223,11 @@ export async function getSiteCache(did: string, rkey: string): Promise<SiteCache
   return result[0] || null;
 }
 
-export async function getSiteSettingsCache(did: string): Promise<SiteSettingsCache | null> {
+export async function getSiteSettingsCache(did: string, rkey: string): Promise<SiteSettingsCache | null> {
   const result = await sql<SiteSettingsCache[]>`
-    SELECT did, record_cid, directory_listing, spa_mode, custom_404, index_files, clean_urls, headers, cached_at, updated_at
+    SELECT did, rkey, record_cid, directory_listing, spa_mode, custom_404, index_files, clean_urls, headers, cached_at, updated_at
     FROM site_settings_cache
-    WHERE did = ${did}
+    WHERE did = ${did} AND rkey = ${rkey}
     LIMIT 1
   `;
   return result[0] || null;

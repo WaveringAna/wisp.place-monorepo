@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "NODE_OPTIONS='--max-old-space-size=2048' tsx --env-file=.env src/index.ts",
+    "dev:backfill": "NODE_OPTIONS='--max-old-space-size=2048' tsx --env-file=.env src/index.ts --backfill",
     "build": "bun run build.ts",
     "start": "NODE_OPTIONS='--max-old-space-size=2048' tsx src/index.ts",
     "check": "tsc --noEmit",
@@ -20,10 +21,11 @@
     "@wispplace/fs-utils": "workspace:*",
     "@wispplace/lexicons": "workspace:*",
     "@wispplace/safe-fetch": "workspace:*",
+    "@wispplace/tiered-storage": "workspace:*",
     "hono": "^4.10.4",
+    "ioredis": "^5.9.2",
     "multiformats": "^13.4.1",
-    "postgres": "^3.4.5",
-    "@wispplace/tiered-storage": "workspace:*"
+    "postgres": "^3.4.5"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",

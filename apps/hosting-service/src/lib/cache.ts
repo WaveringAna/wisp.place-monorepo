@@ -2,7 +2,7 @@
  * Cache management for wisp-hosting-service
  *
  * With tiered storage, most caching is handled transparently.
- * This module tracks sites being cached and manages rewritten HTML cache.
+ * This module provides a generic LRU cache and exposes storage stats.
  */
 
 import { storage } from './storage';
@@ -125,64 +125,11 @@ export class LRUCache<T> {
   }
 }
 
-// Rewritten HTML cache: stores HTML after path rewriting for subdomain routes
-export const rewrittenHtmlCache = new LRUCache<Buffer>(50 * 1024 * 1024, 200); // 50MB for rewritten HTML
-
-// Helper to generate cache keys for rewritten HTML
-export function getCacheKey(did: string, rkey: string, filePath: string, suffix?: string): string {
-  const base = `${did}:${rkey}:${filePath}`;
-  return suffix ? `${base}:${suffix}` : base;
-}
-
-/**
- * Invalidate site cache via tiered storage
- * Also invalidates locally cached rewritten HTML
- */
-export async function invalidateSiteCache(did: string, rkey: string): Promise<void> {
-  // Invalidate in tiered storage
-  const prefix = `${did}/${rkey}/`;
-  const deleted = await storage.invalidate(prefix);
-
-  // Invalidate rewritten HTML cache for this site
-  const sitePrefix = `${did}:${rkey}:`;
-  let htmlCount = 0;
-  const cacheKeys = Array.from((rewrittenHtmlCache as any).cache?.keys() || []) as string[];
-  for (const key of cacheKeys) {
-    if (key.startsWith(sitePrefix)) {
-      rewrittenHtmlCache.delete(key);
-      htmlCount++;
-    }
-  }
-
-  console.log(`[Cache] Invalidated site ${did}:${rkey} - ${deleted} files in tiered storage, ${htmlCount} rewritten HTML`);
-}
-
-// Track sites currently being cached (to prevent serving stale cache during updates)
-const sitesBeingCached = new Set<string>();
-
-export function markSiteAsBeingCached(did: string, rkey: string): void {
-  const key = `${did}:${rkey}`;
-  sitesBeingCached.add(key);
-}
-
-export function unmarkSiteAsBeingCached(did: string, rkey: string): void {
-  const key = `${did}:${rkey}`;
-  sitesBeingCached.delete(key);
-}
-
-export function isSiteBeingCached(did: string, rkey: string): boolean {
-  const key = `${did}:${rkey}`;
-  return sitesBeingCached.has(key);
-}
-
 // Get overall cache statistics
 export async function getCacheStats() {
   const tieredStats = await storage.getStats();
 
   return {
     tieredStorage: tieredStats,
-    rewrittenHtml: rewrittenHtmlCache.getStats(),
-    rewrittenHtmlHitRate: rewrittenHtmlCache.getHitRate(),
-    sitesBeingCached: sitesBeingCached.size,
   };
 }

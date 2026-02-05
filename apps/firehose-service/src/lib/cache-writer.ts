@@ -8,7 +8,7 @@ import type { Record as SubfsRecord } from '@wispplace/lexicons/types/place/wisp
 import type { Record as WispSettings } from '@wispplace/lexicons/types/place/wisp/settings';
 import { safeFetchJson, safeFetchBlob } from '@wispplace/safe-fetch';
 import { extractBlobCid, getPdsForDid } from '@wispplace/atproto-utils';
-import { collectFileCidsFromEntries, countFilesInDirectory } from '@wispplace/fs-utils';
+import { collectFileCidsFromEntries, countFilesInDirectory, normalizeFileCids } from '@wispplace/fs-utils';
 import { shouldCompressMimeType } from '@wispplace/atproto-utils/compression';
 import { MAX_BLOB_SIZE, MAX_FILE_COUNT, MAX_SITE_SIZE } from '@wispplace/constants';
 import { writeFile, deleteFile, listFiles } from './storage';
@@ -244,49 +244,59 @@ interface FileInfo {
   base64?: boolean;
 }
 
-type FileCidsNormalization = {
-  value: Record<string, string>;
-  source: 'object' | 'array' | 'string-json' | 'string-invalid' | 'null' | 'other';
-};
+function isTextLikeMime(mimeType?: string, path?: string): boolean {
+  if (mimeType) {
+    if (mimeType === 'text/html') return true;
+    if (mimeType === 'text/css') return true;
+    if (mimeType === 'text/javascript') return true;
+    if (mimeType === 'application/javascript') return true;
+    if (mimeType === 'application/json') return true;
+    if (mimeType === 'application/xml') return true;
+    if (mimeType === 'image/svg+xml') return true;
+  }
 
-function normalizeFileCids(value: unknown): FileCidsNormalization {
-  if (value == null) return { value: {}, source: 'null' };
+  if (!path) return false;
+  const lower = path.toLowerCase();
+  return lower.endsWith('.html') ||
+    lower.endsWith('.htm') ||
+    lower.endsWith('.css') ||
+    lower.endsWith('.js') ||
+    lower.endsWith('.json') ||
+    lower.endsWith('.xml') ||
+    lower.endsWith('.svg');
+}
 
-  if (typeof value === 'string') {
-    try {
-      const parsed = JSON.parse(value) as unknown;
-      if (Array.isArray(parsed)) {
-        const normalized = normalizeFileCids(parsed);
-        return { value: normalized.value, source: 'string-json' };
-      }
-      if (parsed && typeof parsed === 'object') {
-        return { value: parsed as Record<string, string>, source: 'string-json' };
-      }
-    } catch {
-      // fall through to invalid
+function looksLikeBase64(content: Uint8Array): boolean {
+  if (content.length === 0) return false;
+  let nonWhitespace = 0;
+  for (const byte of content) {
+    const char = byte;
+    if (char === 0x0a || char === 0x0d || char === 0x20 || char === 0x09) {
+      continue;
     }
-    return { value: {}, source: 'string-invalid' };
+    nonWhitespace++;
+    const isBase64Char =
+      (char >= 0x41 && char <= 0x5a) || // A-Z
+      (char >= 0x61 && char <= 0x7a) || // a-z
+      (char >= 0x30 && char <= 0x39) || // 0-9
+      char === 0x2b || // +
+      char === 0x2f || // /
+      char === 0x3d;   // =
+    if (!isBase64Char) return false;
   }
 
-  if (Array.isArray(value)) {
-    const result: Record<string, string> = {};
-    for (const item of value) {
-      if (item && typeof item === 'object' && 'path' in item && 'cid' in item) {
-        const path = (item as any).path;
-        const cid = (item as any).cid;
-        if (typeof path === 'string' && typeof cid === 'string') {
-          result[path] = cid;
-        }
-      }
-    }
-    return { value: result, source: 'array' };
-  }
+  // Base64 length should be divisible by 4 (ignoring whitespace)
+  return nonWhitespace % 4 === 0;
+}
 
-  if (typeof value === 'object') {
-    return { value: value as Record<string, string>, source: 'object' };
+function tryDecodeBase64(content: Uint8Array): Uint8Array | null {
+  if (!looksLikeBase64(content)) return null;
+  const base64String = new TextDecoder().decode(content).replace(/\s+/g, '');
+  try {
+    return Buffer.from(base64String, 'base64');
+  } catch {
+    return null;
   }
-
-  return { value: {}, source: 'other' };
 }
 
 /**
@@ -334,17 +344,24 @@ async function downloadAndWriteBlob(
   console.log(`[Cache] Downloading ${file.path}`);
 
   let content = await safeFetchBlob(blobUrl, { maxSize: MAX_BLOB_SIZE, timeout: 300000 });
+  let encoding = file.encoding;
 
   // Decode base64 if needed
   if (file.base64) {
     const textDecoder = new TextDecoder();
     const base64String = textDecoder.decode(content);
     content = Buffer.from(base64String, 'base64');
+  } else if (isTextLikeMime(file.mimeType, file.path)) {
+    // Heuristic fallback: some records omit base64 flag but content is base64 text
+    const decoded = tryDecodeBase64(content);
+    if (decoded) {
+      console.warn(`[Cache] Decoded base64 fallback for ${file.path} (base64 flag missing)`);
+      content = decoded;
+    }
   }
 
   // Decompress if needed and shouldn't stay compressed
   const shouldStayCompressed = shouldCompressMimeType(file.mimeType);
-  let encoding = file.encoding;
 
   if (encoding === 'gzip' && !shouldStayCompressed && content.length >= 2 &&
       content[0] === 0x1f && content[1] === 0x8b) {
@@ -354,6 +371,26 @@ async function downloadAndWriteBlob(
     } catch (error) {
       console.error(`[Cache] Failed to decompress ${file.path}, storing gzipped`);
     }
+  } else if (encoding === 'gzip' && content.length >= 2 &&
+      !(content[0] === 0x1f && content[1] === 0x8b)) {
+    // If marked gzip but doesn't look gzipped, attempt base64 decode and retry
+    const decoded = tryDecodeBase64(content);
+    if (decoded && decoded.length >= 2 && decoded[0] === 0x1f && decoded[1] === 0x8b) {
+      console.warn(`[Cache] Decoded base64+gzip fallback for ${file.path}`);
+      try {
+        content = gunzipSync(decoded);
+        encoding = undefined;
+      } catch (error) {
+        console.error(`[Cache] Failed to decompress base64+gzip fallback for ${file.path}, storing gzipped`);
+        content = decoded;
+      }
+    }
+  }
+
+  // If encoding is missing but data looks gzipped for a text-like file, mark it
+  if (!encoding && isTextLikeMime(file.mimeType, file.path) && content.length >= 2 &&
+      content[0] === 0x1f && content[1] === 0x8b) {
+    encoding = 'gzip';
   }
 
   // Build storage key
@@ -370,7 +407,16 @@ async function downloadAndWriteBlob(
   // If HTML, also write rewritten version
   if (isHtmlFile(file.path)) {
     const basePath = `/${did}/${rkey}/`;
-    const htmlString = new TextDecoder().decode(content);
+    let rewriteSource = content;
+    if (encoding === 'gzip' && content.length >= 2 && content[0] === 0x1f && content[1] === 0x8b) {
+      try {
+        rewriteSource = gunzipSync(content);
+      } catch (error) {
+        console.error(`[Cache] Failed to decompress ${file.path} for rewrite, using raw content`);
+      }
+    }
+
+    const htmlString = new TextDecoder().decode(rewriteSource);
     const rewritten = rewriteHtmlPaths(htmlString, basePath, file.path);
     const rewrittenContent = new TextEncoder().encode(rewritten);
 
@@ -389,9 +435,15 @@ export async function handleSiteCreateOrUpdate(
   did: string,
   rkey: string,
   record: WispFsRecord,
-  recordCid: string
+  recordCid: string,
+  options?: {
+    forceRewriteHtml?: boolean;
+  }
 ): Promise<void> {
-  console.log(`[Cache] Processing site ${did}/${rkey}, record CID: ${recordCid}`);
+  const forceRewriteHtml = options?.forceRewriteHtml === true;
+  console.log(`[Cache] Processing site ${did}/${rkey}, record CID: ${recordCid}`, {
+    forceRewriteHtml,
+  });
 
   if (!record.root?.entries) {
     console.error('[Cache] Invalid record structure');
@@ -445,7 +497,8 @@ export async function handleSiteCreateOrUpdate(
 
   // Find new or changed files
   for (const file of newFiles) {
-    if (oldFileCids[file.path] !== file.cid) {
+    const shouldForceRewrite = forceRewriteHtml && isHtmlFile(file.path);
+    if (oldFileCids[file.path] !== file.cid || shouldForceRewrite) {
       filesToDownload.push(file);
     }
   }
@@ -523,9 +576,9 @@ export async function handleSiteDelete(did: string, rkey: string): Promise<void>
  * Handle settings create/update event
  */
 export async function handleSettingsUpdate(did: string, rkey: string, settings: WispSettings, recordCid: string): Promise<void> {
-  console.log(`[Cache] Updating settings for ${did}`);
+  console.log(`[Cache] Updating settings for ${did}/${rkey}`);
 
-  await upsertSiteSettingsCache(did, recordCid, {
+  await upsertSiteSettingsCache(did, rkey, recordCid, {
     directoryListing: settings.directoryListing,
     spaMode: settings.spaMode,
     custom404: settings.custom404,
@@ -538,7 +591,7 @@ export async function handleSettingsUpdate(did: string, rkey: string, settings: 
 /**
  * Handle settings delete event
  */
-export async function handleSettingsDelete(did: string): Promise<void> {
-  console.log(`[Cache] Deleting settings for ${did}`);
-  await deleteSiteSettingsCache(did);
+export async function handleSettingsDelete(did: string, rkey: string): Promise<void> {
+  console.log(`[Cache] Deleting settings for ${did}/${rkey}`);
+  await deleteSiteSettingsCache(did, rkey);
 }

@@ -106,7 +106,7 @@ async function handleEvent(evt: Event | CommitEvt): Promise<void> {
       processWithConcurrencyLimit(async () => {
         try {
           if (commitEvt.event === 'delete') {
-            await handleSettingsDelete(did);
+            await handleSettingsDelete(did, rkey);
           } else if (record) {
             const cidStr = cid?.toString() || '';
             await handleSettingsUpdate(did, rkey, record as WispSettings, cidStr);

@@ -3,7 +3,6 @@
  */
 
 import type { Record as WispSettings } from '@wispplace/lexicons/types/place/wisp/settings';
-import { access } from 'fs/promises';
 
 /**
  * Default index file names to check for directory requests
@@ -74,15 +73,6 @@ export function isValidRkey(rkey: string): boolean {
 /**
  * Async file existence check
  */
-export async function fileExists(path: string): Promise<boolean> {
-  try {
-    await access(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Extract and normalize headers from request
  */
@@ -93,4 +83,3 @@ export function extractHeaders(rawHeaders: Headers): Record<string, string> {
   });
   return headers;
 }
-

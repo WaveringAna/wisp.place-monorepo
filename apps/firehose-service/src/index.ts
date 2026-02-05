@@ -10,9 +10,10 @@ import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { config } from './config';
 import { startFirehose, stopFirehose, getFirehoseHealth } from './lib/firehose';
-import { closeDatabase, listAllSiteCaches, getSiteCache } from './lib/db';
+import { closeDatabase, listAllSiteCaches, listAllSites, getSiteCache } from './lib/db';
 import { storage } from './lib/storage';
 import { handleSiteCreateOrUpdate, fetchSiteRecord } from './lib/cache-writer';
+import { startRevalidateWorker, stopRevalidateWorker } from './lib/revalidate-worker';
 
 const app = new Hono();
 
@@ -39,6 +40,7 @@ async function shutdown(signal: string) {
   console.log(`\n[Service] Received ${signal}, shutting down...`);
 
   stopFirehose();
+  await stopRevalidateWorker();
   await closeDatabase();
 
   console.log('[Service] Shutdown complete');
@@ -53,8 +55,20 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
  */
 async function runBackfill(): Promise<void> {
   console.log('[Backfill] Starting backfill mode');
+  const startTime = Date.now();
+  const forceRewriteHtml = process.env.BACKFILL_FORCE_REWRITE_HTML === 'true';
 
-  const sites = await listAllSiteCaches();
+  if (forceRewriteHtml) {
+    console.log('[Backfill] Forcing HTML rewrite for all sites');
+  }
+
+  let sites = await listAllSites();
+  if (sites.length === 0) {
+    const cachedSites = await listAllSiteCaches();
+    sites = cachedSites.map(site => ({ did: site.did, rkey: site.rkey }));
+    console.log('[Backfill] Sites table empty; falling back to site_cache entries');
+  }
+
   console.log(`[Backfill] Found ${sites.length} sites in database`);
 
   let processed = 0;
@@ -72,15 +86,18 @@ async function runBackfill(): Promise<void> {
         continue;
       }
 
+      const existingCache = await getSiteCache(site.did, site.rkey);
       // Check if CID matches (already up to date)
-      if (result.cid === site.record_cid) {
+      if (!forceRewriteHtml && existingCache && result.cid === existingCache.record_cid) {
         console.log(`[Backfill] Site already up to date: ${site.did}/${site.rkey}`);
         skipped++;
         continue;
       }
 
       // Process the site
-      await handleSiteCreateOrUpdate(site.did, site.rkey, result.record, result.cid);
+      await handleSiteCreateOrUpdate(site.did, site.rkey, result.record, result.cid, {
+        forceRewriteHtml,
+      });
       processed++;
 
       console.log(`[Backfill] Progress: ${processed + skipped + failed}/${sites.length}`);
@@ -90,7 +107,13 @@ async function runBackfill(): Promise<void> {
     }
   }
 
-  console.log(`[Backfill] Complete: ${processed} processed, ${skipped} skipped, ${failed} failed`);
+  const elapsedMs = Date.now() - startTime;
+  const elapsedSec = Math.round(elapsedMs / 1000);
+  const elapsedMin = Math.floor(elapsedSec / 60);
+  const elapsedRemSec = elapsedSec % 60;
+  const elapsedLabel = elapsedMin > 0 ? `${elapsedMin}m ${elapsedRemSec}s` : `${elapsedSec}s`;
+
+  console.log(`[Backfill] Complete: ${processed} processed, ${skipped} skipped, ${failed} failed (${elapsedLabel} elapsed)`);
 }
 
 // Main entry point
@@ -115,6 +138,7 @@ async function main() {
   } else {
     // Start firehose
     startFirehose();
+    await startRevalidateWorker();
   }
 }
 

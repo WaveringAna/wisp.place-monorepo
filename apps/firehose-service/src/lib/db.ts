@@ -1,5 +1,5 @@
 import postgres from 'postgres';
-import type { SiteCache, SiteSettingsCache } from '@wispplace/database';
+import type { SiteCache, SiteRecord, SiteSettingsCache } from '@wispplace/database';
 import { config } from '../config';
 
 const sql = postgres(config.databaseUrl, {
@@ -20,11 +20,11 @@ export async function getSiteCache(did: string, rkey: string): Promise<SiteCache
   return result[0] || null;
 }
 
-export async function getSiteSettingsCache(did: string): Promise<SiteSettingsCache | null> {
+export async function getSiteSettingsCache(did: string, rkey: string): Promise<SiteSettingsCache | null> {
   const result = await sql<SiteSettingsCache[]>`
-    SELECT did, record_cid, directory_listing, spa_mode, custom_404, index_files, clean_urls, headers, cached_at, updated_at
+    SELECT did, rkey, record_cid, directory_listing, spa_mode, custom_404, index_files, clean_urls, headers, cached_at, updated_at
     FROM site_settings_cache
-    WHERE did = ${did}
+    WHERE did = ${did} AND rkey = ${rkey}
     LIMIT 1
   `;
   return result[0] || null;
@@ -34,6 +34,14 @@ export async function listAllSiteCaches(): Promise<SiteCache[]> {
   return await sql<SiteCache[]>`
     SELECT did, rkey, record_cid, file_cids, cached_at, updated_at
     FROM site_cache
+    ORDER BY updated_at DESC
+  `;
+}
+
+export async function listAllSites(): Promise<SiteRecord[]> {
+  return await sql<SiteRecord[]>`
+    SELECT did, rkey, display_name, created_at, updated_at
+    FROM sites
     ORDER BY updated_at DESC
   `;
 }
@@ -72,6 +80,7 @@ export async function deleteSiteCache(did: string, rkey: string): Promise<void> 
 
 export async function upsertSiteSettingsCache(
   did: string,
+  rkey: string,
   recordCid: string,
   settings: {
     directoryListing: boolean;
@@ -89,7 +98,7 @@ export async function upsertSiteSettingsCache(
   const cleanUrls = settings.cleanUrls ?? true;
   const headersJson = settings.headers ?? [];
 
-  console.log(`[DB] upsertSiteSettingsCache starting for ${did}`, {
+  console.log(`[DB] upsertSiteSettingsCache starting for ${did}/${rkey}`, {
     directoryListing,
     spaMode,
     custom404,
@@ -100,9 +109,10 @@ export async function upsertSiteSettingsCache(
 
   try {
     await sql`
-      INSERT INTO site_settings_cache (did, record_cid, directory_listing, spa_mode, custom_404, index_files, clean_urls, headers, cached_at, updated_at)
+      INSERT INTO site_settings_cache (did, rkey, record_cid, directory_listing, spa_mode, custom_404, index_files, clean_urls, headers, cached_at, updated_at)
       VALUES (
         ${did},
+        ${rkey},
         ${recordCid},
         ${directoryListing},
         ${spaMode},
@@ -113,7 +123,7 @@ export async function upsertSiteSettingsCache(
         EXTRACT(EPOCH FROM NOW()),
         EXTRACT(EPOCH FROM NOW())
       )
-      ON CONFLICT (did)
+      ON CONFLICT (did, rkey)
       DO UPDATE SET
         record_cid = EXCLUDED.record_cid,
         directory_listing = EXCLUDED.directory_listing,
@@ -124,16 +134,16 @@ export async function upsertSiteSettingsCache(
         headers = EXCLUDED.headers,
         updated_at = EXTRACT(EPOCH FROM NOW())
     `;
-    console.log(`[DB] upsertSiteSettingsCache completed for ${did}`);
+    console.log(`[DB] upsertSiteSettingsCache completed for ${did}/${rkey}`);
   } catch (err) {
     const error = err instanceof Error ? err : new Error(String(err));
-    console.error('[DB] upsertSiteSettingsCache error:', { did, error: error.message, stack: error.stack });
+    console.error('[DB] upsertSiteSettingsCache error:', { did, rkey, error: error.message, stack: error.stack });
     throw error;
   }
 }
 
-export async function deleteSiteSettingsCache(did: string): Promise<void> {
-  await sql`DELETE FROM site_settings_cache WHERE did = ${did}`;
+export async function deleteSiteSettingsCache(did: string, rkey: string): Promise<void> {
+  await sql`DELETE FROM site_settings_cache WHERE did = ${did} AND rkey = ${rkey}`;
 }
 
 export async function closeDatabase(): Promise<void> {

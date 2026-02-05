@@ -138,7 +138,8 @@ await db`
 // Site settings cache table - cached place.wisp.settings records
 await db`
     CREATE TABLE IF NOT EXISTS site_settings_cache (
-        did TEXT PRIMARY KEY,
+        did TEXT NOT NULL,
+        rkey TEXT NOT NULL,
         record_cid TEXT NOT NULL,
         directory_listing BOOLEAN NOT NULL DEFAULT false,
         spa_mode TEXT,
@@ -147,7 +148,8 @@ await db`
         clean_urls BOOLEAN NOT NULL DEFAULT true,
         headers JSONB,
         cached_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()),
-        updated_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())
+        updated_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()),
+        PRIMARY KEY (did, rkey)
     )
 `;
 
