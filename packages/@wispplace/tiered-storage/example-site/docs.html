@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Documentation - Tiered Storage</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <nav>
+            <div class="logo">🗄️ TieredCache</div>
+            <ul>
+                <li><a href="index.html">Home</a></li>
+                <li><a href="about.html">About</a></li>
+                <li><a href="docs.html" class="active">Docs</a></li>
+            </ul>
+        </nav>
+    </header>
+
+    <main>
+        <section class="content">
+            <h1>Quick Start Guide</h1>
+
+            <h2>Installation</h2>
+            <pre><code>npm install tiered-storage
+# or
+bun add tiered-storage</code></pre>
+
+            <h2>Basic Usage</h2>
+            <pre><code>import { TieredStorage, MemoryStorageTier, DiskStorageTier, S3StorageTier } from 'tiered-storage';
+
+const storage = new TieredStorage({
+  tiers: {
+    hot: new MemoryStorageTier({ maxSizeBytes: 100 * 1024 * 1024 }),
+    warm: new DiskStorageTier({ directory: './cache' }),
+    cold: new S3StorageTier({
+      bucket: 'my-bucket',
+      region: 'us-east-1',
+    }),
+  },
+  compression: true,
+  defaultTTL: 14 * 24 * 60 * 60 * 1000, // 14 days
+});
+
+// Store data
+await storage.set('user:123', { name: 'Alice' });
+
+// Retrieve data
+const user = await storage.get('user:123');
+
+// Invalidate by prefix
+await storage.invalidate('user:');</code></pre>
+
+            <h2>Selective Tier Placement</h2>
+            <p>Control which tiers receive specific files:</p>
+            <pre><code>// Critical file - store in all tiers
+await storage.set('index.html', htmlContent);
+
+// Large file - skip hot tier to save memory
+await storage.set('video.mp4', videoData, {
+  skipTiers: ['hot']
+});</code></pre>
+
+            <h2>Bootstrap on Startup</h2>
+            <pre><code>// Warm up hot tier from warm tier
+await storage.bootstrapHot(1000); // Load top 1000 items
+
+// Warm up warm tier from cold tier
+await storage.bootstrapWarm({
+  sinceDate: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+  limit: 10000,
+});</code></pre>
+
+            <h2>Statistics & Monitoring</h2>
+            <pre><code>const stats = await storage.getStats();
+console.log('Hot tier:', stats.hot);
+console.log('Warm tier:', stats.warm);
+console.log('Cold tier:', stats.cold);
+console.log('Hit rate:', stats.hitRate);</code></pre>
+
+            <h2>API Reference</h2>
+            <ul>
+                <li><code>get(key)</code> - Retrieve data</li>
+                <li><code>getWithMetadata(key)</code> - Retrieve with metadata and source tier</li>
+                <li><code>set(key, data, options)</code> - Store data</li>
+                <li><code>delete(key)</code> - Delete from all tiers</li>
+                <li><code>exists(key)</code> - Check if key exists</li>
+                <li><code>touch(key, ttlMs)</code> - Renew TTL</li>
+                <li><code>invalidate(prefix)</code> - Delete by prefix</li>
+                <li><code>listKeys(prefix)</code> - List keys</li>
+                <li><code>getStats()</code> - Get statistics</li>
+                <li><code>bootstrapHot(limit)</code> - Warm up hot tier</li>
+                <li><code>bootstrapWarm(options)</code> - Warm up warm tier</li>
+            </ul>
+        </section>
+    </main>
+
+    <footer>
+        <p>&copy; 2024 Tiered Storage Library. Built with ❤️ for performance.</p>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.env
+*.log
+.DS_Store
+
+# Example cache directories
+example-cache/*
+example-cache/
+cache/*
+cache/
+
+# Test cache directories
+test-cache/
+
+# Build artifacts
+*.tsbuildinfo

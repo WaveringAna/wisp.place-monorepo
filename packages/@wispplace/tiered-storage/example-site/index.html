@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tiered Storage Demo Site</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <nav>
+            <div class="logo">🗄️ TieredCache</div>
+            <ul>
+                <li><a href="index.html" class="active">Home</a></li>
+                <li><a href="about.html">About</a></li>
+                <li><a href="docs.html">Docs</a></li>
+            </ul>
+        </nav>
+    </header>
+
+    <main>
+        <section class="hero">
+            <h1>Lightning-Fast Multi-Tier Caching</h1>
+            <p>Store your data across memory, disk, and cloud storage with automatic promotion and intelligent eviction.</p>
+            <div class="cta-buttons">
+                <a href="#features" class="btn btn-primary">Learn More</a>
+                <a href="docs.html" class="btn btn-secondary">Documentation</a>
+            </div>
+        </section>
+
+        <section id="features" class="features">
+            <h2>Features</h2>
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <div class="feature-icon">⚡</div>
+                    <h3>Hot Tier (Memory)</h3>
+                    <p>Lightning-fast access with LRU eviction. Perfect for frequently accessed data like index.html.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">💾</div>
+                    <h3>Warm Tier (Disk)</h3>
+                    <p>Fast local storage with configurable eviction policies. Ideal for site assets and media.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">☁️</div>
+                    <h3>Cold Tier (S3)</h3>
+                    <p>Unlimited cloud storage as your source of truth. Supports S3, R2, MinIO, and more.</p>
+                </div>
+            </div>
+        </section>
+
+        <section class="architecture">
+            <h2>How It Works</h2>
+            <div class="tier-diagram">
+                <div class="tier hot">
+                    <div class="tier-label">Hot (Memory)</div>
+                    <div class="tier-content">index.html ✓</div>
+                </div>
+                <div class="arrow">↓</div>
+                <div class="tier warm">
+                    <div class="tier-label">Warm (Disk)</div>
+                    <div class="tier-content">index.html, style.css, images ✓</div>
+                </div>
+                <div class="arrow">↓</div>
+                <div class="tier cold">
+                    <div class="tier-label">Cold (S3)</div>
+                    <div class="tier-content">All files (source of truth) ✓</div>
+                </div>
+            </div>
+            <p class="diagram-note">Data cascades down on writes, bubbles up on reads</p>
+        </section>
+
+        <section class="stats" id="cache-stats">
+            <h2>Live Cache Statistics</h2>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-value" id="hot-items">-</div>
+                    <div class="stat-label">Hot Tier Items</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="warm-items">-</div>
+                    <div class="stat-label">Warm Tier Items</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="cold-items">-</div>
+                    <div class="stat-label">Cold Tier Items</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="hit-rate">-</div>
+                    <div class="stat-label">Cache Hit Rate</div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <p>&copy; 2024 Tiered Storage Library. Built with ❤️ for performance.</p>
+        <p><small>This is a demo site to showcase the tiered-storage library capabilities.</small></p>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+</html>

@@ -1,0 +1,54 @@
+{
+  "name": "@wispplace/tiered-storage",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Tiered storage library with S3, disk, and memory caching",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "build": "tsc",
+    "dev": "tsx --watch src/index.ts",
+    "example": "tsx example.ts",
+    "serve": "tsx serve-example.ts",
+    "test": "vitest",
+    "test:watch": "vitest --watch",
+    "lint": "eslint src test --ext .ts",
+    "lint:fix": "eslint src test --ext .ts --fix",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\""
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.500.0",
+    "@aws-sdk/lib-storage": "^3.500.0",
+    "hono": "^4.10.7",
+    "mime-types": "^3.0.2",
+    "tiny-lru": "^11.0.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.4",
+    "@types/mime-types": "^3.0.1",
+    "@types/node": "^24.10.1",
+    "@typescript-eslint/eslint-plugin": "^8.48.1",
+    "@typescript-eslint/parser": "^8.48.1",
+    "eslint": "^9.39.1",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.4",
+    "prettier": "^3.7.4",
+    "tsx": "^4.0.0",
+    "typescript": "^5.3.0",
+    "typescript-eslint": "^8.50.0",
+    "vitest": "^4.0.15"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

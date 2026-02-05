@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>About - Tiered Storage Demo</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <nav>
+            <div class="logo">🗄️ TieredCache</div>
+            <ul>
+                <li><a href="index.html">Home</a></li>
+                <li><a href="about.html" class="active">About</a></li>
+                <li><a href="docs.html">Docs</a></li>
+            </ul>
+        </nav>
+    </header>
+
+    <main>
+        <section class="content">
+            <h1>About Tiered Storage</h1>
+
+            <h2>The Problem</h2>
+            <p>Modern applications need to balance three competing concerns:</p>
+            <ul>
+                <li><strong>Speed:</strong> Users expect instant responses</li>
+                <li><strong>Cost:</strong> Keeping everything in memory is expensive</li>
+                <li><strong>Reliability:</strong> Data must be durable and recoverable</li>
+            </ul>
+
+            <h2>The Solution</h2>
+            <p>Tiered storage provides the best of all worlds by automatically managing data across multiple storage tiers:</p>
+
+            <div class="solution-grid">
+                <div class="solution-item">
+                    <h3>🚀 Performance</h3>
+                    <p>Hot tier (memory) serves critical files like index.html in microseconds</p>
+                </div>
+                <div class="solution-item">
+                    <h3>💰 Cost-Effective</h3>
+                    <p>Warm tier (disk) and cold tier (S3) handle bulk storage efficiently</p>
+                </div>
+                <div class="solution-item">
+                    <h3>🛡️ Reliability</h3>
+                    <p>Cold tier acts as source of truth with automatic backups</p>
+                </div>
+            </div>
+
+            <h2>Use Cases</h2>
+            <div class="use-cases">
+                <div class="use-case">
+                    <h4>Static Site Hosting</h4>
+                    <p>Store index.html in memory for instant serving, while keeping images and videos on disk/S3. Perfect for CDN-like performance on a single server.</p>
+                </div>
+                <div class="use-case">
+                    <h4>Content Delivery</h4>
+                    <p>Automatically promote popular content to hot tier based on access patterns. Rarely accessed content stays in cold storage.</p>
+                </div>
+                <div class="use-case">
+                    <h4>Database Caching</h4>
+                    <p>Cache query results in memory, with overflow to disk and S3. Automatic TTL management keeps data fresh.</p>
+                </div>
+            </div>
+
+            <h2>How This Demo Works</h2>
+            <p>This example site is stored using the tiered-storage library:</p>
+            <ol>
+                <li><code>index.html</code> - Stored in all tiers (hot + warm + cold) for instant access</li>
+                <li><code>about.html</code> - Stored in warm + cold (skips hot to save memory)</li>
+                <li><code>style.css</code> - Stored in warm + cold</li>
+                <li><code>script.js</code> - Stored in warm + cold</li>
+                <li><code>hero-image.jpg</code> - Large file, stored in cold tier only</li>
+            </ol>
+            <p>When you request a page, the library automatically checks hot → warm → cold and serves from the fastest available tier.</p>
+        </section>
+    </main>
+
+    <footer>
+        <p>&copy; 2024 Tiered Storage Library. Built with ❤️ for performance.</p>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+</html>
