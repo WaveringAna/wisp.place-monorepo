@@ -122,6 +122,35 @@ await db`
     )
 `;
 
+// Site cache table - stores CIDs for cached sites (used by firehose/hosting services)
+await db`
+    CREATE TABLE IF NOT EXISTS site_cache (
+        did TEXT NOT NULL,
+        rkey TEXT NOT NULL,
+        record_cid TEXT NOT NULL,
+        file_cids JSONB NOT NULL DEFAULT '{}',
+        cached_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()),
+        updated_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()),
+        PRIMARY KEY (did, rkey)
+    )
+`;
+
+// Site settings cache table - cached place.wisp.settings records
+await db`
+    CREATE TABLE IF NOT EXISTS site_settings_cache (
+        did TEXT PRIMARY KEY,
+        record_cid TEXT NOT NULL,
+        directory_listing BOOLEAN NOT NULL DEFAULT false,
+        spa_mode TEXT,
+        custom_404 TEXT,
+        index_files JSONB,
+        clean_urls BOOLEAN NOT NULL DEFAULT true,
+        headers JSONB,
+        cached_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()),
+        updated_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())
+    )
+`;
+
 // Create indexes for common query patterns
 await Promise.all([
     // oauth_states cleanup queries
@@ -177,6 +206,20 @@ await Promise.all([
     db`CREATE INDEX IF NOT EXISTS idx_sites_did ON sites(did)`.catch(err => {
         if (!err.message?.includes('already exists')) {
             console.error('Failed to create idx_sites_did:', err);
+        }
+    }),
+
+    // site_cache queries by did
+    db`CREATE INDEX IF NOT EXISTS idx_site_cache_did ON site_cache(did)`.catch(err => {
+        if (!err.message?.includes('already exists')) {
+            console.error('Failed to create idx_site_cache_did:', err);
+        }
+    }),
+
+    // site_cache queries by updated_at (for cleanup/monitoring)
+    db`CREATE INDEX IF NOT EXISTS idx_site_cache_updated ON site_cache(updated_at)`.catch(err => {
+        if (!err.message?.includes('already exists')) {
+            console.error('Failed to create idx_site_cache_updated:', err);
         }
     })
 ]);

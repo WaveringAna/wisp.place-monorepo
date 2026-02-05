@@ -18,5 +18,7 @@ export type {
 	OAuthSession,
 	OAuthKey,
 	CookieSecret,
-	AdminUser
+	AdminUser,
+	SiteCache,
+	SiteSettingsCache
 } from './types';

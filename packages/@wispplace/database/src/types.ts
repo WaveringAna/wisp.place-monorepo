@@ -54,3 +54,32 @@ export interface AdminUser {
 	password_hash: string;
 	created_at?: number;
 }
+
+/**
+ * Site cache - stores CIDs for cached sites
+ * Used by firehose-service (writes) and hosting-service (reads)
+ */
+export interface SiteCache {
+	did: string;
+	rkey: string;
+	record_cid: string;
+	file_cids: Record<string, string>;  // path -> CID mapping
+	cached_at: number;
+	updated_at: number;
+}
+
+/**
+ * Cached site settings from place.wisp.settings lexicon
+ */
+export interface SiteSettingsCache {
+	did: string;
+	record_cid: string;
+	directory_listing: boolean;
+	spa_mode: string | null;
+	custom_404: string | null;
+	index_files: string[] | null;
+	clean_urls: boolean;
+	headers: Array<{ name: string; value: string; path?: string }> | null;
+	cached_at: number;
+	updated_at: number;
+}

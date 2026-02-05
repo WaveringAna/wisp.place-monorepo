@@ -6,6 +6,7 @@
     "packages/@wispplace/*",
     "apps/main-app",
     "apps/hosting-service",
+    "apps/firehose-service",
     "cli"
   ],
   "dependencies": {

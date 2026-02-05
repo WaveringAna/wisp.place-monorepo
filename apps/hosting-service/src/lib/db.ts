@@ -1,6 +1,6 @@
 import postgres from 'postgres';
 import { createHash } from 'crypto';
-import type { DomainLookup, CustomDomainLookup } from '@wispplace/database';
+import type { DomainLookup, CustomDomainLookup, SiteCache, SiteSettingsCache } from '@wispplace/database';
 
 // Global cache-only mode flag (set by index.ts)
 let cacheOnlyMode = false;
@@ -242,6 +242,37 @@ export async function closeDatabase(): Promise<void> {
   } catch (err) {
     console.error('[DB] Error closing database connections:', err);
   }
+}
+
+// Site cache queries
+
+export async function getSiteCache(did: string, rkey: string): Promise<SiteCache | null> {
+  const result = await sql<SiteCache[]>`
+    SELECT did, rkey, record_cid, file_cids, cached_at, updated_at
+    FROM site_cache
+    WHERE did = ${did} AND rkey = ${rkey}
+    LIMIT 1
+  `;
+  return result[0] || null;
+}
+
+export async function getSiteSettingsCache(did: string): Promise<SiteSettingsCache | null> {
+  const result = await sql<SiteSettingsCache[]>`
+    SELECT did, record_cid, directory_listing, spa_mode, custom_404, index_files, clean_urls, headers, cached_at, updated_at
+    FROM site_settings_cache
+    WHERE did = ${did}
+    LIMIT 1
+  `;
+  return result[0] || null;
+}
+
+export async function listSiteCachesForDid(did: string): Promise<SiteCache[]> {
+  return await sql<SiteCache[]>`
+    SELECT did, rkey, record_cid, file_cids, cached_at, updated_at
+    FROM site_cache
+    WHERE did = ${did}
+    ORDER BY updated_at DESC
+  `;
 }
 
 export { sql };

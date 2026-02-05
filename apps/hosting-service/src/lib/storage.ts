@@ -17,7 +17,7 @@ import {
 	S3StorageTier,
 	type StorageTier,
 	type StorageMetadata,
-} from 'tiered-storage';
+} from '@wispplace/tiered-storage';
 
 const CACHE_DIR = process.env.CACHE_DIR || './cache/sites';
 const HOT_CACHE_SIZE = parseInt(process.env.HOT_CACHE_SIZE || '104857600', 10); // 100MB default
