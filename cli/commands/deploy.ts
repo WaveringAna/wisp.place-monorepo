@@ -52,7 +52,8 @@ const DEFAULT_IGNORE_PATTERNS = [
   'node_modules', 'node_modules/**', 'Thumbs.db', 'desktop.ini',
   '._*', '.Spotlight-V100/**', '.Trashes/**', '.fseventsd/**',
   '.cache/**', '.temp/**', '.tmp/**', '__pycache__/**', '*.pyc',
-  '.venv/**', 'venv/**', '*.swp', '*.swo', '*~', '.tangled/**'
+  '.venv/**', 'venv/**', '*.swp', '*.swo', '*~', '.tangled/**',
+  '.wispignore'
 ];
 
 function createIgnoreMatcher(siteDir: string): Ignore {
@@ -80,9 +81,11 @@ function collectFiles(dir: string, ig: Ignore, baseDir: string): FileInfo[] {
     const fullPath = join(dir, entry.name);
     const relativePath = relative(baseDir, fullPath);
 
-    if (ig.ignores(relativePath)) continue;
+    // The ignore package needs trailing '/' for directory-pattern matching
+    const isDir = entry.isDirectory();
+    if (ig.ignores(isDir ? relativePath + '/' : relativePath)) continue;
 
-    if (entry.isDirectory()) {
+    if (isDir) {
       files.push(...collectFiles(fullPath, ig, baseDir));
     } else if (entry.isFile()) {
       const stat = statSync(fullPath);
