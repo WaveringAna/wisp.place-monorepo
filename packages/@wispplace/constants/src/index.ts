@@ -31,6 +31,53 @@ export const MAX_ENTRIES_PER_DIRECTORY = 500;
 // Compression settings
 export const GZIP_COMPRESSION_LEVEL = 9;
 
+// Default ignore patterns for file uploads
+export const DEFAULT_IGNORE_PATTERNS: string[] = [
+  '.git',
+  '.git/**',
+  '.github',
+  '.github/**',
+  '.gitlab',
+  '.gitlab/**',
+  '.DS_Store',
+  '.wisp.metadata.json',
+  '.wisp-metadata.json',
+  '.env',
+  '.env.*',
+  'node_modules',
+  'node_modules/**',
+  'Thumbs.db',
+  'desktop.ini',
+  '._*',
+  '.Spotlight-V100',
+  '.Spotlight-V100/**',
+  '.Trashes',
+  '.Trashes/**',
+  '.fseventsd',
+  '.fseventsd/**',
+  '.cache',
+  '.cache/**',
+  '.temp',
+  '.temp/**',
+  '.tmp',
+  '.tmp/**',
+  '__pycache__',
+  '__pycache__/**',
+  '*.pyc',
+  '.venv',
+  '.venv/**',
+  'venv',
+  'venv/**',
+  'env',
+  'env/**',
+  '*.swp',
+  '*.swo',
+  '*~',
+  '.tangled',
+  '.tangled/**',
+  '.wispignore',
+];
+
 // CLI Binary URLs
 export const CLI_BINARY_BASE_URL = "https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries";
 export const CLI_BINARIES = {

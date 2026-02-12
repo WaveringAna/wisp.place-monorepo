@@ -15,7 +15,7 @@ import {
   type FileUploadResult
 } from '@wispplace/fs-utils';
 import { computeCID, extractBlobMap, shouldCompressFile, compressFile, extractSubfsUris } from '@wispplace/atproto-utils';
-import { MAX_SITE_SIZE, MAX_FILE_COUNT, MAX_FILE_SIZE } from '@wispplace/constants';
+import { MAX_SITE_SIZE, MAX_FILE_COUNT, MAX_FILE_SIZE, DEFAULT_IGNORE_PATTERNS } from '@wispplace/constants';
 import { readdirSync, statSync, readFileSync, existsSync } from 'fs';
 import { join, relative, basename } from 'path';
 import ignore, { type Ignore } from 'ignore';
@@ -45,16 +45,6 @@ interface FileInfo {
   size: number;
 }
 
-// Default ignore patterns
-const DEFAULT_IGNORE_PATTERNS = [
-  '.git', '.git/**', '.github', '.github/**', '.gitlab', '.gitlab/**',
-  '.DS_Store', '.wisp-metadata.json', '.env', '.env.*',
-  'node_modules', 'node_modules/**', 'Thumbs.db', 'desktop.ini',
-  '._*', '.Spotlight-V100/**', '.Trashes/**', '.fseventsd/**',
-  '.cache/**', '.temp/**', '.tmp/**', '__pycache__/**', '*.pyc',
-  '.venv/**', 'venv/**', '*.swp', '*.swo', '*~', '.tangled/**',
-  '.wispignore'
-];
 
 function createIgnoreMatcher(siteDir: string): Ignore {
   const ig = ignore();

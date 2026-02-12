@@ -1,6 +1,6 @@
 # Build from monorepo root: docker build -f apps/firehose-service/Dockerfile .
 
-# Stage 1: Install dependencies
+# Stage 1: Install dependencies and compile binary
 FROM oven/bun:1-alpine AS builder
 
 WORKDIR /app
@@ -18,18 +18,15 @@ COPY cli/package.json ./cli/package.json
 # Install dependencies
 RUN bun install --frozen-lockfile
 
-# Stage 2: Runtime
-FROM oven/bun:1-alpine AS runtime
+# Compile to a single binary
+RUN bun build --compile --minify apps/firehose-service/src/index.ts --outfile /app/firehose
 
-WORKDIR /app
+# Stage 2: Minimal runtime
+FROM alpine:3.22
 
-# Copy workspace and dependencies from builder
-COPY --from=builder /app /app
-
-WORKDIR /app/apps/firehose-service
+COPY --from=builder /app/firehose /usr/local/bin/firehose
 
 ENV NODE_ENV=production
 ENV HEALTH_PORT=3001
 
-# Start the firehose service
-CMD ["bun", "run", "start"]
+CMD ["firehose"]
