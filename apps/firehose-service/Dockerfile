@@ -24,6 +24,8 @@ RUN bun build --compile --minify apps/firehose-service/src/index.ts --outfile /a
 # Stage 2: Minimal runtime
 FROM alpine:3.22
 
+RUN apk add --no-cache libstdc++ libgcc
+
 COPY --from=builder /app/firehose /usr/local/bin/firehose
 
 ENV NODE_ENV=production
