@@ -14,7 +14,8 @@ import { isValidRkey, extractHeaders } from './lib/request-utils';
 import { serveFromCache, serveFromCacheWithRewrite } from './lib/file-serving';
 import { getRevalidateMetrics } from './lib/revalidate-metrics';
 
-const BASE_HOST = process.env.BASE_HOST || 'wisp.place';
+const BASE_HOST_ENV = process.env.BASE_HOST || 'wisp.place';
+const BASE_HOST = BASE_HOST_ENV.split(':')[0] || BASE_HOST_ENV;
 
 const app = new Hono();
 
@@ -41,6 +42,8 @@ app.get('/*', async (c) => {
   const hostnameWithoutPort = hostname.split(':')[0] || '';
   const rawPath = url.pathname.replace(/^\//, '');
   const path = sanitizePath(rawPath);
+
+  console.log(`[Server] Request: host=${hostname} hostnameWithoutPort=${hostnameWithoutPort} path=${path} BASE_HOST=${BASE_HOST}`);
 
   // Check if this is sites.wisp.place subdomain (strip port for comparison)
   if (hostnameWithoutPort === `sites.${BASE_HOST}`) {
