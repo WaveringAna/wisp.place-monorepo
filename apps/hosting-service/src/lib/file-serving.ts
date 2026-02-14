@@ -158,11 +158,15 @@ function buildResponseFromStorageResult(
  */
 async function ensureSiteCached(did: string, rkey: string): Promise<void> {
   const existing = await getSiteCache(did, rkey);
-  if (existing) return; // Site is known, proceed normally
+  if (existing) {
+    console.log(`[FileServing] Site ${did}/${rkey} found in DB, proceeding normally`);
+    return;
+  }
 
   // Site is completely unknown — try on-demand fetch
   console.log(`[FileServing] Site ${did}/${rkey} not in DB, attempting on-demand cache`);
-  await fetchAndCacheSite(did, rkey);
+  const success = await fetchAndCacheSite(did, rkey);
+  console.log(`[FileServing] On-demand cache for ${did}/${rkey}: ${success ? 'success' : 'failed'}`);
 }
 
 /**

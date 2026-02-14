@@ -128,11 +128,10 @@ export async function upsertSiteCache(
   recordCid: string,
   fileCids: Record<string, string>
 ): Promise<void> {
-  const fileCidsJson = JSON.stringify(fileCids ?? {});
   try {
     await sql`
       INSERT INTO site_cache (did, rkey, record_cid, file_cids, cached_at, updated_at)
-      VALUES (${did}, ${rkey}, ${recordCid}, ${fileCidsJson}::jsonb, EXTRACT(EPOCH FROM NOW()), EXTRACT(EPOCH FROM NOW()))
+      VALUES (${did}, ${rkey}, ${recordCid}, ${sql.json(fileCids ?? {})}, EXTRACT(EPOCH FROM NOW()), EXTRACT(EPOCH FROM NOW()))
       ON CONFLICT (did, rkey)
       DO UPDATE SET
         record_cid = EXCLUDED.record_cid,

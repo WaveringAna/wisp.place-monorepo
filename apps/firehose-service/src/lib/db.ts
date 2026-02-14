@@ -54,12 +54,11 @@ export async function upsertSiteCache(
   recordCid: string,
   fileCids: Record<string, string>
 ): Promise<void> {
-  const fileCidsJson = JSON.stringify(fileCids ?? {});
   console.log(`[DB] upsertSiteCache starting for ${did}/${rkey}`);
   try {
     await sql`
       INSERT INTO site_cache (did, rkey, record_cid, file_cids, cached_at, updated_at)
-      VALUES (${did}, ${rkey}, ${recordCid}, ${fileCidsJson}::jsonb, EXTRACT(EPOCH FROM NOW()), EXTRACT(EPOCH FROM NOW()))
+      VALUES (${did}, ${rkey}, ${recordCid}, ${sql.json(fileCids ?? {})}, EXTRACT(EPOCH FROM NOW()), EXTRACT(EPOCH FROM NOW()))
       ON CONFLICT (did, rkey)
       DO UPDATE SET
         record_cid = EXCLUDED.record_cid,
@@ -94,17 +93,18 @@ export async function upsertSiteSettingsCache(
   const directoryListing = settings.directoryListing ?? false;
   const spaMode = settings.spaMode ?? null;
   const custom404 = settings.custom404 ?? null;
-  const indexFilesJson = JSON.stringify(settings.indexFiles ?? []);
   const cleanUrls = settings.cleanUrls ?? true;
-  const headersJson = JSON.stringify(settings.headers ?? []);
+
+  const indexFiles = settings.indexFiles ?? [];
+  const headers = settings.headers ?? [];
 
   console.log(`[DB] upsertSiteSettingsCache starting for ${did}/${rkey}`, {
     directoryListing,
     spaMode,
     custom404,
-    indexFiles: indexFilesJson,
+    indexFiles,
     cleanUrls,
-    headers: headersJson,
+    headers,
   });
 
   try {
@@ -117,9 +117,9 @@ export async function upsertSiteSettingsCache(
         ${directoryListing},
         ${spaMode},
         ${custom404},
-        ${indexFilesJson}::jsonb,
+        ${sql.json(indexFiles)},
         ${cleanUrls},
-        ${headersJson}::jsonb,
+        ${sql.json(headers)},
         EXTRACT(EPOCH FROM NOW()),
         EXTRACT(EPOCH FROM NOW())
       )

@@ -59,25 +59,50 @@ class ReadOnlyS3Tier implements StorageTier {
 
 	constructor(private tier: StorageTier) {}
 
-	// Read operations - pass through to underlying tier
+	// Read operations - pass through to underlying tier, catch errors as cache misses
 	async get(key: string) {
-		return this.tier.get(key);
+		try {
+			return await this.tier.get(key);
+		} catch (err) {
+			this.logReadError('get', key, err);
+			return null;
+		}
 	}
 
 	async getWithMetadata(key: string) {
-		return this.tier.getWithMetadata?.(key) ?? null;
+		try {
+			return await this.tier.getWithMetadata?.(key) ?? null;
+		} catch (err) {
+			this.logReadError('getWithMetadata', key, err);
+			return null;
+		}
 	}
 
 	async getStream(key: string) {
-		return this.tier.getStream?.(key) ?? null;
+		try {
+			return await this.tier.getStream?.(key) ?? null;
+		} catch (err) {
+			this.logReadError('getStream', key, err);
+			return null;
+		}
 	}
 
 	async exists(key: string) {
-		return this.tier.exists(key);
+		try {
+			return await this.tier.exists(key);
+		} catch (err) {
+			this.logReadError('exists', key, err);
+			return false;
+		}
 	}
 
 	async getMetadata(key: string) {
-		return this.tier.getMetadata(key);
+		try {
+			return await this.tier.getMetadata(key);
+		} catch (err) {
+			this.logReadError('getMetadata', key, err);
+			return null;
+		}
 	}
 
 	async *listKeys(prefix?: string) {
@@ -111,6 +136,11 @@ class ReadOnlyS3Tier implements StorageTier {
 
 	async clear() {
 		this.logWriteSkip('clear', 'all keys');
+	}
+
+	private logReadError(operation: string, key: string, err: unknown) {
+		const msg = err instanceof Error ? err.message : String(err);
+		console.warn(`[Storage] S3 read error (${operation}) for ${key}: ${msg}`);
 	}
 
 	private logWriteSkip(operation: string, key: string) {
