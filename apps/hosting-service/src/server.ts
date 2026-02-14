@@ -81,6 +81,11 @@ app.get('/*', async (c) => {
       return c.text('Invalid identifier', 400);
     }
 
+    // Redirect to trailing slash when accessing site root so relative paths resolve correctly
+    if (!filePath && !url.pathname.endsWith('/')) {
+      return c.redirect(`${url.pathname}/${url.search}`, 301);
+    }
+
     console.log(`[Server] sites.wisp.place request: identifier=${identifier}, site=${site}, filePath=${filePath}`);
 
     // Serve with HTML path rewriting to handle absolute paths
