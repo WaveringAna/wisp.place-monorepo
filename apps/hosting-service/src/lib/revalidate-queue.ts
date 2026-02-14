@@ -18,6 +18,7 @@ function getRedisClient(): Redis | null {
   }
 
   if (!client) {
+    console.log(`[Revalidate] Connecting to Redis: ${redisUrl}`);
     client = new Redis(redisUrl, {
       maxRetriesPerRequest: 2,
       enableReadyCheck: true,
@@ -25,6 +26,10 @@ function getRedisClient(): Redis | null {
 
     client.on('error', (err) => {
       console.error('[Revalidate] Redis error:', err);
+    });
+
+    client.on('ready', () => {
+      console.log(`[Revalidate] Redis connected, stream: ${streamName}`);
     });
   }
 
@@ -65,6 +70,7 @@ export async function enqueueRevalidate(
       Date.now().toString()
     );
 
+    console.log(`[Revalidate] Enqueued ${did}/${rkey} (${reason}) to ${streamName}`);
     recordRevalidateResult('enqueued');
     return { enqueued: true, result: 'enqueued' };
   } catch (err) {
