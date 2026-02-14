@@ -3,35 +3,38 @@ title: Self-Hosting Guide
 description: Deploy your own Wisp.place instance
 ---
 
-This guide covers deploying your own Wisp.place instance. Wisp.place consists of two services: the main backend (handles OAuth, uploads, domains) and the hosting service (serves cached sites).
+This guide covers deploying your own Wisp.place instance. Wisp.place consists of three services: the main backend (handles OAuth, uploads, domains), the firehose service (watches the AT Protocol firehose and populates the cache), and the hosting service (serves cached sites). See the [Architecture Guide](/architecture) for a detailed breakdown of how these services work together.
 
 ## Prerequisites
 
 - **PostgreSQL** database (14 or newer)
-- **Bun** runtime for the main backend
+- **Bun** runtime for the main backend and firehose service
 - **Node.js** (18+) for the hosting service
 - **Caddy** (optional, for custom domain TLS)
 - **Domain name** for your instance
+- **S3-compatible storage** (optional, recommended for production — Cloudflare R2, MinIO, etc.)
+- **Redis** (optional, for real-time cache invalidation between services)
 
 ## Architecture Overview
 
 ```
-┌─────────────────────────────────────────┐     ┌─────────────────────────────────────────┐
-│  Main Backend (port 8000)               │     │  Hosting Service (port 3001)            │
-│  - OAuth authentication                 │     │  - Firehose listener                    │
-│  - Site upload/management               │     │  - Site caching                         │
-│  - Domain registration                  │     │  - Content serving                      │
-│  - Admin panel                          │     │  - Redirect handling                    │
-└─────────────────────────────────────────┘     └─────────────────────────────────────────┘
-                  │                                             │
-                  └─────────────────┬───────────────────────────┘
-                                    ▼
-                  ┌─────────────────────────────────────────┐
-                  │  PostgreSQL Database                    │
-                  │  - User sessions                        │
-                  │  - Domain mappings                      │
-                  │  - Site metadata                        │
-                  └─────────────────────────────────────────┘
+┌──────────────────────────┐  ┌──────────────────────────┐  ┌──────────────────────────┐
+│  Main Backend (:8000)    │  │ Firehose Service         │  │ Hosting Service (:3001)  │
+│  - OAuth authentication  │  │ - Watches AT firehose    │  │ - Tiered cache (mem/     │
+│  - Site upload/manage    │  │ - Downloads blobs        │  │   disk/S3)               │
+│  - Domain registration   │  │ - Writes to S3/disk      │  │ - Content serving        │
+│  - Admin panel           │  │ - Publishes invalidation │  │ - Redirect handling      │
+└──────────────────────────┘  └──────────────────────────┘  └──────────────────────────┘
+         │                        │               │                     │
+         │                        │  S3/Disk      │ Redis pub/sub       │
+         └────────┬───────────────┘               └─────────────────────┘
+                  ▼
+┌─────────────────────────────────────────┐
+│  PostgreSQL Database                    │
+│  - User sessions                        │
+│  - Domain mappings                      │
+│  - Site metadata                        │
+└─────────────────────────────────────────┘
 ```
 
 ## Database Setup
@@ -106,21 +109,89 @@ bun run scripts/create-admin.ts
 
 Admin panel is available at `https://yourdomain.com/admin`
 
-## Hosting Service Setup
+## Firehose Service Setup
 
-The hosting service is a separate microservice that serves cached sites.
+The firehose service watches the AT Protocol firehose for site changes and pre-populates the cache. It is **write-only** — it never serves requests to users.
 
 ### Environment Variables
 
 ```bash
 # Required
 DATABASE_URL="postgres://user:password@localhost:5432/wisp"
-BASE_HOST="wisp.place"                # Same as main backend
+
+# S3 storage (recommended for production)
+S3_BUCKET="wisp-sites"
+S3_REGION="auto"
+S3_ENDPOINT="https://your-account.r2.cloudflarestorage.com"
+S3_ACCESS_KEY_ID="..."
+S3_SECRET_ACCESS_KEY="..."
+S3_METADATA_BUCKET="wisp-metadata"     # Optional, recommended
+
+# Redis (for notifying hosting service of changes)
+REDIS_URL="redis://localhost:6379"
+
+# Firehose
+FIREHOSE_URL="wss://jetstream2.us-east.bsky.network/subscribe"
+FIREHOSE_CONCURRENCY=5                 # Max parallel event processing
 
 # Optional
-PORT="3001"                           # Default: 3001
-CACHE_DIR="./cache/sites"             # Site cache directory
-CACHE_ONLY_MODE="false"               # Set true to disable DB writes
+CACHE_DIR="./cache/sites"              # Fallback if S3 not configured
+```
+
+### Installation
+
+```bash
+cd firehose-service
+
+# Install dependencies
+bun install
+
+# Production mode
+bun run start
+
+# With backfill (one-time bulk sync of all existing sites)
+bun run start -- --backfill
+```
+
+The firehose service will:
+1. Connect to the AT Protocol firehose (Jetstream)
+2. Filter for `place.wisp.fs` and `place.wisp.settings` events
+3. Download blobs, decompress, and rewrite HTML paths
+4. Write files to S3 (or disk)
+5. Publish cache invalidation events to Redis
+
+## Hosting Service Setup
+
+The hosting service is a **read-only** CDN that serves cached sites through a three-tier storage system (memory, disk, S3).
+
+### Environment Variables
+
+```bash
+# Required
+DATABASE_URL="postgres://user:password@localhost:5432/wisp"
+BASE_HOST="wisp.place"                 # Same as main backend
+
+# Tiered storage
+HOT_CACHE_SIZE=104857600               # Hot tier: 100 MB (memory, LRU)
+HOT_CACHE_COUNT=500                    # Max items in hot tier
+
+WARM_CACHE_SIZE=10737418240            # Warm tier: 10 GB (disk, LRU)
+WARM_EVICTION_POLICY="lru"             # lru, fifo, or size
+CACHE_DIR="./cache/sites"              # Warm tier directory
+
+# S3 cold tier (same bucket as firehose service, read-only)
+S3_BUCKET="wisp-sites"
+S3_REGION="auto"
+S3_ENDPOINT="https://your-account.r2.cloudflarestorage.com"
+S3_ACCESS_KEY_ID="..."
+S3_SECRET_ACCESS_KEY="..."
+S3_METADATA_BUCKET="wisp-metadata"
+
+# Redis (receive cache invalidation from firehose service)
+REDIS_URL="redis://localhost:6379"
+
+# Optional
+PORT="3001"                            # Default: 3001
 ```
 
 ### Installation
@@ -136,23 +207,24 @@ npm run dev
 
 # Production mode
 npm run start
-
-# With backfill (downloads all sites from DB on startup)
-npm run start -- --backfill
 ```
 
 The hosting service will:
-1. Connect to PostgreSQL
-2. Start firehose listener (watches for new sites)
-3. Create cache directory
-4. Serve sites on port 3001
+1. Initialize tiered storage (hot → warm → cold)
+2. Subscribe to Redis for cache invalidation events
+3. Serve sites on port 3001
 
-### Cache Management
+### Cache Behavior
 
-Sites are cached to disk at `./cache/sites/{did}/{sitename}/`. The cache is automatically populated:
-- **On first request**: Downloads from PDS and caches
-- **Via firehose**: Updates when sites are deployed
-- **Backfill mode**: Downloads all sites from database on startup
+Files are cached across three tiers with automatic promotion:
+
+- **Hot (memory):** Fastest, limited by `HOT_CACHE_SIZE`. Evicted on restart.
+- **Warm (disk):** Fast local reads at `CACHE_DIR`. Survives restarts.
+- **Cold (S3):** Shared source of truth, populated by firehose service.
+
+On a cache miss at all tiers, the hosting service fetches directly from the user's PDS and promotes the file into the appropriate tiers.
+
+**Without S3:** Disk acts as both warm and cold tier. The hosting service still works — it just relies on on-demand fetching instead of pre-populated S3 cache.
 
 ## Reverse Proxy Setup
 
@@ -318,11 +390,11 @@ Access observability metrics at `https://yourdomain.com/admin`:
 
 ## Scaling Considerations
 
-- **Multiple hosting instances**: Run multiple hosting services behind a load balancer
+- **Multiple hosting instances**: Run multiple hosting services behind a load balancer — each has its own hot/warm tiers but shares the S3 cold tier and Redis invalidation
 - **Separate databases**: Split read/write with replicas
 - **CDN**: Put Cloudflare or Bunny in front for global caching
-- **Cache storage**: Use NFS/S3 for shared cache across instances
-- **Redis**: Add Redis for session storage at scale
+- **S3 cold tier**: Shared storage across all hosting instances (Cloudflare R2, MinIO, AWS S3)
+- **Redis**: Required for real-time cache invalidation between firehose and hosting services at scale
 
 ## Security Notes
 

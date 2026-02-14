@@ -57,7 +57,9 @@ https://sites.wisp.place/{your-did}/{site-name}
 
 The deployment process starts when you upload your files. Each file is compressed with gzip, base64-encoded, and uploaded as a blob to your PDS. A `place.wisp.fs` record then stores the complete site structure with references to these blobs, creating a verifiable manifest of your site.
 
-Hosting services continuously watch the AT Protocol firehose for new and updated sites. When your site is first accessed or updated, the hosting service downloads the manifest and blobs, caching them locally for optimized delivery. Custom domains work through DNS verification, allowing your site to be served from your own domain while maintaining the cryptographic guarantees of the AT Protocol.
+The **firehose service** continuously watches the AT Protocol firehose for new and updated sites. When a site is created or updated, it downloads the manifest and blobs from the PDS, writes them to S3 (or disk), and publishes a cache invalidation event via Redis. The **hosting service** is a read-only CDN that serves files from a three-tier cache (memory, disk, S3). When a file isn't in cache, the hosting service fetches it on-demand from the PDS and promotes it through the tiers.
+
+Custom domains work through DNS verification, allowing your site to be served from your own domain while maintaining the cryptographic guarantees of the AT Protocol.
 
 ## Architecture Overview
 
@@ -67,7 +69,6 @@ Hosting services continuously watch the AT Protocol firehose for new and updated
        │ (Rust Binary)│             │   Website    │
        │              │             │  (React UI)  │
        └──────────────┘             └──────────────┘
-             │                             │
              │                             │
              ▼                             ▼
 ┌─────────────────────────────────────────────────────────┐
@@ -83,9 +84,7 @@ Hosting services continuously watch the AT Protocol firehose for new and updated
 │                                                         │
 │  ┌──────────────────────────────────────────────┐       │
 │  │ Blobs (gzipped + base64 encoded)             │       │
-│  │ - index.html                                 │       │
-│  │ - styles.css                                 │       │
-│  │ - assets/*                                   │       │
+│  │ - index.html, styles.css, assets/*           │       │
 │  └──────────────────────────────────────────────┘       │
 └─────────────────────────────────────────────────────────┘
                            │
@@ -97,13 +96,26 @@ Hosting services continuously watch the AT Protocol firehose for new and updated
                            │
                            ▼
 ┌─────────────────────────────────────────────────────────┐
-│              Wisp Hosting Service                       │
+│            Firehose Service (Write Path)                │
+│                                                         │
+│  - Watches firehose for place.wisp.fs changes           │
+│  - Downloads blobs from PDS                             │
+│  - Writes cached files to S3 / disk                     │
+│  - Publishes cache invalidation via Redis               │
+└─────────────────────────────────────────────────────────┘
+           │                         │
+           │ (S3 / Disk)             │ (Redis pub/sub)
+           ▼                         ▼
+┌─────────────────────────────────────────────────────────┐
+│            Hosting Service (Read Path)                  │
 │                                                         │
 │  ┌──────────────────────────────────────────────┐       │
-│  │ Cache (Disk + In-Memory)                     │       │
-│  │ - Downloads sites on first access            │       │
-│  │ - Auto-updates on firehose events            │       │
-│  │ - LRU eviction for memory limits             │       │
+│  │ Tiered Storage                               │       │
+│  │ ┌──────┐    ┌──────┐    ┌──────────────┐     │       │
+│  │ │ Hot  │ →  │ Warm │ →  │ Cold         │     │       │
+│  │ │(Mem) │    │(Disk)│    │(S3/Disk)     │     │       │
+│  │ └──────┘    └──────┘    └──────────────┘     │       │
+│  │ On miss: fetch from PDS and promote up       │       │
 │  └──────────────────────────────────────────────┘       │
 │                                                         │
 │  ┌──────────────────────────────────────────────┐       │
@@ -120,13 +132,17 @@ Hosting services continuously watch the AT Protocol firehose for new and updated
                     └─────────────┘
 ```
 
+For a detailed breakdown of the services and storage system, see the [Architecture Guide](/architecture).
+
 ## Tech Stack
 
 - **Backend**: Bun + Elysia + PostgreSQL
 - **Frontend**: React 19 + Tailwind 4 + Radix UI
-- **Hosting**: Node.js + Hono
+- **Hosting Service**: Node.js + Hono
+- **Firehose Service**: Bun
 - **CLI**: Rust + Jacquard (AT Protocol library)
 - **Protocol**: AT Protocol OAuth + custom lexicons
+- **Storage**: S3-compatible (Cloudflare R2, MinIO, etc.) + Redis for cache invalidation
 
 ## Limits
 
@@ -139,7 +155,8 @@ Files are automatically compressed with gzip before upload, so actual limits may
 ## Getting Started
 
 - [CLI Documentation](/cli) - Deploy sites from the command line
-- [Deployment Guide](/deployment) - Configure domains, redirects, and hosting
+- [Architecture Guide](/architecture) - How hosting, firehose, and tiered storage work
+- [Self-Hosting Guide](/deployment) - Deploy your own instance
 - [Lexicons](/lexicons) - AT Protocol record schemas and data structures
 
 ## Links
