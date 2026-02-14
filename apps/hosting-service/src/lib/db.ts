@@ -10,6 +10,9 @@ const sql = postgres(
   }
 );
 
+// Cache-only mode: skip all DB writes and only use tiered storage
+export const CACHE_ONLY = process.env.CACHE_ONLY === 'true';
+
 // Domain lookup cache with TTL
 const DOMAIN_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
@@ -128,6 +131,11 @@ export async function upsertSiteCache(
   recordCid: string,
   fileCids: Record<string, string>
 ): Promise<void> {
+  if (CACHE_ONLY) {
+    console.log('[DB] Cache-only mode: skipping upsertSiteCache', { did, rkey });
+    return;
+  }
+
   try {
     await sql`
       INSERT INTO site_cache (did, rkey, record_cid, file_cids, cached_at, updated_at)

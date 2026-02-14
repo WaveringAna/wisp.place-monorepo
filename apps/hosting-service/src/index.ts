@@ -2,7 +2,7 @@ import app from './server';
 import { serve } from '@hono/node-server';
 import { initializeGrafanaExporters, createLogger } from '@wispplace/observability';
 import { mkdirSync, existsSync } from 'fs';
-import { startDomainCacheCleanup, stopDomainCacheCleanup, closeDatabase } from './lib/db';
+import { startDomainCacheCleanup, stopDomainCacheCleanup, closeDatabase, CACHE_ONLY } from './lib/db';
 import { closeRevalidateQueue } from './lib/revalidate-queue';
 import { startCacheInvalidationSubscriber, stopCacheInvalidationSubscriber } from './lib/cache-invalidation';
 import { storage, getStorageConfig } from './lib/storage';
@@ -69,6 +69,8 @@ Wisp Hosting Service (Read-Only) with Tiered Storage
 
 Server:       http://localhost:${PORT}
 Health:       http://localhost:${PORT}/health
+
+Mode:         ${CACHE_ONLY ? 'CACHE-ONLY (no DB writes)' : 'Standard (with DB writes)'}
 
 Tiered Storage Configuration:
   Hot Cache:        ${storageConfig.hotCacheSize} (${storageConfig.hotCacheCount} items max)
