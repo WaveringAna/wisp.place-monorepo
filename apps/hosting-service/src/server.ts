@@ -7,12 +7,14 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { getWispDomain, getCustomDomain, getCustomDomainByHash } from './lib/db';
 import { resolveDid } from './lib/utils';
-import { logCollector, errorTracker, metricsCollector } from '@wispplace/observability';
+import { createLogger, logCollector, errorTracker, metricsCollector } from '@wispplace/observability';
 import { observabilityMiddleware, observabilityErrorHandler } from '@wispplace/observability/middleware/hono';
 import { sanitizePath } from '@wispplace/fs-utils';
 import { isValidRkey, extractHeaders } from './lib/request-utils';
 import { serveFromCache, serveFromCacheWithRewrite } from './lib/file-serving';
 import { getRevalidateMetrics } from './lib/revalidate-metrics';
+
+const logger = createLogger('hosting-service');
 
 const BASE_HOST_ENV = process.env.BASE_HOST || 'wisp.place';
 const BASE_HOST = BASE_HOST_ENV.split(':')[0] || BASE_HOST_ENV;
@@ -43,7 +45,7 @@ app.get('/*', async (c) => {
   const rawPath = url.pathname.replace(/^\//, '');
   const path = sanitizePath(rawPath);
 
-  console.log(`[Server] Request: host=${hostname} hostnameWithoutPort=${hostnameWithoutPort} path=${path} BASE_HOST=${BASE_HOST}`);
+  logger.debug(`Request: host=${hostname} hostnameWithoutPort=${hostnameWithoutPort} path=${path}`, { BASE_HOST });
 
   // Check if this is sites.wisp.place subdomain (strip port for comparison)
   if (hostnameWithoutPort === `sites.${BASE_HOST}`) {
@@ -86,11 +88,11 @@ app.get('/*', async (c) => {
       return c.redirect(`${url.pathname}/${url.search}`, 301);
     }
 
-    console.log(`[Server] sites.wisp.place request: identifier=${identifier}, site=${site}, filePath=${filePath}`);
+    logger.debug(`sites.wisp.place request: identifier=${identifier}, site=${site}, filePath=${filePath}`);
 
     // Serve with HTML path rewriting to handle absolute paths
     const basePath = `/${identifier}/${site}/`;
-    console.log(`[Server] Serving with basePath: ${basePath}`);
+    logger.debug(`Serving with basePath: ${basePath}`);
     const headers = extractHeaders(c.req.raw.headers);
     return serveFromCacheWithRewrite(did, site, filePath, basePath, c.req.url, headers);
   }

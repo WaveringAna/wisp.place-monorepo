@@ -20,6 +20,7 @@
     "@wispplace/database": "workspace:*",
     "@wispplace/fs-utils": "workspace:*",
     "@wispplace/lexicons": "workspace:*",
+    "@wispplace/observability": "workspace:*",
     "@wispplace/safe-fetch": "workspace:*",
     "@wispplace/tiered-storage": "workspace:*",
     "hono": "^4.10.4",

@@ -15,8 +15,24 @@ import { storage } from './lib/storage';
 import { handleSiteCreateOrUpdate, fetchSiteRecord } from './lib/cache-writer';
 import { startRevalidateWorker, stopRevalidateWorker } from './lib/revalidate-worker';
 import { closeCacheInvalidationPublisher } from './lib/cache-invalidation';
+import { initializeGrafanaExporters, createLogger, logCollector, errorTracker, metricsCollector } from '@wispplace/observability';
+import { observabilityMiddleware, observabilityErrorHandler } from '@wispplace/observability/middleware/hono';
+
+// Initialize Grafana exporters if configured
+initializeGrafanaExporters({
+  serviceName: 'firehose-service',
+  serviceVersion: '1.0.0'
+});
+
+const logger = createLogger('firehose-service');
 
 const app = new Hono();
+
+// Add observability middleware
+app.use('*', observabilityMiddleware('firehose-service'));
+
+// Error handler
+app.onError(observabilityErrorHandler('firehose-service'));
 
 // Health endpoint
 app.get('/health', async (c) => {
@@ -38,14 +54,14 @@ async function shutdown(signal: string) {
   if (isShuttingDown) return;
   isShuttingDown = true;
 
-  console.log(`\n[Service] Received ${signal}, shutting down...`);
+  logger.info(`Received ${signal}, shutting down...`);
 
   stopFirehose();
   await stopRevalidateWorker();
   await closeCacheInvalidationPublisher();
   await closeDatabase();
 
-  console.log('[Service] Shutdown complete');
+  logger.info('Shutdown complete');
   process.exit(0);
 }
 
@@ -56,22 +72,22 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
  * Backfill mode - process existing sites from database
  */
 async function runBackfill(): Promise<void> {
-  console.log('[Backfill] Starting backfill mode');
+  logger.info('Starting backfill mode');
   const startTime = Date.now();
   const forceRewriteHtml = process.env.BACKFILL_FORCE_REWRITE_HTML === 'true';
 
   if (forceRewriteHtml) {
-    console.log('[Backfill] Forcing HTML rewrite for all sites');
+    logger.info('Forcing HTML rewrite for all sites');
   }
 
   let sites = await listAllSites();
   if (sites.length === 0) {
     const cachedSites = await listAllSiteCaches();
     sites = cachedSites.map(site => ({ did: site.did, rkey: site.rkey }));
-    console.log('[Backfill] Sites table empty; falling back to site_cache entries');
+    logger.info('Sites table empty; falling back to site_cache entries');
   }
 
-  console.log(`[Backfill] Found ${sites.length} sites in database`);
+  logger.info(`Found ${sites.length} sites in database`);
 
   let processed = 0;
   let skipped = 0;
@@ -83,7 +99,7 @@ async function runBackfill(): Promise<void> {
       const result = await fetchSiteRecord(site.did, site.rkey);
 
       if (!result) {
-        console.log(`[Backfill] Site not found on PDS: ${site.did}/${site.rkey}`);
+        logger.info(`Site not found on PDS: ${site.did}/${site.rkey}`);
         skipped++;
         continue;
       }
@@ -91,7 +107,7 @@ async function runBackfill(): Promise<void> {
       const existingCache = await getSiteCache(site.did, site.rkey);
       // Check if CID matches (already up to date)
       if (!forceRewriteHtml && existingCache && result.cid === existingCache.record_cid) {
-        console.log(`[Backfill] Site already up to date: ${site.did}/${site.rkey}`);
+        logger.info(`Site already up to date: ${site.did}/${site.rkey}`);
         skipped++;
         continue;
       }
@@ -102,9 +118,9 @@ async function runBackfill(): Promise<void> {
       });
       processed++;
 
-      console.log(`[Backfill] Progress: ${processed + skipped + failed}/${sites.length}`);
+      logger.info(`Progress: ${processed + skipped + failed}/${sites.length}`);
     } catch (err) {
-      console.error(`[Backfill] Failed to process ${site.did}/${site.rkey}:`, err);
+      logger.error(`Failed to process ${site.did}/${site.rkey}`, err);
       failed++;
     }
   }
@@ -115,14 +131,41 @@ async function runBackfill(): Promise<void> {
   const elapsedRemSec = elapsedSec % 60;
   const elapsedLabel = elapsedMin > 0 ? `${elapsedMin}m ${elapsedRemSec}s` : `${elapsedSec}s`;
 
-  console.log(`[Backfill] Complete: ${processed} processed, ${skipped} skipped, ${failed} failed (${elapsedLabel} elapsed)`);
+  logger.info(`Complete: ${processed} processed, ${skipped} skipped, ${failed} failed (${elapsedLabel} elapsed)`);
 }
+
+// Internal observability endpoints (for admin panel)
+app.get('/__internal__/observability/logs', (c) => {
+  const query = c.req.query();
+  const filter: any = {};
+  if (query.level) filter.level = query.level;
+  if (query.service) filter.service = query.service;
+  if (query.search) filter.search = query.search;
+  if (query.eventType) filter.eventType = query.eventType;
+  if (query.limit) filter.limit = parseInt(query.limit as string);
+  return c.json({ logs: logCollector.getLogs(filter) });
+});
+
+app.get('/__internal__/observability/errors', (c) => {
+  const query = c.req.query();
+  const filter: any = {};
+  if (query.service) filter.service = query.service;
+  if (query.limit) filter.limit = parseInt(query.limit as string);
+  return c.json({ errors: errorTracker.getErrors(filter) });
+});
+
+app.get('/__internal__/observability/metrics', (c) => {
+  const query = c.req.query();
+  const timeWindow = query.timeWindow ? parseInt(query.timeWindow as string) : 3600000;
+  const stats = metricsCollector.getStats('firehose-service', timeWindow);
+  return c.json({ stats, timeWindow });
+});
 
 // Main entry point
 async function main() {
-  console.log('[Service] Starting firehose-service');
-  console.log(`[Service] Mode: ${config.isBackfill ? 'backfill' : 'firehose'}`);
-  console.log(`[Service] S3 Bucket: ${config.s3Bucket || '(disk fallback)'}`);
+  logger.info('Starting firehose-service');
+  logger.info(`Mode: ${config.isBackfill ? 'backfill' : 'firehose'}`);
+  logger.info(`S3 Bucket: ${config.s3Bucket || '(disk fallback)'}`);
 
   // Start health server
   const server = serve({
@@ -130,7 +173,7 @@ async function main() {
     port: config.healthPort,
   });
 
-  console.log(`[Service] Health endpoint: http://localhost:${config.healthPort}/health`);
+  logger.info(`Health endpoint: http://localhost:${config.healthPort}/health`);
 
   if (config.isBackfill) {
     // Run backfill and exit
@@ -145,6 +188,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error('[Service] Fatal error:', err);
+  logger.error('Fatal error', err);
   process.exit(1);
 });

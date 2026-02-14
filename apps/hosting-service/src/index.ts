@@ -1,11 +1,13 @@
 import app from './server';
 import { serve } from '@hono/node-server';
-import { initializeGrafanaExporters } from '@wispplace/observability';
+import { initializeGrafanaExporters, createLogger } from '@wispplace/observability';
 import { mkdirSync, existsSync } from 'fs';
 import { startDomainCacheCleanup, stopDomainCacheCleanup, closeDatabase } from './lib/db';
 import { closeRevalidateQueue } from './lib/revalidate-queue';
 import { startCacheInvalidationSubscriber, stopCacheInvalidationSubscriber } from './lib/cache-invalidation';
 import { storage, getStorageConfig } from './lib/storage';
+
+const logger = createLogger('hosting-service');
 
 // Initialize Grafana exporters if configured
 initializeGrafanaExporters({
@@ -19,7 +21,7 @@ const CACHE_DIR = process.env.CACHE_DIR || './cache/sites';
 // Ensure cache directory exists
 if (!existsSync(CACHE_DIR)) {
   mkdirSync(CACHE_DIR, { recursive: true });
-  console.log('Created cache directory:', CACHE_DIR);
+  logger.info('Created cache directory', { CACHE_DIR });
 }
 
 // Start domain cache cleanup
@@ -33,13 +35,13 @@ const BOOTSTRAP_HOT_ON_STARTUP = process.env.BOOTSTRAP_HOT_ON_STARTUP === 'true'
 const BOOTSTRAP_HOT_LIMIT = process.env.BOOTSTRAP_HOT_LIMIT ? parseInt(process.env.BOOTSTRAP_HOT_LIMIT) : 100;
 
 if (BOOTSTRAP_HOT_ON_STARTUP) {
-  console.log(`🔥 Bootstrapping hot cache (top ${BOOTSTRAP_HOT_LIMIT} items)...`);
+  logger.info(`Bootstrapping hot cache (top ${BOOTSTRAP_HOT_LIMIT} items)...`);
   storage.bootstrapHot(BOOTSTRAP_HOT_LIMIT)
     .then((loaded: number) => {
-      console.log(`✅ Bootstrapped ${loaded} items into hot cache`);
+      logger.info(`Bootstrapped ${loaded} items into hot cache`);
     })
     .catch((err: unknown) => {
-      console.error('❌ Hot cache bootstrap error:', err);
+      logger.error('Hot cache bootstrap error', err);
     });
 }
 
@@ -82,7 +84,7 @@ Firehose:     DISABLED (read-only)
 
 // Graceful shutdown
 process.on('SIGINT', async () => {
-  console.log('\n🛑 Shutting down...');
+  logger.info('Shutting down...');
   stopDomainCacheCleanup();
   await stopCacheInvalidationSubscriber();
   await closeRevalidateQueue();
@@ -92,7 +94,7 @@ process.on('SIGINT', async () => {
 });
 
 process.on('SIGTERM', async () => {
-  console.log('\n🛑 Shutting down...');
+  logger.info('Shutting down...');
   stopDomainCacheCleanup();
   await stopCacheInvalidationSubscriber();
   await closeRevalidateQueue();
