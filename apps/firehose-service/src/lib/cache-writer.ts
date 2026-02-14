@@ -443,12 +443,15 @@ export async function handleSiteCreateOrUpdate(
   options?: {
     forceRewriteHtml?: boolean;
     skipInvalidation?: boolean;
+    forceDownload?: boolean;
   }
 ): Promise<void> {
   const forceRewriteHtml = options?.forceRewriteHtml === true;
+  const forceDownload = options?.forceDownload === true;
   logger.info(`Processing site ${did}/${rkey}`, {
     recordCid,
     forceRewriteHtml,
+    forceDownload,
   });
 
   if (!record.root?.entries) {
@@ -504,7 +507,7 @@ export async function handleSiteCreateOrUpdate(
   // Find new or changed files
   for (const file of newFiles) {
     const shouldForceRewrite = forceRewriteHtml && isHtmlFile(file.path);
-    if (oldFileCids[file.path] !== file.cid || shouldForceRewrite) {
+    if (forceDownload || oldFileCids[file.path] !== file.cid || shouldForceRewrite) {
       filesToDownload.push(file);
     }
   }
@@ -552,7 +555,9 @@ export async function handleSiteCreateOrUpdate(
   // Backfill settings if a record exists for this rkey
   const settingsRecord = await fetchSettingsRecord(did, rkey, pdsEndpoint);
   if (settingsRecord) {
-    await handleSettingsUpdate(did, rkey, settingsRecord.record, settingsRecord.cid);
+    await handleSettingsUpdate(did, rkey, settingsRecord.record, settingsRecord.cid, {
+      skipInvalidation: options?.skipInvalidation,
+    });
   }
 
   // Notify hosting-service to invalidate its local caches
@@ -590,7 +595,13 @@ export async function handleSiteDelete(did: string, rkey: string): Promise<void>
 /**
  * Handle settings create/update event
  */
-export async function handleSettingsUpdate(did: string, rkey: string, settings: WispSettings, recordCid: string): Promise<void> {
+export async function handleSettingsUpdate(
+  did: string,
+  rkey: string,
+  settings: WispSettings,
+  recordCid: string,
+  options?: { skipInvalidation?: boolean }
+): Promise<void> {
   logger.info(`Updating settings for ${did}/${rkey}`);
 
   await upsertSiteSettingsCache(did, rkey, recordCid, {
@@ -603,7 +614,9 @@ export async function handleSettingsUpdate(did: string, rkey: string, settings: 
   });
 
   // Notify hosting-service to invalidate its local caches (redirect rules depend on settings)
-  await publishCacheInvalidation(did, rkey, 'settings');
+  if (!options?.skipInvalidation) {
+    await publishCacheInvalidation(did, rkey, 'settings');
+  }
 }
 
 /**
