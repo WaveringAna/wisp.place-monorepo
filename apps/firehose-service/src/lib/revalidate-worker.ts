@@ -114,19 +114,19 @@ async function readNewMessages(): Promise<void> {
     'GROUP',
     config.revalidateGroup,
     consumerName,
-    'BLOCK',
-    blockMs,
     'COUNT',
     batchSize,
+    'BLOCK',
+    blockMs,
     'STREAMS',
     config.revalidateStream,
     '>'
-  );
+  ) as [string, Array<[string, string[]]>][] | null;
 
   if (!response) return;
 
   for (const [, messages] of response) {
-    await processMessages(messages as Array<[string, string[]]>);
+    await processMessages(messages);
   }
 }
 

@@ -119,6 +119,33 @@ export async function upsertSite(did: string, rkey: string, displayName?: string
   console.log('[DB] Read-only mode: skipping upsertSite', { did, rkey, displayName });
 }
 
+/**
+ * Upsert site cache entry (used by on-demand caching when a site is completely missing)
+ */
+export async function upsertSiteCache(
+  did: string,
+  rkey: string,
+  recordCid: string,
+  fileCids: Record<string, string>
+): Promise<void> {
+  const fileCidsJson = JSON.stringify(fileCids ?? {});
+  try {
+    await sql`
+      INSERT INTO site_cache (did, rkey, record_cid, file_cids, cached_at, updated_at)
+      VALUES (${did}, ${rkey}, ${recordCid}, ${fileCidsJson}::jsonb, EXTRACT(EPOCH FROM NOW()), EXTRACT(EPOCH FROM NOW()))
+      ON CONFLICT (did, rkey)
+      DO UPDATE SET
+        record_cid = EXCLUDED.record_cid,
+        file_cids = EXCLUDED.file_cids,
+        updated_at = EXTRACT(EPOCH FROM NOW())
+    `;
+  } catch (err) {
+    const error = err instanceof Error ? err : new Error(String(err));
+    console.error('[DB] upsertSiteCache error:', { did, rkey, error: error.message });
+    throw error;
+  }
+}
+
 export interface SiteRecord {
   did: string;
   rkey: string;

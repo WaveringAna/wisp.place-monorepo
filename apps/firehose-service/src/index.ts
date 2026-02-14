@@ -14,6 +14,7 @@ import { closeDatabase, listAllSiteCaches, listAllSites, getSiteCache } from './
 import { storage } from './lib/storage';
 import { handleSiteCreateOrUpdate, fetchSiteRecord } from './lib/cache-writer';
 import { startRevalidateWorker, stopRevalidateWorker } from './lib/revalidate-worker';
+import { closeCacheInvalidationPublisher } from './lib/cache-invalidation';
 
 const app = new Hono();
 
@@ -41,6 +42,7 @@ async function shutdown(signal: string) {
 
   stopFirehose();
   await stopRevalidateWorker();
+  await closeCacheInvalidationPublisher();
   await closeDatabase();
 
   console.log('[Service] Shutdown complete');
