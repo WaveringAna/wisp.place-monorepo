@@ -32,11 +32,7 @@ async function getFileWithMetadata(did: string, rkey: string, filePath: string) 
   const result = await storage.getWithMetadata(key);
 
   if (result) {
-    const metadata = result.metadata;
-    const tier =
-      metadata && typeof metadata === 'object' && 'tier' in metadata
-        ? String((metadata as Record<string, unknown>).tier)
-        : 'unknown';
+    const tier = result.source || 'unknown';
     const size = result.data ? (result.data as Uint8Array).length : 0;
     console.log(`[Storage] Served ${filePath} from ${tier} tier (${size} bytes) - ${did}:${rkey}`);
   }

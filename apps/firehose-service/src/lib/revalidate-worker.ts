@@ -49,8 +49,12 @@ async function processMessage(id: string, rawFields: string[]): Promise<void> {
     return;
   }
 
+  // For storage-miss events, force re-download all files since storage is empty
+  const forceDownload = reason.startsWith('storage-miss');
+
   await handleSiteCreateOrUpdate(did, rkey, record.record, record.cid, {
     skipInvalidation: true,
+    forceDownload,
   });
 
   logger.info(`[Revalidate] Completed ${id}: ${did}/${rkey}`);
