@@ -21,6 +21,7 @@ export function startCacheInvalidationSubscriber(): void {
     return;
   }
 
+  console.log(`[CacheInvalidation] Connecting to Redis for subscribing: ${redisUrl}`);
   subscriber = new Redis(redisUrl, {
     maxRetriesPerRequest: 2,
     enableReadyCheck: true,
@@ -28,6 +29,10 @@ export function startCacheInvalidationSubscriber(): void {
 
   subscriber.on('error', (err) => {
     console.error('[CacheInvalidation] Redis error:', err);
+  });
+
+  subscriber.on('ready', () => {
+    console.log('[CacheInvalidation] Redis subscriber connected');
   });
 
   subscriber.subscribe(CHANNEL, (err) => {

@@ -24,6 +24,7 @@ function getPublisher(): Redis | null {
   }
 
   if (!publisher) {
+    console.log(`[CacheInvalidation] Connecting to Redis for publishing: ${config.redisUrl}`);
     publisher = new Redis(config.redisUrl, {
       maxRetriesPerRequest: 2,
       enableReadyCheck: true,
@@ -31,6 +32,10 @@ function getPublisher(): Redis | null {
 
     publisher.on('error', (err) => {
       console.error('[CacheInvalidation] Redis error:', err);
+    });
+
+    publisher.on('ready', () => {
+      console.log('[CacheInvalidation] Redis publisher connected');
     });
   }
 
@@ -47,6 +52,7 @@ export async function publishCacheInvalidation(
 
   try {
     const message = JSON.stringify({ did, rkey, action });
+    console.log(`[CacheInvalidation] Publishing ${action} for ${did}/${rkey} to ${CHANNEL}`);
     await redis.publish(CHANNEL, message);
   } catch (err) {
     console.error('[CacheInvalidation] Failed to publish:', err);

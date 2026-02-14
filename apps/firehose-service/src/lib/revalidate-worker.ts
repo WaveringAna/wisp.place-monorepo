@@ -38,17 +38,18 @@ async function processMessage(id: string, rawFields: string[]): Promise<void> {
     return;
   }
 
-  console.log('[Revalidate] Processing', { did, rkey, reason, id });
+  console.log(`[Revalidate] Received message ${id}: ${did}/${rkey} (${reason})`);
 
   const record = await fetchSiteRecord(did, rkey);
   if (!record) {
-    console.warn('[Revalidate] Site record not found', { did, rkey });
+    console.warn(`[Revalidate] Site record not found on PDS: ${did}/${rkey}`);
     await redis.xack(config.revalidateStream, config.revalidateGroup, id);
     return;
   }
 
   await handleSiteCreateOrUpdate(did, rkey, record.record, record.cid);
 
+  console.log(`[Revalidate] Completed ${id}: ${did}/${rkey}`);
   await redis.xack(config.revalidateStream, config.revalidateGroup, id);
 }
 
@@ -155,6 +156,7 @@ export async function startRevalidateWorker(): Promise<void> {
 
   if (running) return;
 
+  console.log(`[Revalidate] Connecting to Redis: ${config.redisUrl}`);
   redis = new Redis(config.redisUrl, {
     maxRetriesPerRequest: 2,
     enableReadyCheck: true,
@@ -162,6 +164,10 @@ export async function startRevalidateWorker(): Promise<void> {
 
   redis.on('error', (err) => {
     console.error('[Revalidate] Redis error:', err);
+  });
+
+  redis.on('ready', () => {
+    console.log(`[Revalidate] Redis connected, stream: ${config.revalidateStream}, group: ${config.revalidateGroup}`);
   });
 
   running = true;
