@@ -270,7 +270,7 @@ export const adminRoutes = (cookieSecret: string) =>
 		// Get database stats (protected)
 		/**
 		 * GET /api/admin/database
-		 * Success: { stats, recentSites, recentDomains }
+		 * Success: { stats, recentSites, recentDomains, siteCacheStats }
 		 * Failure (500): { error, message }
 		 */
 		.get('/database', async ({ cookie, set }) => {
@@ -282,6 +282,8 @@ export const adminRoutes = (cookieSecret: string) =>
 				const allSitesResult = await db`SELECT COUNT(*) as count FROM sites`
 				const wispSubdomainsResult = await db`SELECT COUNT(*) as count FROM domains WHERE domain LIKE '%.wisp.place'`
 				const customDomainsResult = await db`SELECT COUNT(*) as count FROM custom_domains WHERE verified = true`
+				const siteCacheResult = await db`SELECT COUNT(*) as count FROM site_cache`
+				const siteSettingsCacheResult = await db`SELECT COUNT(*) as count FROM site_settings_cache`
 
 				// Get recent sites (including those without domains)
 				const recentSites = await db`
@@ -290,9 +292,11 @@ export const adminRoutes = (cookieSecret: string) =>
 						s.rkey,
 						s.display_name,
 						s.created_at,
-						d.domain as subdomain
+						d.domain as subdomain,
+						cd.domain as custom_domain
 					FROM sites s
 					LEFT JOIN domains d ON s.did = d.did AND s.rkey = d.rkey AND d.domain LIKE '%.wisp.place'
+					LEFT JOIN custom_domains cd ON s.did = cd.did AND s.rkey = cd.rkey AND cd.verified = true
 					ORDER BY s.created_at DESC
 					LIMIT 10
 				`
@@ -304,7 +308,9 @@ export const adminRoutes = (cookieSecret: string) =>
 					stats: {
 						totalSites: allSitesResult[0].count,
 						totalWispSubdomains: wispSubdomainsResult[0].count,
-						totalCustomDomains: customDomainsResult[0].count
+						totalCustomDomains: customDomainsResult[0].count,
+						totalSiteCache: siteCacheResult[0].count,
+						totalSiteSettingsCache: siteSettingsCacheResult[0].count
 					},
 					recentSites: recentSites,
 					recentDomains: recentDomains
@@ -385,9 +391,11 @@ export const adminRoutes = (cookieSecret: string) =>
 						s.rkey,
 						s.display_name,
 						s.created_at,
-						d.domain as subdomain
+						d.domain as subdomain,
+						cd.domain as custom_domain
 					FROM sites s
 					LEFT JOIN domains d ON s.did = d.did AND s.rkey = d.rkey AND d.domain LIKE '%.wisp.place'
+					LEFT JOIN custom_domains cd ON s.did = cd.did AND s.rkey = cd.rkey AND cd.verified = true
 					ORDER BY s.created_at DESC
 					LIMIT ${limit} OFFSET ${offset}
 				`
@@ -412,6 +420,46 @@ export const adminRoutes = (cookieSecret: string) =>
 				set.status = 500
 				return {
 					error: 'Failed to fetch sites',
+					message: error instanceof Error ? error.message : String(error)
+				}
+			}
+		}, {
+			cookie: t.Cookie({
+				admin_session: t.Optional(t.String())
+			}, {
+				secrets: cookieSecret,
+				sign: ['admin_session']
+			})
+		})
+
+		// Get firehose worker status (protected)
+		/**
+		 * GET /api/admin/firehose
+		 * Success: firehose health data from firehose-service
+		 * Failure (503|500): { error, message }
+		 */
+		.get('/firehose', async ({ cookie, set }) => {
+			const check = requireAdmin({ cookie, set })
+			if (check) return check
+
+			try {
+				const firehoseServiceUrl = process.env.FIREHOSE_SERVICE_URL || `http://localhost:${process.env.FIREHOSE_PORT || '3002'}`
+				const response = await fetch(`${firehoseServiceUrl}/health`)
+
+				if (response.ok) {
+					const data = await response.json()
+					return data
+				} else {
+					set.status = 503
+					return {
+						error: 'Failed to fetch firehose status',
+						message: 'Firehose service unavailable'
+					}
+				}
+			} catch (error) {
+				set.status = 500
+				return {
+					error: 'Failed to fetch firehose status',
 					message: error instanceof Error ? error.message : String(error)
 				}
 			}

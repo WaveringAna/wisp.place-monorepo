@@ -127,6 +127,7 @@ function Dashboard() {
 	const [database, setDatabase] = useState<any>(null)
 	const [sites, setSites] = useState<any>(null)
 	const [health, setHealth] = useState<any>(null)
+	const [firehose, setFirehose] = useState<any>(null)
 	const [autoRefresh, setAutoRefresh] = useState(true)
 
 	// Filters
@@ -190,6 +191,14 @@ function Dashboard() {
 		}
 	}
 
+	const fetchFirehose = async () => {
+		const res = await fetch('/api/admin/firehose', { credentials: 'include' })
+		if (res.ok) {
+			const data = await res.json()
+			setFirehose(data)
+		}
+	}
+
 	const logout = async () => {
 		await fetch('/api/admin/logout', { method: 'POST', credentials: 'include' })
 		window.location.reload()
@@ -199,6 +208,7 @@ function Dashboard() {
 		fetchMetrics()
 		fetchDatabase()
 		fetchHealth()
+		fetchFirehose()
 		fetchLogs()
 		fetchErrors()
 		fetchSites()
@@ -215,6 +225,7 @@ function Dashboard() {
 			if (tab === 'overview') {
 				fetchMetrics()
 				fetchHealth()
+				fetchFirehose()
 			} else if (tab === 'logs') {
 				fetchLogs()
 			} else if (tab === 'errors') {
@@ -303,6 +314,42 @@ function Dashboard() {
 								<div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
 									<div className="text-sm text-gray-400 mb-1">RSS</div>
 									<div className="text-2xl font-bold">{health.memory.rss} MB</div>
+								</div>
+							</div>
+						)}
+
+						{/* Firehose Worker */}
+						{firehose && (
+							<div>
+								<h2 className="text-xl font-bold mb-4">Firehose Worker</h2>
+								<div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
+									<div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+										<div>
+											<div className="text-sm text-gray-400">Status</div>
+											<div className="flex items-center gap-2 mt-1">
+												<span className={`inline-block w-3 h-3 rounded-full ${firehose.firehose?.healthy ? 'bg-green-500' : 'bg-red-500'}`}></span>
+												<span className="text-lg font-bold">{firehose.firehose?.connected ? 'Connected' : 'Disconnected'}</span>
+											</div>
+										</div>
+										<div>
+											<div className="text-sm text-gray-400">Mode</div>
+											<div className="text-lg font-bold capitalize">{firehose.mode || 'unknown'}</div>
+										</div>
+										<div>
+											<div className="text-sm text-gray-400">Queue Size</div>
+											<div className="text-lg font-bold">{firehose.firehose?.queueSize || 0}</div>
+										</div>
+										<div>
+											<div className="text-sm text-gray-400">Active Handlers</div>
+											<div className="text-lg font-bold">{firehose.firehose?.activeHandlers || 0}</div>
+										</div>
+									</div>
+									{firehose.firehose?.lastEventTime && (
+										<div className="mt-3 text-sm text-gray-400">
+											Last event: {new Date(firehose.firehose.lastEventTime).toLocaleString()}
+											({Math.round(firehose.firehose.timeSinceLastEvent / 1000)}s ago)
+										</div>
+									)}
 								</div>
 							</div>
 						)}
@@ -527,7 +574,7 @@ function Dashboard() {
 				{tab === 'database' && database && (
 					<div className="space-y-6">
 						{/* Stats */}
-						<div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+						<div className="grid grid-cols-2 md:grid-cols-5 gap-4">
 							<div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
 								<div className="text-sm text-gray-400 mb-1">Total Sites</div>
 								<div className="text-3xl font-bold">{database.stats.totalSites}</div>
@@ -540,6 +587,14 @@ function Dashboard() {
 								<div className="text-sm text-gray-400 mb-1">Custom Domains</div>
 								<div className="text-3xl font-bold">{database.stats.totalCustomDomains}</div>
 							</div>
+							<div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
+								<div className="text-sm text-gray-400 mb-1">Site Cache</div>
+								<div className="text-3xl font-bold">{database.stats.totalSiteCache}</div>
+							</div>
+							<div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
+								<div className="text-sm text-gray-400 mb-1">Settings Cache</div>
+								<div className="text-3xl font-bold">{database.stats.totalSiteSettingsCache}</div>
+							</div>
 						</div>
 
 						{/* Recent Sites */}
@@ -550,10 +605,11 @@ function Dashboard() {
 									<thead className="bg-gray-800">
 										<tr>
 											<th className="px-4 py-2 text-left">Site Name</th>
-											<th className="px-4 py-2 text-left">Subdomain</th>
+											<th className="px-4 py-2 text-left">Links</th>
 											<th className="px-4 py-2 text-left">DID</th>
 											<th className="px-4 py-2 text-left">RKey</th>
 											<th className="px-4 py-2 text-left">Created</th>
+											<th className="px-4 py-2 text-left">PDSls</th>
 										</tr>
 									</thead>
 									<tbody>
@@ -561,21 +617,39 @@ function Dashboard() {
 											<tr key={i} className="border-t border-gray-800">
 												<td className="px-4 py-2">{site.display_name || 'Untitled'}</td>
 												<td className="px-4 py-2">
-													{site.subdomain ? (
+													<div className="flex flex-col gap-1">
 														<a
-															href={`https://${site.subdomain}`}
+															href={`https://sites.wisp.place/${site.did}/${site.rkey || 'self'}`}
 															target="_blank"
 															rel="noopener noreferrer"
-															className="text-blue-400 hover:underline"
+															className="text-blue-400 hover:underline text-xs"
 														>
-															{site.subdomain}
+															sites.wisp.place
 														</a>
-													) : (
-														<span className="text-gray-500">No domain</span>
-													)}
+														{site.subdomain && (
+															<a
+																href={`https://${site.subdomain}`}
+																target="_blank"
+																rel="noopener noreferrer"
+																className="text-green-400 hover:underline text-xs"
+															>
+																{site.subdomain}
+															</a>
+														)}
+														{site.custom_domain && (
+															<a
+																href={`https://${site.custom_domain}`}
+																target="_blank"
+																rel="noopener noreferrer"
+																className="text-purple-400 hover:underline text-xs"
+															>
+																{site.custom_domain}
+															</a>
+														)}
+													</div>
 												</td>
 												<td className="px-4 py-2 text-gray-400 font-mono text-xs">
-													{site.did.slice(0, 20)}...
+													{site.did}
 												</td>
 												<td className="px-4 py-2 text-gray-400">{site.rkey || 'self'}</td>
 												<td className="px-4 py-2 text-gray-400">
@@ -610,6 +684,7 @@ function Dashboard() {
 										<tr>
 											<th className="px-4 py-2 text-left">Domain</th>
 											<th className="px-4 py-2 text-left">DID</th>
+											<th className="px-4 py-2 text-left">RKey</th>
 											<th className="px-4 py-2 text-left">Verified</th>
 											<th className="px-4 py-2 text-left">Created</th>
 										</tr>
@@ -617,10 +692,24 @@ function Dashboard() {
 									<tbody>
 										{database.recentDomains.map((domain: any, i: number) => (
 											<tr key={i} className="border-t border-gray-800">
-												<td className="px-4 py-2">{domain.domain}</td>
-												<td className="px-4 py-2 text-gray-400 font-mono text-xs">
-													{domain.did.slice(0, 20)}...
+												<td className="px-4 py-2">
+													{domain.verified ? (
+														<a
+															href={`https://${domain.domain}`}
+															target="_blank"
+															rel="noopener noreferrer"
+															className="text-blue-400 hover:underline"
+														>
+															{domain.domain}
+														</a>
+													) : (
+														<span className="text-gray-400">{domain.domain}</span>
+													)}
 												</td>
+												<td className="px-4 py-2 text-gray-400 font-mono text-xs">
+													{domain.did}
+												</td>
+												<td className="px-4 py-2 text-gray-400">{domain.rkey || 'self'}</td>
 												<td className="px-4 py-2">
 													<span
 														className={`px-2 py-1 rounded text-xs ${
@@ -654,10 +743,11 @@ function Dashboard() {
 									<thead className="bg-gray-800">
 										<tr>
 											<th className="px-4 py-2 text-left">Site Name</th>
-											<th className="px-4 py-2 text-left">Subdomain</th>
+											<th className="px-4 py-2 text-left">Links</th>
 											<th className="px-4 py-2 text-left">DID</th>
 											<th className="px-4 py-2 text-left">RKey</th>
 											<th className="px-4 py-2 text-left">Created</th>
+											<th className="px-4 py-2 text-left">PDSls</th>
 										</tr>
 									</thead>
 									<tbody>
@@ -665,21 +755,39 @@ function Dashboard() {
 											<tr key={i} className="border-t border-gray-800 hover:bg-gray-800">
 												<td className="px-4 py-2">{site.display_name || 'Untitled'}</td>
 												<td className="px-4 py-2">
-													{site.subdomain ? (
+													<div className="flex flex-col gap-1">
 														<a
-															href={`https://${site.subdomain}`}
+															href={`https://sites.wisp.place/${site.did}/${site.rkey || 'self'}`}
 															target="_blank"
 															rel="noopener noreferrer"
-															className="text-blue-400 hover:underline"
+															className="text-blue-400 hover:underline text-xs"
 														>
-															{site.subdomain}
+															sites.wisp.place
 														</a>
-													) : (
-														<span className="text-gray-500">No domain</span>
-													)}
+														{site.subdomain && (
+															<a
+																href={`https://${site.subdomain}`}
+																target="_blank"
+																rel="noopener noreferrer"
+																className="text-green-400 hover:underline text-xs"
+															>
+																{site.subdomain}
+															</a>
+														)}
+														{site.custom_domain && (
+															<a
+																href={`https://${site.custom_domain}`}
+																target="_blank"
+																rel="noopener noreferrer"
+																className="text-purple-400 hover:underline text-xs"
+															>
+																{site.custom_domain}
+															</a>
+														)}
+													</div>
 												</td>
 												<td className="px-4 py-2 text-gray-400 font-mono text-xs">
-													{site.did.slice(0, 30)}...
+													{site.did}
 												</td>
 												<td className="px-4 py-2 text-gray-400">{site.rkey || 'self'}</td>
 												<td className="px-4 py-2 text-gray-400">
@@ -749,7 +857,7 @@ function Dashboard() {
 													</span>
 												</td>
 												<td className="px-4 py-2 text-gray-400 font-mono text-xs">
-													{domain.did.slice(0, 30)}...
+													{domain.did}
 												</td>
 												<td className="px-4 py-2 text-gray-400">{domain.rkey || 'self'}</td>
 												<td className="px-4 py-2 text-gray-400">
