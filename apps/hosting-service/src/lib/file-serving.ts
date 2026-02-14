@@ -159,14 +159,28 @@ function buildResponseFromStorageResult(
 async function ensureSiteCached(did: string, rkey: string): Promise<void> {
   const existing = await getSiteCache(did, rkey);
   if (existing) {
-    console.log(`[FileServing] Site ${did}/${rkey} found in DB, proceeding normally`);
-    return;
+    // Site is in DB — check if any files actually exist in storage
+    const prefix = `${did}/${rkey}/`;
+    const hasFiles = await storage.exists(prefix.slice(0, -1)) ||
+      await checkAnyFileExists(did, rkey, existing.file_cids);
+    if (hasFiles) {
+      return;
+    }
+    console.log(`[FileServing] Site ${did}/${rkey} in DB but no files in storage, re-fetching`);
+  } else {
+    console.log(`[FileServing] Site ${did}/${rkey} not in DB, attempting on-demand cache`);
   }
 
-  // Site is completely unknown — try on-demand fetch
-  console.log(`[FileServing] Site ${did}/${rkey} not in DB, attempting on-demand cache`);
   const success = await fetchAndCacheSite(did, rkey);
   console.log(`[FileServing] On-demand cache for ${did}/${rkey}: ${success ? 'success' : 'failed'}`);
+}
+
+async function checkAnyFileExists(did: string, rkey: string, fileCids: unknown): Promise<boolean> {
+  if (!fileCids || typeof fileCids !== 'object') return false;
+  const cids = fileCids as Record<string, string>;
+  const firstFile = Object.keys(cids)[0];
+  if (!firstFile) return false;
+  return storage.exists(`${did}/${rkey}/${firstFile}`);
 }
 
 /**

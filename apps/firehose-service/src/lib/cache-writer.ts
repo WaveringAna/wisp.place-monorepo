@@ -439,6 +439,7 @@ export async function handleSiteCreateOrUpdate(
   recordCid: string,
   options?: {
     forceRewriteHtml?: boolean;
+    skipInvalidation?: boolean;
   }
 ): Promise<void> {
   const forceRewriteHtml = options?.forceRewriteHtml === true;
@@ -551,7 +552,10 @@ export async function handleSiteCreateOrUpdate(
   }
 
   // Notify hosting-service to invalidate its local caches
-  await publishCacheInvalidation(did, rkey, 'update');
+  // (skip for revalidate/backfill since hosting-service already has the files locally)
+  if (!options?.skipInvalidation) {
+    await publishCacheInvalidation(did, rkey, 'update');
+  }
 
   console.log(`[Cache] Successfully cached site ${did}/${rkey}`);
 }

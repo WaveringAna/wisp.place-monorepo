@@ -47,7 +47,9 @@ async function processMessage(id: string, rawFields: string[]): Promise<void> {
     return;
   }
 
-  await handleSiteCreateOrUpdate(did, rkey, record.record, record.cid);
+  await handleSiteCreateOrUpdate(did, rkey, record.record, record.cid, {
+    skipInvalidation: true,
+  });
 
   console.log(`[Revalidate] Completed ${id}: ${did}/${rkey}`);
   await redis.xack(config.revalidateStream, config.revalidateGroup, id);
