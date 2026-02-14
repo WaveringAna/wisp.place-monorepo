@@ -1,6 +1,9 @@
 import postgres from 'postgres';
 import type { SiteCache, SiteRecord, SiteSettingsCache } from '@wispplace/database';
+import { createLogger } from '@wispplace/observability';
 import { config } from '../config';
+
+const logger = createLogger('firehose-service');
 
 const sql = postgres(config.databaseUrl, {
   max: 10,
@@ -54,7 +57,7 @@ export async function upsertSiteCache(
   recordCid: string,
   fileCids: Record<string, string>
 ): Promise<void> {
-  console.log(`[DB] upsertSiteCache starting for ${did}/${rkey}`);
+  logger.debug(`[DB] upsertSiteCache starting for ${did}/${rkey}`);
   try {
     await sql`
       INSERT INTO site_cache (did, rkey, record_cid, file_cids, cached_at, updated_at)
@@ -65,11 +68,10 @@ export async function upsertSiteCache(
         file_cids = EXCLUDED.file_cids,
         updated_at = EXTRACT(EPOCH FROM NOW())
     `;
-    console.log(`[DB] upsertSiteCache completed for ${did}/${rkey}`);
+    logger.debug(`[DB] upsertSiteCache completed for ${did}/${rkey}`);
   } catch (err) {
-    const error = err instanceof Error ? err : new Error(String(err));
-    console.error('[DB] upsertSiteCache error:', { did, rkey, error: error.message, stack: error.stack });
-    throw error;
+    logger.error('[DB] upsertSiteCache error', err, { did, rkey });
+    throw err;
   }
 }
 
@@ -98,7 +100,7 @@ export async function upsertSiteSettingsCache(
   const indexFiles = settings.indexFiles ?? [];
   const headers = settings.headers ?? [];
 
-  console.log(`[DB] upsertSiteSettingsCache starting for ${did}/${rkey}`, {
+  logger.debug(`[DB] upsertSiteSettingsCache starting for ${did}/${rkey}`, {
     directoryListing,
     spaMode,
     custom404,
@@ -134,11 +136,10 @@ export async function upsertSiteSettingsCache(
         headers = EXCLUDED.headers,
         updated_at = EXTRACT(EPOCH FROM NOW())
     `;
-    console.log(`[DB] upsertSiteSettingsCache completed for ${did}/${rkey}`);
+    logger.debug(`[DB] upsertSiteSettingsCache completed for ${did}/${rkey}`);
   } catch (err) {
-    const error = err instanceof Error ? err : new Error(String(err));
-    console.error('[DB] upsertSiteSettingsCache error:', { did, rkey, error: error.message, stack: error.stack });
-    throw error;
+    logger.error('[DB] upsertSiteSettingsCache error', err, { did, rkey });
+    throw err;
   }
 }
 
@@ -148,7 +149,7 @@ export async function deleteSiteSettingsCache(did: string, rkey: string): Promis
 
 export async function closeDatabase(): Promise<void> {
   await sql.end({ timeout: 5 });
-  console.log('[DB] Database connections closed');
+  logger.info('[DB] Database connections closed');
 }
 
 export { sql };

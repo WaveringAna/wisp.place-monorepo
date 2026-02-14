@@ -8,6 +8,7 @@ import { Firehose } from '@atproto/sync';
 import { isBun, BunFirehose, type Event, type CommitEvt } from '@wispplace/bun-firehose';
 import type { Record as WispFsRecord } from '@wispplace/lexicons/types/place/wisp/fs';
 import type { Record as WispSettings } from '@wispplace/lexicons/types/place/wisp/settings';
+import { createLogger } from '@wispplace/observability';
 import { config } from '../config';
 import {
   handleSiteCreateOrUpdate,
@@ -18,6 +19,7 @@ import {
 } from './cache-writer';
 
 const idResolver = new IdResolver();
+const logger = createLogger('firehose-service');
 
 // Track firehose health
 let lastEventTime = Date.now();
@@ -70,14 +72,14 @@ async function handleEvent(evt: Event | CommitEvt): Promise<void> {
     const commitEvt = evt as CommitEvt;
     const { did, collection, rkey, record, cid } = commitEvt;
 
-    console.log(`[Firehose] Debug: Event ${evt.event} for ${collection}:${did}/${rkey}, CID: ${cid?.toString() || 'unknown'}`);
+    logger.debug(`Event ${evt.event} for ${collection}:${did}/${rkey}`, { cid: cid?.toString() || 'unknown' });
 
     // Handle place.wisp.fs events
     if (collection === 'place.wisp.fs') {
-      console.log(`[Firehose] Received ${commitEvt.event} event for ${did}/${rkey}, CID: ${cid?.toString() || 'unknown'}`);
+      logger.info(`[place.wisp.fs] Received ${commitEvt.event} event`, { did, rkey, cid: cid?.toString() || 'unknown' });
       processWithConcurrencyLimit(async () => {
         try {
-          console.log(`[Firehose] Inside handler for ${commitEvt.event} event for ${did}/${rkey}`);
+          logger.debug(`[place.wisp.fs] Processing ${commitEvt.event} event`, { did, rkey });
           if (commitEvt.event === 'delete') {
             await handleSiteDelete(did, rkey);
           } else {
@@ -87,17 +89,15 @@ async function handleEvent(evt: Event | CommitEvt): Promise<void> {
             if (verified) {
               await handleSiteCreateOrUpdate(did, rkey, verified.record, verified.cid);
             } else {
-              console.log(`[Firehose] Skipping ${commitEvt.event} event for ${did}/${rkey} - verification failed`);
+              logger.warn(`[place.wisp.fs] Skipping ${commitEvt.event} event - verification failed`, { did, rkey });
             }
           }
-          console.log(`[Firehose] Completed handler for ${commitEvt.event} event for ${did}/${rkey}`);
+          logger.debug(`[place.wisp.fs] Completed ${commitEvt.event} event`, { did, rkey });
         } catch (err) {
-          const error = err instanceof Error ? err : new Error(String(err));
-          console.error('[Firehose] Error handling place.wisp.fs event:', { did, rkey, event: commitEvt.event, error: error.message, stack: error.stack });
+          logger.error(`[place.wisp.fs] Error handling event`, err, { did, rkey, event: commitEvt.event });
         }
       }).catch(err => {
-        const error = err instanceof Error ? err : new Error(String(err));
-        console.error('[Firehose] Error processing place.wisp.fs event:', { did, rkey, event: commitEvt.event, error: error.message, stack: error.stack });
+        logger.error(`[place.wisp.fs] Error processing event`, err, { did, rkey, event: commitEvt.event });
       });
     }
 
@@ -112,23 +112,19 @@ async function handleEvent(evt: Event | CommitEvt): Promise<void> {
             await handleSettingsUpdate(did, rkey, record as WispSettings, cidStr);
           }
         } catch (err) {
-          const error = err instanceof Error ? err : new Error(String(err));
-          console.error('[Firehose] Error handling place.wisp.settings event:', { did, rkey, event: commitEvt.event, error: error.message, stack: error.stack });
+          logger.error(`[place.wisp.settings] Error handling event`, err, { did, rkey, event: commitEvt.event });
         }
       }).catch(err => {
-        const error = err instanceof Error ? err : new Error(String(err));
-        console.error('[Firehose] Error processing place.wisp.settings event:', { did, rkey, event: commitEvt.event, error: error.message, stack: error.stack });
+        logger.error(`[place.wisp.settings] Error processing event`, err, { did, rkey, event: commitEvt.event });
       });
     }
   } catch (err) {
-    const error = err instanceof Error ? err : new Error(String(err));
-    console.error('[Firehose] Unexpected error in handleEvent:', { error: error.message, stack: error.stack });
+    logger.error('Unexpected error in handleEvent', err);
   }
 }
 
 function handleError(err: Error): void {
-  console.error('[Firehose] Error:', err);
-  console.error('[Firehose] Stack:', err.stack);
+  logger.error('Firehose connection error', err);
 }
 
 let firehoseHandle: { destroy: () => void } | null = null;
@@ -137,9 +133,9 @@ let firehoseHandle: { destroy: () => void } | null = null;
  * Start the firehose worker
  */
 export function startFirehose(): void {
-  console.log(`[Firehose] Starting (runtime: ${isBun ? 'Bun' : 'Node.js'})`);
-  console.log(`[Firehose] Service: ${config.firehoseService}`);
-  console.log(`[Firehose] Max concurrency: ${config.firehoseMaxConcurrency}`);
+  logger.info(`Starting firehose (runtime: ${isBun ? 'Bun' : 'Node.js'})`);
+  logger.info(`Service: ${config.firehoseService}`);
+  logger.info(`Max concurrency: ${config.firehoseMaxConcurrency}`);
 
   isConnected = true;
 
@@ -169,14 +165,14 @@ export function startFirehose(): void {
 
   // Log cache info hourly
   setInterval(() => {
-    console.log('[Firehose] Hourly status check');
+    logger.info('Hourly status check');
   }, 60 * 60 * 1000);
 
   // Log status periodically
   setInterval(() => {
     const health = getFirehoseHealth();
     if (health.timeSinceLastEvent > 30000) {
-      console.log(`[Firehose] No events for ${Math.round(health.timeSinceLastEvent / 1000)}s`);
+      logger.warn(`No events for ${Math.round(health.timeSinceLastEvent / 1000)}s`);
     }
   }, 30000);
 }
@@ -185,7 +181,7 @@ export function startFirehose(): void {
  * Stop the firehose worker
  */
 export function stopFirehose(): void {
-  console.log('[Firehose] Stopping');
+  logger.info('Stopping firehose');
   isConnected = false;
   firehoseHandle?.destroy();
   firehoseHandle = null;

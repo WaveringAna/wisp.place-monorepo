@@ -8,7 +8,10 @@ import {
   S3StorageTier,
   DiskStorageTier,
 } from '@wispplace/tiered-storage';
+import { createLogger } from '@wispplace/observability';
 import { config } from '../config';
+
+const logger = createLogger('firehose-service');
 
 // Create S3 tier (or fallback to disk for local dev)
 let coldTier: S3StorageTier | DiskStorageTier;
@@ -28,7 +31,7 @@ if (config.s3Bucket) {
     forcePathStyle: config.s3ForcePathStyle,
     metadataBucket: config.s3MetadataBucket,
   });
-  console.log('[Storage] Using S3 cold tier:', config.s3Bucket);
+  logger.info('[Storage] Using S3 cold tier:', { bucket: config.s3Bucket });
 } else {
   // Fallback to disk for local development
   const cacheDir = process.env.CACHE_DIR || './cache/sites';
@@ -38,7 +41,7 @@ if (config.s3Bucket) {
     evictionPolicy: 'lru',
     encodeColons: false,
   });
-  console.log('[Storage] Using disk fallback (no S3_BUCKET configured):', cacheDir);
+  logger.info('[Storage] Using disk fallback (no S3_BUCKET configured):', { cacheDir });
 }
 
 // Identity serializers for raw binary data (no JSON transformation)

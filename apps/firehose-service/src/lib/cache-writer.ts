@@ -11,11 +11,14 @@ import { extractBlobCid, getPdsForDid } from '@wispplace/atproto-utils';
 import { collectFileCidsFromEntries, countFilesInDirectory, normalizeFileCids } from '@wispplace/fs-utils';
 import { shouldCompressMimeType } from '@wispplace/atproto-utils/compression';
 import { MAX_BLOB_SIZE, MAX_FILE_COUNT, MAX_SITE_SIZE } from '@wispplace/constants';
+import { createLogger } from '@wispplace/observability';
 import { writeFile, deleteFile, listFiles } from './storage';
 import { getSiteCache, upsertSiteCache, deleteSiteCache, upsertSiteSettingsCache, deleteSiteSettingsCache } from './db';
 import { rewriteHtmlPaths, isHtmlFile } from './html-rewriter';
 import { gunzipSync } from 'zlib';
 import { publishCacheInvalidation } from './cache-invalidation';
+
+const logger = createLogger('firehose-service');
 
 /**
  * Fetch a site record from the PDS
@@ -24,7 +27,7 @@ export async function fetchSiteRecord(did: string, rkey: string): Promise<{ reco
   try {
     const pdsEndpoint = await getPdsForDid(did);
     if (!pdsEndpoint) {
-      console.error('[Cache] Failed to get PDS endpoint for DID', { did, rkey });
+      logger.error('Failed to get PDS endpoint for DID', undefined, { did, rkey });
       return null;
     }
 
@@ -38,9 +41,9 @@ export async function fetchSiteRecord(did: string, rkey: string): Promise<{ reco
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
     if (errorMsg.includes('HTTP 404') || errorMsg.includes('Not Found')) {
-      console.log('[Cache] Site record not found', { did, rkey });
+      logger.info('Site record not found', { did, rkey });
     } else {
-      console.error('[Cache] Failed to fetch site record', { did, rkey, error: errorMsg });
+      logger.error('Failed to fetch site record', err, { did, rkey });
     }
     return null;
   }
@@ -57,7 +60,7 @@ export async function fetchSettingsRecord(
   try {
     const endpoint = pdsEndpoint ?? await getPdsForDid(did);
     if (!endpoint) {
-      console.error('[Cache] Failed to get PDS endpoint for DID (settings)', { did, rkey });
+      logger.error('Failed to get PDS endpoint for DID (settings)', undefined, { did, rkey });
       return null;
     }
 
@@ -71,9 +74,9 @@ export async function fetchSettingsRecord(
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
     if (errorMsg.includes('HTTP 404') || errorMsg.includes('Not Found')) {
-      console.log('[Cache] Settings record not found', { did, rkey });
+      logger.info('Settings record not found', { did, rkey });
     } else {
-      console.error('[Cache] Failed to fetch settings record', { did, rkey, error: errorMsg });
+      logger.error('Failed to fetch settings record', err, { did, rkey });
     }
     return null;
   }
@@ -137,7 +140,7 @@ export async function expandSubfsNodes(
   const MAX_DEPTH = 10;
 
   if (depth >= MAX_DEPTH) {
-    console.error('[Cache] Max subfs expansion depth reached');
+    logger.error('Max subfs expansion depth reached');
     return directory;
   }
 
@@ -147,7 +150,7 @@ export async function expandSubfsNodes(
   // Fetch uncached subfs records
   const uncachedUris = subfsUris.filter(({ uri }) => !subfsCache.has(uri));
   if (uncachedUris.length > 0) {
-    console.log(`[Cache] Fetching ${uncachedUris.length} subfs records (depth ${depth})`);
+    logger.info(`Fetching ${uncachedUris.length} subfs records`, { depth });
     const fetchedRecords = await Promise.all(
       uncachedUris.map(async ({ uri }) => {
         const record = await fetchSubfsRecord(uri, pdsEndpoint);
@@ -342,7 +345,7 @@ async function downloadAndWriteBlob(
 ): Promise<void> {
   const blobUrl = `${pdsEndpoint}/xrpc/com.atproto.sync.getBlob?did=${encodeURIComponent(did)}&cid=${encodeURIComponent(file.cid)}`;
 
-  console.log(`[Cache] Downloading ${file.path}`);
+  logger.debug(`Downloading ${file.path}`);
 
   let content = await safeFetchBlob(blobUrl, { maxSize: MAX_BLOB_SIZE, timeout: 300000 });
   let encoding = file.encoding;
@@ -356,7 +359,7 @@ async function downloadAndWriteBlob(
     // Heuristic fallback: some records omit base64 flag but content is base64 text
     const decoded = tryDecodeBase64(content);
     if (decoded) {
-      console.warn(`[Cache] Decoded base64 fallback for ${file.path} (base64 flag missing)`);
+      logger.warn(`Decoded base64 fallback for ${file.path} (base64 flag missing)`);
       content = decoded;
     }
   }
@@ -370,19 +373,19 @@ async function downloadAndWriteBlob(
       content = gunzipSync(content);
       encoding = undefined;
     } catch (error) {
-      console.error(`[Cache] Failed to decompress ${file.path}, storing gzipped`);
+      logger.error(`Failed to decompress ${file.path}, storing gzipped`, error);
     }
   } else if (encoding === 'gzip' && content.length >= 2 &&
       !(content[0] === 0x1f && content[1] === 0x8b)) {
     // If marked gzip but doesn't look gzipped, attempt base64 decode and retry
     const decoded = tryDecodeBase64(content);
     if (decoded && decoded.length >= 2 && decoded[0] === 0x1f && decoded[1] === 0x8b) {
-      console.warn(`[Cache] Decoded base64+gzip fallback for ${file.path}`);
+      logger.warn(`Decoded base64+gzip fallback for ${file.path}`);
       try {
         content = gunzipSync(decoded);
         encoding = undefined;
       } catch (error) {
-        console.error(`[Cache] Failed to decompress base64+gzip fallback for ${file.path}, storing gzipped`);
+        logger.error(`Failed to decompress base64+gzip fallback for ${file.path}, storing gzipped`, error);
         content = decoded;
       }
     }
@@ -413,7 +416,7 @@ async function downloadAndWriteBlob(
       try {
         rewriteSource = gunzipSync(content);
       } catch (error) {
-        console.error(`[Cache] Failed to decompress ${file.path} for rewrite, using raw content`);
+        logger.error(`Failed to decompress ${file.path} for rewrite, using raw content`, error);
       }
     }
 
@@ -423,10 +426,10 @@ async function downloadAndWriteBlob(
 
     const rewrittenKey = `${did}/${rkey}/.rewritten/${file.path}`;
     await writeFile(rewrittenKey, rewrittenContent, { mimeType: 'text/html' });
-    console.log(`[Cache] Wrote rewritten HTML: ${rewrittenKey}`);
+    logger.debug(`Wrote rewritten HTML: ${rewrittenKey}`);
   }
 
-  console.log(`[Cache] Stored ${file.path} (${content.length} bytes)`);
+  logger.debug(`Stored ${file.path} (${content.length} bytes)`);
 }
 
 /**
@@ -443,19 +446,20 @@ export async function handleSiteCreateOrUpdate(
   }
 ): Promise<void> {
   const forceRewriteHtml = options?.forceRewriteHtml === true;
-  console.log(`[Cache] Processing site ${did}/${rkey}, record CID: ${recordCid}`, {
+  logger.info(`Processing site ${did}/${rkey}`, {
+    recordCid,
     forceRewriteHtml,
   });
 
   if (!record.root?.entries) {
-    console.error('[Cache] Invalid record structure');
+    logger.error('Invalid record structure');
     return;
   }
 
   // Get PDS endpoint
   const pdsEndpoint = await getPdsForDid(did);
   if (!pdsEndpoint) {
-    console.error('[Cache] Could not resolve PDS for', did);
+    logger.error('Could not resolve PDS', undefined, { did });
     return;
   }
 
@@ -465,13 +469,13 @@ export async function handleSiteCreateOrUpdate(
   // Validate limits
   const fileCount = countFilesInDirectory(expandedRoot);
   if (fileCount > MAX_FILE_COUNT) {
-    console.error(`[Cache] Site exceeds file limit: ${fileCount} > ${MAX_FILE_COUNT}`);
+    logger.error(`Site exceeds file limit: ${fileCount} > ${MAX_FILE_COUNT}`);
     return;
   }
 
   const totalSize = calculateTotalBlobSize(expandedRoot);
   if (totalSize > MAX_SITE_SIZE) {
-    console.error(`[Cache] Site exceeds size limit: ${totalSize} > ${MAX_SITE_SIZE}`);
+    logger.error(`Site exceeds size limit: ${totalSize} > ${MAX_SITE_SIZE}`);
     return;
   }
 
@@ -485,7 +489,7 @@ export async function handleSiteCreateOrUpdate(
   const normalizedFileCids = normalizeFileCids(rawFileCids);
   const oldFileCids = normalizedFileCids.value;
   if (normalizedFileCids.source === 'string-invalid' || normalizedFileCids.source === 'other') {
-    console.warn('[Cache] Existing file_cids had unexpected shape; treating as empty', {
+    logger.warn('Existing file_cids had unexpected shape; treating as empty', {
       did,
       rkey,
       type: Array.isArray(rawFileCids) ? 'array' : typeof rawFileCids,
@@ -512,7 +516,7 @@ export async function handleSiteCreateOrUpdate(
     }
   }
 
-  console.log(`[Cache] Files unchanged: ${newFiles.length - filesToDownload.length}, to download: ${filesToDownload.length}, to delete: ${pathsToDelete.length}`);
+  logger.info(`Files unchanged: ${newFiles.length - filesToDownload.length}, to download: ${filesToDownload.length}, to delete: ${pathsToDelete.length}`);
 
   // Download new/changed files (with concurrency limit)
   const DOWNLOAD_CONCURRENCY = 20;
@@ -541,9 +545,9 @@ export async function handleSiteCreateOrUpdate(
   }
 
   // Update DB with new CIDs
-  console.log(`[Cache] About to upsert site cache for ${did}/${rkey}`);
+  logger.debug(`About to upsert site cache for ${did}/${rkey}`);
   await upsertSiteCache(did, rkey, recordCid, newFileCids);
-  console.log(`[Cache] Updated site cache for ${did}/${rkey} with record CID ${recordCid}`);
+  logger.debug(`Updated site cache for ${did}/${rkey} with record CID ${recordCid}`);
 
   // Backfill settings if a record exists for this rkey
   const settingsRecord = await fetchSettingsRecord(did, rkey, pdsEndpoint);
@@ -557,14 +561,14 @@ export async function handleSiteCreateOrUpdate(
     await publishCacheInvalidation(did, rkey, 'update');
   }
 
-  console.log(`[Cache] Successfully cached site ${did}/${rkey}`);
+  logger.info(`Successfully cached site ${did}/${rkey}`);
 }
 
 /**
  * Handle a site delete event
  */
 export async function handleSiteDelete(did: string, rkey: string): Promise<void> {
-  console.log(`[Cache] Deleting site ${did}/${rkey}`);
+  logger.info(`Deleting site ${did}/${rkey}`);
 
   // List all files for this site and delete them
   const prefix = `${did}/${rkey}/`;
@@ -580,14 +584,14 @@ export async function handleSiteDelete(did: string, rkey: string): Promise<void>
   // Notify hosting-service to invalidate its local caches
   await publishCacheInvalidation(did, rkey, 'delete');
 
-  console.log(`[Cache] Deleted site ${did}/${rkey} (${keys.length} files)`);
+  logger.info(`Deleted site ${did}/${rkey} (${keys.length} files)`);
 }
 
 /**
  * Handle settings create/update event
  */
 export async function handleSettingsUpdate(did: string, rkey: string, settings: WispSettings, recordCid: string): Promise<void> {
-  console.log(`[Cache] Updating settings for ${did}/${rkey}`);
+  logger.info(`Updating settings for ${did}/${rkey}`);
 
   await upsertSiteSettingsCache(did, rkey, recordCid, {
     directoryListing: settings.directoryListing,
@@ -606,7 +610,7 @@ export async function handleSettingsUpdate(did: string, rkey: string, settings: 
  * Handle settings delete event
  */
 export async function handleSettingsDelete(did: string, rkey: string): Promise<void> {
-  console.log(`[Cache] Deleting settings for ${did}/${rkey}`);
+  logger.info(`Deleting settings for ${did}/${rkey}`);
   await deleteSiteSettingsCache(did, rkey);
 
   // Notify hosting-service to invalidate its local caches

@@ -1,8 +1,10 @@
 import Redis from 'ioredis';
 import os from 'os';
+import { createLogger } from '@wispplace/observability';
 import { config } from '../config';
 import { fetchSiteRecord, handleSiteCreateOrUpdate } from './cache-writer';
 
+const logger = createLogger('firehose-service');
 const consumerName = process.env.WISP_REVALIDATE_CONSUMER || `${os.hostname()}:${process.pid}`;
 const batchSize = Number.parseInt(process.env.WISP_REVALIDATE_BATCH_SIZE || '10', 10);
 const claimIdleMs = Number.parseInt(process.env.WISP_REVALIDATE_CLAIM_IDLE_MS || '60000', 10);
@@ -33,16 +35,16 @@ async function processMessage(id: string, rawFields: string[]): Promise<void> {
   const reason = fields.reason || 'storage-miss';
 
   if (!did || !rkey) {
-    console.warn('[Revalidate] Missing did/rkey in message', { id, fields });
+    logger.warn('[Revalidate] Missing did/rkey in message', { id, fields });
     await redis.xack(config.revalidateStream, config.revalidateGroup, id);
     return;
   }
 
-  console.log(`[Revalidate] Received message ${id}: ${did}/${rkey} (${reason})`);
+  logger.info(`[Revalidate] Received message ${id}: ${did}/${rkey} (${reason})`);
 
   const record = await fetchSiteRecord(did, rkey);
   if (!record) {
-    console.warn(`[Revalidate] Site record not found on PDS: ${did}/${rkey}`);
+    logger.warn(`[Revalidate] Site record not found on PDS: ${did}/${rkey}`);
     await redis.xack(config.revalidateStream, config.revalidateGroup, id);
     return;
   }
@@ -51,7 +53,7 @@ async function processMessage(id: string, rawFields: string[]): Promise<void> {
     skipInvalidation: true,
   });
 
-  console.log(`[Revalidate] Completed ${id}: ${did}/${rkey}`);
+  logger.info(`[Revalidate] Completed ${id}: ${did}/${rkey}`);
   await redis.xack(config.revalidateStream, config.revalidateGroup, id);
 }
 
@@ -60,8 +62,7 @@ async function processMessages(messages: Array<[string, string[]]>): Promise<voi
     try {
       await processMessage(id, rawFields);
     } catch (err) {
-      const error = err instanceof Error ? err : new Error(String(err));
-      console.error('[Revalidate] Failed to process message', { id, error: error.message, stack: error.stack });
+      logger.error('[Revalidate] Failed to process message', err, { id });
     }
   }
 }
@@ -143,8 +144,7 @@ async function runLoop(): Promise<void> {
       await claimStaleMessages();
       await readNewMessages();
     } catch (err) {
-      const error = err instanceof Error ? err : new Error(String(err));
-      console.error('[Revalidate] Loop error', { error: error.message, stack: error.stack });
+      logger.error('[Revalidate] Loop error', err);
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }
   }
@@ -152,24 +152,24 @@ async function runLoop(): Promise<void> {
 
 export async function startRevalidateWorker(): Promise<void> {
   if (!config.redisUrl) {
-    console.warn('[Revalidate] REDIS_URL not set; revalidate worker disabled');
+    logger.warn('[Revalidate] REDIS_URL not set; revalidate worker disabled');
     return;
   }
 
   if (running) return;
 
-  console.log(`[Revalidate] Connecting to Redis: ${config.redisUrl}`);
+  logger.info(`[Revalidate] Connecting to Redis: ${config.redisUrl}`);
   redis = new Redis(config.redisUrl, {
     maxRetriesPerRequest: 2,
     enableReadyCheck: true,
   });
 
   redis.on('error', (err) => {
-    console.error('[Revalidate] Redis error:', err);
+    logger.error('[Revalidate] Redis error', err);
   });
 
   redis.on('ready', () => {
-    console.log(`[Revalidate] Redis connected, stream: ${config.revalidateStream}, group: ${config.revalidateGroup}`);
+    logger.info(`[Revalidate] Redis connected, stream: ${config.revalidateStream}, group: ${config.revalidateGroup}`);
   });
 
   running = true;
