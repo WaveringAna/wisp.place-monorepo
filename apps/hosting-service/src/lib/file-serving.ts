@@ -20,6 +20,9 @@ import { recordStorageMiss } from './revalidate-metrics';
 import { normalizeFileCids } from '@wispplace/fs-utils';
 import { fetchAndCacheSite } from './on-demand-cache';
 import type { StorageResult } from '@wispplace/tiered-storage';
+import { createLogger } from '@wispplace/observability';
+
+const logger = createLogger('file-serving');
 
 type FileStorageResult = StorageResult<Uint8Array>;
 
@@ -34,7 +37,7 @@ async function getFileWithMetadata(did: string, rkey: string, filePath: string) 
   if (result) {
     const tier = result.source || 'unknown';
     const size = result.data ? (result.data as Uint8Array).length : 0;
-    console.log(`[Storage] Served ${filePath} from ${tier} tier (${size} bytes) - ${did}:${rkey}`);
+    logger.debug(`Served ${filePath} from ${tier} tier`, { did, rkey, size, tier });
   }
 
   return result;
@@ -136,7 +139,7 @@ function buildResponseFromStorageResult(
         applyCustomHeaders(headers, filePath, settings);
         return new Response(decompressed, { headers });
       }
-      console.warn(`File ${filePath} marked as gzipped but lacks magic bytes, serving as-is`);
+      logger.warn(`File marked as gzipped but lacks magic bytes, serving as-is`, { filePath });
       applyCustomHeaders(headers, filePath, settings);
       return new Response(content, { headers });
     }
@@ -149,37 +152,6 @@ function buildResponseFromStorageResult(
 }
 
 /**
- * Ensure a site is cached locally. If the site has no DB entry (completely unknown),
- * attempt to fetch and cache it on-demand from the PDS.
- */
-async function ensureSiteCached(did: string, rkey: string): Promise<void> {
-  const existing = await getSiteCache(did, rkey);
-  if (existing) {
-    // Site is in DB — check if any files actually exist in storage
-    const prefix = `${did}/${rkey}/`;
-    const hasFiles = await storage.exists(prefix.slice(0, -1)) ||
-      await checkAnyFileExists(did, rkey, existing.file_cids);
-    if (hasFiles) {
-      return;
-    }
-    console.log(`[FileServing] Site ${did}/${rkey} in DB but no files in storage, re-fetching`);
-  } else {
-    console.log(`[FileServing] Site ${did}/${rkey} not in DB, attempting on-demand cache`);
-  }
-
-  const success = await fetchAndCacheSite(did, rkey);
-  console.log(`[FileServing] On-demand cache for ${did}/${rkey}: ${success ? 'success' : 'failed'}`);
-}
-
-async function checkAnyFileExists(did: string, rkey: string, fileCids: unknown): Promise<boolean> {
-  if (!fileCids || typeof fileCids !== 'object') return false;
-  const cids = fileCids as Record<string, string>;
-  const firstFile = Object.keys(cids)[0];
-  if (!firstFile) return false;
-  return storage.exists(`${did}/${rkey}/${firstFile}`);
-}
-
-/**
  * Helper to serve files from cache (for custom domains and subdomains)
  */
 export async function serveFromCache(
@@ -189,10 +161,6 @@ export async function serveFromCache(
   fullUrl?: string,
   headers?: Record<string, string>
 ): Promise<Response> {
-  // Check if this site is completely unknown (not in DB, no files in storage)
-  // If so, attempt to fetch and cache it on-demand from the PDS
-  await ensureSiteCached(did, rkey);
-
   // Load settings for this site
   const settings = await getCachedSettings(did, rkey);
   const indexFiles = getIndexFiles(settings);
@@ -318,30 +286,34 @@ export async function serveFileInternal(
     requestPath = requestPath.slice(0, -1);
   }
 
-  // Check if this path is a directory first (best-effort via prefix scan)
-  const directoryEntries = await listDirectoryEntries(did, rkey, requestPath);
-  if (directoryEntries.length > 0) {
-    // It's a directory, try each index file in order
+  // For directory-like paths (empty or no extension), try index files FIRST (fast)
+  // Only do expensive directory listing if needed for directory listing feature
+  if (!requestPath || !requestPath.includes('.')) {
     for (const indexFile of indexFiles) {
       const indexPath = requestPath ? `${requestPath}/${indexFile}` : indexFile;
-      if (await storageExists(did, rkey, indexPath)) {
-        return serveFileInternal(did, rkey, indexPath, settings, requestHeaders);
+      const result = await getFileWithMetadata(did, rkey, indexPath);
+      if (result) {
+        return buildResponseFromStorageResult(result, indexPath, settings, requestHeaders);
       }
       await markExpectedMiss(indexPath);
     }
-    // No index file found - check if directory listing is enabled
+
+    // Index not found - check if we need directory listing
     if (settings?.directoryListing) {
-      const missResponse = await maybeReturnStorageMiss();
-      if (missResponse) return missResponse;
-      const html = generateDirectoryListing(requestPath, directoryEntries);
-      return new Response(html, {
-        headers: {
-          'Content-Type': 'text/html; charset=utf-8',
-          'Cache-Control': 'public, max-age=300',
-        },
-      });
+      const directoryEntries = await listDirectoryEntries(did, rkey, requestPath);
+      if (directoryEntries.length > 0) {
+        const missResponse = await maybeReturnStorageMiss();
+        if (missResponse) return missResponse;
+        const html = generateDirectoryListing(requestPath, directoryEntries);
+        return new Response(html, {
+          headers: {
+            'Content-Type': 'text/html; charset=utf-8',
+            'Cache-Control': 'public, max-age=300',
+          },
+        });
+      }
     }
-    // Fall through to 404/SPA handling
+    // Fall through to normal file serving / 404 handling
   }
 
   // Not a directory, try to serve as a file
@@ -458,6 +430,21 @@ export async function serveFileInternal(
   const missResponse = await maybeReturnStorageMiss();
   if (missResponse) return missResponse;
 
+  // Last resort: if site not in DB at all, try on-demand fetch
+  const fileCids = await getExpectedFileCids();
+  if (fileCids === null) {
+    logger.info(`Site not found in DB, attempting on-demand fetch before 404`, { did, rkey });
+    const success = await fetchAndCacheSite(did, rkey);
+    if (success) {
+      // Retry serving the originally requested file
+      const retryPath = filePath || indexFiles[0] || 'index.html';
+      const retryResult = await getFileWithMetadata(did, rkey, retryPath);
+      if (retryResult) {
+        return buildResponseFromStorageResult(retryResult, retryPath, settings, requestHeaders);
+      }
+    }
+  }
+
   // Default styled 404 page
   const html = generate404Page();
   return new Response(html, {
@@ -480,10 +467,6 @@ export async function serveFromCacheWithRewrite(
   fullUrl?: string,
   headers?: Record<string, string>
 ): Promise<Response> {
-  // Check if this site is completely unknown (not in DB, no files in storage)
-  // If so, attempt to fetch and cache it on-demand from the PDS
-  await ensureSiteCached(did, rkey);
-
   // Load settings for this site
   const settings = await getCachedSettings(did, rkey);
   const indexFiles = getIndexFiles(settings);
@@ -615,30 +598,34 @@ export async function serveFileInternalWithRewrite(
     requestPath = requestPath.slice(0, -1);
   }
 
-  // Check if this path is a directory first (best-effort via prefix scan)
-  const directoryEntries = await listDirectoryEntries(did, rkey, requestPath);
-  if (directoryEntries.length > 0) {
-    // It's a directory, try each index file in order
+  // For directory-like paths (empty or no extension), try index files FIRST (fast)
+  // Only do expensive directory listing if needed for directory listing feature
+  if (!requestPath || !requestPath.includes('.')) {
     for (const indexFile of indexFiles) {
       const indexPath = requestPath ? `${requestPath}/${indexFile}` : indexFile;
-      if (await storageExists(did, rkey, indexPath)) {
-        return serveFileInternalWithRewrite(did, rkey, indexPath, basePath, settings, requestHeaders);
+      const fileResult = await getFileForRequest(did, rkey, indexPath, true);
+      if (fileResult) {
+        return buildResponseFromStorageResult(fileResult.result, indexPath, settings, requestHeaders);
       }
       await markExpectedMiss(indexPath);
     }
-    // No index file found - check if directory listing is enabled
+
+    // Index not found - check if we need directory listing
     if (settings?.directoryListing) {
-      const missResponse = await maybeReturnStorageMiss();
-      if (missResponse) return missResponse;
-      const html = generateDirectoryListing(requestPath, directoryEntries);
-      return new Response(html, {
-        headers: {
-          'Content-Type': 'text/html; charset=utf-8',
-          'Cache-Control': 'public, max-age=300',
-        },
-      });
+      const directoryEntries = await listDirectoryEntries(did, rkey, requestPath);
+      if (directoryEntries.length > 0) {
+        const missResponse = await maybeReturnStorageMiss();
+        if (missResponse) return missResponse;
+        const html = generateDirectoryListing(requestPath, directoryEntries);
+        return new Response(html, {
+          headers: {
+            'Content-Type': 'text/html; charset=utf-8',
+            'Cache-Control': 'public, max-age=300',
+          },
+        });
+      }
     }
-    // Fall through to 404/SPA handling
+    // Fall through to normal file serving / 404 handling
   }
 
   // Not a directory, try to serve as a file
@@ -736,6 +723,21 @@ export async function serveFileInternalWithRewrite(
 
   const missResponse = await maybeReturnStorageMiss();
   if (missResponse) return missResponse;
+
+  // Last resort: if site not in DB at all, try on-demand fetch
+  const fileCids = await getExpectedFileCids();
+  if (fileCids === null) {
+    logger.info(`Site not found in DB, attempting on-demand fetch before 404`, { did, rkey });
+    const success = await fetchAndCacheSite(did, rkey);
+    if (success) {
+      // Retry serving the originally requested file
+      const retryPath = filePath || indexFiles[0] || 'index.html';
+      const retryResult = await getFileWithMetadata(did, rkey, retryPath);
+      if (retryResult) {
+        return buildResponseFromStorageResult(retryResult, retryPath, settings, requestHeaders);
+      }
+    }
+  }
 
   // Default styled 404 page
   const html = generate404Page();

@@ -20,6 +20,9 @@ import { storage } from './storage';
 import { upsertSiteCache, tryAcquireLock, releaseLock } from './db';
 import { enqueueRevalidate } from './revalidate-queue';
 import { gunzipSync } from 'zlib';
+import { createLogger } from '@wispplace/observability';
+
+const logger = createLogger('on-demand-cache');
 
 // Track in-flight fetches to avoid duplicate work
 const inFlightFetches = new Map<string, Promise<boolean>>();
@@ -65,17 +68,17 @@ async function doFetchAndCache(did: string, rkey: string): Promise<boolean> {
   // Try to acquire a distributed lock
   const acquired = await tryAcquireLock(lockKey);
   if (!acquired) {
-    console.log(`[OnDemandCache] Lock not acquired for ${did}/${rkey}, another instance is handling it`);
+    logger.debug('Lock not acquired, another instance is handling it', { did, rkey });
     return false;
   }
 
   try {
-    console.log(`[OnDemandCache] Fetching missing site ${did}/${rkey}`);
+    logger.info('Fetching missing site', { did, rkey });
 
     // Fetch site record from PDS
     const pdsEndpoint = await getPdsForDid(did);
     if (!pdsEndpoint) {
-      console.error(`[OnDemandCache] Could not resolve PDS for ${did}`);
+      logger.error('Could not resolve PDS', { did });
       return false;
     }
 
@@ -87,9 +90,9 @@ async function doFetchAndCache(did: string, rkey: string): Promise<boolean> {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('HTTP 404') || msg.includes('Not Found')) {
-        console.log(`[OnDemandCache] Site record not found on PDS: ${did}/${rkey}`);
+        logger.info('Site record not found on PDS', { did, rkey });
       } else {
-        console.error(`[OnDemandCache] Failed to fetch site record: ${did}/${rkey}`, msg);
+        logger.error('Failed to fetch site record', { did, rkey, error: msg });
       }
       return false;
     }
@@ -98,7 +101,7 @@ async function doFetchAndCache(did: string, rkey: string): Promise<boolean> {
     const recordCid = data.cid || '';
 
     if (!record?.root?.entries) {
-      console.error(`[OnDemandCache] Invalid record structure for ${did}/${rkey}`);
+      logger.error('Invalid record structure', { did, rkey });
       return false;
     }
 
@@ -108,7 +111,7 @@ async function doFetchAndCache(did: string, rkey: string): Promise<boolean> {
     // Validate limits
     const fileCount = countFilesInDirectory(expandedRoot);
     if (fileCount > MAX_FILE_COUNT) {
-      console.error(`[OnDemandCache] Site exceeds file limit: ${fileCount} > ${MAX_FILE_COUNT}`);
+      logger.error('Site exceeds file limit', { did, rkey, fileCount, maxFileCount: MAX_FILE_COUNT });
       return false;
     }
 
@@ -135,12 +138,12 @@ async function doFetchAndCache(did: string, rkey: string): Promise<boolean> {
           downloaded++;
         } else {
           failed++;
-          console.error(`[OnDemandCache] Failed to download blob:`, result.reason);
+          logger.error('Failed to download blob', { did, rkey, error: result.reason });
         }
       }
     }
 
-    console.log(`[OnDemandCache] Downloaded ${downloaded} files (${failed} failed) for ${did}/${rkey}`);
+    logger.info('Downloaded files', { did, rkey, downloaded, failed });
 
     // Update DB with file CIDs so future storage misses can be detected
     await upsertSiteCache(did, rkey, recordCid, fileCids);
@@ -148,10 +151,10 @@ async function doFetchAndCache(did: string, rkey: string): Promise<boolean> {
     // Enqueue revalidate so firehose-service backfills S3 (cold tier)
     await enqueueRevalidate(did, rkey, `on-demand-cache`);
 
-    console.log(`[OnDemandCache] Successfully cached site ${did}/${rkey}`);
+    logger.info('Successfully cached site', { did, rkey, downloaded });
     return downloaded > 0;
   } catch (err) {
-    console.error(`[OnDemandCache] Error caching site ${did}/${rkey}:`, err);
+    logger.error('Error caching site', { did, rkey, error: err });
     return false;
   } finally {
     await releaseLock(lockKey);
