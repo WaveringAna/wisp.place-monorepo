@@ -46,7 +46,7 @@ export async function enqueueRevalidate(
 
   try {
     const dedupeKey = `revalidate:site:${did}:${rkey}`;
-    const set = await redis.set(dedupeKey, '1', 'NX', 'EX', dedupeTtlSeconds);
+    const set = await redis.set(dedupeKey, '1', 'EX', dedupeTtlSeconds, 'NX');
     if (!set) {
       recordRevalidateResult('deduped');
       return { enqueued: false, result: 'deduped' };

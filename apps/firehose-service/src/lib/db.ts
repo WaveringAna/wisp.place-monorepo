@@ -54,7 +54,7 @@ export async function upsertSiteCache(
   recordCid: string,
   fileCids: Record<string, string>
 ): Promise<void> {
-  const fileCidsJson = fileCids ?? {};
+  const fileCidsJson = JSON.stringify(fileCids ?? {});
   console.log(`[DB] upsertSiteCache starting for ${did}/${rkey}`);
   try {
     await sql`
@@ -94,9 +94,9 @@ export async function upsertSiteSettingsCache(
   const directoryListing = settings.directoryListing ?? false;
   const spaMode = settings.spaMode ?? null;
   const custom404 = settings.custom404 ?? null;
-  const indexFilesJson = settings.indexFiles ?? [];
+  const indexFilesJson = JSON.stringify(settings.indexFiles ?? []);
   const cleanUrls = settings.cleanUrls ?? true;
-  const headersJson = settings.headers ?? [];
+  const headersJson = JSON.stringify(settings.headers ?? []);
 
   console.log(`[DB] upsertSiteSettingsCache starting for ${did}/${rkey}`, {
     directoryListing,

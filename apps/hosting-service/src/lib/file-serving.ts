@@ -18,6 +18,10 @@ import { getSiteCache } from './db';
 import { enqueueRevalidate } from './revalidate-queue';
 import { recordStorageMiss } from './revalidate-metrics';
 import { normalizeFileCids } from '@wispplace/fs-utils';
+import { fetchAndCacheSite } from './on-demand-cache';
+import type { StorageResult } from '@wispplace/tiered-storage';
+
+type FileStorageResult = StorageResult<Uint8Array>;
 
 /**
  * Helper to retrieve a file with metadata from tiered storage
@@ -91,7 +95,7 @@ async function getFileForRequest(
   rkey: string,
   filePath: string,
   preferRewrittenHtml: boolean
-): Promise<{ result: Awaited<ReturnType<typeof storage.getWithMetadata>>; filePath: string } | null> {
+): Promise<{ result: FileStorageResult; filePath: string } | null> {
   const mimeTypeGuess = lookup(filePath) || 'application/octet-stream';
   if (preferRewrittenHtml && isHtmlContent(filePath, mimeTypeGuess)) {
     const rewrittenPath = `.rewritten/${filePath}`;
@@ -107,7 +111,7 @@ async function getFileForRequest(
 }
 
 function buildResponseFromStorageResult(
-  result: Awaited<ReturnType<typeof storage.getWithMetadata>>,
+  result: FileStorageResult,
   filePath: string,
   settings: WispSettings | null,
   requestHeaders?: Record<string, string>
@@ -149,6 +153,19 @@ function buildResponseFromStorageResult(
 }
 
 /**
+ * Ensure a site is cached locally. If the site has no DB entry (completely unknown),
+ * attempt to fetch and cache it on-demand from the PDS.
+ */
+async function ensureSiteCached(did: string, rkey: string): Promise<void> {
+  const existing = await getSiteCache(did, rkey);
+  if (existing) return; // Site is known, proceed normally
+
+  // Site is completely unknown — try on-demand fetch
+  console.log(`[FileServing] Site ${did}/${rkey} not in DB, attempting on-demand cache`);
+  await fetchAndCacheSite(did, rkey);
+}
+
+/**
  * Helper to serve files from cache (for custom domains and subdomains)
  */
 export async function serveFromCache(
@@ -158,6 +175,10 @@ export async function serveFromCache(
   fullUrl?: string,
   headers?: Record<string, string>
 ): Promise<Response> {
+  // Check if this site is completely unknown (not in DB, no files in storage)
+  // If so, attempt to fetch and cache it on-demand from the PDS
+  await ensureSiteCached(did, rkey);
+
   // Load settings for this site
   const settings = await getCachedSettings(did, rkey);
   const indexFiles = getIndexFiles(settings);
@@ -445,6 +466,10 @@ export async function serveFromCacheWithRewrite(
   fullUrl?: string,
   headers?: Record<string, string>
 ): Promise<Response> {
+  // Check if this site is completely unknown (not in DB, no files in storage)
+  // If so, attempt to fetch and cache it on-demand from the PDS
+  await ensureSiteCached(did, rkey);
+
   // Load settings for this site
   const settings = await getCachedSettings(did, rkey);
   const indexFiles = getIndexFiles(settings);

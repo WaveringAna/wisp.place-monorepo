@@ -15,6 +15,7 @@ import { writeFile, deleteFile, listFiles } from './storage';
 import { getSiteCache, upsertSiteCache, deleteSiteCache, upsertSiteSettingsCache, deleteSiteSettingsCache } from './db';
 import { rewriteHtmlPaths, isHtmlFile } from './html-rewriter';
 import { gunzipSync } from 'zlib';
+import { publishCacheInvalidation } from './cache-invalidation';
 
 /**
  * Fetch a site record from the PDS
@@ -549,6 +550,9 @@ export async function handleSiteCreateOrUpdate(
     await handleSettingsUpdate(did, rkey, settingsRecord.record, settingsRecord.cid);
   }
 
+  // Notify hosting-service to invalidate its local caches
+  await publishCacheInvalidation(did, rkey, 'update');
+
   console.log(`[Cache] Successfully cached site ${did}/${rkey}`);
 }
 
@@ -569,6 +573,9 @@ export async function handleSiteDelete(did: string, rkey: string): Promise<void>
   // Delete from DB
   await deleteSiteCache(did, rkey);
 
+  // Notify hosting-service to invalidate its local caches
+  await publishCacheInvalidation(did, rkey, 'delete');
+
   console.log(`[Cache] Deleted site ${did}/${rkey} (${keys.length} files)`);
 }
 
@@ -586,6 +593,9 @@ export async function handleSettingsUpdate(did: string, rkey: string, settings: 
     cleanUrls: settings.cleanUrls,
     headers: settings.headers,
   });
+
+  // Notify hosting-service to invalidate its local caches (redirect rules depend on settings)
+  await publishCacheInvalidation(did, rkey, 'settings');
 }
 
 /**
@@ -594,4 +604,7 @@ export async function handleSettingsUpdate(did: string, rkey: string, settings: 
 export async function handleSettingsDelete(did: string, rkey: string): Promise<void> {
   console.log(`[Cache] Deleting settings for ${did}/${rkey}`);
   await deleteSiteSettingsCache(did, rkey);
+
+  // Notify hosting-service to invalidate its local caches
+  await publishCacheInvalidation(did, rkey, 'settings');
 }

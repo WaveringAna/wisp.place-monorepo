@@ -4,6 +4,7 @@ import { initializeGrafanaExporters } from '@wispplace/observability';
 import { mkdirSync, existsSync } from 'fs';
 import { startDomainCacheCleanup, stopDomainCacheCleanup, closeDatabase } from './lib/db';
 import { closeRevalidateQueue } from './lib/revalidate-queue';
+import { startCacheInvalidationSubscriber, stopCacheInvalidationSubscriber } from './lib/cache-invalidation';
 import { storage, getStorageConfig } from './lib/storage';
 
 // Initialize Grafana exporters if configured
@@ -23,6 +24,9 @@ if (!existsSync(CACHE_DIR)) {
 
 // Start domain cache cleanup
 startDomainCacheCleanup();
+
+// Start cache invalidation subscriber (listens for firehose-service updates via Redis pub/sub)
+startCacheInvalidationSubscriber();
 
 // Optional: Bootstrap hot cache from warm tier on startup
 const BOOTSTRAP_HOT_ON_STARTUP = process.env.BOOTSTRAP_HOT_ON_STARTUP === 'true';
@@ -80,6 +84,7 @@ Firehose:     DISABLED (read-only)
 process.on('SIGINT', async () => {
   console.log('\n🛑 Shutting down...');
   stopDomainCacheCleanup();
+  await stopCacheInvalidationSubscriber();
   await closeRevalidateQueue();
   await closeDatabase();
   server.close();
@@ -89,6 +94,7 @@ process.on('SIGINT', async () => {
 process.on('SIGTERM', async () => {
   console.log('\n🛑 Shutting down...');
   stopDomainCacheCleanup();
+  await stopCacheInvalidationSubscriber();
   await closeRevalidateQueue();
   await closeDatabase();
   server.close();

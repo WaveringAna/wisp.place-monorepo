@@ -38,7 +38,7 @@ app.onError(observabilityErrorHandler('hosting-service'));
 app.get('/*', async (c) => {
   const url = new URL(c.req.url);
   const hostname = c.req.header('host') || '';
-  const hostnameWithoutPort = hostname.split(':')[0];
+  const hostnameWithoutPort = hostname.split(':')[0] || '';
   const rawPath = url.pathname.replace(/^\//, '');
   const path = sanitizePath(rawPath);
 
