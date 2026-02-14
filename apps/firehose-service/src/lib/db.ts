@@ -147,6 +147,21 @@ export async function deleteSiteSettingsCache(did: string, rkey: string): Promis
   await sql`DELETE FROM site_settings_cache WHERE did = ${did} AND rkey = ${rkey}`;
 }
 
+export async function upsertSite(did: string, rkey: string, displayName: string): Promise<void> {
+  await sql`
+    INSERT INTO sites (did, rkey, display_name, created_at, updated_at)
+    VALUES (${did}, ${rkey}, ${displayName}, EXTRACT(EPOCH FROM NOW()), EXTRACT(EPOCH FROM NOW()))
+    ON CONFLICT (did, rkey)
+    DO UPDATE SET
+      display_name = EXCLUDED.display_name,
+      updated_at = EXTRACT(EPOCH FROM NOW())
+  `;
+}
+
+export async function deleteSite(did: string, rkey: string): Promise<void> {
+  await sql`DELETE FROM sites WHERE did = ${did} AND rkey = ${rkey}`;
+}
+
 export async function closeDatabase(): Promise<void> {
   await sql.end({ timeout: 5 });
   logger.info('[DB] Database connections closed');

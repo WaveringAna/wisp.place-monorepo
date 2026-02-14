@@ -13,7 +13,7 @@ import { shouldCompressMimeType } from '@wispplace/atproto-utils/compression';
 import { MAX_BLOB_SIZE, MAX_FILE_COUNT, MAX_SITE_SIZE } from '@wispplace/constants';
 import { createLogger } from '@wispplace/observability';
 import { writeFile, deleteFile, listFiles } from './storage';
-import { getSiteCache, upsertSiteCache, deleteSiteCache, upsertSiteSettingsCache, deleteSiteSettingsCache } from './db';
+import { getSiteCache, upsertSiteCache, deleteSiteCache, upsertSiteSettingsCache, deleteSiteSettingsCache, upsertSite, deleteSite } from './db';
 import { rewriteHtmlPaths, isHtmlFile } from './html-rewriter';
 import { gunzipSync } from 'zlib';
 import { publishCacheInvalidation } from './cache-invalidation';
@@ -550,6 +550,7 @@ export async function handleSiteCreateOrUpdate(
   // Update DB with new CIDs
   logger.debug(`About to upsert site cache for ${did}/${rkey}`);
   await upsertSiteCache(did, rkey, recordCid, newFileCids);
+  await upsertSite(did, rkey, record.site);
   logger.debug(`Updated site cache for ${did}/${rkey} with record CID ${recordCid}`);
 
   // Backfill settings if a record exists for this rkey
@@ -585,6 +586,7 @@ export async function handleSiteDelete(did: string, rkey: string): Promise<void>
 
   // Delete from DB
   await deleteSiteCache(did, rkey);
+  await deleteSite(did, rkey);
 
   // Notify hosting-service to invalidate its local caches
   await publishCacheInvalidation(did, rkey, 'delete');
