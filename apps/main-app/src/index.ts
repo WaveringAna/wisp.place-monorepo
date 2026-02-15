@@ -226,6 +226,29 @@ export const app = new Elysia({
 				})
 			: (app) => app
 	)
+	// Production only: serve built admin assets
+	.use(
+		Bun.env.NODE_ENV === 'production'
+			? await staticPlugin({
+					assets: './apps/main-app/dist/admin',
+					prefix: '/admin'
+				})
+			: (app) => app
+	)
+	// Production only: serve built HTML for /admin
+	.use(
+		Bun.env.NODE_ENV === 'production'
+			? new Elysia()
+				.get('/admin', async ({ set }) => {
+					set.headers['Content-Type'] = 'text/html; charset=utf-8'
+					return await Bun.file('./apps/main-app/dist/admin/index.html').text()
+				})
+				.get('/admin/*', async ({ set }) => {
+					set.headers['Content-Type'] = 'text/html; charset=utf-8'
+					return await Bun.file('./apps/main-app/dist/admin/index.html').text()
+				})
+			: (app) => app
+	)
 	.get('/wisp.css', ({ set }) => {
 		set.headers['Content-Type'] = 'text/css; charset=utf-8'
 		set.headers['Cache-Control'] = 'public, max-age=86400'

@@ -112,9 +112,99 @@ const htmlContent = `<!doctype html>
 
 await Bun.write(`${distDir}/editor/index.html`, htmlContent)
 
+// Create admin directory
+await mkdir(`${distDir}/admin`, { recursive: true })
+
+// Build the admin React app
+const adminResult = await Bun.build({
+	entrypoints: [`${publicDir}/admin/admin.tsx`],
+	outdir: `${distDir}/admin`,
+	target: 'browser',
+	format: 'esm',
+	minify: true,
+	sourcemap: 'none',
+	splitting: true,
+	naming: {
+		entry: '[name].[hash].js',
+		chunk: '[name].[hash].js',
+		asset: '[name].[hash][ext]'
+	}
+})
+
+if (!adminResult.success) {
+	console.error('❌ Admin build failed:')
+	for (const log of adminResult.logs) {
+		console.error(log)
+	}
+	process.exit(1)
+}
+
+// Find the main entry bundle for admin
+const adminBundle = adminResult.outputs.find(o => o.path.includes('admin.') && o.path.endsWith('.js'))
+
+if (!adminBundle) {
+	console.error('❌ Could not find admin bundle in outputs')
+	process.exit(1)
+}
+
+const adminBundleName = path.basename(adminBundle.path)
+
+// Generate the production HTML for admin
+const adminHtmlContent = `<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Admin - wisp.place</title>
+		<meta name="description" content="Admin dashboard for wisp.place decentralized static site hosting." />
+		<meta name="robots" content="noindex, nofollow" />
+
+		<!-- Theme -->
+		<meta name="theme-color" content="#7c3aed" />
+
+		<link rel="icon" type="image/x-icon" href="/favicon.ico">
+		<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+		<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+		<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+		<link rel="manifest" href="/site.webmanifest">
+		<link rel="stylesheet" href="/dist/styles.css">
+		<style>
+			/* Dark theme fallback styles for before JS loads */
+			@media (prefers-color-scheme: dark) {
+				body {
+					background-color: oklch(0.23 0.015 285);
+					color: oklch(0.90 0.005 285);
+				}
+
+				pre {
+					background-color: oklch(0.33 0.015 285) !important;
+					color: oklch(0.90 0.005 285) !important;
+				}
+
+				.bg-muted {
+					background-color: oklch(0.33 0.015 285) !important;
+				}
+			}
+		</style>
+	</head>
+	<body>
+		<div id="root"></div>
+		<script type="module" src="/admin/${adminBundleName}"></script>
+	</body>
+</html>
+`
+
+await Bun.write(`${distDir}/admin/index.html`, adminHtmlContent)
+
 console.log('✅ Build successful!')
-console.log(`📦 Generated ${editorResult.outputs.length + 1} file(s):`)
+console.log(`📦 Generated ${editorResult.outputs.length + adminResult.outputs.length + 2} file(s):`)
+console.log(`\n   Editor:`)
 console.log(`   - ${distDir}/editor/index.html`)
 for (const output of editorResult.outputs) {
+	console.log(`   - ${output.path}`)
+}
+console.log(`\n   Admin:`)
+console.log(`   - ${distDir}/admin/index.html`)
+for (const output of adminResult.outputs) {
 	console.log(`   - ${output.path}`)
 }
