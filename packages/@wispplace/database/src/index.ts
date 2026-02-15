@@ -20,5 +20,6 @@ export type {
 	CookieSecret,
 	AdminUser,
 	SiteCache,
-	SiteSettingsCache
+	SiteSettingsCache,
+	Supporter
 } from './types';

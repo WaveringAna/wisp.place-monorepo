@@ -400,9 +400,16 @@ function Dashboard() {
 						</p>
 					</div>
 					<div className="flex items-center gap-3">
-						<span className="text-sm text-muted-foreground">
-							{userInfo?.handle || 'Loading...'}
-						</span>
+						<div className="flex items-center gap-2">
+							<span className="text-sm text-muted-foreground">
+								{userInfo?.handle || 'Loading...'}
+							</span>
+							{userInfo?.isSupporter && (
+								<Badge variant="default" className="text-xs">
+									Supporter
+								</Badge>
+							)}
+						</div>
 						<Button
 							variant="ghost"
 							size="sm"

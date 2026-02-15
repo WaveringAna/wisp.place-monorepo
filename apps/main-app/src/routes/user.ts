@@ -1,7 +1,7 @@
 import { Elysia, t } from 'elysia'
 import { requireAuth } from '../lib/wisp-auth'
 import { NodeOAuthClient } from '@atproto/oauth-client-node'
-import { getSitesByDid, getDomainByDid, getCustomDomainsByDid, getWispDomainInfo, getDomainsBySite, getAllWispDomains } from '../lib/db'
+import { getSitesByDid, getDomainByDid, getCustomDomainsByDid, getWispDomainInfo, getDomainsBySite, getAllWispDomains, isSupporter } from '../lib/db'
 import { syncSitesFromPDS } from '../lib/sync-sites'
 import { createLogger } from '@wispplace/observability'
 import { getHandleForDid } from '@wispplace/atproto-utils'
@@ -46,7 +46,7 @@ export const userRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		})
 		/**
 		 * GET /api/user/info
-		 * Success: { did, handle }
+		 * Success: { did, handle, isSupporter }
 		 */
 		.get('/info', async ({ auth }) => {
 			try {
@@ -60,10 +60,17 @@ export const userRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 					logger.error('[User] Failed to resolve DID', err)
 				}
 
-				return {
+				// Check if user is a supporter
+				const supporter = await isSupporter(auth.did)
+				logger.debug('[User] isSupporter check', { did: auth.did, supporter })
+
+				const response = {
 					did: auth.did,
-					handle
+					handle,
+					isSupporter: supporter
 				}
+				logger.debug('[User] Returning info', response)
+				return response
 			} catch (err) {
 				logger.error('[User] Info error', err)
 				throw new Error('Failed to get user info')

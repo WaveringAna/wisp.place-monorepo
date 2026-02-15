@@ -153,6 +153,21 @@ await db`
     )
 `;
 
+// Supporter table - list of supporter DIDs
+await db`
+    CREATE TABLE IF NOT EXISTS supporter (
+        did TEXT PRIMARY KEY,
+        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())
+    )
+`;
+
+// Insert initial supporter
+await db`
+    INSERT INTO supporter (did)
+    VALUES ('did:plc:ttdrpj45ibqunmfhdsb4zdwq')
+    ON CONFLICT (did) DO NOTHING
+`;
+
 // Create indexes for common query patterns
 await Promise.all([
     // oauth_states cleanup queries
@@ -328,10 +343,13 @@ export const claimDomain = async (did: string, handle: string): Promise<string> 
     const h = handle.trim().toLowerCase();
     if (!isValidHandle(h)) throw new Error('invalid_handle');
 
-    // Check if user already has 3 domains
-    const existingCount = await countWispDomains(did);
-    if (existingCount >= 3) {
-        throw new Error('domain_limit_reached');
+    // Check if user already has 3 domains (unless they're a supporter)
+    const supporter = await isSupporter(did);
+    if (!supporter) {
+        const existingCount = await countWispDomains(did);
+        if (existingCount >= 3) {
+            throw new Error('domain_limit_reached');
+        }
     }
 
     const domain = toDomain(h);
@@ -570,6 +588,29 @@ export const getCookieSecret = async (): Promise<string> => {
 
     console.log('[CookieSecret] Generated new cookie signing secret');
     return secret;
+};
+
+// Supporter management functions
+export const isSupporter = async (did: string): Promise<boolean> => {
+    const rows = await db`SELECT 1 FROM supporter WHERE did = ${did} LIMIT 1`;
+    return rows.length > 0;
+};
+
+export const addSupporter = async (did: string): Promise<void> => {
+    await db`
+        INSERT INTO supporter (did)
+        VALUES (${did})
+        ON CONFLICT (did) DO NOTHING
+    `;
+};
+
+export const removeSupporter = async (did: string): Promise<void> => {
+    await db`DELETE FROM supporter WHERE did = ${did}`;
+};
+
+export const getAllSupporters = async () => {
+    const rows = await db`SELECT * FROM supporter ORDER BY created_at ASC`;
+    return rows;
 };
 
 /**

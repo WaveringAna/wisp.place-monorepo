@@ -84,3 +84,11 @@ export interface SiteSettingsCache {
 	cached_at: number;
 	updated_at: number;
 }
+
+/**
+ * Supporter - list of supporter DIDs
+ */
+export interface Supporter {
+	did: string;
+	created_at?: number;
+}

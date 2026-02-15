@@ -196,7 +196,7 @@ export function useDomainData() {
 
 			// Handle domain limit error more gracefully
 			if (errorMessage.includes('Domain limit reached')) {
-				alert('You have already claimed 3 wisp.place subdomains (maximum limit).')
+				alert('You have already claimed 3 wisp.place subdomains (maximum limit). Supporters get unlimited subdomains!')
 				await fetchDomains()
 			} else {
 				alert(`Failed to claim domain: ${errorMessage}`)

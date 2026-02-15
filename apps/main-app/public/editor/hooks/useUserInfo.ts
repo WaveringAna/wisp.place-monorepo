@@ -3,6 +3,7 @@ import { useState } from 'react'
 export interface UserInfo {
 	did: string
 	handle: string
+	isSupporter: boolean
 }
 
 export function useUserInfo() {

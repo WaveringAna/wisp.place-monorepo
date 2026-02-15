@@ -145,7 +145,9 @@ export function DomainsTab({
 					<CardHeader>
 						<CardTitle>wisp.place Subdomains</CardTitle>
 						<CardDescription>
-							Your free subdomains on the wisp.place network (up to 3)
+							{userInfo?.isSupporter
+								? 'Your free subdomains on the wisp.place network (unlimited as a supporter)'
+								: 'Your free subdomains on the wisp.place network (up to 3)'}
 						</CardDescription>
 					</CardHeader>
 					<CardContent>
@@ -211,11 +213,13 @@ export function DomainsTab({
 									</div>
 								)}
 
-								{wispDomains.length < 3 && (
+								{(wispDomains.length < 3 || userInfo?.isSupporter) && (
 									<div className="p-4 bg-muted/30 rounded-lg">
 										<p className="text-sm text-muted-foreground mb-4">
 											{wispDomains.length === 0
 												? 'Claim your free wisp.place subdomain'
+												: userInfo?.isSupporter
+												? `Claim another wisp.place subdomain (${wispDomains.length} claimed)`
 												: `Claim another wisp.place subdomain (${wispDomains.length}/3)`}
 										</p>
 										<div className="space-y-3">
@@ -280,7 +284,7 @@ export function DomainsTab({
 									</div>
 								)}
 
-								{wispDomains.length === 3 && (
+								{wispDomains.length === 3 && !userInfo?.isSupporter && (
 									<div className="p-3 bg-muted/30 rounded-lg text-center">
 										<p className="text-sm text-muted-foreground">
 											You have claimed the maximum of 3 wisp.place subdomains

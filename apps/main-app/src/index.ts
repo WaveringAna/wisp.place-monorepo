@@ -248,7 +248,18 @@ export const app = new Elysia({
 		return await Bun.file('./apps/main-app/public/editor/onboarding.html').text()
 	})
 	.get('/oauth-client-metadata.json', () => {
-		return createClientMetadata(config)
+		logger.debug('[OAuth] Client metadata requested', {
+			LOCAL_DEV: Bun.env.LOCAL_DEV,
+			DOMAIN: Bun.env.DOMAIN,
+			BASE_DOMAIN: Bun.env.BASE_DOMAIN,
+			configDomain: config.domain
+		})
+		const metadata = createClientMetadata(config)
+		logger.debug('[OAuth] Returning metadata', {
+			client_id: metadata.client_id,
+			redirect_uris: metadata.redirect_uris
+		})
+		return metadata
 	})
 	.get('/jwks.json', async ({ set }) => {
 		// Prevent caching to ensure clients always get fresh keys after rotation
