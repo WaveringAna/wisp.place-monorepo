@@ -2,7 +2,8 @@
 import { Elysia, t } from 'elysia'
 import { adminAuth, requireAdmin } from '../lib/admin-auth'
 import { logCollector, errorTracker, metricsCollector } from '@wispplace/observability'
-import { db } from '../lib/db'
+import { db, getAllSupporters, addSupporter, removeSupporter } from '../lib/db'
+import { SlingshotHandleResolver } from '../lib/slingshot-handle-resolver'
 
 export const adminRoutes = (cookieSecret: string) =>
 	new Elysia({
@@ -494,6 +495,99 @@ export const adminRoutes = (cookieSecret: string) =>
 				},
 				timestamp: new Date().toISOString()
 			}
+		}, {
+			cookie: t.Cookie({
+				admin_session: t.Optional(t.String())
+			}, {
+				secrets: cookieSecret,
+				sign: ['admin_session']
+			})
+		})
+
+		// Get all supporters (protected)
+		/**
+		 * GET /api/admin/supporters
+		 * Success: { supporters }
+		 * Unauthorized (401): { error: 'Unauthorized' }
+		 */
+		.get('/supporters', async ({ cookie, set }) => {
+			const check = requireAdmin({ cookie, set })
+			if (check) return check
+
+			const supporters = await getAllSupporters()
+			return { supporters }
+		}, {
+			cookie: t.Cookie({
+				admin_session: t.Optional(t.String())
+			}, {
+				secrets: cookieSecret,
+				sign: ['admin_session']
+			})
+		})
+
+		// Add supporter (protected)
+		/**
+		 * POST /api/admin/supporters
+		 * Body: { identifier } - can be a handle or DID
+		 * Success: { success: true, did }
+		 * Failure (400): { error, message }
+		 */
+		.post('/supporters', async ({ body, cookie, set }) => {
+			const check = requireAdmin({ cookie, set })
+			if (check) return check
+
+			const { identifier } = body
+			let did = identifier.trim()
+
+			// If it's not a DID, treat it as a handle and resolve it
+			if (!did.startsWith('did:')) {
+				const handleResolver = new SlingshotHandleResolver()
+				const resolvedDid = await handleResolver.resolve(did)
+
+				if (!resolvedDid) {
+					set.status = 400
+					return {
+						error: 'Invalid handle',
+						message: `Could not resolve handle: ${did}`
+					}
+				}
+
+				did = resolvedDid
+			}
+
+			// Add to supporters table
+			await addSupporter(did)
+
+			return {
+				success: true,
+				did
+			}
+		}, {
+			body: t.Object({
+				identifier: t.String()
+			}),
+			cookie: t.Cookie({
+				admin_session: t.Optional(t.String())
+			}, {
+				secrets: cookieSecret,
+				sign: ['admin_session']
+			})
+		})
+
+		// Remove supporter (protected)
+		/**
+		 * DELETE /api/admin/supporters/:did
+		 * Success: { success: true }
+		 * Unauthorized (401): { error: 'Unauthorized' }
+		 */
+		.delete('/supporters/:did', async ({ params, cookie, set }) => {
+			const check = requireAdmin({ cookie, set })
+			if (check) return check
+
+			const { did } = params
+			await removeSupporter(did)
+
+			return { success: true }
 		}, {
 			cookie: t.Cookie({
 				admin_session: t.Optional(t.String())
