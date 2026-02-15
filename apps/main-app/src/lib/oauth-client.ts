@@ -161,7 +161,9 @@ const persistKey = async (key: JoseKey) => {
     await db`
         INSERT INTO oauth_keys (kid, jwk, created_at)
         VALUES (${kid}, ${JSON.stringify(priv)}, EXTRACT(EPOCH FROM NOW()))
-        ON CONFLICT (kid) DO UPDATE SET jwk = EXCLUDED.jwk
+        ON CONFLICT (kid) DO UPDATE SET
+            jwk = EXCLUDED.jwk,
+            created_at = EXCLUDED.created_at
     `;
 };
 
@@ -201,8 +203,8 @@ export const getCurrentKeys = async (): Promise<JoseKey[]> => {
     return await loadPersistedKeys();
 };
 
-// Key rotation - rotate keys older than 30 days (monthly rotation)
-const KEY_MAX_AGE = 30 * 24 * 60 * 60; // 30 days in seconds
+// Key rotation - rotate keys older than 6 months
+const KEY_MAX_AGE = 182.5 * 24 * 60 * 60; // ~6 months in seconds
 
 export const rotateKeysIfNeeded = async (): Promise<boolean> => {
     const now = Math.floor(Date.now() / 1000);
@@ -221,7 +223,7 @@ export const rotateKeysIfNeeded = async (): Promise<boolean> => {
             return false;
         }
 
-        logger.info(`[KeyRotation] Found ${oldKeys.length} key(s) older than 30 days, rotating oldest key`);
+        logger.info(`[KeyRotation] Found ${oldKeys.length} key(s) older than 6 months, rotating oldest key`);
 
         // Rotate the oldest key
         const oldestKey = oldKeys[0];
