@@ -3,6 +3,7 @@
 import { rm, mkdir } from 'fs/promises'
 import { existsSync } from 'fs'
 import path from 'path'
+import { css as wispCss } from '@wispplace/css'
 
 console.log('🔨 Building main-app frontend...')
 
@@ -196,8 +197,11 @@ const adminHtmlContent = `<!doctype html>
 
 await Bun.write(`${distDir}/admin/index.html`, adminHtmlContent)
 
+// Write wisp.css to public directory so it can be served by static plugin
+await Bun.write(`${publicDir}/wisp.css`, wispCss)
+
 console.log('✅ Build successful!')
-console.log(`📦 Generated ${editorResult.outputs.length + adminResult.outputs.length + 2} file(s):`)
+console.log(`📦 Generated ${editorResult.outputs.length + adminResult.outputs.length + 4} file(s):`)
 console.log(`\n   Editor:`)
 console.log(`   - ${distDir}/editor/index.html`)
 for (const output of editorResult.outputs) {
@@ -208,3 +212,6 @@ console.log(`   - ${distDir}/admin/index.html`)
 for (const output of adminResult.outputs) {
 	console.log(`   - ${output.path}`)
 }
+console.log(`\n   CSS:`)
+console.log(`   - ${publicDir}/wisp.css`)
+console.log(`   - ${distDir}/wisp.css`)
