@@ -43,6 +43,12 @@ export function startDomainCacheCleanup() {
         customDomainCache.delete(key);
       }
     }
+
+    for (const [key, entry] of settingsCache.entries()) {
+      if (now - entry.timestamp > SETTINGS_CACHE_TTL) {
+        settingsCache.delete(key);
+      }
+    }
   }, 30 * 60 * 1000); // Run every 30 minutes
 }
 
@@ -247,6 +253,29 @@ export async function closeDatabase(): Promise<void> {
 
 // Site cache queries
 
+const SETTINGS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const settingsCache = new Map<string, CachedDomain<SiteSettingsCache | null>>();
+
+export async function getSiteSettingsCache(did: string, rkey: string): Promise<SiteSettingsCache | null> {
+  const key = `${did}:${rkey}`;
+
+  const cached = settingsCache.get(key);
+  if (cached && Date.now() - cached.timestamp < SETTINGS_CACHE_TTL) {
+    return cached.value;
+  }
+
+  const result = await sql<SiteSettingsCache[]>`
+    SELECT did, rkey, record_cid, directory_listing, spa_mode, custom_404, index_files, clean_urls, headers, cached_at, updated_at
+    FROM site_settings_cache
+    WHERE did = ${did} AND rkey = ${rkey}
+    LIMIT 1
+  `;
+  const data = result[0] || null;
+
+  settingsCache.set(key, { value: data, timestamp: Date.now() });
+  return data;
+}
+
 export async function getSiteCache(did: string, rkey: string): Promise<SiteCache | null> {
   const result = await sql<SiteCache[]>`
     SELECT did, rkey, record_cid, file_cids, cached_at, updated_at
@@ -257,15 +286,6 @@ export async function getSiteCache(did: string, rkey: string): Promise<SiteCache
   return result[0] || null;
 }
 
-export async function getSiteSettingsCache(did: string, rkey: string): Promise<SiteSettingsCache | null> {
-  const result = await sql<SiteSettingsCache[]>`
-    SELECT did, rkey, record_cid, directory_listing, spa_mode, custom_404, index_files, clean_urls, headers, cached_at, updated_at
-    FROM site_settings_cache
-    WHERE did = ${did} AND rkey = ${rkey}
-    LIMIT 1
-  `;
-  return result[0] || null;
-}
 
 export async function listSiteCachesForDid(did: string): Promise<SiteCache[]> {
   return await sql<SiteCache[]>`

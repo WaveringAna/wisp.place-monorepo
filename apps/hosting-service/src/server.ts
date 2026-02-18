@@ -16,6 +16,21 @@ import { getRevalidateMetrics } from './lib/revalidate-metrics';
 
 const logger = createLogger('hosting-service');
 
+// Cache handle → DID resolutions for 10 minutes to avoid hitting bsky API on every request
+const HANDLE_CACHE_TTL = 10 * 60 * 1000;
+const handleCache = new Map<string, { did: string; timestamp: number }>();
+
+async function resolveDidCached(identifier: string): Promise<string | null> {
+  if (identifier.startsWith('did:')) return identifier;
+  const cached = handleCache.get(identifier);
+  if (cached && Date.now() - cached.timestamp < HANDLE_CACHE_TTL) {
+    return cached.did;
+  }
+  const did = await resolveDid(identifier);
+  if (did) handleCache.set(identifier, { did, timestamp: Date.now() });
+  return did;
+}
+
 const BASE_HOST_ENV = process.env.BASE_HOST || 'wisp.place';
 const BASE_HOST = BASE_HOST_ENV.split(':')[0] || BASE_HOST_ENV;
 
@@ -26,7 +41,7 @@ app.use('*', cors({
   origin: '*',
   allowMethods: ['GET', 'HEAD', 'OPTIONS'],
   allowHeaders: ['Content-Type', 'Authorization'],
-  exposeHeaders: ['Content-Length', 'Content-Type', 'Content-Encoding', 'Cache-Control'],
+  exposeHeaders: ['Content-Length', 'Content-Type', 'Content-Encoding', 'Cache-Control', 'ETag'],
   maxAge: 86400, // 24 hours
   credentials: false,
 }));
@@ -78,7 +93,7 @@ app.get('/*', async (c) => {
     }
 
     // Resolve identifier to DID
-    const did = await resolveDid(identifier);
+    const did = await resolveDidCached(identifier);
     if (!did) {
       return c.text('Invalid identifier', 400);
     }

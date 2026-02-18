@@ -21,6 +21,7 @@ import { normalizeFileCids } from '@wispplace/fs-utils';
 import { fetchAndCacheSite } from './on-demand-cache';
 import type { StorageResult } from '@wispplace/tiered-storage';
 import { createLogger } from '@wispplace/observability';
+import { createTrace, span, logTrace, type RequestTrace } from './trace';
 
 const logger = createLogger('file-serving');
 
@@ -118,14 +119,32 @@ function buildResponseFromStorageResult(
   const content = Buffer.from(result.data);
   const meta = result.metadata.customMetadata as { encoding?: string; mimeType?: string } | undefined;
   const mimeType = meta?.mimeType || lookup(filePath) || 'application/octet-stream';
+  const cacheControl = mimeType.startsWith('text/html')
+    ? 'public, max-age=300'
+    : 'public, max-age=31536000, immutable';
+  const etag = result.metadata.checksum ? `"${result.metadata.checksum}"` : undefined;
+
+  // Handle conditional requests (If-None-Match → 304 Not Modified)
+  if (etag && requestHeaders?.['if-none-match']) {
+    const ifNoneMatch = requestHeaders['if-none-match'];
+    const matches = ifNoneMatch === '*' || ifNoneMatch.split(',').map(e => e.trim()).includes(etag);
+    if (matches) {
+      return new Response(null, {
+        status: 304,
+        headers: { 'ETag': etag, 'Cache-Control': cacheControl },
+      });
+    }
+  }
 
   const headers: Record<string, string> = {
     'Content-Type': mimeType,
-    'Cache-Control': mimeType.startsWith('text/html')
-      ? 'public, max-age=300'
-      : 'public, max-age=31536000, immutable',
+    'Cache-Control': cacheControl,
     'X-Cache-Tier': result.source,
   };
+
+  if (etag) {
+    headers['ETag'] = etag;
+  }
 
   if (meta?.encoding === 'gzip') {
     const shouldServeCompressed = shouldCompressMimeType(mimeType);
@@ -161,8 +180,10 @@ export async function serveFromCache(
   fullUrl?: string,
   headers?: Record<string, string>
 ): Promise<Response> {
+  const trace = createTrace();
+
   // Load settings for this site
-  const settings = await getCachedSettings(did, rkey);
+  const settings = await span(trace, 'db:settings', () => getCachedSettings(did, rkey));
   const indexFiles = getIndexFiles(settings);
 
   // Check for redirect rules first (_redirects wins over settings)
@@ -170,7 +191,7 @@ export async function serveFromCache(
 
   if (redirectRules === null) {
     // Load rules (not in cache or evicted)
-    redirectRules = await loadRedirectRules(did, rkey);
+    redirectRules = await span(trace, 'storage:redirectRules', () => loadRedirectRules(did, rkey));
     setRedirectRulesInCache(did, rkey, redirectRules);
   }
 
@@ -201,7 +222,9 @@ export async function serveFromCache(
 
         // If file exists and redirect is not forced, serve the file normally
         if (fileExistsInStorage) {
-          return serveFileInternal(did, rkey, filePath, settings, headers);
+          const response = await serveFileInternal(did, rkey, filePath, settings, headers, trace);
+          logTrace(trace, filePath || '/', logger);
+          return response;
         }
       }
 
@@ -210,9 +233,12 @@ export async function serveFromCache(
         // Rewrite: serve different content but keep URL the same
         // Remove leading slash for internal path resolution
         const rewritePath = targetPath.startsWith('/') ? targetPath.slice(1) : targetPath;
-        return serveFileInternal(did, rkey, rewritePath, settings, headers);
+        const response = await serveFileInternal(did, rkey, rewritePath, settings, headers, trace);
+        logTrace(trace, filePath || '/', logger);
+        return response;
       } else if (status === 301 || status === 302) {
         // External redirect: change the URL
+        logTrace(trace, filePath || '/', logger);
         return new Response(null, {
           status,
           headers: {
@@ -223,7 +249,8 @@ export async function serveFromCache(
       } else if (status === 404) {
         // Custom 404 page from _redirects (wins over settings.custom404)
         const custom404Path = targetPath.startsWith('/') ? targetPath.slice(1) : targetPath;
-        const response = await serveFileInternal(did, rkey, custom404Path, settings, headers);
+        const response = await serveFileInternal(did, rkey, custom404Path, settings, headers, trace);
+        logTrace(trace, filePath || '/', logger);
         // Override status to 404
         return new Response(response.body, {
           status: 404,
@@ -234,7 +261,9 @@ export async function serveFromCache(
   }
 
   // No redirect matched, serve normally with settings
-  return serveFileInternal(did, rkey, filePath, settings, headers);
+  const response = await serveFileInternal(did, rkey, filePath, settings, headers, trace);
+  logTrace(trace, filePath || '/', logger);
+  return response;
 }
 
 /**
@@ -245,14 +274,15 @@ export async function serveFileInternal(
   rkey: string,
   filePath: string,
   settings: WispSettings | null = null,
-  requestHeaders?: Record<string, string>
+  requestHeaders?: Record<string, string>,
+  trace?: RequestTrace | null
 ): Promise<Response> {
   let expectedFileCids: Record<string, string> | null | undefined;
   let expectedMissPath: string | null = null;
 
   const getExpectedFileCids = async (): Promise<Record<string, string> | null> => {
     if (expectedFileCids !== undefined) return expectedFileCids;
-    const siteCache = await getSiteCache(did, rkey);
+    const siteCache = await span(trace, 'db:siteCache', () => getSiteCache(did, rkey));
     if (!siteCache) {
       expectedFileCids = null;
       return null;
@@ -291,7 +321,7 @@ export async function serveFileInternal(
   if (!requestPath || !requestPath.includes('.')) {
     for (const indexFile of indexFiles) {
       const indexPath = requestPath ? `${requestPath}/${indexFile}` : indexFile;
-      const result = await getFileWithMetadata(did, rkey, indexPath);
+      const result = await span(trace, `storage:${indexPath}`, () => getFileWithMetadata(did, rkey, indexPath));
       if (result) {
         return buildResponseFromStorageResult(result, indexPath, settings, requestHeaders);
       }
@@ -320,7 +350,7 @@ export async function serveFileInternal(
   const fileRequestPath: string = requestPath || indexFiles[0] || 'index.html';
 
   // Retrieve from tiered storage
-  const result = await getFileWithMetadata(did, rkey, fileRequestPath);
+  const result = await span(trace, `storage:${fileRequestPath}`, () => getFileWithMetadata(did, rkey, fileRequestPath));
 
   if (result) {
     return buildResponseFromStorageResult(result, fileRequestPath, settings, requestHeaders);
@@ -331,25 +361,9 @@ export async function serveFileInternal(
   if (!fileRequestPath.includes('.')) {
     for (const indexFileName of indexFiles) {
       const indexPath = fileRequestPath ? `${fileRequestPath}/${indexFileName}` : indexFileName;
-
-      const indexResult = await getFileWithMetadata(did, rkey, indexPath);
-
+      const indexResult = await span(trace, `storage:${indexPath}`, () => getFileWithMetadata(did, rkey, indexPath));
       if (indexResult) {
-        const indexContent = Buffer.from(indexResult.data);
-        const indexMeta = indexResult.metadata.customMetadata as { encoding?: string; mimeType?: string } | undefined;
-
-        const headers: Record<string, string> = {
-          'Content-Type': 'text/html; charset=utf-8',
-          'Cache-Control': 'public, max-age=300',
-          'X-Cache-Tier': indexResult.source,
-        };
-
-        if (indexMeta?.encoding === 'gzip') {
-          headers['Content-Encoding'] = 'gzip';
-        }
-
-        applyCustomHeaders(headers, indexPath, settings);
-        return new Response(indexContent, { headers });
+        return buildResponseFromStorageResult(indexResult, indexPath, settings, requestHeaders);
       }
       await markExpectedMiss(indexPath);
     }
@@ -359,7 +373,7 @@ export async function serveFileInternal(
   if (settings?.cleanUrls && !fileRequestPath.includes('.')) {
     const htmlPath = `${fileRequestPath}.html`;
     if (await storageExists(did, rkey, htmlPath)) {
-      return serveFileInternal(did, rkey, htmlPath, settings, requestHeaders);
+      return serveFileInternal(did, rkey, htmlPath, settings, requestHeaders, trace);
     }
     await markExpectedMiss(htmlPath);
 
@@ -367,7 +381,7 @@ export async function serveFileInternal(
     for (const indexFileName of indexFiles) {
       const indexPath = fileRequestPath ? `${fileRequestPath}/${indexFileName}` : indexFileName;
       if (await storageExists(did, rkey, indexPath)) {
-        return serveFileInternal(did, rkey, indexPath, settings, requestHeaders);
+        return serveFileInternal(did, rkey, indexPath, settings, requestHeaders, trace);
       }
       await markExpectedMiss(indexPath);
     }
@@ -377,7 +391,7 @@ export async function serveFileInternal(
   if (settings?.spaMode) {
     const spaFile = settings.spaMode;
     if (await storageExists(did, rkey, spaFile)) {
-      return serveFileInternal(did, rkey, spaFile, settings, requestHeaders);
+      return serveFileInternal(did, rkey, spaFile, settings, requestHeaders, trace);
     }
     await markExpectedMiss(spaFile);
   }
@@ -386,7 +400,7 @@ export async function serveFileInternal(
   if (settings?.custom404) {
     const custom404File = settings.custom404;
     if (await storageExists(did, rkey, custom404File)) {
-      const response: Response = await serveFileInternal(did, rkey, custom404File, settings, requestHeaders);
+      const response: Response = await serveFileInternal(did, rkey, custom404File, settings, requestHeaders, trace);
       // Override status to 404
       return new Response(response.body, {
         status: 404,
@@ -400,7 +414,7 @@ export async function serveFileInternal(
   const auto404Pages = ['404.html', 'not_found.html'];
   for (const auto404Page of auto404Pages) {
     if (await storageExists(did, rkey, auto404Page)) {
-      const response: Response = await serveFileInternal(did, rkey, auto404Page, settings, requestHeaders);
+      const response: Response = await serveFileInternal(did, rkey, auto404Page, settings, requestHeaders, trace);
       // Override status to 404
       return new Response(response.body, {
         status: 404,
@@ -438,7 +452,7 @@ export async function serveFileInternal(
     if (success) {
       // Retry serving the originally requested file
       const retryPath = filePath || indexFiles[0] || 'index.html';
-      const retryResult = await getFileWithMetadata(did, rkey, retryPath);
+      const retryResult = await span(trace, `storage:${retryPath}`, () => getFileWithMetadata(did, rkey, retryPath));
       if (retryResult) {
         return buildResponseFromStorageResult(retryResult, retryPath, settings, requestHeaders);
       }
@@ -467,8 +481,10 @@ export async function serveFromCacheWithRewrite(
   fullUrl?: string,
   headers?: Record<string, string>
 ): Promise<Response> {
+  const trace = createTrace();
+
   // Load settings for this site
-  const settings = await getCachedSettings(did, rkey);
+  const settings = await span(trace, 'db:settings', () => getCachedSettings(did, rkey));
   const indexFiles = getIndexFiles(settings);
 
   // Check for redirect rules first (_redirects wins over settings)
@@ -476,7 +492,7 @@ export async function serveFromCacheWithRewrite(
 
   if (redirectRules === null) {
     // Load rules (not in cache or evicted)
-    redirectRules = await loadRedirectRules(did, rkey);
+    redirectRules = await span(trace, 'storage:redirectRules', () => loadRedirectRules(did, rkey));
     setRedirectRulesInCache(did, rkey, redirectRules);
   }
 
@@ -507,7 +523,9 @@ export async function serveFromCacheWithRewrite(
 
         // If file exists and redirect is not forced, serve the file normally
         if (fileExistsInStorage) {
-          return serveFileInternalWithRewrite(did, rkey, filePath, basePath, settings, headers);
+          const response = await serveFileInternalWithRewrite(did, rkey, filePath, basePath, settings, headers, trace);
+          logTrace(trace, filePath || '/', logger);
+          return response;
         }
       }
 
@@ -515,7 +533,9 @@ export async function serveFromCacheWithRewrite(
       if (status === 200) {
         // Rewrite: serve different content but keep URL the same
         const rewritePath = targetPath.startsWith('/') ? targetPath.slice(1) : targetPath;
-        return serveFileInternalWithRewrite(did, rkey, rewritePath, basePath, settings, headers);
+        const response = await serveFileInternalWithRewrite(did, rkey, rewritePath, basePath, settings, headers, trace);
+        logTrace(trace, filePath || '/', logger);
+        return response;
       } else if (status === 301 || status === 302) {
         // External redirect: change the URL
         // For sites.wisp.place, we need to adjust the target path to include the base path
@@ -524,6 +544,7 @@ export async function serveFromCacheWithRewrite(
         if (!targetPath.startsWith('http://') && !targetPath.startsWith('https://')) {
           redirectTarget = basePath + (targetPath.startsWith('/') ? targetPath.slice(1) : targetPath);
         }
+        logTrace(trace, filePath || '/', logger);
         return new Response(null, {
           status,
           headers: {
@@ -534,7 +555,8 @@ export async function serveFromCacheWithRewrite(
       } else if (status === 404) {
         // Custom 404 page from _redirects (wins over settings.custom404)
         const custom404Path = targetPath.startsWith('/') ? targetPath.slice(1) : targetPath;
-        const response = await serveFileInternalWithRewrite(did, rkey, custom404Path, basePath, settings, headers);
+        const response = await serveFileInternalWithRewrite(did, rkey, custom404Path, basePath, settings, headers, trace);
+        logTrace(trace, filePath || '/', logger);
         // Override status to 404
         return new Response(response.body, {
           status: 404,
@@ -545,7 +567,9 @@ export async function serveFromCacheWithRewrite(
   }
 
   // No redirect matched, serve normally with settings
-  return serveFileInternalWithRewrite(did, rkey, filePath, basePath, settings, headers);
+  const response = await serveFileInternalWithRewrite(did, rkey, filePath, basePath, settings, headers, trace);
+  logTrace(trace, filePath || '/', logger);
+  return response;
 }
 
 /**
@@ -557,14 +581,15 @@ export async function serveFileInternalWithRewrite(
   filePath: string,
   basePath: string,
   settings: WispSettings | null = null,
-  requestHeaders?: Record<string, string>
+  requestHeaders?: Record<string, string>,
+  trace?: RequestTrace | null
 ): Promise<Response> {
   let expectedFileCids: Record<string, string> | null | undefined;
   let expectedMissPath: string | null = null;
 
   const getExpectedFileCids = async (): Promise<Record<string, string> | null> => {
     if (expectedFileCids !== undefined) return expectedFileCids;
-    const siteCache = await getSiteCache(did, rkey);
+    const siteCache = await span(trace, 'db:siteCache', () => getSiteCache(did, rkey));
     if (!siteCache) {
       expectedFileCids = null;
       return null;
@@ -603,7 +628,7 @@ export async function serveFileInternalWithRewrite(
   if (!requestPath || !requestPath.includes('.')) {
     for (const indexFile of indexFiles) {
       const indexPath = requestPath ? `${requestPath}/${indexFile}` : indexFile;
-      const fileResult = await getFileForRequest(did, rkey, indexPath, true);
+      const fileResult = await span(trace, `storage:${indexPath}`, () => getFileForRequest(did, rkey, indexPath, true));
       if (fileResult) {
         return buildResponseFromStorageResult(fileResult.result, indexPath, settings, requestHeaders);
       }
@@ -631,7 +656,7 @@ export async function serveFileInternalWithRewrite(
   // Not a directory, try to serve as a file
   const fileRequestPath: string = requestPath || indexFiles[0] || 'index.html';
 
-  const fileResult = await getFileForRequest(did, rkey, fileRequestPath, true);
+  const fileResult = await span(trace, `storage:${fileRequestPath}`, () => getFileForRequest(did, rkey, fileRequestPath, true));
   if (fileResult) {
     return buildResponseFromStorageResult(fileResult.result, fileRequestPath, settings, requestHeaders);
   }
@@ -641,7 +666,7 @@ export async function serveFileInternalWithRewrite(
   if (!fileRequestPath.includes('.')) {
     for (const indexFileName of indexFiles) {
       const indexPath = fileRequestPath ? `${fileRequestPath}/${indexFileName}` : indexFileName;
-      const indexResult = await getFileForRequest(did, rkey, indexPath, true);
+      const indexResult = await span(trace, `storage:${indexPath}`, () => getFileForRequest(did, rkey, indexPath, true));
       if (indexResult) {
         return buildResponseFromStorageResult(indexResult.result, indexPath, settings, requestHeaders);
       }
@@ -653,7 +678,7 @@ export async function serveFileInternalWithRewrite(
   if (settings?.cleanUrls && !fileRequestPath.includes('.')) {
     const htmlPath = `${fileRequestPath}.html`;
     if (await storageExists(did, rkey, htmlPath)) {
-      return serveFileInternalWithRewrite(did, rkey, htmlPath, basePath, settings, requestHeaders);
+      return serveFileInternalWithRewrite(did, rkey, htmlPath, basePath, settings, requestHeaders, trace);
     }
     await markExpectedMiss(htmlPath);
 
@@ -661,7 +686,7 @@ export async function serveFileInternalWithRewrite(
     for (const indexFileName of indexFiles) {
       const indexPath = fileRequestPath ? `${fileRequestPath}/${indexFileName}` : indexFileName;
       if (await storageExists(did, rkey, indexPath)) {
-        return serveFileInternalWithRewrite(did, rkey, indexPath, basePath, settings, requestHeaders);
+        return serveFileInternalWithRewrite(did, rkey, indexPath, basePath, settings, requestHeaders, trace);
       }
       await markExpectedMiss(indexPath);
     }
@@ -671,7 +696,7 @@ export async function serveFileInternalWithRewrite(
   if (settings?.spaMode) {
     const spaFile = settings.spaMode;
     if (await storageExists(did, rkey, spaFile)) {
-      return serveFileInternalWithRewrite(did, rkey, spaFile, basePath, settings, requestHeaders);
+      return serveFileInternalWithRewrite(did, rkey, spaFile, basePath, settings, requestHeaders, trace);
     }
     await markExpectedMiss(spaFile);
   }
@@ -680,7 +705,7 @@ export async function serveFileInternalWithRewrite(
   if (settings?.custom404) {
     const custom404File = settings.custom404;
     if (await storageExists(did, rkey, custom404File)) {
-      const response: Response = await serveFileInternalWithRewrite(did, rkey, custom404File, basePath, settings, requestHeaders);
+      const response: Response = await serveFileInternalWithRewrite(did, rkey, custom404File, basePath, settings, requestHeaders, trace);
       // Override status to 404
       return new Response(response.body, {
         status: 404,
@@ -694,7 +719,7 @@ export async function serveFileInternalWithRewrite(
   const auto404Pages = ['404.html', 'not_found.html'];
   for (const auto404Page of auto404Pages) {
     if (await storageExists(did, rkey, auto404Page)) {
-      const response: Response = await serveFileInternalWithRewrite(did, rkey, auto404Page, basePath, settings, requestHeaders);
+      const response: Response = await serveFileInternalWithRewrite(did, rkey, auto404Page, basePath, settings, requestHeaders, trace);
       // Override status to 404
       return new Response(response.body, {
         status: 404,
@@ -732,7 +757,7 @@ export async function serveFileInternalWithRewrite(
     if (success) {
       // Retry serving the originally requested file
       const retryPath = filePath || indexFiles[0] || 'index.html';
-      const retryResult = await getFileWithMetadata(did, rkey, retryPath);
+      const retryResult = await span(trace, `storage:${retryPath}`, () => getFileWithMetadata(did, rkey, retryPath));
       if (retryResult) {
         return buildResponseFromStorageResult(retryResult, retryPath, settings, requestHeaders);
       }
