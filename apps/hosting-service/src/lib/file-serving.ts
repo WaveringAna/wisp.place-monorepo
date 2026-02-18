@@ -28,6 +28,16 @@ const logger = createLogger('file-serving');
 type FileStorageResult = StorageResult<Uint8Array>;
 
 /**
+ * Check if the last segment of a path looks like it has a file extension.
+ * e.g. "style.css" → true, "about" → false, "wisp-cli-x86_64-linux" → false,
+ *      "dir.name/file" → false, "dir/file.tar.gz" → true
+ */
+function hasFileExtension(path: string): boolean {
+  const basename = path.split('/').pop() || '';
+  return /\.[a-zA-Z0-9]+$/.test(basename);
+}
+
+/**
  * Helper to retrieve a file with metadata from tiered storage
  * Logs which tier the file was served from
  */
@@ -312,9 +322,17 @@ export async function serveFileInternal(
     requestPath = requestPath.slice(0, -1);
   }
 
-  // For directory-like paths (empty or no extension), try index files FIRST (fast)
-  // Only do expensive directory listing if needed for directory listing feature
-  if (!requestPath || !requestPath.includes('.')) {
+  // For directory-like paths (empty or no file extension in basename), try index files
+  if (!requestPath || !hasFileExtension(requestPath)) {
+    // For non-empty extensionless paths, try as a direct file first (e.g. binary downloads)
+    if (requestPath) {
+      const directResult = await span(trace, `storage:${requestPath}`, () => getFileWithMetadata(did, rkey, requestPath));
+      if (directResult) {
+        return buildResponseFromStorageResult(directResult, requestPath, settings, requestHeaders);
+      }
+      await markExpectedMiss(requestPath);
+    }
+
     for (const indexFile of indexFiles) {
       const indexPath = requestPath ? `${requestPath}/${indexFile}` : indexFile;
       const result = await span(trace, `storage:${indexPath}`, () => getFileWithMetadata(did, rkey, indexPath));
@@ -342,7 +360,7 @@ export async function serveFileInternal(
     // Fall through to normal file serving / 404 handling
   }
 
-  // Not a directory, try to serve as a file
+  // Try to serve as a file
   const fileRequestPath: string = requestPath || indexFiles[0] || 'index.html';
 
   // Retrieve from tiered storage
@@ -354,7 +372,7 @@ export async function serveFileInternal(
   await markExpectedMiss(fileRequestPath);
 
   // Try index files for directory-like paths
-  if (!fileRequestPath.includes('.')) {
+  if (!hasFileExtension(fileRequestPath)) {
     for (const indexFileName of indexFiles) {
       const indexPath = fileRequestPath ? `${fileRequestPath}/${indexFileName}` : indexFileName;
       const indexResult = await span(trace, `storage:${indexPath}`, () => getFileWithMetadata(did, rkey, indexPath));
@@ -366,7 +384,7 @@ export async function serveFileInternal(
   }
 
   // Try clean URLs: /about -> /about.html
-  if (settings?.cleanUrls && !fileRequestPath.includes('.')) {
+  if (settings?.cleanUrls && !hasFileExtension(fileRequestPath)) {
     const htmlPath = `${fileRequestPath}.html`;
     if (await storageExists(did, rkey, htmlPath)) {
       return serveFileInternal(did, rkey, htmlPath, settings, requestHeaders, trace);
@@ -615,9 +633,17 @@ export async function serveFileInternalWithRewrite(
     requestPath = requestPath.slice(0, -1);
   }
 
-  // For directory-like paths (empty or no extension), try index files FIRST (fast)
-  // Only do expensive directory listing if needed for directory listing feature
-  if (!requestPath || !requestPath.includes('.')) {
+  // For directory-like paths (empty or no file extension in basename), try index files
+  if (!requestPath || !hasFileExtension(requestPath)) {
+    // For non-empty extensionless paths, try as a direct file first (e.g. binary downloads)
+    if (requestPath) {
+      const directResult = await span(trace, `storage:${requestPath}`, () => getFileForRequest(did, rkey, requestPath, true));
+      if (directResult) {
+        return buildResponseFromStorageResult(directResult.result, requestPath, settings, requestHeaders);
+      }
+      await markExpectedMiss(requestPath);
+    }
+
     for (const indexFile of indexFiles) {
       const indexPath = requestPath ? `${requestPath}/${indexFile}` : indexFile;
       const fileResult = await span(trace, `storage:${indexPath}`, () => getFileForRequest(did, rkey, indexPath, true));
@@ -645,7 +671,7 @@ export async function serveFileInternalWithRewrite(
     // Fall through to normal file serving / 404 handling
   }
 
-  // Not a directory, try to serve as a file
+  // Try to serve as a file
   const fileRequestPath: string = requestPath || indexFiles[0] || 'index.html';
 
   const fileResult = await span(trace, `storage:${fileRequestPath}`, () => getFileForRequest(did, rkey, fileRequestPath, true));
@@ -655,7 +681,7 @@ export async function serveFileInternalWithRewrite(
   await markExpectedMiss(fileRequestPath);
 
   // Try index files for directory-like paths
-  if (!fileRequestPath.includes('.')) {
+  if (!hasFileExtension(fileRequestPath)) {
     for (const indexFileName of indexFiles) {
       const indexPath = fileRequestPath ? `${fileRequestPath}/${indexFileName}` : indexFileName;
       const indexResult = await span(trace, `storage:${indexPath}`, () => getFileForRequest(did, rkey, indexPath, true));
@@ -667,7 +693,7 @@ export async function serveFileInternalWithRewrite(
   }
 
   // Try clean URLs: /about -> /about.html
-  if (settings?.cleanUrls && !fileRequestPath.includes('.')) {
+  if (settings?.cleanUrls && !hasFileExtension(fileRequestPath)) {
     const htmlPath = `${fileRequestPath}.html`;
     if (await storageExists(did, rkey, htmlPath)) {
       return serveFileInternalWithRewrite(did, rkey, htmlPath, basePath, settings, requestHeaders, trace);
