@@ -12,7 +12,7 @@ import { loadRedirectRules, matchRedirectRule, parseCookies, parseQueryString } 
 import { isHtmlContent } from './html-rewriter';
 import { generate404Page, generateDirectoryListing } from './page-generators';
 import { getIndexFiles, applyCustomHeaders } from './request-utils';
-import { getRedirectRulesFromCache, setRedirectRulesInCache } from './site-cache';
+import { cache } from './cache-manager';
 import { storage } from './storage';
 import { getSiteCache } from './db';
 import { enqueueRevalidate } from './revalidate-queue';
@@ -187,13 +187,9 @@ export async function serveFromCache(
   const indexFiles = getIndexFiles(settings);
 
   // Check for redirect rules first (_redirects wins over settings)
-  let redirectRules = getRedirectRulesFromCache(did, rkey);
-
-  if (redirectRules === null) {
-    // Load rules (not in cache or evicted)
-    redirectRules = await span(trace, 'storage:redirectRules', () => loadRedirectRules(did, rkey));
-    setRedirectRulesInCache(did, rkey, redirectRules);
-  }
+  const redirectRules = await cache.getOrFetch('redirectRules', `${did}:${rkey}`, () =>
+    span(trace, 'storage:redirectRules', () => loadRedirectRules(did, rkey))
+  );
 
   // Apply redirect rules if any exist
   if (redirectRules.length > 0) {
@@ -488,13 +484,9 @@ export async function serveFromCacheWithRewrite(
   const indexFiles = getIndexFiles(settings);
 
   // Check for redirect rules first (_redirects wins over settings)
-  let redirectRules = getRedirectRulesFromCache(did, rkey);
-
-  if (redirectRules === null) {
-    // Load rules (not in cache or evicted)
-    redirectRules = await span(trace, 'storage:redirectRules', () => loadRedirectRules(did, rkey));
-    setRedirectRulesInCache(did, rkey, redirectRules);
-  }
+  const redirectRules = await cache.getOrFetch('redirectRules', `${did}:${rkey}`, () =>
+    span(trace, 'storage:redirectRules', () => loadRedirectRules(did, rkey))
+  );
 
   // Apply redirect rules if any exist
   if (redirectRules.length > 0) {

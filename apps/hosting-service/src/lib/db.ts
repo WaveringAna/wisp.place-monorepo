@@ -1,6 +1,7 @@
 import postgres from 'postgres';
 import { createHash } from 'crypto';
 import type { DomainLookup, CustomDomainLookup, SiteCache, SiteSettingsCache } from '@wispplace/database';
+import { cache } from './cache-manager';
 
 const sql = postgres(
   process.env.DATABASE_URL || 'postgres://postgres:postgres@localhost:5432/wisp',
@@ -13,115 +14,35 @@ const sql = postgres(
 // Cache-only mode: skip all DB writes and only use tiered storage
 export const CACHE_ONLY = process.env.CACHE_ONLY === 'true';
 
-// Domain lookup cache with TTL
-const DOMAIN_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
-
-interface CachedDomain<T> {
-  value: T;
-  timestamp: number;
-}
-
-const domainCache = new Map<string, CachedDomain<DomainLookup | null>>();
-const customDomainCache = new Map<string, CachedDomain<CustomDomainLookup | null>>();
-
-let cleanupInterval: NodeJS.Timeout | null = null;
-
-export function startDomainCacheCleanup() {
-  if (cleanupInterval) return;
-
-  cleanupInterval = setInterval(() => {
-    const now = Date.now();
-
-    for (const [key, entry] of domainCache.entries()) {
-      if (now - entry.timestamp > DOMAIN_CACHE_TTL) {
-        domainCache.delete(key);
-      }
-    }
-
-    for (const [key, entry] of customDomainCache.entries()) {
-      if (now - entry.timestamp > DOMAIN_CACHE_TTL) {
-        customDomainCache.delete(key);
-      }
-    }
-
-    for (const [key, entry] of settingsCache.entries()) {
-      if (now - entry.timestamp > SETTINGS_CACHE_TTL) {
-        settingsCache.delete(key);
-      }
-    }
-  }, 30 * 60 * 1000); // Run every 30 minutes
-}
-
-export function stopDomainCacheCleanup() {
-  if (cleanupInterval) {
-    clearInterval(cleanupInterval);
-    cleanupInterval = null;
-  }
-}
-
 export async function getWispDomain(domain: string): Promise<DomainLookup | null> {
   const key = domain.toLowerCase();
-
-  // Check cache first
-  const cached = domainCache.get(key);
-  if (cached && Date.now() - cached.timestamp < DOMAIN_CACHE_TTL) {
-    return cached.value;
-  }
-
-  // Query database
-  const result = await sql<DomainLookup[]>`
-    SELECT did, rkey FROM domains WHERE domain = ${key} LIMIT 1
-  `;
-  const data = result[0] || null;
-
-  // Cache the result
-  domainCache.set(key, { value: data, timestamp: Date.now() });
-
-  return data;
+  return cache.getOrFetch('domains', key, async () => {
+    const result = await sql<DomainLookup[]>`
+      SELECT did, rkey FROM domains WHERE domain = ${key} LIMIT 1
+    `;
+    return result[0] || null;
+  });
 }
 
 export async function getCustomDomain(domain: string): Promise<CustomDomainLookup | null> {
   const key = domain.toLowerCase();
-
-  // Check cache first
-  const cached = customDomainCache.get(key);
-  if (cached && Date.now() - cached.timestamp < DOMAIN_CACHE_TTL) {
-    return cached.value;
-  }
-
-  // Query database
-  const result = await sql<CustomDomainLookup[]>`
-    SELECT id, domain, did, rkey, verified FROM custom_domains
-    WHERE domain = ${key} AND verified = true LIMIT 1
-  `;
-  const data = result[0] || null;
-
-  // Cache the result
-  customDomainCache.set(key, { value: data, timestamp: Date.now() });
-
-  return data;
+  return cache.getOrFetch('customDomains', key, async () => {
+    const result = await sql<CustomDomainLookup[]>`
+      SELECT id, domain, did, rkey, verified FROM custom_domains
+      WHERE domain = ${key} AND verified = true LIMIT 1
+    `;
+    return result[0] || null;
+  });
 }
 
 export async function getCustomDomainByHash(hash: string): Promise<CustomDomainLookup | null> {
-  const key = `hash:${hash}`;
-
-  // Check cache first
-  const cached = customDomainCache.get(key);
-  if (cached && Date.now() - cached.timestamp < DOMAIN_CACHE_TTL) {
-    return cached.value;
-  }
-
-  // Query database
-  const result = await sql<CustomDomainLookup[]>`
-    SELECT id, domain, did, rkey, verified FROM custom_domains
-    WHERE id = ${hash} AND verified = true LIMIT 1
-  `;
-  const data = result[0] || null;
-
-  // Cache the result
-  customDomainCache.set(key, { value: data, timestamp: Date.now() });
-
-  return data;
+  return cache.getOrFetch('customDomains', `hash:${hash}`, async () => {
+    const result = await sql<CustomDomainLookup[]>`
+      SELECT id, domain, did, rkey, verified FROM custom_domains
+      WHERE id = ${hash} AND verified = true LIMIT 1
+    `;
+    return result[0] || null;
+  });
 }
 
 export async function upsertSite(did: string, rkey: string, displayName?: string) {
@@ -253,27 +174,16 @@ export async function closeDatabase(): Promise<void> {
 
 // Site cache queries
 
-const SETTINGS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
-const settingsCache = new Map<string, CachedDomain<SiteSettingsCache | null>>();
-
 export async function getSiteSettingsCache(did: string, rkey: string): Promise<SiteSettingsCache | null> {
-  const key = `${did}:${rkey}`;
-
-  const cached = settingsCache.get(key);
-  if (cached && Date.now() - cached.timestamp < SETTINGS_CACHE_TTL) {
-    return cached.value;
-  }
-
-  const result = await sql<SiteSettingsCache[]>`
-    SELECT did, rkey, record_cid, directory_listing, spa_mode, custom_404, index_files, clean_urls, headers, cached_at, updated_at
-    FROM site_settings_cache
-    WHERE did = ${did} AND rkey = ${rkey}
-    LIMIT 1
-  `;
-  const data = result[0] || null;
-
-  settingsCache.set(key, { value: data, timestamp: Date.now() });
-  return data;
+  return cache.getOrFetch('settings', `${did}:${rkey}`, async () => {
+    const result = await sql<SiteSettingsCache[]>`
+      SELECT did, rkey, record_cid, directory_listing, spa_mode, custom_404, index_files, clean_urls, headers, cached_at, updated_at
+      FROM site_settings_cache
+      WHERE did = ${did} AND rkey = ${rkey}
+      LIMIT 1
+    `;
+    return result[0] || null;
+  });
 }
 
 export async function getSiteCache(did: string, rkey: string): Promise<SiteCache | null> {

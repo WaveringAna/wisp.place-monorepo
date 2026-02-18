@@ -2,7 +2,8 @@ import app from './server';
 import { serve } from '@hono/node-server';
 import { initializeGrafanaExporters, createLogger } from '@wispplace/observability';
 import { mkdirSync, existsSync } from 'fs';
-import { startDomainCacheCleanup, stopDomainCacheCleanup, closeDatabase, CACHE_ONLY } from './lib/db';
+import { closeDatabase, CACHE_ONLY } from './lib/db';
+import { cache } from './lib/cache-manager';
 import { closeRevalidateQueue } from './lib/revalidate-queue';
 import { startCacheInvalidationSubscriber, stopCacheInvalidationSubscriber } from './lib/cache-invalidation';
 import { storage, getStorageConfig } from './lib/storage';
@@ -24,8 +25,8 @@ if (!existsSync(CACHE_DIR)) {
   logger.info('Created cache directory', { CACHE_DIR });
 }
 
-// Start domain cache cleanup
-startDomainCacheCleanup();
+// Start in-memory cache cleanup
+cache.startCleanup();
 
 // Start cache invalidation subscriber (listens for firehose-service updates via Redis pub/sub)
 startCacheInvalidationSubscriber();
@@ -87,7 +88,7 @@ Firehose:     DISABLED (read-only)
 // Graceful shutdown
 process.on('SIGINT', async () => {
   logger.info('Shutting down...');
-  stopDomainCacheCleanup();
+  cache.stopCleanup();
   await stopCacheInvalidationSubscriber();
   await closeRevalidateQueue();
   await closeDatabase();
@@ -97,7 +98,7 @@ process.on('SIGINT', async () => {
 
 process.on('SIGTERM', async () => {
   logger.info('Shutting down...');
-  stopDomainCacheCleanup();
+  cache.stopCleanup();
   await stopCacheInvalidationSubscriber();
   await closeRevalidateQueue();
   await closeDatabase();

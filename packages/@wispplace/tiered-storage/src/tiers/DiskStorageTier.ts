@@ -180,7 +180,8 @@ export class DiskStorageTier implements StorageTier {
 			const data = await readFile(filePath);
 			return new Uint8Array(data);
 		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code === 'ENOENT' || code === 'ENOTDIR') {
 				return null;
 			}
 			throw error;
@@ -218,7 +219,8 @@ export class DiskStorageTier implements StorageTier {
 
 			return { data: new Uint8Array(dataBuffer), metadata };
 		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code === 'ENOENT' || code === 'ENOTDIR') {
 				return null;
 			}
 			throw error;
@@ -256,7 +258,8 @@ export class DiskStorageTier implements StorageTier {
 
 			return { stream, metadata };
 		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code === 'ENOENT' || code === 'ENOTDIR') {
 				return null;
 			}
 			throw error;
@@ -435,7 +438,7 @@ export class DiskStorageTier implements StorageTier {
 			return metadata;
 		} catch (error) {
 			const code = (error as NodeJS.ErrnoException).code;
-			if (code === 'ENOENT') {
+			if (code === 'ENOENT' || code === 'ENOTDIR') {
 				return null;
 			}
 			if (error instanceof SyntaxError) {

@@ -13,22 +13,15 @@ import { sanitizePath } from '@wispplace/fs-utils';
 import { isValidRkey, extractHeaders } from './lib/request-utils';
 import { serveFromCache, serveFromCacheWithRewrite } from './lib/file-serving';
 import { getRevalidateMetrics } from './lib/revalidate-metrics';
+import { cache } from './lib/cache-manager';
 
 const logger = createLogger('hosting-service');
 
-// Cache handle → DID resolutions for 10 minutes to avoid hitting bsky API on every request
-const HANDLE_CACHE_TTL = 10 * 60 * 1000;
-const handleCache = new Map<string, { did: string; timestamp: number }>();
-
 async function resolveDidCached(identifier: string): Promise<string | null> {
   if (identifier.startsWith('did:')) return identifier;
-  const cached = handleCache.get(identifier);
-  if (cached && Date.now() - cached.timestamp < HANDLE_CACHE_TTL) {
-    return cached.did;
-  }
-  const did = await resolveDid(identifier);
-  if (did) handleCache.set(identifier, { did, timestamp: Date.now() });
-  return did;
+  return cache.getOrFetch('handles', identifier, () => resolveDid(identifier), {
+    cacheIf: (v) => v !== null,
+  });
 }
 
 const BASE_HOST_ENV = process.env.BASE_HOST || 'wisp.place';

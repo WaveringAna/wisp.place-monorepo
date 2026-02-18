@@ -8,7 +8,7 @@
 
 import Redis from 'ioredis';
 import { storage } from './storage';
-import { clearRedirectRulesCache } from './site-cache';
+import { cache } from './cache-manager';
 
 const CHANNEL = 'wisp:cache-invalidate';
 
@@ -63,8 +63,9 @@ export function startCacheInvalidationSubscriber(): void {
       const deleted = await storage.invalidate(prefix);
       console.log(`[CacheInvalidation] Cleared ${deleted} keys from tiered storage for ${did}/${rkey}`);
 
-      // Clear redirect rules cache
-      clearRedirectRulesCache(did, rkey);
+      // Clear in-memory caches for this site
+      cache.delete('redirectRules', `${did}:${rkey}`);
+      cache.delete('settings', `${did}:${rkey}`);
     } catch (err) {
       console.error('[CacheInvalidation] Error processing message:', err);
     }
