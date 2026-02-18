@@ -32,7 +32,7 @@ type FileStorageResult = StorageResult<Uint8Array>;
  * e.g. "style.css" → true, "about" → false, "wisp-cli-x86_64-linux" → false,
  *      "dir.name/file" → false, "dir/file.tar.gz" → true
  */
-function hasFileExtension(path: string): boolean {
+export function hasFileExtension(path: string): boolean {
   const basename = path.split('/').pop() || '';
   return /\.[a-zA-Z0-9]+$/.test(basename);
 }
