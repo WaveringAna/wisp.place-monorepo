@@ -22,7 +22,7 @@ import {
     extractSubfsUris
 } from '@wispplace/atproto-utils'
 import { createManifest } from '@wispplace/fs-utils'
-import { upsertSite } from '../lib/db'
+import { upsertSite, getDomainByDid, updateWispDomainSite, getWispDomainSite, upsertSiteCache } from '../lib/db'
 import { createLogger } from '@wispplace/observability'
 // import { validateRecord, type Directory } from '@wispplace/lexicons/types/place/wisp/fs'
 import { type Directory } from '@wispplace/lexicons/types/place/wisp/fs'
@@ -311,6 +311,30 @@ async function processUploadInBackground(
             });
 
             await upsertSite(did, rkey, siteName);
+
+            // Cache the empty site for the hosting service
+            try {
+                await upsertSiteCache(did, rkey, record.data.cid, {});
+            } catch (err) {
+                // Don't fail the upload if caching fails
+                logger.warn('Failed to cache site', err);
+            }
+
+            // Auto-map claimed domain to this site if user has a claimed domain with no rkey
+            try {
+                const existingDomain = await getDomainByDid(did);
+                if (existingDomain) {
+                    const currentSiteMapping = await getWispDomainSite(did);
+                    if (!currentSiteMapping) {
+                        // Domain is claimed but not mapped to any site, map it to this new site
+                        await updateWispDomainSite(existingDomain, rkey);
+                        logger.info(`Auto-mapped domain ${existingDomain} to new site ${siteName}`);
+                    }
+                }
+            } catch (err) {
+                // Don't fail the upload if domain mapping fails
+                logger.warn('Failed to auto-map domain to new site', err);
+            }
 
             completeUploadJob(jobId, {
                 success: true,
@@ -854,6 +878,35 @@ async function processUploadInBackground(
         // Store site in database cache
         await upsertSite(did, rkey, siteName);
 
+        // Cache the site files for the hosting service
+        try {
+            const fileCids: Record<string, string> = {};
+            for (const blob of uploadedBlobs) {
+                const normalizedPath = blob.filePath.replace(/^[^\/]*\//, '');
+                fileCids[normalizedPath] = blob.result.hash;
+            }
+            await upsertSiteCache(did, rkey, record.data.cid, fileCids);
+        } catch (err) {
+            // Don't fail the upload if caching fails
+            logger.warn('Failed to cache site files', err);
+        }
+
+        // Auto-map claimed domain to this site if user has a claimed domain with no rkey
+        try {
+            const existingDomain = await getDomainByDid(did);
+            if (existingDomain) {
+                const currentSiteMapping = await getWispDomainSite(did);
+                if (!currentSiteMapping) {
+                    // Domain is claimed but not mapped to any site, map it to this new site
+                    await updateWispDomainSite(existingDomain, rkey);
+                    logger.info(`Auto-mapped domain ${existingDomain} to new site ${siteName}`);
+                }
+            }
+        } catch (err) {
+            // Don't fail the upload if domain mapping fails
+            logger.warn('Failed to auto-map domain to new site', err);
+        }
+
         // Clean up old subfs records if we had any
         if (oldSubfsUris.length > 0) {
             console.log(`Cleaning up ${oldSubfsUris.length} old subfs records...`);
@@ -1076,6 +1129,30 @@ export const wispRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
                         });
 
                         await upsertSite(auth.did, rkey, siteName);
+
+                        // Cache the empty site for the hosting service
+                        try {
+                            await upsertSiteCache(auth.did, rkey, record.data.cid, {});
+                        } catch (err) {
+                            // Don't fail the upload if caching fails
+                            logger.warn('Failed to cache site', err);
+                        }
+
+                        // Auto-map claimed domain to this site if user has a claimed domain with no rkey
+                        try {
+                            const existingDomain = await getDomainByDid(auth.did);
+                            if (existingDomain) {
+                                const currentSiteMapping = await getWispDomainSite(auth.did);
+                                if (!currentSiteMapping) {
+                                    // Domain is claimed but not mapped to any site, map it to this new site
+                                    await updateWispDomainSite(existingDomain, rkey);
+                                    logger.info(`Auto-mapped domain ${existingDomain} to new site ${siteName}`);
+                                }
+                            }
+                        } catch (err) {
+                            // Don't fail the upload if domain mapping fails
+                            logger.warn('Failed to auto-map domain to new site', err);
+                        }
 
                         return {
                             success: true,

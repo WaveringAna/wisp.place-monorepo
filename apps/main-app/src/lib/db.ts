@@ -512,6 +512,24 @@ export const deleteSite = async (did: string, rkey: string) => {
     }
 };
 
+export const upsertSiteCache = async (did: string, rkey: string, recordCid: string, fileCids: Record<string, string> = {}) => {
+    try {
+        await db`
+            INSERT INTO site_cache (did, rkey, record_cid, file_cids, cached_at, updated_at)
+            VALUES (${did}, ${rkey}, ${recordCid}, ${JSON.stringify(fileCids)}, EXTRACT(EPOCH FROM NOW()), EXTRACT(EPOCH FROM NOW()))
+            ON CONFLICT (did, rkey)
+            DO UPDATE SET
+                record_cid = EXCLUDED.record_cid,
+                file_cids = EXCLUDED.file_cids,
+                updated_at = EXTRACT(EPOCH FROM NOW())
+        `;
+        return { success: true };
+    } catch (err) {
+        console.error('Failed to upsert site cache', err);
+        return { success: false, error: err };
+    }
+};
+
 // Get all domains (wisp + custom) mapped to a specific site
 export const getDomainsBySite = async (did: string, rkey: string) => {
     const domains: Array<{

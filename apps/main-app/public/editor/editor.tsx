@@ -520,12 +520,12 @@ function Dashboard() {
 							<span>
 								Built by{' '}
 								<a
-									href="https://bsky.app/profile/nekomimi.pet"
+									href="https://bsky.app/profile/null.namespaces.me"
 									target="_blank"
 									rel="noopener noreferrer"
 									className="text-accent hover:text-accent/80 transition-colors"
 								>
-									@nekomimi.pet
+									@null.namespaces.me
 								</a>
 							</span>
 							<span>
