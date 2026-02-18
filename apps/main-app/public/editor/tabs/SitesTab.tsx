@@ -18,6 +18,7 @@ interface SitesTabProps {
 	sitesLoading: boolean
 	userInfo: UserInfo | null
 	onConfigureSite: (site: SiteWithDomains) => void
+	onDeleteSite: (site: SiteWithDomains) => void
 }
 
 // Helper to generate unique site key
@@ -42,7 +43,8 @@ export function SitesTab({
 	sites,
 	sitesLoading,
 	userInfo,
-	onConfigureSite
+	onConfigureSite,
+	onDeleteSite
 }: SitesTabProps) {
 	// State: only one site can be expanded at a time (null = none expanded)
 	const [expandedSiteKey, setExpandedSiteKey] = useState<string | null>(null)
@@ -166,7 +168,7 @@ export function SitesTab({
 				case 'd':
 					if (isExpanded && currentSite) {
 						e.preventDefault()
-						onConfigureSite(currentSite)
+						onDeleteSite(currentSite)
 					}
 					break
 			}
@@ -174,7 +176,7 @@ export function SitesTab({
 
 		window.addEventListener('keydown', handleKeyDown)
 		return () => window.removeEventListener('keydown', handleKeyDown)
-	}, [sites, focusedIndex, expandedSiteKey, toggleExpanded, getSiteUrl, onConfigureSite])
+	}, [sites, focusedIndex, expandedSiteKey, toggleExpanded, getSiteUrl, onConfigureSite, onDeleteSite])
 
 	// Loading state
 	if (sitesLoading) {
@@ -255,7 +257,7 @@ export function SitesTab({
 							key={siteKey}
 							ref={el => { siteRefs.current[index] = el }}
 							className={`border transition-colors ${
-								isFocused ? 'border-accent bg-accent/10' : 'border-border/30 hover:bg-muted/20'
+								isFocused ? 'border-accent bg-accent/10' : 'border-border/30 bg-card hover:bg-muted/10'
 							}`}
 						>
 							{/* Site header */}
@@ -365,7 +367,7 @@ export function SitesTab({
 												variant="outline"
 												size="sm"
 												className="font-mono text-xs text-red-400 hover:text-red-500 hover:border-red-400/50"
-												onClick={() => onConfigureSite(site)}
+												onClick={() => onDeleteSite(site)}
 											>
 												<Trash2 className="w-3 h-3 mr-2" />
 												Delete

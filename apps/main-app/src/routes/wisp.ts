@@ -317,7 +317,7 @@ async function processUploadInBackground(
                 await upsertSiteCache(did, rkey, record.data.cid, {});
             } catch (err) {
                 // Don't fail the upload if caching fails
-                logger.warn('Failed to cache site', err);
+                logger.warn('Failed to cache site', err as any);
             }
 
             // Auto-map claimed domain to this site if user has a claimed domain with no rkey
@@ -331,10 +331,10 @@ async function processUploadInBackground(
                         logger.info(`Auto-mapped domain ${existingDomain} to new site ${siteName}`);
                     }
                 }
-            } catch (err) {
-                // Don't fail the upload if domain mapping fails
-                logger.warn('Failed to auto-map domain to new site', err);
-            }
+        } catch (err) {
+            // Don't fail the upload if domain mapping fails
+            logger.warn('Failed to auto-map domain to new site', err as any);
+        }
 
             completeUploadJob(jobId, {
                 success: true,
@@ -888,7 +888,7 @@ async function processUploadInBackground(
             await upsertSiteCache(did, rkey, record.data.cid, fileCids);
         } catch (err) {
             // Don't fail the upload if caching fails
-            logger.warn('Failed to cache site files', err);
+            logger.warn('Failed to cache site files', err as any);
         }
 
         // Auto-map claimed domain to this site if user has a claimed domain with no rkey
@@ -904,7 +904,7 @@ async function processUploadInBackground(
             }
         } catch (err) {
             // Don't fail the upload if domain mapping fails
-            logger.warn('Failed to auto-map domain to new site', err);
+            logger.warn('Failed to auto-map domain to new site', err as any);
         }
 
         // Clean up old subfs records if we had any
@@ -1135,7 +1135,7 @@ export const wispRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
                             await upsertSiteCache(auth.did, rkey, record.data.cid, {});
                         } catch (err) {
                             // Don't fail the upload if caching fails
-                            logger.warn('Failed to cache site', err);
+                            logger.warn('Failed to cache site', err as any);
                         }
 
                         // Auto-map claimed domain to this site if user has a claimed domain with no rkey
@@ -1151,7 +1151,7 @@ export const wispRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
                             }
                         } catch (err) {
                             // Don't fail the upload if domain mapping fails
-                            logger.warn('Failed to auto-map domain to new site', err);
+                            logger.warn('Failed to auto-map domain to new site', err as any);
                         }
 
                         return {

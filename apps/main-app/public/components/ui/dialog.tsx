@@ -89,8 +89,41 @@ function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
 }
 
 function DialogFooter({ className, ...props }: React.ComponentProps<"div">) {
+  const footerRef = React.useRef<HTMLDivElement>(null)
+
+  React.useEffect(() => {
+    const footer = footerRef.current
+    if (!footer) return
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+
+      const buttons = Array.from(
+        footer.querySelectorAll('button:not([disabled])')
+      ) as HTMLElement[]
+      const currentIndex = buttons.indexOf(document.activeElement as HTMLElement)
+      
+      if (currentIndex === -1) return
+
+      e.preventDefault()
+      let nextIndex = currentIndex
+
+      if (e.key === 'ArrowRight') {
+        nextIndex = (currentIndex + 1) % buttons.length
+      } else if (e.key === 'ArrowLeft') {
+        nextIndex = (currentIndex - 1 + buttons.length) % buttons.length
+      }
+
+      buttons[nextIndex]?.focus()
+    }
+
+    footer.addEventListener('keydown', handleKeyDown)
+    return () => footer.removeEventListener('keydown', handleKeyDown)
+  }, [])
+
   return (
     <div
+      ref={footerRef}
       data-slot="dialog-footer"
       className={cn(
         "flex flex-col-reverse gap-2 sm:flex-row sm:justify-end",

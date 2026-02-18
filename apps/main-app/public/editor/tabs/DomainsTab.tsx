@@ -31,9 +31,10 @@ import type { UserInfo } from '../hooks/useUserInfo'
 
 // Hosting node IP addresses for A record fallback
 const HOSTING_NODES = [
-	{ region: 'US East (Virginia)', ip: '192.0.2.1' },
-	{ region: 'US West (California)', ip: '192.0.2.2' },
-	{ region: 'Europe (Frankfurt)', ip: '192.0.2.3' },
+	{ region: 'US East (Virginia)', ip: '129.213.110.75' },
+	{ region: 'US West (California)', ip: '152.44.44.138' },
+	{ region: 'Europe (Netherlands)', ip: '152.53.121.97' },
+	{ region: 'Asia (Singapore)', ip: '213.163.207.16' },
 ] as const
 
 interface DomainsTabProps {

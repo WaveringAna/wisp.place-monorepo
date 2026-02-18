@@ -61,6 +61,7 @@ function Dashboard() {
 	const [selectedDomains, setSelectedDomains] = useState<Set<string>>(new Set())
 	const [isSavingConfig, setIsSavingConfig] = useState(false)
 	const [isDeletingSite, setIsDeletingSite] = useState(false)
+	const [deleteConfirmSite, setDeleteConfirmSite] = useState<SiteWithDomains | null>(null)
 
 	// Site settings state
 	type RoutingMode = 'default' | 'spa' | 'directory' | 'custom404'
@@ -303,19 +304,21 @@ function Dashboard() {
 		}
 	}
 
-	const handleDeleteSite = async () => {
-		if (!configuringSite) return
+	const handleDeleteConfirmSite = async (site: SiteWithDomains) => {
+		setDeleteConfirmSite(site)
+	}
 
-		if (!confirm(`Are you sure you want to delete "${configuringSite.display_name || configuringSite.rkey}"? This action cannot be undone.`)) {
-			return
-		}
+	const handleDeleteSite = async () => {
+		const site = configuringSite || deleteConfirmSite
+		if (!site) return
 
 		setIsDeletingSite(true)
-		const success = await deleteSite(configuringSite.rkey)
+		const success = await deleteSite(site.rkey)
 		if (success) {
 			// Refresh domains in case this site was mapped
 			await fetchDomains()
 			setConfiguringSite(null)
+			setDeleteConfirmSite(null)
 		}
 		setIsDeletingSite(false)
 	}
@@ -441,28 +444,28 @@ function Dashboard() {
 					</div>
 
 					<Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col flex-1 overflow-hidden">
-						<TabsList className="grid w-full grid-cols-4 bg-transparent border-b border-border/50 rounded-none h-auto p-0 flex-shrink-0">
+						<TabsList className="grid w-full grid-cols-4 bg-card border-b border-border/50 rounded-none h-auto p-0 flex-shrink-0">
 							<TabsTrigger
 								value="sites"
-								className="rounded-none border-b-2 border-transparent data-[state=active]:border-accent data-[state=active]:bg-transparent data-[state=active]:shadow-none py-3"
+								className="rounded-none border-b-2 border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/50 data-[state=active]:border-accent data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none py-3"
 							>
 								Sites
 							</TabsTrigger>
 							<TabsTrigger
 								value="domains"
-								className="rounded-none border-b-2 border-transparent data-[state=active]:border-accent data-[state=active]:bg-transparent data-[state=active]:shadow-none py-3"
+								className="rounded-none border-b-2 border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/50 data-[state=active]:border-accent data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none py-3"
 							>
 								Domains
 							</TabsTrigger>
 							<TabsTrigger
 								value="upload"
-								className="rounded-none border-b-2 border-transparent data-[state=active]:border-accent data-[state=active]:bg-transparent data-[state=active]:shadow-none py-3"
+								className="rounded-none border-b-2 border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/50 data-[state=active]:border-accent data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none py-3"
 							>
 								Upload
 							</TabsTrigger>
 							<TabsTrigger
 								value="cli"
-								className="rounded-none border-b-2 border-transparent data-[state=active]:border-accent data-[state=active]:bg-transparent data-[state=active]:shadow-none py-3"
+								className="rounded-none border-b-2 border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/50 data-[state=active]:border-accent data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none py-3"
 							>
 								Cli
 							</TabsTrigger>
@@ -475,6 +478,7 @@ function Dashboard() {
 								sitesLoading={sitesLoading}
 								userInfo={userInfo}
 								onConfigureSite={handleConfigureSite}
+								onDeleteSite={handleDeleteConfirmSite}
 							/>
 						</TabsContent>
 
@@ -580,9 +584,9 @@ function Dashboard() {
 							</div>
 
 							<Tabs defaultValue="domains" className="w-full">
-								<TabsList className="grid w-full grid-cols-2">
-									<TabsTrigger value="domains">Domains</TabsTrigger>
-									<TabsTrigger value="settings">Settings</TabsTrigger>
+								<TabsList className="grid w-full grid-cols-2 bg-card border-b border-border/50 rounded-none h-auto p-0 flex-shrink-0">
+									<TabsTrigger value="domains" className="text-muted-foreground hover:text-foreground hover:bg-muted/50 data-[state=active]:bg-transparent data-[state=active]:text-foreground">Domains</TabsTrigger>
+									<TabsTrigger value="settings" className="text-muted-foreground hover:text-foreground hover:bg-muted/50 data-[state=active]:bg-transparent data-[state=active]:text-foreground">Settings</TabsTrigger>
 								</TabsList>
 
 								{/* Domains Tab */}
@@ -907,6 +911,46 @@ function Dashboard() {
 								)}
 							</Button>
 						</div>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
+
+			{/* Delete Site Confirmation Modal */}
+			<Dialog
+				open={deleteConfirmSite !== null}
+				onOpenChange={(open) => !open && setDeleteConfirmSite(null)}
+			>
+				<DialogContent className="sm:max-w-md">
+					<DialogHeader>
+						<DialogTitle>Delete Site</DialogTitle>
+						<DialogDescription>
+							Are you sure you want to delete "{deleteConfirmSite?.display_name || deleteConfirmSite?.rkey}"? This action cannot be undone.
+						</DialogDescription>
+					</DialogHeader>
+					<DialogFooter className="flex flex-col sm:flex-row gap-2 sm:justify-end">
+						<Button
+							variant="outline"
+							onClick={() => setDeleteConfirmSite(null)}
+							disabled={isDeletingSite}
+							className="w-full sm:w-auto"
+						>
+							Cancel
+						</Button>
+						<Button
+							variant="destructive"
+							onClick={handleDeleteSite}
+							disabled={isDeletingSite}
+							className="w-full sm:w-auto"
+						>
+							{isDeletingSite ? (
+								<>
+									<Loader2 className="w-4 h-4 mr-2 animate-spin" />
+									Deleting...
+								</>
+							) : (
+								'Delete'
+							)}
+						</Button>
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>

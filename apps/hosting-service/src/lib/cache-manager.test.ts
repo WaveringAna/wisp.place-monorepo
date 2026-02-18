@@ -22,22 +22,22 @@ describe('CacheManager', () => {
 		test('stores and retrieves a value', () => {
 			const c = createTestCache()
 			c.set('ttl', 'k', 42)
-			expect(c.get('ttl', 'k')).toBe(42)
+			expect(c.get<number>('ttl', 'k')).toBe(42)
 		})
 
 		test('namespaces are isolated', () => {
 			const c = createTestCache()
 			c.set('ttl', 'k', 'from-ttl')
 			c.set('lru', 'k', 'from-lru')
-			expect(c.get('ttl', 'k')).toBe('from-ttl')
-			expect(c.get('lru', 'k')).toBe('from-lru')
+			expect(c.get<string>('ttl', 'k')).toBe('from-ttl')
+			expect(c.get<string>('lru', 'k')).toBe('from-lru')
 		})
 
 		test('overwrites existing key', () => {
 			const c = createTestCache()
 			c.set('lru', 'k', 'v1')
 			c.set('lru', 'k', 'v2')
-			expect(c.get('lru', 'k')).toBe('v2')
+			expect(c.get<string>('lru', 'k')).toBe('v2')
 		})
 	})
 
@@ -45,7 +45,7 @@ describe('CacheManager', () => {
 		test('returns value within TTL', () => {
 			const c = createTestCache()
 			c.set('ttl', 'k', 'fresh')
-			expect(c.get('ttl', 'k')).toBe('fresh')
+			expect(c.get<string>('ttl', 'k')).toBe('fresh')
 		})
 
 		test('expires value after TTL', async () => {
@@ -64,9 +64,9 @@ describe('CacheManager', () => {
 			c.set('lru', 'c', 3)
 			// At capacity (3). Adding a 4th should evict 'a' (oldest).
 			c.set('lru', 'd', 4)
-			expect(c.get('lru', 'a')).toBeUndefined()
-			expect(c.get('lru', 'b')).toBe(2)
-			expect(c.get('lru', 'd')).toBe(4)
+			expect(c.get<number>('lru', 'a')).toBeUndefined()
+			expect(c.get<number>('lru', 'b')).toBe(2)
+			expect(c.get<number>('lru', 'd')).toBe(4)
 		})
 
 		test('accessing a key refreshes its LRU position', () => {
@@ -78,8 +78,8 @@ describe('CacheManager', () => {
 			c.get('lru', 'a')
 			// Now 'b' is the oldest
 			c.set('lru', 'd', 4)
-			expect(c.get('lru', 'b')).toBeUndefined()
-			expect(c.get('lru', 'a')).toBe(1)
+			expect(c.get<number>('lru', 'b')).toBeUndefined()
+			expect(c.get<number>('lru', 'a')).toBe(1)
 		})
 	})
 
@@ -118,10 +118,10 @@ describe('CacheManager', () => {
 			c.set('lru', 'b', 2)
 			c.set('ttl', 'x', 3)
 			c.clear('lru')
-			expect(c.get('lru', 'a')).toBeUndefined()
-			expect(c.get('lru', 'b')).toBeUndefined()
+			expect(c.get<number>('lru', 'a')).toBeUndefined()
+			expect(c.get<number>('lru', 'b')).toBeUndefined()
 			// Other namespace untouched
-			expect(c.get('ttl', 'x')).toBe(3)
+			expect(c.get<number>('ttl', 'x')).toBe(3)
 		})
 	})
 
@@ -151,7 +151,7 @@ describe('CacheManager', () => {
 			})
 			expect(val).toBe('async-result')
 			// Second call should be from cache
-			expect(c.get('lru', 'k')).toBe('async-result')
+			expect(c.get<string>('lru', 'k')).toBe('async-result')
 		})
 
 		test('cacheIf: false skips caching', async () => {
@@ -170,7 +170,7 @@ describe('CacheManager', () => {
 				cacheIf: (v) => v !== null,
 			})
 			expect(val).toBe('good')
-			expect(c.get('lru', 'k')).toBe('good')
+			expect(c.get<string>('lru', 'k')).toBe('good')
 		})
 	})
 
@@ -248,7 +248,7 @@ describe('CacheManager', () => {
 			c.startCleanup(50)
 			await Bun.sleep(200)
 			c.stopCleanup()
-			expect(c.get('lru', 'k')).toBe('val')
+			expect(c.get<string>('lru', 'k')).toBe('val')
 		})
 	})
 })
