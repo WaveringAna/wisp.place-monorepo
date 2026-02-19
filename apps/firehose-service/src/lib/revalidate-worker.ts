@@ -51,10 +51,12 @@ async function processMessage(id: string, rawFields: string[]): Promise<void> {
 
   // For storage-miss events, force re-download all files since storage is empty
   const forceDownload = reason.startsWith('storage-miss');
+  const forceRewriteHtml = reason.startsWith('rewrite-miss');
 
   await handleSiteCreateOrUpdate(did, rkey, record.record, record.cid, {
     skipInvalidation: true,
     forceDownload,
+    forceRewriteHtml,
   });
 
   logger.info(`[Revalidate] Completed ${id}: ${did}/${rkey}`);

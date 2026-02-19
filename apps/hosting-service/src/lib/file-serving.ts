@@ -4,12 +4,12 @@
  */
 
 import { lookup } from 'mime-types';
-import { gunzipSync } from 'zlib';
+import { gunzipSync, gzipSync } from 'zlib';
 import type { Record as WispSettings } from '@wispplace/lexicons/types/place/wisp/settings';
 import { shouldCompressMimeType } from '@wispplace/atproto-utils/compression';
 import { getCachedSettings } from './utils';
 import { loadRedirectRules, matchRedirectRule, parseCookies, parseQueryString } from './redirects';
-import { isHtmlContent } from './html-rewriter';
+import { isHtmlContent, rewriteHtmlPaths } from './html-rewriter';
 import { generate404Page, generateDirectoryListing } from './page-generators';
 import { getIndexFiles, applyCustomHeaders } from './request-utils';
 import { cache } from './cache-manager';
@@ -26,6 +26,7 @@ import { createTrace, span, logTrace, type RequestTrace } from './trace';
 const logger = createLogger('file-serving');
 
 type FileStorageResult = StorageResult<Uint8Array>;
+type FileForRequestResult = { result: FileStorageResult; filePath: string; wasRewritten: boolean };
 
 /**
  * Check if the last segment of a path looks like it has a file extension.
@@ -105,19 +106,19 @@ async function getFileForRequest(
   rkey: string,
   filePath: string,
   preferRewrittenHtml: boolean
-): Promise<{ result: FileStorageResult; filePath: string } | null> {
+): Promise<FileForRequestResult | null> {
   const mimeTypeGuess = lookup(filePath) || 'application/octet-stream';
   if (preferRewrittenHtml && isHtmlContent(filePath, mimeTypeGuess)) {
     const rewrittenPath = `.rewritten/${filePath}`;
     const rewritten = await getFileWithMetadata(did, rkey, rewrittenPath);
     if (rewritten) {
-      return { result: rewritten, filePath };
+      return { result: rewritten, filePath, wasRewritten: true };
     }
   }
 
   const result = await getFileWithMetadata(did, rkey, filePath);
   if (!result) return null;
-  return { result, filePath };
+  return { result, filePath, wasRewritten: false };
 }
 
 function buildResponseFromStorageResult(
@@ -178,6 +179,62 @@ function buildResponseFromStorageResult(
 
   applyCustomHeaders(headers, filePath, settings);
   return new Response(content, { headers });
+}
+
+function buildRewrittenHtmlResponse(
+  result: FileStorageResult,
+  filePath: string,
+  basePath: string,
+  settings: WispSettings | null,
+  requestHeaders?: Record<string, string>
+): Response {
+  try {
+    const content = Buffer.from(result.data);
+    const meta = result.metadata.customMetadata as { encoding?: string; mimeType?: string } | undefined;
+    const mimeType = meta?.mimeType || lookup(filePath) || 'application/octet-stream';
+    const cacheControl = mimeType.startsWith('text/html')
+      ? 'public, max-age=300'
+      : 'public, max-age=31536000, immutable';
+
+    const headers: Record<string, string> = {
+      'Content-Type': mimeType,
+      'Cache-Control': cacheControl,
+      'X-Cache-Tier': result.source,
+    };
+
+    const hasGzipMagic = content.length >= 2 && content[0] === 0x1f && content[1] === 0x8b;
+    let decoded = content;
+    if (meta?.encoding === 'gzip') {
+      if (hasGzipMagic) {
+        decoded = gunzipSync(content);
+      } else {
+        logger.warn(`File marked as gzipped but lacks magic bytes, serving original`, { filePath });
+        applyCustomHeaders(headers, filePath, settings);
+        return new Response(content, { headers });
+      }
+    } else if (hasGzipMagic && shouldCompressMimeType(mimeType)) {
+      // Heuristic: treat as gzipped text content even if encoding metadata is missing
+      decoded = gunzipSync(content);
+    }
+
+    const htmlString = new TextDecoder().decode(decoded);
+    const rewritten = rewriteHtmlPaths(htmlString, basePath, filePath);
+    let output = new TextEncoder().encode(rewritten);
+
+    const shouldServeCompressed = shouldCompressMimeType(mimeType);
+    const acceptEncoding = requestHeaders?.['accept-encoding'] ?? '';
+    const clientAcceptsGzip = acceptEncoding.includes('gzip');
+    if (clientAcceptsGzip && shouldServeCompressed) {
+      output = gzipSync(output);
+      headers['Content-Encoding'] = 'gzip';
+    }
+
+    applyCustomHeaders(headers, filePath, settings);
+    return new Response(output, { headers });
+  } catch (err) {
+    logger.warn('Failed to rewrite HTML on demand, serving original', { filePath, error: err });
+    return buildResponseFromStorageResult(result, filePath, settings, requestHeaders);
+  }
 }
 
 /**
@@ -626,6 +683,18 @@ export async function serveFileInternalWithRewrite(
   };
 
   const indexFiles = getIndexFiles(settings);
+  const buildResponse = (fileResult: FileForRequestResult): Response => {
+    const meta = fileResult.result.metadata.customMetadata as { encoding?: string; mimeType?: string } | undefined;
+    const mimeType = meta?.mimeType || lookup(fileResult.filePath) || 'application/octet-stream';
+    const needsRewrite = !fileResult.wasRewritten && isHtmlContent(fileResult.filePath, mimeType);
+
+    if (needsRewrite) {
+      void enqueueRevalidate(did, rkey, `rewrite-miss:${fileResult.filePath}`);
+      return buildRewrittenHtmlResponse(fileResult.result, fileResult.filePath, basePath, settings, requestHeaders);
+    }
+
+    return buildResponseFromStorageResult(fileResult.result, fileResult.filePath, settings, requestHeaders);
+  };
 
   // Normalize the request path (keep empty for root, remove trailing slash for others)
   let requestPath = filePath || '';
@@ -639,7 +708,7 @@ export async function serveFileInternalWithRewrite(
     if (requestPath) {
       const directResult = await span(trace, `storage:${requestPath}`, () => getFileForRequest(did, rkey, requestPath, true));
       if (directResult) {
-        return buildResponseFromStorageResult(directResult.result, requestPath, settings, requestHeaders);
+        return buildResponse(directResult);
       }
       await markExpectedMiss(requestPath);
     }
@@ -648,7 +717,7 @@ export async function serveFileInternalWithRewrite(
       const indexPath = requestPath ? `${requestPath}/${indexFile}` : indexFile;
       const fileResult = await span(trace, `storage:${indexPath}`, () => getFileForRequest(did, rkey, indexPath, true));
       if (fileResult) {
-        return buildResponseFromStorageResult(fileResult.result, indexPath, settings, requestHeaders);
+        return buildResponse(fileResult);
       }
       await markExpectedMiss(indexPath);
     }
@@ -676,7 +745,7 @@ export async function serveFileInternalWithRewrite(
 
   const fileResult = await span(trace, `storage:${fileRequestPath}`, () => getFileForRequest(did, rkey, fileRequestPath, true));
   if (fileResult) {
-    return buildResponseFromStorageResult(fileResult.result, fileRequestPath, settings, requestHeaders);
+    return buildResponse(fileResult);
   }
   await markExpectedMiss(fileRequestPath);
 
@@ -686,7 +755,7 @@ export async function serveFileInternalWithRewrite(
       const indexPath = fileRequestPath ? `${fileRequestPath}/${indexFileName}` : indexFileName;
       const indexResult = await span(trace, `storage:${indexPath}`, () => getFileForRequest(did, rkey, indexPath, true));
       if (indexResult) {
-        return buildResponseFromStorageResult(indexResult.result, indexPath, settings, requestHeaders);
+        return buildResponse(indexResult);
       }
       await markExpectedMiss(indexPath);
     }
@@ -775,9 +844,9 @@ export async function serveFileInternalWithRewrite(
     if (success) {
       // Retry serving the originally requested file
       const retryPath = filePath || indexFiles[0] || 'index.html';
-      const retryResult = await span(trace, `storage:${retryPath}`, () => getFileWithMetadata(did, rkey, retryPath));
+      const retryResult = await span(trace, `storage:${retryPath}`, () => getFileForRequest(did, rkey, retryPath, true));
       if (retryResult) {
-        return buildResponseFromStorageResult(retryResult, retryPath, settings, requestHeaders);
+        return buildResponse(retryResult);
       }
     }
   }
