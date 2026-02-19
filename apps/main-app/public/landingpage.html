@@ -356,6 +356,39 @@
             line-height: 1.6;
         }
 
+        .cli-subsection-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 3rem;
+            align-items: center;
+            margin-top: 3rem;
+        }
+
+        .cli-subsection-grid > div > h3 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+        }
+
+        .cli-subsection-grid > div > p {
+            color: var(--text-muted); 
+            margin-bottom: 1.5rem;
+        }
+
+        .cli-install-row {
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+        }
+        .cli-install-row code {
+            color: var(--text); 
+            background: var(--code-bg); 
+            padding: 0.5rem 0.75rem; 
+            border: 1px solid var(--border-light); 
+            border-radius: 4px; 
+            font-size: 0.875rem;
+        }
+
         /* Final CTA */
         .final-cta {
             padding: 8rem 2rem;
@@ -397,6 +430,11 @@
 
             .cli-features {
                 grid-template-columns: 1fr;
+            }
+
+            .cli-subsection-grid {
+                grid-template-columns: 1fr;
+                gap: 2rem;
             }
 
             .cta-buttons {
@@ -556,13 +594,13 @@
                 </div>
             </div>
 
-            <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 3rem; align-items: center; margin-top: 3rem;">
+            <div class="cli-subsection-grid">
                 <div>
-                    <h3 style="font-size: 1.5rem; font-weight: 600; margin-bottom: 1rem;">Self-host anywhere</h3>
-                    <p style="color: var(--text-muted); margin-bottom: 1.5rem;">Deploy your own server anywhere in the world. The CLI watches the firehose and automatically pulls updates when you push changes—complete control over your hosting infrastructure.</p>
-                    <div style="display: flex; align-items: center; gap: 1.5rem;">
+                    <h3>Self-host anywhere</h3>
+                    <p>Deploy your own server anywhere in the world. The CLI watches the firehose and automatically pulls updates when you push changes—complete control over your hosting infrastructure.</p>
+                    <div class="cli-install-row">
                         <a href="https://docs.wisp.place/cli/" target="_blank" class="cta-secondary">Install CLI</a>
-                        <code style="color: var(--text); background: var(--code-bg); padding: 0.5rem 0.75rem; border: 1px solid var(--border-light); border-radius: 4px; font-size: 0.875rem;">npm install -g wispctl</code>
+                        <code>npm install -g wispctl</code>
                     </div>
                 </div>
                 <div>
