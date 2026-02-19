@@ -554,10 +554,12 @@ export async function handleSiteCreateOrUpdate(
   logger.debug(`Updated site cache for ${did}/${rkey} with record CID ${recordCid}`);
 
   // Backfill settings if a record exists for this rkey
+  // Always skip settings invalidation here - the 'update' invalidation below
+  // already clears everything including the settings cache on the hosting service
   const settingsRecord = await fetchSettingsRecord(did, rkey, pdsEndpoint);
   if (settingsRecord) {
     await handleSettingsUpdate(did, rkey, settingsRecord.record, settingsRecord.cid, {
-      skipInvalidation: options?.skipInvalidation,
+      skipInvalidation: true,
     });
   }
 

@@ -7,12 +7,37 @@
  */
 
 import Redis from 'ioredis';
-import { storage } from './storage';
+import type { StorageTier } from '@wispplace/tiered-storage';
+import { hotTier, warmTier } from './storage';
 import { cache } from './cache-manager';
 
 const CHANNEL = 'wisp:cache-invalidate';
 
 let subscriber: Redis | null = null;
+
+/**
+ * Directly invalidate a tier by listing and deleting all keys with the given prefix.
+ * Each tier is invalidated independently so a failure in one doesn't block the others.
+ */
+async function invalidateTier(
+  tier: StorageTier,
+  tierName: string,
+  prefix: string,
+): Promise<number> {
+  try {
+    const keys: string[] = [];
+    for await (const key of tier.listKeys(prefix)) {
+      keys.push(key);
+    }
+    if (keys.length > 0) {
+      await tier.deleteMany(keys);
+    }
+    return keys.length;
+  } catch (err) {
+    console.error(`[CacheInvalidation] Failed to invalidate ${tierName} tier for prefix ${prefix}:`, err);
+    return 0;
+  }
+}
 
 export function startCacheInvalidationSubscriber(): void {
   const redisUrl = process.env.REDIS_URL;
@@ -58,10 +83,18 @@ export function startCacheInvalidationSubscriber(): void {
 
       console.log(`[CacheInvalidation] Invalidating ${did}/${rkey} (${action})`);
 
-      // Clear tiered storage (hot + warm) for this site
       const prefix = `${did}/${rkey}/`;
-      const deleted = await storage.invalidate(prefix);
-      console.log(`[CacheInvalidation] Cleared ${deleted} keys from tiered storage for ${did}/${rkey}`);
+
+      // Invalidate each tier independently - a failure in one tier
+      // (e.g. S3 listKeys timeout) must NOT prevent hot/warm from being cleared
+      const hotDeleted = await invalidateTier(hotTier, 'hot', prefix);
+      const warmDeleted = warmTier
+        ? await invalidateTier(warmTier, 'warm', prefix)
+        : 0;
+
+      console.log(
+        `[CacheInvalidation] Cleared ${hotDeleted} hot + ${warmDeleted} warm keys for ${did}/${rkey}`,
+      );
 
       // Clear in-memory caches for this site
       cache.delete('redirectRules', `${did}:${rkey}`);

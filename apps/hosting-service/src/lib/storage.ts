@@ -106,7 +106,13 @@ class ReadOnlyS3Tier implements StorageTier {
 	}
 
 	async *listKeys(prefix?: string) {
-		yield* this.tier.listKeys(prefix);
+		try {
+			yield* this.tier.listKeys(prefix);
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			console.warn(`[Storage] S3 listKeys error for prefix ${prefix}: ${msg}`);
+			// Yield nothing on error - don't break invalidation
+		}
 	}
 
 	async getStats() {
@@ -152,6 +158,109 @@ class ReadOnlyS3Tier implements StorageTier {
 	}
 }
 
+// Hot tier TTL (seconds) - safety net so stale entries expire even if invalidation fails
+const HOT_CACHE_TTL = parseInt(process.env.HOT_CACHE_TTL || '60', 10); // 60s default
+
+/**
+ * Wrapper around MemoryStorageTier that enforces a short per-entry TTL.
+ * This acts as a safety net: even if cache invalidation fails to clear the
+ * hot tier, stale entries will expire after HOT_CACHE_TTL seconds.
+ *
+ * The TieredStorage defaultTTL (14 days) is too long for the hot tier -
+ * we want stale hot entries to expire quickly and re-fetch from warm/cold.
+ */
+class TTLMemoryTier implements StorageTier {
+	public readonly inner: MemoryStorageTier;
+	private ttlMs: number;
+	private insertedAt = new Map<string, number>();
+
+	constructor(config: { maxSizeBytes: number; maxItems?: number }, ttlSeconds: number) {
+		this.inner = new MemoryStorageTier(config);
+		this.ttlMs = ttlSeconds * 1000;
+	}
+
+	private isStale(key: string): boolean {
+		const ts = this.insertedAt.get(key);
+		if (!ts) return false;
+		return Date.now() - ts > this.ttlMs;
+	}
+
+	private async evictIfStale(key: string): Promise<boolean> {
+		if (this.isStale(key)) {
+			await this.inner.delete(key);
+			this.insertedAt.delete(key);
+			return true;
+		}
+		return false;
+	}
+
+	async get(key: string) {
+		if (await this.evictIfStale(key)) return null;
+		return this.inner.get(key);
+	}
+
+	async getWithMetadata(key: string) {
+		if (await this.evictIfStale(key)) return null;
+		return this.inner.getWithMetadata(key);
+	}
+
+	async getStream(key: string) {
+		if (await this.evictIfStale(key)) return null;
+		return this.inner.getStream(key);
+	}
+
+	async set(key: string, data: Uint8Array, metadata: StorageMetadata) {
+		this.insertedAt.set(key, Date.now());
+		return this.inner.set(key, data, metadata);
+	}
+
+	async setStream(key: string, stream: NodeJS.ReadableStream, metadata: StorageMetadata) {
+		this.insertedAt.set(key, Date.now());
+		return this.inner.setStream(key, stream, metadata);
+	}
+
+	async delete(key: string) {
+		this.insertedAt.delete(key);
+		return this.inner.delete(key);
+	}
+
+	async deleteMany(keys: string[]) {
+		for (const key of keys) this.insertedAt.delete(key);
+		return this.inner.deleteMany(keys);
+	}
+
+	async exists(key: string) {
+		if (await this.evictIfStale(key)) return false;
+		return this.inner.exists(key);
+	}
+
+	async *listKeys(prefix?: string) {
+		yield* this.inner.listKeys(prefix);
+	}
+
+	async getMetadata(key: string) {
+		if (await this.evictIfStale(key)) return null;
+		return this.inner.getMetadata(key);
+	}
+
+	async setMetadata(key: string, metadata: StorageMetadata) {
+		return this.inner.setMetadata(key, metadata);
+	}
+
+	async getStats() {
+		return this.inner.getStats();
+	}
+
+	async clear() {
+		this.insertedAt.clear();
+		return this.inner.clear();
+	}
+}
+
+// Exported for direct access during cache invalidation
+export let hotTier: TTLMemoryTier;
+export let warmTier: StorageTier | undefined;
+
 /**
  * Initialize tiered storage
  * Must be called before serving requests
@@ -159,7 +268,6 @@ class ReadOnlyS3Tier implements StorageTier {
 function initializeStorage(): TieredStorage<Uint8Array> {
 	// Determine cold tier: S3 if configured, otherwise disk acts as cold
 	let coldTier: StorageTier;
-	let warmTier: StorageTier | undefined;
 
 	const diskTier = new DiskStorageTier({
 		directory: CACHE_DIR,
@@ -195,13 +303,18 @@ function initializeStorage(): TieredStorage<Uint8Array> {
 		console.log('[Storage] S3 not configured - using disk-only mode (disk as cold tier)');
 	}
 
+	// Hot tier with short TTL - entries expire quickly so stale data doesn't persist
+	hotTier = new TTLMemoryTier(
+		{ maxSizeBytes: HOT_CACHE_SIZE, maxItems: HOT_CACHE_COUNT },
+		HOT_CACHE_TTL,
+	);
+
+	console.log(`[Storage] Hot tier TTL: ${HOT_CACHE_TTL}s`);
+
 	const storage = new TieredStorage<Uint8Array>({
 		tiers: {
-			// Hot tier: In-memory LRU for instant serving
-			hot: new MemoryStorageTier({
-				maxSizeBytes: HOT_CACHE_SIZE,
-				maxItems: HOT_CACHE_COUNT,
-			}),
+			// Hot tier: In-memory LRU with short TTL for instant serving
+			hot: hotTier,
 
 			// Warm tier: Disk-based cache (only when S3 is configured)
 			warm: warmTier,
