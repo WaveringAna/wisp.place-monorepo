@@ -1,0 +1,57 @@
+{
+  "lexicon": 1,
+  "id": "place.wisp.v2.domain.getStatus",
+  "defs": {
+    "main": {
+      "type": "query",
+      "description": "Get current claim and verification status for a domain.",
+      "parameters": {
+        "type": "params",
+        "required": ["domain"],
+        "properties": {
+          "domain": {
+            "type": "string",
+            "description": "Domain to inspect (FQDN, lowercase preferred).",
+            "minLength": 3,
+            "maxLength": 253
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["domain", "status"],
+          "properties": {
+            "domain": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "enum": ["unclaimed", "pendingVerification", "verified", "alreadyClaimed"]
+            },
+            "kind": {
+              "type": "string",
+              "enum": ["wisp", "custom"]
+            },
+            "verified": {
+              "type": "boolean"
+            },
+            "lastCheckedAt": {
+              "type": "string",
+              "format": "datetime"
+            },
+            "lastError": {
+              "type": "string",
+              "maxLength": 1000
+            },
+            "siteRkey": {
+              "type": "string",
+              "format": "record-key"
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,5 +1,7 @@
 import { SQL } from "bun";
-import { BASE_HOST } from "@wispplace/constants";
+import { isValidHandle, toDomain } from "./domain-utils";
+
+export { isValidHandle, toDomain } from "./domain-utils";
 
 export const db = new SQL(
     process.env.NODE_ENV === 'production'
@@ -43,6 +45,17 @@ await db`
     )
 `;
 
+// Service identity keys for did.json verificationMethod
+await db`
+    CREATE TABLE IF NOT EXISTS service_identity_keys (
+        id TEXT PRIMARY KEY DEFAULT 'default',
+        public_key_multibase TEXT NOT NULL,
+        private_key_multibase TEXT,
+        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()),
+        updated_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())
+    )
+`;
+
 // Domains table maps subdomain -> DID (now supports up to 3 domains per user)
 await db`
     CREATE TABLE IF NOT EXISTS domains (
@@ -74,6 +87,18 @@ try {
 
 try {
     await db`ALTER TABLE oauth_states ADD COLUMN IF NOT EXISTS expires_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) + 3600`;
+} catch (err) {
+    // Column might already exist, ignore
+}
+
+try {
+    await db`ALTER TABLE service_identity_keys ADD COLUMN IF NOT EXISTS updated_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())`;
+} catch (err) {
+    // Column might already exist, ignore
+}
+
+try {
+    await db`ALTER TABLE service_identity_keys ADD COLUMN IF NOT EXISTS private_key_multibase TEXT`;
 } catch (err) {
     // Column might already exist, ignore
 }
@@ -240,34 +265,6 @@ await Promise.all([
         }
     })
 ]);
-
-const RESERVED_HANDLES = new Set([
-    "www",
-    "api",
-    "admin",
-    "static",
-    "public",
-    "preview",
-    "slingshot",
-    "plc",
-    "constellation",
-    "cdn",
-    "pds",
-    "staging",
-    "auth"
-]);
-
-export const isValidHandle = (handle: string): boolean => {
-    const h = handle.trim().toLowerCase();
-    if (h.length < 3 || h.length > 63) return false;
-    if (!/^[a-z0-9-]+$/.test(h)) return false;
-    if (h.startsWith('-') || h.endsWith('-')) return false;
-    if (h.includes('--')) return false;
-    if (RESERVED_HANDLES.has(h)) return false;
-    return true;
-};
-
-export const toDomain = (handle: string): string => `${handle.toLowerCase()}.${BASE_HOST}`;
 
 export const getDomainByDid = async (did: string): Promise<string | null> => {
     const rows = await db`SELECT domain FROM domains WHERE did = ${did} ORDER BY created_at ASC LIMIT 1`;
@@ -606,6 +603,42 @@ export const getCookieSecret = async (): Promise<string> => {
 
     console.log('[CookieSecret] Generated new cookie signing secret');
     return secret;
+};
+
+export const getServiceIdentityKeypair = async (): Promise<{
+    publicKeyMultibase: string;
+    privateKeyMultibase: string | null;
+} | null> => {
+    const rows = await db`
+        SELECT public_key_multibase, private_key_multibase
+        FROM service_identity_keys
+        WHERE id = 'default'
+        LIMIT 1
+    `;
+
+    if (rows.length === 0) {
+        return null;
+    }
+
+    return {
+        publicKeyMultibase: rows[0].public_key_multibase as string,
+        privateKeyMultibase: (rows[0].private_key_multibase as string | undefined) ?? null,
+    };
+};
+
+export const setServiceIdentityKeypair = async (
+    publicKeyMultibase: string,
+    privateKeyMultibase: string | null
+): Promise<void> => {
+    await db`
+        INSERT INTO service_identity_keys (id, public_key_multibase, private_key_multibase, created_at, updated_at)
+        VALUES ('default', ${publicKeyMultibase}, ${privateKeyMultibase}, EXTRACT(EPOCH FROM NOW()), EXTRACT(EPOCH FROM NOW()))
+        ON CONFLICT (id)
+        DO UPDATE SET
+            public_key_multibase = EXCLUDED.public_key_multibase,
+            private_key_multibase = EXCLUDED.private_key_multibase,
+            updated_at = EXTRACT(EPOCH FROM NOW())
+    `;
 };
 
 // Supporter management functions

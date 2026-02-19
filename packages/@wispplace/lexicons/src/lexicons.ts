@@ -10,6 +10,281 @@ import {
 import { type $Typed, is$typed, maybe$typed } from './util.js'
 
 export const schemaDict = {
+  PlaceWispV2DomainClaim: {
+    lexicon: 1,
+    id: 'place.wisp.v2.domain.claim',
+    defs: {
+      main: {
+        type: 'procedure',
+        description:
+          'Claim a domain for the authenticated DID. Returns DNS setup instructions for custom domains.',
+        input: {
+          encoding: 'application/json',
+          schema: {
+            type: 'object',
+            required: ['domain'],
+            properties: {
+              domain: {
+                type: 'string',
+                description:
+                  'Domain to claim (wisp subdomain FQDN or custom domain FQDN).',
+                minLength: 3,
+                maxLength: 253,
+              },
+              siteRkey: {
+                type: 'string',
+                format: 'record-key',
+                description:
+                  'Optional place.wisp.fs rkey to map immediately after claim.',
+              },
+            },
+          },
+        },
+        output: {
+          encoding: 'application/json',
+          schema: {
+            type: 'object',
+            required: ['domain', 'status'],
+            properties: {
+              domain: {
+                type: 'string',
+              },
+              kind: {
+                type: 'string',
+                enum: ['wisp', 'custom'],
+              },
+              status: {
+                type: 'string',
+                enum: ['alreadyClaimed', 'pendingVerification', 'verified'],
+              },
+              challengeId: {
+                type: 'string',
+                description:
+                  'Identifier used to construct DNS challenge targets for custom domains.',
+                minLength: 8,
+                maxLength: 64,
+              },
+              txtName: {
+                type: 'string',
+                description:
+                  'TXT hostname to set for ownership proof (custom domains).',
+                minLength: 3,
+                maxLength: 253,
+              },
+              txtValue: {
+                type: 'string',
+                format: 'did',
+                description:
+                  'TXT value to set for ownership proof (custom domains).',
+              },
+              cnameTarget: {
+                type: 'string',
+                description: 'Advisory CNAME target (custom domains).',
+                minLength: 3,
+                maxLength: 253,
+              },
+              siteRkey: {
+                type: 'string',
+                format: 'record-key',
+              },
+            },
+          },
+        },
+        errors: [
+          {
+            name: 'AuthenticationRequired',
+          },
+          {
+            name: 'InvalidDomain',
+          },
+          {
+            name: 'AlreadyClaimed',
+          },
+          {
+            name: 'DomainLimitReached',
+          },
+          {
+            name: 'RateLimitExceeded',
+          },
+        ],
+      },
+    },
+  },
+  PlaceWispV2DomainGetStatus: {
+    lexicon: 1,
+    id: 'place.wisp.v2.domain.getStatus',
+    defs: {
+      main: {
+        type: 'query',
+        description: 'Get current claim and verification status for a domain.',
+        parameters: {
+          type: 'params',
+          required: ['domain'],
+          properties: {
+            domain: {
+              type: 'string',
+              description: 'Domain to inspect (FQDN, lowercase preferred).',
+              minLength: 3,
+              maxLength: 253,
+            },
+          },
+        },
+        output: {
+          encoding: 'application/json',
+          schema: {
+            type: 'object',
+            required: ['domain', 'status'],
+            properties: {
+              domain: {
+                type: 'string',
+              },
+              status: {
+                type: 'string',
+                enum: [
+                  'unclaimed',
+                  'pendingVerification',
+                  'verified',
+                  'alreadyClaimed',
+                ],
+              },
+              kind: {
+                type: 'string',
+                enum: ['wisp', 'custom'],
+              },
+              verified: {
+                type: 'boolean',
+              },
+              lastCheckedAt: {
+                type: 'string',
+                format: 'datetime',
+              },
+              lastError: {
+                type: 'string',
+                maxLength: 1000,
+              },
+              siteRkey: {
+                type: 'string',
+                format: 'record-key',
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+  PlaceWispV2Domains: {
+    lexicon: 1,
+    id: 'place.wisp.v2.domains',
+    defs: {
+      main: {
+        type: 'record',
+        description:
+          'Domain registration metadata for wisp.place subdomains and custom domains.',
+        key: 'any',
+        record: {
+          type: 'object',
+          required: ['domain', 'registration', 'createdAt', 'updatedAt'],
+          properties: {
+            domain: {
+              type: 'string',
+              description:
+                'Lowercase FQDN for this registration (for example, alice.wisp.place or example.com).',
+              minLength: 3,
+              maxLength: 253,
+            },
+            registration: {
+              type: 'union',
+              refs: [
+                'lex:place.wisp.v2.domains#wispRegistration',
+                'lex:place.wisp.v2.domains#customRegistration',
+              ],
+            },
+            siteRkey: {
+              type: 'string',
+              format: 'record-key',
+              description:
+                'Optional place.wisp.fs record key currently mapped to this domain.',
+            },
+            createdAt: {
+              type: 'string',
+              format: 'datetime',
+            },
+            updatedAt: {
+              type: 'string',
+              format: 'datetime',
+            },
+          },
+        },
+      },
+      wispRegistration: {
+        type: 'object',
+        description:
+          'Registration for a first-party subdomain under the wisp.place base host.',
+        required: ['kind', 'handle'],
+        properties: {
+          kind: {
+            type: 'string',
+            const: 'wisp',
+          },
+          handle: {
+            type: 'string',
+            description: 'Subdomain label only (for example, alice).',
+            minLength: 3,
+            maxLength: 63,
+          },
+        },
+      },
+      customRegistration: {
+        type: 'object',
+        description: 'Registration metadata for a custom domain.',
+        required: ['kind', 'challengeId', 'verification'],
+        properties: {
+          kind: {
+            type: 'string',
+            const: 'custom',
+          },
+          challengeId: {
+            type: 'string',
+            description:
+              'Challenge identifier used to derive DNS setup instructions.',
+            minLength: 8,
+            maxLength: 64,
+          },
+          verification: {
+            type: 'ref',
+            ref: 'lex:place.wisp.v2.domains#verification',
+          },
+        },
+      },
+      verification: {
+        type: 'object',
+        description: 'Latest verification state for a custom domain.',
+        required: ['status', 'method'],
+        properties: {
+          status: {
+            type: 'string',
+            enum: ['pending', 'verified', 'failed'],
+          },
+          method: {
+            type: 'string',
+            enum: ['txt-did-v1'],
+          },
+          lastCheckedAt: {
+            type: 'string',
+            format: 'datetime',
+          },
+          verifiedAt: {
+            type: 'string',
+            format: 'datetime',
+          },
+          lastError: {
+            type: 'string',
+            maxLength: 1000,
+          },
+        },
+      },
+    },
+  },
   PlaceWispFs: {
     lexicon: 1,
     id: 'place.wisp.fs',
@@ -358,6 +633,9 @@ export function validate(
 }
 
 export const ids = {
+  PlaceWispV2DomainClaim: 'place.wisp.v2.domain.claim',
+  PlaceWispV2DomainGetStatus: 'place.wisp.v2.domain.getStatus',
+  PlaceWispV2Domains: 'place.wisp.v2.domains',
   PlaceWispFs: 'place.wisp.fs',
   PlaceWispSettings: 'place.wisp.settings',
   PlaceWispSubfs: 'place.wisp.subfs',

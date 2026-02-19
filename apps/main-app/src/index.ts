@@ -1,6 +1,8 @@
 // Fix for Elysia issue with Bun, (see https://github.com/oven-sh/bun/issues/12161)
 process.getBuiltinModule = require;
 
+import { existsSync } from 'node:fs'
+
 import { Elysia, t } from 'elysia'
 import type { Context } from 'elysia'
 import { cors } from '@elysiajs/cors'
@@ -16,11 +18,13 @@ import {
 	rotateKeysIfNeeded
 } from './lib/oauth-client'
 import { getCookieSecret, closeDatabase } from './lib/db'
+import { ensureServiceIdentityKeypair } from './lib/service-identity'
 import { authRoutes } from './routes/auth'
 import { wispRoutes } from './routes/wisp'
 import { domainRoutes } from './routes/domain'
 import { userRoutes } from './routes/user'
 import { siteRoutes } from './routes/site'
+import { xrpcRoutes } from './routes/xrpc'
 import { csrfProtection } from './lib/csrf'
 import { DNSVerificationWorker } from './lib/dns-verification-worker'
 import { createLogger, logCollector, initializeGrafanaExporters } from '@wispplace/observability'
@@ -35,6 +39,29 @@ initializeGrafanaExporters({
 })
 
 const logger = createLogger('main-app')
+const isLocalDev = Bun.env.LOCAL_DEV === 'true'
+const oauthAuthorizationServer = Bun.env.OAUTH_AUTHORIZATION_SERVER ?? 'https://atproto.wisp.place'
+const defaultServiceDid = isLocalDev ? 'did:web:localhost' : 'did:web:wisp.place'
+const serviceDid = Bun.env.SERVICE_DID ?? defaultServiceDid
+const parsedServiceIds = (Bun.env.SERVICE_IDS ?? '')
+	.split(',')
+	.map((id) => id.trim())
+	.filter((id) => id.length > 0 && id.startsWith('#'))
+const didServiceIds = parsedServiceIds.length > 0
+	? Array.from(new Set(parsedServiceIds))
+	: ['#wisp_xrpc']
+const serverPort = Number(Bun.env.PORT ?? (isLocalDev ? '443' : '80'))
+const localTlsEnabled = isLocalDev && Bun.env.LOCAL_DEV_TLS !== 'false'
+const localTlsCertPath = Bun.env.LOCAL_TLS_CERT_PATH ?? './certs/dev-cert.pem'
+const localTlsKeyPath = Bun.env.LOCAL_TLS_KEY_PATH ?? './certs/dev-key.pem'
+
+logger.info('[Server] Local TLS config', {
+	isLocalDev,
+	localTlsEnabled,
+	port: serverPort,
+	certPath: localTlsEnabled ? localTlsCertPath : undefined,
+	keyPath: localTlsEnabled ? localTlsKeyPath : undefined
+})
 
 const config: Config = {
 	domain: (Bun.env.DOMAIN ?? `https://${BASE_HOST}`) as Config['domain'],
@@ -46,6 +73,11 @@ await promptAdminSetup()
 
 // Get or generate cookie signing secret
 const cookieSecret = await getCookieSecret()
+const serviceIdentity = await ensureServiceIdentityKeypair(
+	Bun.env.SERVICE_PUBLIC_KEY_MULTIBASE ?? null,
+	Bun.env.SERVICE_PRIVATE_KEY_MULTIBASE ?? null
+)
+const servicePublicKeyMultibase = serviceIdentity.publicKeyMultibase
 
 const client = await getOAuthClient(config)
 
@@ -169,11 +201,10 @@ export const app = new Elysia({
 		}
 	})
 	.use(csrfProtection())
-	.get('/', async ({ set }) => {
+	.get('/', async ({ request, set }) => {
 		// Build dynamic login URL for AT Protocol OAuth entryway
-		const isLocalDev = Bun.env.LOCAL_DEV === 'true'
 		const loginUrl = isLocalDev
-			? 'http://127.0.0.1:8000/api/auth/login'
+			? `${new URL(request.url).origin}/api/auth/login`
 			: `${config.domain}/api/auth/login`
 		const atprotoLoginUrl = `https://atproto.wisp.place/?next=${encodeURIComponent(loginUrl)}`
 
@@ -183,6 +214,7 @@ export const app = new Elysia({
 		return html.replaceAll('{{ATPROTO_LOGIN_URL}}', atprotoLoginUrl)
 	})
 	.use(authRoutes(client, cookieSecret))
+	.use(xrpcRoutes())
 	.use(wispRoutes(client, cookieSecret))
 	.use(domainRoutes(client, cookieSecret))
 	.use(userRoutes(client, cookieSecret))
@@ -278,6 +310,48 @@ export const app = new Elysia({
 		})
 		return metadata
 	})
+	.get('/.well-known/oauth-protected-resource', ({ request }) => {
+		const resource = new URL(request.url).origin
+
+		return {
+			resource,
+			authorization_servers: [oauthAuthorizationServer],
+			bearer_methods_supported: ['header'],
+		}
+	})
+	.get('/.well-known/did.json', ({ request, set }) => {
+		set.headers['Content-Type'] = 'application/did+json'
+
+		const serviceEndpoint = Bun.env.SERVICE_ENDPOINT ?? new URL(request.url).origin
+		const contexts = ['https://www.w3.org/ns/did/v1']
+		if (servicePublicKeyMultibase) {
+			contexts.push('https://w3id.org/security/multikey/v1')
+		}
+
+		const services = didServiceIds.map((id) => ({
+			id,
+			type: 'AtprotoService',
+			serviceEndpoint
+		}))
+
+		const verificationMethod = servicePublicKeyMultibase
+			? [
+					{
+						id: `${serviceDid}#atproto`,
+						type: 'Multikey',
+						controller: serviceDid,
+						publicKeyMultibase: servicePublicKeyMultibase
+					}
+				]
+			: undefined
+
+		return {
+			'@context': contexts,
+			id: serviceDid,
+			verificationMethod,
+			service: services
+		}
+	})
 	.get('/jwks.json', async ({ set }) => {
 		// Prevent caching to ensure clients always get fresh keys after rotation
 		set.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
@@ -335,23 +409,60 @@ export const app = new Elysia({
 	.get('/.well-known/atproto-did', ({ set }) => {
 		// Return plain text DID for AT Protocol domain verification
 		set.headers['Content-Type'] = 'text/plain'
-		return 'did:plc:7puq73yz2hkvbcpdhnsze2qw'
+		return serviceDid
 	})
 	.use(cors({
-		origin: config.domain,
+		origin: isLocalDev
+			? [
+					config.domain,
+					/^http:\/\/127\.0\.0\.1:\d+$/,
+					/^http:\/\/localhost:\d+$/,
+					/^https:\/\/127\.0\.0\.1:\d+$/,
+					/^https:\/\/localhost:\d+$/
+				]
+			: config.domain,
 		credentials: true,
 		methods: ['GET', 'POST', 'DELETE', 'PUT', 'PATCH', 'OPTIONS'],
-		allowedHeaders: ['Content-Type', 'Authorization', 'Origin', 'X-Forwarded-Host'],
-		exposeHeaders: ['Content-Type'],
+		allowedHeaders: [
+			'Content-Type',
+			'Authorization',
+			'Origin',
+			'X-Forwarded-Host',
+			'DPoP',
+			'dpop',
+			'DPoP-Nonce',
+			'dpop-nonce'
+		],
+		exposeHeaders: ['Content-Type', 'DPoP-Nonce', 'dpop-nonce'],
 		maxAge: 86400 // 24 hours
 	}))
-	.listen({
-		port: 8000,
-		hostname: '0.0.0.0'
-	})
+	.listen(
+		localTlsEnabled
+			? (() => {
+					if (!existsSync(localTlsCertPath)) {
+						throw new Error(`LOCAL_DEV TLS cert not found at ${localTlsCertPath}`)
+					}
+					if (!existsSync(localTlsKeyPath)) {
+						throw new Error(`LOCAL_DEV TLS key not found at ${localTlsKeyPath}`)
+					}
+
+					return {
+						port: serverPort,
+						hostname: '0.0.0.0',
+						tls: {
+							cert: Bun.file(localTlsCertPath),
+							key: Bun.file(localTlsKeyPath)
+						}
+					}
+				})()
+			: {
+					port: serverPort,
+					hostname: '0.0.0.0'
+				}
+	)
 
 console.log(
-	`🦊 Elysia is running at ${app.server?.hostname}:${app.server?.port}`
+	`🦊 Elysia is running at ${localTlsEnabled ? 'https' : 'http'}://${app.server?.hostname}:${app.server?.port}`
 )
 
 // Graceful shutdown

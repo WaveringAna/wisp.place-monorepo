@@ -1,0 +1,105 @@
+{
+  "lexicon": 1,
+  "id": "place.wisp.v2.domains",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "Domain registration metadata for wisp.place subdomains and custom domains.",
+      "key": "any",
+      "record": {
+        "type": "object",
+        "required": ["domain", "registration", "createdAt", "updatedAt"],
+        "properties": {
+          "domain": {
+            "type": "string",
+            "description": "Lowercase FQDN for this registration (for example, alice.wisp.place or example.com).",
+            "minLength": 3,
+            "maxLength": 253
+          },
+          "registration": {
+            "type": "union",
+            "refs": ["#wispRegistration", "#customRegistration"]
+          },
+          "siteRkey": {
+            "type": "string",
+            "format": "record-key",
+            "description": "Optional place.wisp.fs record key currently mapped to this domain."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "datetime"
+          }
+        }
+      }
+    },
+    "wispRegistration": {
+      "type": "object",
+      "description": "Registration for a first-party subdomain under the wisp.place base host.",
+      "required": ["kind", "handle"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "wisp"
+        },
+        "handle": {
+          "type": "string",
+          "description": "Subdomain label only (for example, alice).",
+          "minLength": 3,
+          "maxLength": 63
+        }
+      }
+    },
+    "customRegistration": {
+      "type": "object",
+      "description": "Registration metadata for a custom domain.",
+      "required": ["kind", "challengeId", "verification"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "custom"
+        },
+        "challengeId": {
+          "type": "string",
+          "description": "Challenge identifier used to derive DNS setup instructions.",
+          "minLength": 8,
+          "maxLength": 64
+        },
+        "verification": {
+          "type": "ref",
+          "ref": "#verification"
+        }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "description": "Latest verification state for a custom domain.",
+      "required": ["status", "method"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["pending", "verified", "failed"]
+        },
+        "method": {
+          "type": "string",
+          "enum": ["txt-did-v1"]
+        },
+        "lastCheckedAt": {
+          "type": "string",
+          "format": "datetime"
+        },
+        "verifiedAt": {
+          "type": "string",
+          "format": "datetime"
+        },
+        "lastError": {
+          "type": "string",
+          "maxLength": 1000
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,84 @@
+{
+  "lexicon": 1,
+  "id": "place.wisp.v2.domain.claim",
+  "defs": {
+    "main": {
+      "type": "procedure",
+      "description": "Claim a domain for the authenticated DID. Returns DNS setup instructions for custom domains.",
+      "input": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["domain"],
+          "properties": {
+            "domain": {
+              "type": "string",
+              "description": "Domain to claim (wisp subdomain FQDN or custom domain FQDN).",
+              "minLength": 3,
+              "maxLength": 253
+            },
+            "siteRkey": {
+              "type": "string",
+              "format": "record-key",
+              "description": "Optional place.wisp.fs rkey to map immediately after claim."
+            }
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["domain", "status"],
+          "properties": {
+            "domain": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": ["wisp", "custom"]
+            },
+            "status": {
+              "type": "string",
+              "enum": ["alreadyClaimed", "pendingVerification", "verified"]
+            },
+            "challengeId": {
+              "type": "string",
+              "description": "Identifier used to construct DNS challenge targets for custom domains.",
+              "minLength": 8,
+              "maxLength": 64
+            },
+            "txtName": {
+              "type": "string",
+              "description": "TXT hostname to set for ownership proof (custom domains).",
+              "minLength": 3,
+              "maxLength": 253
+            },
+            "txtValue": {
+              "type": "string",
+              "format": "did",
+              "description": "TXT value to set for ownership proof (custom domains)."
+            },
+            "cnameTarget": {
+              "type": "string",
+              "description": "Advisory CNAME target (custom domains).",
+              "minLength": 3,
+              "maxLength": 253
+            },
+            "siteRkey": {
+              "type": "string",
+              "format": "record-key"
+            }
+          }
+        }
+      },
+      "errors": [
+        { "name": "AuthenticationRequired" },
+        { "name": "InvalidDomain" },
+        { "name": "AlreadyClaimed" },
+        { "name": "DomainLimitReached" },
+        { "name": "RateLimitExceeded" }
+      ]
+    }
+  }
+}

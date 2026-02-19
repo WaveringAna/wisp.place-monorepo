@@ -55,6 +55,53 @@ CLIENT_NAME=Wisp.Place
 LOCAL_DEV=true
 ```
 
+### Local Domain XRPC (ServiceAuth via PDS Proxy)
+
+`apps/main-app` exposes domain claim/status XRPC endpoints:
+
+- `place.wisp.v2.domain.claim` (procedure / POST)
+- `place.wisp.v2.domain.getStatus` (query / GET)
+
+The server validates **serviceAuth JWTs** (not cookie auth, not direct end-user access JWTs) on `/xrpc/*`.
+
+Set these env vars in your active `.env`:
+
+```env
+LOCAL_DEV=true
+SERVICE_DID=did:web:regentsmacbookair
+SERVICE_IDS="#wisp_xrpc"
+SERVICE_ENDPOINT=https://regentsmacbookair
+```
+
+Notes:
+
+- `/.well-known/atproto-did` returns `SERVICE_DID`.
+- `/.well-known/did.json` publishes the DID doc, including `service` entries from `SERVICE_IDS`.
+- `SERVICE_IDS` must be quoted when it starts with `#` (otherwise dotenv treats it as a comment).
+- Service identity keys are stored in `service_identity_keys` in Postgres.  
+  If `SERVICE_PUBLIC_KEY_MULTIBASE` and `SERVICE_PRIVATE_KEY_MULTIBASE` are not set, a keypair is generated once and persisted.
+
+### Local TLS Requirement (No Auto Cert Generation)
+
+Some PDS proxy flows require HTTPS on `:443` for the proxied service endpoint.
+Cert generation is intentionally manual so SANs are explicit and correct for your environment.
+
+Example with `mkcert`:
+
+```bash
+mkcert -cert-file certs/dev-cert.pem -key-file certs/dev-key.pem regentsmacbookair localhost 100.64.0.2
+```
+
+Use SANs that match exactly what your PDS will call (hostname and/or IP).  
+`apps/main-app` can terminate TLS directly in local dev with:
+
+```env
+PORT=443
+LOCAL_DEV_TLS=true
+LOCAL_TLS_CERT_PATH=./certs/dev-cert.pem
+LOCAL_TLS_KEY_PATH=./certs/dev-key.pem
+```
+
 
 ```bash
 # Hosting service

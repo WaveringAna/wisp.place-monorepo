@@ -11,7 +11,10 @@ if [[ "$1" == "-y" || "$1" == "--yes" ]]; then
 fi
 
 echo "=== Generating TypeScript lexicons ==="
-cd "$ROOT_DIR/packages/@wisp/lexicons"
-eval "$AUTO_ACCEPT npm run codegen"
+cd "$ROOT_DIR/packages/@wispplace/lexicons"
+eval "$AUTO_ACCEPT bun run codegen"
+
+echo "=== Generating atcute lexicons ==="
+eval "$AUTO_ACCEPT bun run codegen:atcute"
 
 echo "=== Done ==="

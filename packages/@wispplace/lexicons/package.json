@@ -22,6 +22,22 @@
       "types": "./src/types/place/wisp/subfs.ts",
       "default": "./src/types/place/wisp/subfs.ts"
     },
+    "./types/place/wisp/v2/domains": {
+      "types": "./src/types/place/wisp/v2/domains.ts",
+      "default": "./src/types/place/wisp/v2/domains.ts"
+    },
+    "./types/place/wisp/v2/domain/claim": {
+      "types": "./src/types/place/wisp/v2/domain/claim.ts",
+      "default": "./src/types/place/wisp/v2/domain/claim.ts"
+    },
+    "./types/place/wisp/v2/domain/getStatus": {
+      "types": "./src/types/place/wisp/v2/domain/getStatus.ts",
+      "default": "./src/types/place/wisp/v2/domain/getStatus.ts"
+    },
+    "./atcute": {
+      "types": "./src/atcute/index.ts",
+      "default": "./src/atcute/index.ts"
+    },
     "./lexicons": {
       "types": "./src/lexicons.ts",
       "default": "./src/lexicons.ts"
@@ -32,13 +48,16 @@
     }
   },
   "scripts": {
-    "codegen": "lex gen-server ./src ../../../lexicons/*.json"
+    "codegen": "lex gen-server ./src ../../../lexicons/*.json",
+    "codegen:atcute": "lex-cli generate -c lex.atcute.config.js"
   },
   "dependencies": {
+    "@atcute/lexicons": "^1.2.9",
     "@atproto/lexicon": "^0.5.1",
     "@atproto/xrpc-server": "^0.9.5"
   },
   "devDependencies": {
+    "@atcute/lex-cli": "^2.5.3",
     "@atproto/lex-cli": "^0.9.5",
     "multiformats": "^13.4.1"
   }

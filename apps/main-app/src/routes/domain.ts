@@ -7,8 +7,6 @@ import {
 	getDomainByDid,
 	isDomainAvailable,
 	isDomainRegistered,
-	isValidHandle,
-	toDomain,
 	updateDomain,
 	countWispDomains,
 	deleteWispDomain,
@@ -20,6 +18,13 @@ import {
 	updateWispDomainSite,
 	updateCustomDomainRkey
 } from '../lib/db'
+import {
+	extractWispHandle,
+	isValidHandle,
+	normalizeDomain,
+	toDomain,
+	validateCustomDomain
+} from '../lib/domain-utils'
 import { createHash } from 'crypto'
 import { verifyCustomDomain } from '../lib/dns-verify'
 import { createLogger } from '@wispplace/observability'
@@ -73,7 +78,7 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		 */
 		.get('/registered', async ({ query, set }) => {
 			try {
-				const domain = (query.domain || "").trim().toLowerCase();
+				const domain = normalizeDomain(String(query.domain || ''))
 
 				if (!domain) {
 					set.status = 400;
@@ -206,77 +211,12 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		.post('/custom/add', async ({ body, auth, set }) => {
 			try {
 				const { domain } = body as { domain: string };
-				const domainLower = domain.toLowerCase().trim();
+				const domainLower = normalizeDomain(domain || '')
 
-				// Enhanced domain validation
-				// 1. Length check (RFC 1035: labels 1-63 chars, total max 253)
-				if (!domainLower || domainLower.length < 3 || domainLower.length > 253) {
+				const domainError = validateCustomDomain(domainLower)
+				if (domainError) {
 					set.status = 400
-					throw new Error('Invalid domain: must be 3-253 characters');
-				}
-
-				// 2. Basic format validation
-				// - Must contain at least one dot (require TLD)
-				// - Valid characters: a-z, 0-9, hyphen, dot
-				// - No consecutive dots, no leading/trailing dots or hyphens
-				const domainPattern = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
-				if (!domainPattern.test(domainLower)) {
-					set.status = 400
-					throw new Error('Invalid domain format');
-				}
-
-				// 3. Validate each label (part between dots)
-				const labels = domainLower.split('.');
-				for (const label of labels) {
-					if (label.length === 0 || label.length > 63) {
-						set.status = 400
-						throw new Error('Invalid domain: label length must be 1-63 characters');
-					}
-					if (label.startsWith('-') || label.endsWith('-')) {
-						set.status = 400
-						throw new Error('Invalid domain: labels cannot start or end with hyphen');
-					}
-				}
-
-				// 4. TLD validation (require valid TLD, block single-char TLDs and numeric TLDs)
-				const tld = labels[labels.length - 1];
-				if (tld.length < 2 || /^\d+$/.test(tld)) {
-					set.status = 400
-					throw new Error('Invalid domain: TLD must be at least 2 characters and not all numeric');
-				}
-
-				// 5. Homograph attack protection - block domains with mixed scripts or confusables
-				// Block non-ASCII characters (Punycode domains should be pre-converted)
-				if (!/^[a-z0-9.-]+$/.test(domainLower)) {
-					set.status = 400
-					throw new Error('Invalid domain: only ASCII alphanumeric, dots, and hyphens allowed');
-				}
-
-				// 6. Block localhost, internal IPs, and reserved domains
-				const blockedDomains = [
-					'localhost',
-					'example.com',
-					'example.org',
-					'example.net',
-					'test',
-					'invalid',
-					'local'
-				];
-				const blockedPatterns = [
-					/^(?:10|127|172\.(?:1[6-9]|2[0-9]|3[01])|192\.168)\./,  // Private IPs
-					/^(?:\d{1,3}\.){3}\d{1,3}$/,  // Any IP address
-				];
-
-				if (blockedDomains.includes(domainLower)) {
-					set.status = 400
-					throw new Error('Invalid domain: reserved or blocked domain');
-				}
-
-				for (const pattern of blockedPatterns) {
-					if (pattern.test(domainLower)) {
-						set.status = 400
-						throw new Error('Invalid domain: IP addresses not allowed');
-					}
+					throw new Error(`Invalid domain: ${domainError}`)
 				}
 
 				// Check if already exists and is verified
@@ -396,7 +336,7 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				const { domain } = params;
 
 				// Verify domain belongs to user
-				const domainLower = domain.toLowerCase().trim();
+				const domainLower = normalizeDomain(domain)
 				const info = await isDomainRegistered(domainLower);
 
 				if (!info.registered || info.type !== 'wisp') {
@@ -414,7 +354,11 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 
 				// Delete from PDS
 				const agent = new Agent((url, init) => auth.session.fetchHandler(url, init));
-				const handle = domainLower.replace(`.${process.env.BASE_DOMAIN || 'wisp.place'}`, '');
+				const handle = extractWispHandle(domainLower);
+				if (!handle) {
+					set.status = 400
+					throw new Error('Invalid wisp domain');
+				}
 				try {
 					await agent.com.atproto.repo.deleteRecord({
 						repo: auth.did,
