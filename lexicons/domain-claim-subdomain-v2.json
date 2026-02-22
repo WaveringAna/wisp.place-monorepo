@@ -1,0 +1,61 @@
+{
+  "lexicon": 1,
+  "id": "place.wisp.v2.domain.claimSubdomain",
+  "defs": {
+    "main": {
+      "type": "procedure",
+      "description": "Claim a wisp.place subdomain handle for the authenticated DID.",
+      "input": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["handle"],
+          "properties": {
+            "handle": {
+              "type": "string",
+              "description": "Subdomain label only (for example, alice).",
+              "minLength": 3,
+              "maxLength": 63
+            },
+            "siteRkey": {
+              "type": "string",
+              "format": "record-key",
+              "description": "Optional place.wisp.fs rkey to map immediately after claim."
+            }
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["domain", "kind", "status"],
+          "properties": {
+            "domain": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": ["wisp"]
+            },
+            "status": {
+              "type": "string",
+              "enum": ["verified", "alreadyClaimed"]
+            },
+            "siteRkey": {
+              "type": "string",
+              "format": "record-key"
+            }
+          }
+        }
+      },
+      "errors": [
+        { "name": "AuthenticationRequired" },
+        { "name": "InvalidDomain" },
+        { "name": "AlreadyClaimed" },
+        { "name": "DomainLimitReached" },
+        { "name": "RateLimitExceeded" }
+      ]
+    }
+  }
+}

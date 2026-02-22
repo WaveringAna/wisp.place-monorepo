@@ -12,29 +12,21 @@ import {
 
 const is$typed = _is$typed,
   validate = _validate
-const id = 'place.wisp.v2.domain.claim'
+const id = 'place.wisp.v2.domain.claimSubdomain'
 
 export type QueryParams = {}
 
 export interface InputSchema {
-  /** Custom domain FQDN to claim (for example, example.com). */
-  domain: string
+  /** Subdomain label only (for example, alice). */
+  handle: string
   /** Optional place.wisp.fs rkey to map immediately after claim. */
   siteRkey?: string
 }
 
 export interface OutputSchema {
   domain: string
-  kind?: 'custom'
-  status: 'alreadyClaimed' | 'pendingVerification' | 'verified'
-  /** Identifier used to construct DNS challenge targets for custom domains. */
-  challengeId?: string
-  /** TXT hostname to set for ownership proof (custom domains). */
-  txtName?: string
-  /** TXT value to set for ownership proof (custom domains). */
-  txtValue?: string
-  /** Advisory CNAME target (custom domains). */
-  cnameTarget?: string
+  kind: 'wisp'
+  status: 'verified' | 'alreadyClaimed'
   siteRkey?: string
 }
 

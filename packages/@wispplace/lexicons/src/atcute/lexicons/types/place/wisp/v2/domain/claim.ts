@@ -8,7 +8,7 @@ const _mainSchema = /*#__PURE__*/ v.procedure("place.wisp.v2.domain.claim", {
     type: "lex",
     schema: /*#__PURE__*/ v.object({
       /**
-       * Domain to claim (wisp subdomain FQDN or custom domain FQDN).
+       * Custom domain FQDN to claim (for example, example.com).
        * @minLength 3
        * @maxLength 253
        */
@@ -45,9 +45,7 @@ const _mainSchema = /*#__PURE__*/ v.procedure("place.wisp.v2.domain.claim", {
         ]),
       ),
       domain: /*#__PURE__*/ v.string(),
-      kind: /*#__PURE__*/ v.optional(
-        /*#__PURE__*/ v.literalEnum(["custom", "wisp"]),
-      ),
+      kind: /*#__PURE__*/ v.optional(/*#__PURE__*/ v.literalEnum(["custom"])),
       siteRkey: /*#__PURE__*/ v.optional(/*#__PURE__*/ v.recordKeyString()),
       status: /*#__PURE__*/ v.literalEnum([
         "alreadyClaimed",

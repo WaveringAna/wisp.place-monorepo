@@ -1,8 +1,6 @@
 // Fix for Elysia issue with Bun, (see https://github.com/oven-sh/bun/issues/12161)
 process.getBuiltinModule = require;
 
-import { existsSync } from 'node:fs'
-
 import { Elysia, t } from 'elysia'
 import type { Context } from 'elysia'
 import { cors } from '@elysiajs/cors'
@@ -50,17 +48,11 @@ const parsedServiceIds = (Bun.env.SERVICE_IDS ?? '')
 const didServiceIds = parsedServiceIds.length > 0
 	? Array.from(new Set(parsedServiceIds))
 	: ['#wisp_xrpc']
-const serverPort = Number(Bun.env.PORT ?? (isLocalDev ? '443' : '80'))
-const localTlsEnabled = isLocalDev && Bun.env.LOCAL_DEV_TLS !== 'false'
-const localTlsCertPath = Bun.env.LOCAL_TLS_CERT_PATH ?? './certs/dev-cert.pem'
-const localTlsKeyPath = Bun.env.LOCAL_TLS_KEY_PATH ?? './certs/dev-key.pem'
+const serverPort = Number(Bun.env.PORT ?? (isLocalDev ? '8000' : '80'))
 
-logger.info('[Server] Local TLS config', {
+logger.info('[Server] Startup config', {
 	isLocalDev,
-	localTlsEnabled,
-	port: serverPort,
-	certPath: localTlsEnabled ? localTlsCertPath : undefined,
-	keyPath: localTlsEnabled ? localTlsKeyPath : undefined
+	port: serverPort
 })
 
 const config: Config = {
@@ -124,6 +116,17 @@ export const app = new Elysia({
 	})
 	// Observability middleware
 	.onBeforeHandle(observabilityMiddleware('main-app').beforeHandle)
+	.onRequest(({ request }) => {
+		if (isLocalDev) {
+			const pathname = new URL(request.url).pathname
+			if (pathname.startsWith('/xrpc/')) {
+				console.log('[Server] Incoming /xrpc request', {
+					method: request.method,
+					path: pathname
+				})
+			}
+		}
+	})
 	.onAfterHandle((ctx: Context) => {
 		observabilityMiddleware('main-app').afterHandle(ctx)
 		// Security headers middleware
@@ -214,7 +217,6 @@ export const app = new Elysia({
 		return html.replaceAll('{{ATPROTO_LOGIN_URL}}', atprotoLoginUrl)
 	})
 	.use(authRoutes(client, cookieSecret))
-	.use(xrpcRoutes())
 	.use(wispRoutes(client, cookieSecret))
 	.use(domainRoutes(client, cookieSecret))
 	.use(userRoutes(client, cookieSecret))
@@ -223,7 +225,10 @@ export const app = new Elysia({
 	.use(
 		await staticPlugin({
 			assets: './apps/main-app/public',
-			prefix: '/'
+			prefix: '/',
+			// Prevent dev-mode GET /* fallback from swallowing XRPC GET routes.
+			alwaysStatic: true,
+			staticLimit: 10000
 		})
 	)
 	// Production only: serve built assets from dist
@@ -257,6 +262,8 @@ export const app = new Elysia({
 				})
 			: (app) => app
 	)
+	// Keep XRPC after static in dev, since staticPlugin(prefix='/') installs GET /* fallback.
+	.use(xrpcRoutes())
 	// Production only: serve built admin assets
 	.use(
 		Bun.env.NODE_ENV === 'production'
@@ -436,33 +443,13 @@ export const app = new Elysia({
 		exposeHeaders: ['Content-Type', 'DPoP-Nonce', 'dpop-nonce'],
 		maxAge: 86400 // 24 hours
 	}))
-	.listen(
-		localTlsEnabled
-			? (() => {
-					if (!existsSync(localTlsCertPath)) {
-						throw new Error(`LOCAL_DEV TLS cert not found at ${localTlsCertPath}`)
-					}
-					if (!existsSync(localTlsKeyPath)) {
-						throw new Error(`LOCAL_DEV TLS key not found at ${localTlsKeyPath}`)
-					}
-
-					return {
-						port: serverPort,
-						hostname: '0.0.0.0',
-						tls: {
-							cert: Bun.file(localTlsCertPath),
-							key: Bun.file(localTlsKeyPath)
-						}
-					}
-				})()
-			: {
-					port: serverPort,
-					hostname: '0.0.0.0'
-				}
-	)
+	.listen({
+		port: serverPort,
+		hostname: '0.0.0.0'
+	})
 
 console.log(
-	`🦊 Elysia is running at ${localTlsEnabled ? 'https' : 'http'}://${app.server?.hostname}:${app.server?.port}`
+	`🦊 Elysia is running at http://${app.server?.hostname}:${app.server?.port}`
 )
 
 // Graceful shutdown

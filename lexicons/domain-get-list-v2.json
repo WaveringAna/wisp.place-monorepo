@@ -1,0 +1,62 @@
+{
+  "lexicon": 1,
+  "id": "place.wisp.v2.domain.getList",
+  "defs": {
+    "main": {
+      "type": "query",
+      "description": "List domains for the authenticated DID (wisp subdomains + custom).",
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["domains"],
+          "properties": {
+            "domains": {
+              "type": "array",
+              "description": "Domains owned by the caller DID.",
+              "items": {
+                "type": "ref",
+                "ref": "#domainSummary"
+              }
+            }
+          }
+        }
+      },
+      "errors": [
+        { "name": "AuthenticationRequired" },
+        { "name": "InvalidRequest" }
+      ]
+    },
+    "domainSummary": {
+      "type": "object",
+      "description": "Summary of a claimed domain for list views.",
+      "required": ["domain", "kind", "status", "verified"],
+      "properties": {
+        "domain": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 253
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["wisp", "custom"]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pendingVerification", "verified"]
+        },
+        "verified": {
+          "type": "boolean"
+        },
+        "siteRkey": {
+          "type": "string",
+          "format": "record-key"
+        },
+        "lastCheckedAt": {
+          "type": "string",
+          "format": "datetime"
+        }
+      }
+    }
+  }
+}

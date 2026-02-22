@@ -219,11 +219,20 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 					throw new Error(`Invalid domain: ${domainError}`)
 				}
 
-				// Check if already exists and is verified
+				// Verified claims are DID-locked. Pending claims can be reclaimed.
 				const existing = await getCustomDomainInfo(domainLower);
-				if (existing && existing.verified) {
+				if (existing && existing.verified && existing.did !== auth.did) {
 					set.status = 409
-					throw new Error('Domain already verified and claimed');
+					throw new Error('Domain already claimed');
+				}
+
+				if (existing && existing.did === auth.did) {
+					return {
+						success: true,
+						id: existing.id,
+						domain: domainLower,
+						verified: Boolean(existing.verified)
+					};
 				}
 
 				// Create hash for ID

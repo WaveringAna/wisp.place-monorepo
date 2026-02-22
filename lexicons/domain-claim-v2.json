@@ -4,7 +4,7 @@
   "defs": {
     "main": {
       "type": "procedure",
-      "description": "Claim a domain for the authenticated DID. Returns DNS setup instructions for custom domains.",
+      "description": "Claim a custom domain for the authenticated DID. Returns DNS setup instructions.",
       "input": {
         "encoding": "application/json",
         "schema": {
@@ -13,7 +13,7 @@
           "properties": {
             "domain": {
               "type": "string",
-              "description": "Domain to claim (wisp subdomain FQDN or custom domain FQDN).",
+              "description": "Custom domain FQDN to claim (for example, example.com).",
               "minLength": 3,
               "maxLength": 253
             },
@@ -36,7 +36,7 @@
             },
             "kind": {
               "type": "string",
-              "enum": ["wisp", "custom"]
+              "enum": ["custom"]
             },
             "status": {
               "type": "string",

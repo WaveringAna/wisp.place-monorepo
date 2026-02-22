@@ -59,7 +59,10 @@ LOCAL_DEV=true
 
 `apps/main-app` exposes domain claim/status XRPC endpoints:
 
+- `place.wisp.v2.domain.claimSubdomain` (procedure / POST, wisp handles)
 - `place.wisp.v2.domain.claim` (procedure / POST)
+- `place.wisp.v2.domain.delete` (procedure / POST)
+- `place.wisp.v2.domain.getList` (query / GET)
 - `place.wisp.v2.domain.getStatus` (query / GET)
 
 The server validates **serviceAuth JWTs** (not cookie auth, not direct end-user access JWTs) on `/xrpc/*`.
@@ -83,24 +86,8 @@ Notes:
 
 ### Local TLS Requirement (No Auto Cert Generation)
 
-Some PDS proxy flows require HTTPS on `:443` for the proxied service endpoint.
-Cert generation is intentionally manual so SANs are explicit and correct for your environment.
-
-Example with `mkcert`:
-
-```bash
-mkcert -cert-file certs/dev-cert.pem -key-file certs/dev-key.pem regentsmacbookair localhost 100.64.0.2
-```
-
-Use SANs that match exactly what your PDS will call (hostname and/or IP).  
-`apps/main-app` can terminate TLS directly in local dev with:
-
-```env
-PORT=443
-LOCAL_DEV_TLS=true
-LOCAL_TLS_CERT_PATH=./certs/dev-cert.pem
-LOCAL_TLS_KEY_PATH=./certs/dev-key.pem
-```
+`apps/main-app` now serves HTTP only. If you need HTTPS in local/proxy flows,
+terminate TLS in your reverse proxy or tunnel layer and forward plain HTTP to main-app.
 
 
 ```bash

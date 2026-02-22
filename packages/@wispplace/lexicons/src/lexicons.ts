@@ -10,6 +10,79 @@ import {
 import { type $Typed, is$typed, maybe$typed } from './util.js'
 
 export const schemaDict = {
+  PlaceWispV2DomainClaimSubdomain: {
+    lexicon: 1,
+    id: 'place.wisp.v2.domain.claimSubdomain',
+    defs: {
+      main: {
+        type: 'procedure',
+        description:
+          'Claim a wisp.place subdomain handle for the authenticated DID.',
+        input: {
+          encoding: 'application/json',
+          schema: {
+            type: 'object',
+            required: ['handle'],
+            properties: {
+              handle: {
+                type: 'string',
+                description: 'Subdomain label only (for example, alice).',
+                minLength: 3,
+                maxLength: 63,
+              },
+              siteRkey: {
+                type: 'string',
+                format: 'record-key',
+                description:
+                  'Optional place.wisp.fs rkey to map immediately after claim.',
+              },
+            },
+          },
+        },
+        output: {
+          encoding: 'application/json',
+          schema: {
+            type: 'object',
+            required: ['domain', 'kind', 'status'],
+            properties: {
+              domain: {
+                type: 'string',
+              },
+              kind: {
+                type: 'string',
+                enum: ['wisp'],
+              },
+              status: {
+                type: 'string',
+                enum: ['verified', 'alreadyClaimed'],
+              },
+              siteRkey: {
+                type: 'string',
+                format: 'record-key',
+              },
+            },
+          },
+        },
+        errors: [
+          {
+            name: 'AuthenticationRequired',
+          },
+          {
+            name: 'InvalidDomain',
+          },
+          {
+            name: 'AlreadyClaimed',
+          },
+          {
+            name: 'DomainLimitReached',
+          },
+          {
+            name: 'RateLimitExceeded',
+          },
+        ],
+      },
+    },
+  },
   PlaceWispV2DomainClaim: {
     lexicon: 1,
     id: 'place.wisp.v2.domain.claim',
@@ -17,7 +90,7 @@ export const schemaDict = {
       main: {
         type: 'procedure',
         description:
-          'Claim a domain for the authenticated DID. Returns DNS setup instructions for custom domains.',
+          'Claim a custom domain for the authenticated DID. Returns DNS setup instructions.',
         input: {
           encoding: 'application/json',
           schema: {
@@ -27,7 +100,7 @@ export const schemaDict = {
               domain: {
                 type: 'string',
                 description:
-                  'Domain to claim (wisp subdomain FQDN or custom domain FQDN).',
+                  'Custom domain FQDN to claim (for example, example.com).',
                 minLength: 3,
                 maxLength: 253,
               },
@@ -51,7 +124,7 @@ export const schemaDict = {
               },
               kind: {
                 type: 'string',
-                enum: ['wisp', 'custom'],
+                enum: ['custom'],
               },
               status: {
                 type: 'string',
@@ -107,6 +180,123 @@ export const schemaDict = {
             name: 'RateLimitExceeded',
           },
         ],
+      },
+    },
+  },
+  PlaceWispV2DomainDelete: {
+    lexicon: 1,
+    id: 'place.wisp.v2.domain.delete',
+    defs: {
+      main: {
+        type: 'procedure',
+        description: 'Delete a claimed domain owned by the authenticated DID.',
+        parameters: {
+          type: 'params',
+          required: ['domain'],
+          properties: {
+            domain: {
+              type: 'string',
+              description:
+                'Fully-qualified domain to delete (wisp subdomain or custom domain).',
+              minLength: 3,
+              maxLength: 253,
+            },
+          },
+        },
+        output: {
+          encoding: 'application/json',
+          schema: {
+            type: 'object',
+            required: ['domain', 'deleted'],
+            properties: {
+              domain: {
+                type: 'string',
+              },
+              deleted: {
+                type: 'boolean',
+                const: true,
+              },
+            },
+          },
+        },
+        errors: [
+          {
+            name: 'AuthenticationRequired',
+          },
+          {
+            name: 'InvalidDomain',
+          },
+          {
+            name: 'NotFound',
+          },
+        ],
+      },
+    },
+  },
+  PlaceWispV2DomainGetList: {
+    lexicon: 1,
+    id: 'place.wisp.v2.domain.getList',
+    defs: {
+      main: {
+        type: 'query',
+        description:
+          'List domains for the authenticated DID (wisp subdomains + custom).',
+        output: {
+          encoding: 'application/json',
+          schema: {
+            type: 'object',
+            required: ['domains'],
+            properties: {
+              domains: {
+                type: 'array',
+                description: 'Domains owned by the caller DID.',
+                items: {
+                  type: 'ref',
+                  ref: 'lex:place.wisp.v2.domain.getList#domainSummary',
+                },
+              },
+            },
+          },
+        },
+        errors: [
+          {
+            name: 'AuthenticationRequired',
+          },
+          {
+            name: 'InvalidRequest',
+          },
+        ],
+      },
+      domainSummary: {
+        type: 'object',
+        description: 'Summary of a claimed domain for list views.',
+        required: ['domain', 'kind', 'status', 'verified'],
+        properties: {
+          domain: {
+            type: 'string',
+            minLength: 3,
+            maxLength: 253,
+          },
+          kind: {
+            type: 'string',
+            enum: ['wisp', 'custom'],
+          },
+          status: {
+            type: 'string',
+            enum: ['pendingVerification', 'verified'],
+          },
+          verified: {
+            type: 'boolean',
+          },
+          siteRkey: {
+            type: 'string',
+            format: 'record-key',
+          },
+          lastCheckedAt: {
+            type: 'string',
+            format: 'datetime',
+          },
+        },
       },
     },
   },
@@ -633,7 +823,10 @@ export function validate(
 }
 
 export const ids = {
+  PlaceWispV2DomainClaimSubdomain: 'place.wisp.v2.domain.claimSubdomain',
   PlaceWispV2DomainClaim: 'place.wisp.v2.domain.claim',
+  PlaceWispV2DomainDelete: 'place.wisp.v2.domain.delete',
+  PlaceWispV2DomainGetList: 'place.wisp.v2.domain.getList',
   PlaceWispV2DomainGetStatus: 'place.wisp.v2.domain.getStatus',
   PlaceWispV2Domains: 'place.wisp.v2.domains',
   PlaceWispFs: 'place.wisp.fs',

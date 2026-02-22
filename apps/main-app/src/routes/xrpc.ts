@@ -5,7 +5,13 @@ import { Elysia } from 'elysia';
 import { CompositeDidDocumentResolver, PlcDidDocumentResolver, WebDidDocumentResolver } from '@atcute/identity-resolver';
 import { json, XRPCRouter, XRPCError } from '@atcute/xrpc-server';
 import { ServiceJwtVerifier } from '@atcute/xrpc-server/auth';
-import { PlaceWispV2DomainClaim, PlaceWispV2DomainGetStatus } from '@wispplace/lexicons/atcute';
+import {
+  PlaceWispV2DomainClaim,
+  PlaceWispV2DomainClaimSubdomain,
+  PlaceWispV2DomainDelete,
+  PlaceWispV2DomainGetList,
+  PlaceWispV2DomainGetStatus,
+} from '@wispplace/lexicons/atcute';
 import { BASE_HOST } from '@wispplace/constants';
 
 import { createLogger } from '@wispplace/observability';
@@ -13,6 +19,10 @@ import { createLogger } from '@wispplace/observability';
 import {
   claimCustomDomain,
   claimDomain,
+  deleteCustomDomain,
+  deleteWispDomain,
+  getAllWispDomains,
+  getCustomDomainsByDid,
   getCustomDomainInfo,
   isDomainRegistered,
   updateCustomDomainRkey,
@@ -22,6 +32,7 @@ import {
   extractWispHandle,
   isValidHandle,
   normalizeDomain,
+  toDomain,
   validateCustomDomain,
 } from '../lib/domain-utils';
 
@@ -45,9 +56,22 @@ const serviceJwtVerifier = new ServiceJwtVerifier({
 });
 
 const NSID_ALIASES: Record<string, string> = {
+  'place.wisp.v2.domain.claim-subdomain': 'place.wisp.v2.domain.claimSubdomain',
+  'place.wisp.v2.domain.claimsubdomain': 'place.wisp.v2.domain.claimSubdomain',
+  'place.wisp.v2.domain.claimsub-domain': 'place.wisp.v2.domain.claimSubdomain',
+  'place.wisp.v2.domain.get-list': 'place.wisp.v2.domain.getList',
+  'place.wisp.v2.domain.getlist': 'place.wisp.v2.domain.getList',
   'place.wisp.v2.domain.getstatus': 'place.wisp.v2.domain.getStatus',
   'place.wisp.v2.domain.get-status': 'place.wisp.v2.domain.getStatus',
 };
+
+const XRPC_NSIDS = {
+  getStatus: 'place.wisp.v2.domain.getStatus',
+  getList: 'place.wisp.v2.domain.getList',
+  claimSubdomain: 'place.wisp.v2.domain.claimSubdomain',
+  claim: 'place.wisp.v2.domain.claim',
+  delete: 'place.wisp.v2.domain.delete',
+} as const;
 
 const toIsoFromEpoch = (epoch: unknown): string | undefined => {
   let numeric: number | undefined;
@@ -108,6 +132,14 @@ const domainLimitReached = (): never => {
     status: 400,
     error: 'DomainLimitReached',
     description: 'free tier users can claim up to 3 wisp subdomains',
+  });
+};
+
+const notFound = (description = 'domain not found'): never => {
+  throw new XRPCError({
+    status: 404,
+    error: 'NotFound',
+    description,
   });
 };
 
@@ -193,7 +225,8 @@ const prepareXrpcRequest = async (request: Request, parsedBody: unknown): Promis
 
 const normalizeNsidPath = (request: Request): { request: Request; rawNsid: string; nsid: string } => {
   const url = new URL(request.url);
-  const rawNsid = url.pathname.startsWith('/xrpc/') ? url.pathname.slice('/xrpc/'.length) : url.pathname;
+  const rawNsidFull = url.pathname.startsWith('/xrpc/') ? url.pathname.slice('/xrpc/'.length) : url.pathname;
+  const rawNsid = rawNsidFull.replace(/^\/+|\/+$/g, '');
   const nsid = NSID_ALIASES[rawNsid] ?? rawNsid;
 
   if (nsid === rawNsid) {
@@ -209,11 +242,173 @@ const normalizeNsidPath = (request: Request): { request: Request; rawNsid: strin
   };
 };
 
+const withNsid = <T extends { nsid: string }>(schema: T, nsid: string): T => {
+  if (schema.nsid === nsid) {
+    return schema;
+  }
+
+  return { ...schema, nsid } as T;
+};
+
+const addQueryWithAliases = (
+  router: XRPCRouter,
+  schema: { nsid: string },
+  aliases: readonly string[],
+  config: { handler: (ctx: any) => Promise<Response> | Response },
+) => {
+  const seen = new Set<string>();
+  for (const nsid of [schema.nsid, ...aliases]) {
+    if (seen.has(nsid)) {
+      continue;
+    }
+    seen.add(nsid);
+    router.addQuery(withNsid(schema as any, nsid), config as any);
+  }
+};
+
+const addProcedureWithAliases = (
+  router: XRPCRouter,
+  schema: { nsid: string },
+  aliases: readonly string[],
+  config: { handler: (ctx: any) => Promise<Response> | Response },
+) => {
+  const seen = new Set<string>();
+  for (const nsid of [schema.nsid, ...aliases]) {
+    if (seen.has(nsid)) {
+      continue;
+    }
+    seen.add(nsid);
+    router.addProcedure(withNsid(schema as any, nsid), config as any);
+  }
+};
+
+const claimWispSubdomain = async (
+  did: DidString,
+  input: { handle: string; siteRkey?: string },
+) => {
+  const handle = input.handle.trim().toLowerCase();
+  if (!isValidHandle(handle)) {
+    invalidDomain('invalid wisp subdomain handle');
+  }
+
+  const domain = toDomain(handle);
+  const existing = await isDomainRegistered(domain);
+  if (existing.registered && existing.did !== did) {
+    alreadyClaimed('domain is already claimed');
+  }
+
+  if (existing.registered && existing.did === did) {
+    if (input.siteRkey !== undefined) {
+      await updateWispDomainSite(domain, input.siteRkey);
+    }
+
+    return json({
+      domain,
+      kind: 'wisp',
+      status: 'verified',
+      siteRkey: input.siteRkey ?? existing.rkey ?? undefined,
+    });
+  }
+
+  try {
+    await claimDomain(did, handle);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : '';
+
+    if (message === 'domain_limit_reached') {
+      domainLimitReached();
+    }
+    if (message === 'invalid_handle') {
+      invalidDomain('invalid wisp subdomain handle');
+    }
+
+    alreadyClaimed('domain is already claimed');
+  }
+
+  if (input.siteRkey !== undefined) {
+    await updateWispDomainSite(domain, input.siteRkey);
+  }
+
+  return json({
+    domain,
+    kind: 'wisp',
+    status: 'verified',
+    siteRkey: input.siteRkey,
+  });
+};
+
+const claimCustomDomainForDid = async (
+  did: DidString,
+  input: { domain: string; siteRkey?: string },
+) => {
+  const domain = normalizeDomain(input.domain);
+  if (domain.length === 0) {
+    invalidDomain('domain is required');
+  }
+
+  if (extractWispHandle(domain) !== null) {
+    invalidDomain('wisp subdomains must be claimed via place.wisp.v2.domain.claimSubdomain');
+  }
+
+  const customError = validateCustomDomain(domain);
+  if (customError !== null) {
+    invalidDomain(customError);
+  }
+
+  const existing = await getCustomDomainInfo(domain);
+  if (existing && existing.verified && existing.did !== did) {
+    alreadyClaimed('domain is already claimed');
+  }
+
+  if (existing && existing.did === did) {
+    if (input.siteRkey !== undefined) {
+      await updateCustomDomainRkey(existing.id, input.siteRkey);
+    }
+
+    const status = existing.verified ? 'verified' : 'pendingVerification';
+
+    return json({
+      domain,
+      kind: 'custom',
+      status,
+      siteRkey: input.siteRkey ?? existing.rkey ?? undefined,
+      ...buildCustomDnsInstructions(domain, did, existing.id),
+    });
+  }
+
+  const challengeId = createHash('sha256').update(`${did}:${domain}`).digest('hex').substring(0, 16);
+
+  try {
+    await claimCustomDomain(did, domain, challengeId, input.siteRkey ?? null);
+  } catch {
+    alreadyClaimed('domain is already claimed');
+  }
+
+  return json({
+    domain,
+    kind: 'custom',
+    status: 'pendingVerification',
+    siteRkey: input.siteRkey,
+    ...buildCustomDnsInstructions(domain, did, challengeId),
+  });
+};
+
 export const xrpcRoutes = () => {
   const authByRequest = new WeakMap<Request, XrpcAuthContext>();
   const router = new XRPCRouter();
+  const registeredNsids = [
+    XRPC_NSIDS.getStatus,
+    XRPC_NSIDS.getList,
+    XRPC_NSIDS.claimSubdomain,
+    XRPC_NSIDS.claim,
+    XRPC_NSIDS.delete,
+  ];
 
-  router.addQuery(PlaceWispV2DomainGetStatus.mainSchema, {
+  addQueryWithAliases(
+    router,
+    withNsid(PlaceWispV2DomainGetStatus.mainSchema as any, XRPC_NSIDS.getStatus),
+    ['place.wisp.v2.domain.getstatus', 'place.wisp.v2.domain.get-status'],
+    {
     async handler({ params, request }) {
       const domain = normalizeDomain(params.domain);
       const auth = authByRequest.get(request);
@@ -233,7 +428,11 @@ export const xrpcRoutes = () => {
       const kind = info.type;
       const ownedByCaller = auth ? auth.did === info.did : undefined;
 
-      if (auth && ownedByCaller === false) {
+      if (
+        auth &&
+        ownedByCaller === false &&
+        (kind === 'wisp' || (kind === 'custom' && Boolean(info.verified)))
+      ) {
         return json({
           domain,
           kind,
@@ -265,114 +464,146 @@ export const xrpcRoutes = () => {
         siteRkey: info.rkey ?? undefined,
       });
     },
-  });
+    },
+  );
 
-  router.addProcedure(PlaceWispV2DomainClaim.mainSchema, {
+  addQueryWithAliases(
+    router,
+    withNsid(PlaceWispV2DomainGetList.mainSchema as any, XRPC_NSIDS.getList),
+    ['place.wisp.v2.domain.getlist', 'place.wisp.v2.domain.get-list'],
+    {
+    async handler({ request }) {
+      const auth = requireAuthenticated(authByRequest.get(request));
+      const did = auth.did as DidString;
+
+      const [wispDomains, customDomains] = await Promise.all([
+        getAllWispDomains(did),
+        getCustomDomainsByDid(did),
+      ]);
+
+      const domains = [
+        ...wispDomains.map((entry: { domain: string; rkey: string | null }) => ({
+          domain: entry.domain as string,
+          kind: 'wisp' as const,
+          status: 'verified' as const,
+          verified: true,
+          siteRkey: entry.rkey ?? undefined,
+        })),
+        ...customDomains.map((entry: {
+          domain: string;
+          verified: boolean;
+          rkey: string | null;
+          last_verified_at?: number | string | null;
+        }) => ({
+          domain: entry.domain as string,
+          kind: 'custom' as const,
+          status: entry.verified ? 'verified' as const : 'pendingVerification' as const,
+          verified: Boolean(entry.verified),
+          siteRkey: entry.rkey ?? undefined,
+          lastCheckedAt: toIsoFromEpoch(entry.last_verified_at),
+        })),
+      ].sort((a, b) => a.domain.localeCompare(b.domain));
+
+      return json({ domains });
+    },
+    },
+  );
+
+  addProcedureWithAliases(
+    router,
+    withNsid(PlaceWispV2DomainClaimSubdomain.mainSchema as any, XRPC_NSIDS.claimSubdomain),
+    ['place.wisp.v2.domain.claimsubdomain', 'place.wisp.v2.domain.claim-subdomain'],
+    {
     async handler({ input, request }) {
       const auth = requireAuthenticated(authByRequest.get(request));
       const did = auth.did as DidString;
 
-      const domain = normalizeDomain(input.domain);
+      return claimWispSubdomain(did, {
+        handle: input.handle,
+        siteRkey: input.siteRkey,
+      });
+    },
+    },
+  );
+
+  addProcedureWithAliases(
+    router,
+    withNsid(PlaceWispV2DomainClaim.mainSchema as any, XRPC_NSIDS.claim),
+    [],
+    {
+    async handler({ input, request }) {
+      const auth = requireAuthenticated(authByRequest.get(request));
+      const did = auth.did as DidString;
+
+      return claimCustomDomainForDid(did, {
+        domain: input.domain,
+        siteRkey: input.siteRkey,
+      });
+    },
+    },
+  );
+
+  addProcedureWithAliases(
+    router,
+    withNsid(PlaceWispV2DomainDelete.mainSchema as any, XRPC_NSIDS.delete),
+    [],
+    {
+    async handler({ params, request }) {
+      const auth = requireAuthenticated(authByRequest.get(request));
+      const did = auth.did as DidString;
+
+      const domain = normalizeDomain(params.domain);
       if (domain.length === 0) {
         invalidDomain('domain is required');
       }
 
-      const wispHandle = extractWispHandle(domain);
-      if (wispHandle !== null) {
-        if (!isValidHandle(wispHandle)) {
-          invalidDomain('invalid wisp subdomain handle');
-        }
-
-        const existing = await isDomainRegistered(domain);
-        if (existing.registered && existing.did !== did) {
-          alreadyClaimed('domain is already claimed');
-        }
-
-        if (existing.registered && existing.did === did) {
-          if (input.siteRkey !== undefined) {
-            await updateWispDomainSite(domain, input.siteRkey);
-          }
-
-          return json({
-            domain,
-            kind: 'wisp',
-            status: 'alreadyClaimed',
-            siteRkey: input.siteRkey ?? existing.rkey ?? undefined,
-          });
-        }
-
-        try {
-          await claimDomain(did, wispHandle);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : '';
-
-          if (message === 'domain_limit_reached') {
-            domainLimitReached();
-          }
-          if (message === 'invalid_handle') {
-            invalidDomain('invalid wisp subdomain handle');
-          }
-
-          alreadyClaimed('domain is already claimed');
-        }
-
-        if (input.siteRkey !== undefined) {
-          await updateWispDomainSite(domain, input.siteRkey);
-        }
-
-        return json({
-          domain,
-          kind: 'wisp',
-          status: 'verified',
-          siteRkey: input.siteRkey,
-        });
+      const existing = await isDomainRegistered(domain);
+      if (!existing.registered) {
+        notFound();
       }
 
-      const customError = validateCustomDomain(domain);
-      if (customError !== null) {
-        invalidDomain(customError);
+      if (existing.did !== did) {
+        notFound();
       }
 
-      const existing = await getCustomDomainInfo(domain);
-      if (existing && existing.verified && existing.did !== did) {
-        alreadyClaimed('domain already verified and owned by another user');
-      }
-
-      if (existing && existing.did === did) {
-        if (input.siteRkey !== undefined) {
-          await updateCustomDomainRkey(existing.id, input.siteRkey);
+      if (existing.type === 'wisp') {
+        await deleteWispDomain(domain);
+      } else {
+        const custom = await getCustomDomainInfo(domain);
+        if (!custom || custom.did !== did) {
+          notFound();
         }
 
-        const status = existing.verified ? 'verified' : 'pendingVerification';
-
-        return json({
-          domain,
-          kind: 'custom',
-          status,
-          siteRkey: input.siteRkey ?? existing.rkey ?? undefined,
-          ...buildCustomDnsInstructions(domain, did, existing.id),
-        });
-      }
-
-      const challengeId = createHash('sha256').update(`${did}:${domain}`).digest('hex').substring(0, 16);
-
-      try {
-        await claimCustomDomain(did, domain, challengeId, input.siteRkey ?? null);
-      } catch (err) {
-        alreadyClaimed('domain already verified and owned by another user');
+        await deleteCustomDomain(custom.id as string);
       }
 
       return json({
         domain,
-        kind: 'custom',
-        status: 'pendingVerification',
-        siteRkey: input.siteRkey,
-        ...buildCustomDnsInstructions(domain, did, challengeId),
+        deleted: true,
       });
     },
-  });
+    },
+  );
 
-  return new Elysia().all('/xrpc/*', async ({ body, request }) => {
+  const schemaNsids = {
+    getStatus: (PlaceWispV2DomainGetStatus.mainSchema as any).nsid,
+    getList: (PlaceWispV2DomainGetList.mainSchema as any).nsid,
+    claimSubdomain: (PlaceWispV2DomainClaimSubdomain.mainSchema as any).nsid,
+    claim: (PlaceWispV2DomainClaim.mainSchema as any).nsid,
+    delete: (PlaceWispV2DomainDelete.mainSchema as any).nsid,
+  };
+  logger.info('[XRPC] Registered methods', {
+    expectedNsids: registeredNsids,
+    schemaNsids,
+  });
+  if (isLocalDev) {
+    console.log('[XRPC] Registered methods', {
+      expectedNsids: registeredNsids,
+      schemaNsids,
+    });
+  }
+
+  const handleXrpcRequest = async (request: Request, body: unknown): Promise<Response> => {
     const startedAt = Date.now();
     let xrpcRequest: Request | undefined;
     let nsid = '';
@@ -387,14 +618,26 @@ export const xrpcRoutes = () => {
       nsid = normalized.nsid;
 
       const authorization = xrpcRequest.headers.get('authorization');
-      logger.info('[XRPC] Incoming request', {
+      const origin = xrpcRequest.headers.get('origin') ?? '-';
+      const authScheme = authorization ? authorization.split(' ')[0] : '-';
+      logger.info('[XRPC] Incoming', {
         method: xrpcRequest.method,
         rawNsid,
         nsid,
-        origin: xrpcRequest.headers.get('origin') ?? undefined,
-        hasAuthorization: Boolean(authorization),
-        authorizationScheme: authorization ? authorization.split(' ')[0] : undefined,
+        origin,
+        hasAuth: Boolean(authorization),
+        scheme: authScheme,
       });
+      if (isLocalDev) {
+        console.log('[XRPC] Incoming', {
+          method: xrpcRequest.method,
+          rawNsid,
+          nsid,
+          origin,
+          hasAuth: Boolean(authorization),
+          scheme: authScheme,
+        });
+      }
 
       auth = await resolveServiceAuth(xrpcRequest, nsid);
       if (auth) {
@@ -411,37 +654,37 @@ export const xrpcRoutes = () => {
           responseData = await response.clone().text();
         }
 
-        logger.warn('[XRPC] Request failed', {
+        logger.warn('[XRPC] Failed', {
           method: xrpcRequest.method,
           rawNsid,
           nsid,
           status: response.status,
-          did: auth?.did,
+          did: auth?.did ?? '-',
+          durationMs: Date.now() - startedAt,
           origin: xrpcRequest.headers.get('origin') ?? undefined,
           requestBodyUsed: request.bodyUsed,
           error: responseData,
-          durationMs: Date.now() - startedAt,
         });
       } else {
-        logger.info('[XRPC] Request succeeded', {
+        logger.info('[XRPC] Succeeded', {
           method: xrpcRequest.method,
           rawNsid,
           nsid,
           status: response.status,
-          did: auth?.did,
+          did: auth?.did ?? '-',
           durationMs: Date.now() - startedAt,
         });
       }
 
       return response;
     } catch (err) {
-      logger.error('[XRPC] Handler error', {
+      logger.error('[XRPC] Handler error', err, {
         method: xrpcRequest?.method ?? request.method,
-        rawNsid: rawNsid || undefined,
-        nsid: nsid || undefined,
-        origin: request.headers.get('origin') ?? undefined,
+        rawNsid: rawNsid || '-',
+        nsid: nsid || '-',
         durationMs: Date.now() - startedAt,
         error: err instanceof Error ? err.message : String(err),
+        origin: request.headers.get('origin') ?? undefined,
       });
       throw err;
     } finally {
@@ -449,5 +692,17 @@ export const xrpcRoutes = () => {
         authByRequest.delete(xrpcRequest);
       }
     }
-  });
+  };
+
+  return new Elysia()
+    .all('/xrpc/:nsid', ({ body, request }) => handleXrpcRequest(request, body))
+    .all('/xrpc/:nsid/', async ({ body, request }) => {
+      const url = new URL(request.url);
+      if (url.pathname.endsWith('/') && url.pathname.length > '/xrpc/'.length) {
+        url.pathname = url.pathname.slice(0, -1);
+      }
+
+      const rewritten = new Request(url.toString(), request);
+      return handleXrpcRequest(rewritten, body);
+    });
 };

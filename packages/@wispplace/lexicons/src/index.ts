@@ -10,7 +10,10 @@ import {
   createServer as createXrpcServer,
 } from '@atproto/xrpc-server'
 import { schemas } from './lexicons.js'
+import * as PlaceWispV2DomainClaimSubdomain from './types/place/wisp/v2/domain/claimSubdomain.js'
 import * as PlaceWispV2DomainClaim from './types/place/wisp/v2/domain/claim.js'
+import * as PlaceWispV2DomainDelete from './types/place/wisp/v2/domain/delete.js'
+import * as PlaceWispV2DomainGetList from './types/place/wisp/v2/domain/getList.js'
 import * as PlaceWispV2DomainGetStatus from './types/place/wisp/v2/domain/getStatus.js'
 
 export function createServer(options?: XrpcOptions): Server {
@@ -64,6 +67,18 @@ export class PlaceWispV2DomainNS {
     this._server = server
   }
 
+  claimSubdomain<A extends Auth = void>(
+    cfg: MethodConfigOrHandler<
+      A,
+      PlaceWispV2DomainClaimSubdomain.QueryParams,
+      PlaceWispV2DomainClaimSubdomain.HandlerInput,
+      PlaceWispV2DomainClaimSubdomain.HandlerOutput
+    >,
+  ) {
+    const nsid = 'place.wisp.v2.domain.claimSubdomain' // @ts-ignore
+    return this._server.xrpc.method(nsid, cfg)
+  }
+
   claim<A extends Auth = void>(
     cfg: MethodConfigOrHandler<
       A,
@@ -73,6 +88,30 @@ export class PlaceWispV2DomainNS {
     >,
   ) {
     const nsid = 'place.wisp.v2.domain.claim' // @ts-ignore
+    return this._server.xrpc.method(nsid, cfg)
+  }
+
+  delete<A extends Auth = void>(
+    cfg: MethodConfigOrHandler<
+      A,
+      PlaceWispV2DomainDelete.QueryParams,
+      PlaceWispV2DomainDelete.HandlerInput,
+      PlaceWispV2DomainDelete.HandlerOutput
+    >,
+  ) {
+    const nsid = 'place.wisp.v2.domain.delete' // @ts-ignore
+    return this._server.xrpc.method(nsid, cfg)
+  }
+
+  getList<A extends Auth = void>(
+    cfg: MethodConfigOrHandler<
+      A,
+      PlaceWispV2DomainGetList.QueryParams,
+      PlaceWispV2DomainGetList.HandlerInput,
+      PlaceWispV2DomainGetList.HandlerOutput
+    >,
+  ) {
+    const nsid = 'place.wisp.v2.domain.getList' // @ts-ignore
     return this._server.xrpc.method(nsid, cfg)
   }
 

@@ -30,13 +30,25 @@
       "types": "./src/types/place/wisp/v2/domain/claim.ts",
       "default": "./src/types/place/wisp/v2/domain/claim.ts"
     },
+    "./types/place/wisp/v2/domain/claimSubdomain": {
+      "types": "./src/types/place/wisp/v2/domain/claimSubdomain.ts",
+      "default": "./src/types/place/wisp/v2/domain/claimSubdomain.ts"
+    },
+    "./types/place/wisp/v2/domain/delete": {
+      "types": "./src/types/place/wisp/v2/domain/delete.ts",
+      "default": "./src/types/place/wisp/v2/domain/delete.ts"
+    },
+    "./types/place/wisp/v2/domain/getList": {
+      "types": "./src/types/place/wisp/v2/domain/getList.ts",
+      "default": "./src/types/place/wisp/v2/domain/getList.ts"
+    },
     "./types/place/wisp/v2/domain/getStatus": {
       "types": "./src/types/place/wisp/v2/domain/getStatus.ts",
       "default": "./src/types/place/wisp/v2/domain/getStatus.ts"
     },
     "./atcute": {
-      "types": "./src/atcute/index.ts",
-      "default": "./src/atcute/index.ts"
+      "types": "./src/atcute/lexicons/index.ts",
+      "default": "./src/atcute/lexicons/index.ts"
     },
     "./lexicons": {
       "types": "./src/lexicons.ts",

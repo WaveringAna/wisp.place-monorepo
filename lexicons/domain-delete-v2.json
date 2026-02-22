@@ -1,0 +1,43 @@
+{
+  "lexicon": 1,
+  "id": "place.wisp.v2.domain.delete",
+  "defs": {
+    "main": {
+      "type": "procedure",
+      "description": "Delete a claimed domain owned by the authenticated DID.",
+      "parameters": {
+        "type": "params",
+        "required": ["domain"],
+        "properties": {
+          "domain": {
+            "type": "string",
+            "description": "Fully-qualified domain to delete (wisp subdomain or custom domain).",
+            "minLength": 3,
+            "maxLength": 253
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["domain", "deleted"],
+          "properties": {
+            "domain": {
+              "type": "string"
+            },
+            "deleted": {
+              "type": "boolean",
+              "const": true
+            }
+          }
+        }
+      },
+      "errors": [
+        { "name": "AuthenticationRequired" },
+        { "name": "InvalidDomain" },
+        { "name": "NotFound" }
+      ]
+    }
+  }
+}
