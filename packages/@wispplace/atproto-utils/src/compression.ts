@@ -1,4 +1,5 @@
 import { gzipSync } from 'zlib';
+import { charsets } from 'mime-types';
 
 /**
  * Determine if a file should be gzip compressed based on its MIME type and filename
@@ -83,6 +84,14 @@ export function shouldCompressMimeType(mimeType: string | undefined): boolean {
 
 	// Default to not compressing for unknown types
 	return false;
+}
+
+/**
+ * Returns true if the given MIME type is a text-based type (charset UTF-8).
+ * Uses mime-types library instead of a hardcoded list.
+ */
+export function isTextMimeType(mimeType: string): boolean {
+	return charsets.lookup(mimeType) === 'UTF-8';
 }
 
 /**

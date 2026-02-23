@@ -2,7 +2,7 @@
 export { computeCID, extractBlobMap, extractBlobCid } from './blob';
 
 // Compression utilities
-export { shouldCompressFile, shouldCompressMimeType, compressFile } from './compression';
+export { shouldCompressFile, shouldCompressMimeType, compressFile, isTextMimeType } from './compression';
 
 // Subfs utilities
 export { extractSubfsUris } from './subfs';

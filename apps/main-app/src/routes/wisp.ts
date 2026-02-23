@@ -19,10 +19,11 @@ import {
     compressFile,
     computeCID,
     extractBlobMap,
-    extractSubfsUris
+    extractSubfsUris,
+    isTextMimeType
 } from '@wispplace/atproto-utils'
 import { createManifest } from '@wispplace/fs-utils'
-import { upsertSite, getDomainByDid, updateWispDomainSite, getWispDomainSite, upsertSiteCache } from '../lib/db'
+import { upsertSite, upsertSiteCache } from '../lib/db'
 import { createLogger } from '@wispplace/observability'
 // import { validateRecord, type Directory } from '@wispplace/lexicons/types/place/wisp/fs'
 import { type Directory } from '@wispplace/lexicons/types/place/wisp/fs'
@@ -222,32 +223,13 @@ async function processUploadInBackground(
             // Determine if file should be compressed (pass filename to exclude _redirects)
             const shouldCompress = shouldCompressFile(originalMimeType, normalizedPath);
 
-            // Text files (HTML/CSS/JS) need base64 encoding to prevent PDS content sniffing
-            // Audio files just need compression without base64
-            const needsBase64 =
-                originalMimeType.startsWith('text/') ||
-                originalMimeType.startsWith('application/json') ||
-                originalMimeType.startsWith('application/xml') ||
-                originalMimeType === 'image/svg+xml';
-
             let finalContent: Buffer;
             let compressed = false;
-            let base64Encoded = false;
 
             if (shouldCompress) {
-                const compressedContent = compressFile(originalContent);
+                finalContent = compressFile(originalContent);
                 compressed = true;
-
-                if (needsBase64) {
-                    // Text files: compress AND base64 encode
-                    finalContent = Buffer.from(compressedContent.toString('base64'), 'binary');
-                    base64Encoded = true;
-                } else {
-                    // Audio files: just compress, no base64
-                    finalContent = compressedContent;
-                }
             } else {
-                // Binary files: upload directly
                 finalContent = originalContent;
             }
 
@@ -257,7 +239,6 @@ async function processUploadInBackground(
                 mimeType: originalMimeType,
                 size: finalContent.length,
                 compressed,
-                base64Encoded,
                 originalMimeType
             });
         }
@@ -319,22 +300,6 @@ async function processUploadInBackground(
                 // Don't fail the upload if caching fails
                 logger.warn('Failed to cache site', err as any);
             }
-
-            // Auto-map claimed domain to this site if user has a claimed domain with no rkey
-            try {
-                const existingDomain = await getDomainByDid(did);
-                if (existingDomain) {
-                    const currentSiteMapping = await getWispDomainSite(did);
-                    if (!currentSiteMapping) {
-                        // Domain is claimed but not mapped to any site, map it to this new site
-                        await updateWispDomainSite(existingDomain, rkey);
-                        logger.info(`Auto-mapped domain ${existingDomain} to new site ${siteName}`);
-                    }
-                }
-        } catch (err) {
-            // Don't fail the upload if domain mapping fails
-            logger.warn('Failed to auto-map domain to new site', err as any);
-        }
 
             completeUploadJob(jobId, {
                 success: true,
@@ -487,8 +452,8 @@ async function processUploadInBackground(
                             ...(file.compressed && {
                                 encoding: 'gzip' as const,
                                 mimeType: file.originalMimeType || file.mimeType,
-                                base64: file.base64Encoded || false
-                            })
+                            }),
+                            base64: !!file.base64Encoded
                         },
                         filePath: file.name,
                         sentMimeType: file.mimeType,
@@ -528,8 +493,8 @@ async function processUploadInBackground(
                         ...(file.compressed && {
                             encoding: 'gzip' as const,
                             mimeType: file.originalMimeType || file.mimeType,
-                            base64: file.base64Encoded || false
-                        })
+                        }),
+                        base64: !!file.base64Encoded
                     },
                     filePath: file.name,
                     sentMimeType: file.mimeType,
@@ -621,121 +586,149 @@ async function processUploadInBackground(
         const uploadedCount = uploadedBlobs.filter(b => !b.reused).length;
         logger.info(`[File Upload] 🎉 Upload phase complete! Total: ${successfulCount} files (${uploadedCount} uploaded, ${reusedCount} reused)`);
 
-        const uploadResults: FileUploadResult[] = uploadedBlobs.map(blob => blob.result);
-        const filePaths: string[] = uploadedBlobs.map(blob => blob.filePath);
+        // Build directory tree from blob results, split into subfs if needed, then put the manifest record.
+        // Extracted so it can be retried with different blob sets (e.g. base64-encoded fallback).
+        const buildManifestAndPut = async (blobs: typeof uploadedBlobs) => {
+            const blobUploadResults: FileUploadResult[] = blobs.map(b => b.result);
+            const blobFilePaths: string[] = blobs.map(b => b.filePath);
 
-        // Update directory with file blobs (only for successfully uploaded files)
-        console.log('Updating directory with blob references...');
-        updateJobProgress(jobId, { phase: 'creating_manifest' });
+            console.log('Updating directory with blob references...');
+            updateJobProgress(jobId, { phase: 'creating_manifest' });
 
-        // Create a set of successfully uploaded paths for quick lookup
-        const successfulPaths = new Set(filePaths.map(path => path.replace(/^[^\/]*\//, '')));
+            const successfulPaths = new Set(blobFilePaths.map(path => path.replace(/^[^\/]*\//, '')));
+            const updatedDirectory = updateFileBlobs(directory, blobUploadResults, blobFilePaths, '', successfulPaths);
+            const actualFileCount = blobs.length;
 
-        const updatedDirectory = updateFileBlobs(directory, uploadResults, filePaths, '', successfulPaths);
+            const MAX_MANIFEST_SIZE = 140 * 1024;
+            const FILE_COUNT_THRESHOLD = 250;
+            const TARGET_FILE_COUNT = 200;
+            const MAX_SUBFS_SIZE = 75 * 1024;
+            const subfsRecords: Array<{ uri: string; path: string }> = [];
+            let workingDirectory = updatedDirectory;
+            let currentFileCount = actualFileCount;
 
-        // Calculate actual file count (only successfully uploaded files)
-        const actualFileCount = uploadedBlobs.length;
+            let manifest = createManifest(siteName, workingDirectory, actualFileCount);
+            let manifestSize = JSON.stringify(manifest).length;
 
-        // Check if we need to split into subfs records
-        // Split proactively if we have lots of files to avoid hitting manifest size limits
-        const MAX_MANIFEST_SIZE = 140 * 1024; // 140KB to be safe (PDS limit is 150KB)
-        const FILE_COUNT_THRESHOLD = 250; // Start splitting at this many files
-        const TARGET_FILE_COUNT = 200; // Try to keep main manifest under this many files
-        const MAX_SUBFS_SIZE = 75 * 1024; // 75KB per subfs record
-        const subfsRecords: Array<{ uri: string; path: string }> = [];
-        let workingDirectory = updatedDirectory;
-        let currentFileCount = actualFileCount;
+            if (actualFileCount >= FILE_COUNT_THRESHOLD || manifestSize > MAX_MANIFEST_SIZE) {
+                console.log(`⚠️  Large site detected (${actualFileCount} files, ${(manifestSize / 1024).toFixed(1)}KB), splitting into subfs records...`);
+                logger.info(`Large site with ${actualFileCount} files, splitting into subfs records`);
 
-        // Create initial manifest to check size
-        let manifest = createManifest(siteName, workingDirectory, actualFileCount);
-        let manifestSize = JSON.stringify(manifest).length;
+                let attempts = 0;
+                const MAX_ATTEMPTS = 100;
 
-        // Split if we have lots of files OR if manifest is already too large
-        if (actualFileCount >= FILE_COUNT_THRESHOLD || manifestSize > MAX_MANIFEST_SIZE) {
-            console.log(`⚠️  Large site detected (${actualFileCount} files, ${(manifestSize / 1024).toFixed(1)}KB), splitting into subfs records...`);
-            logger.info(`Large site with ${actualFileCount} files, splitting into subfs records`);
+                while ((manifestSize > MAX_MANIFEST_SIZE || currentFileCount > TARGET_FILE_COUNT) && attempts < MAX_ATTEMPTS) {
+                    attempts++;
 
-            // Keep splitting until manifest fits under limits (both size and file count)
-            let attempts = 0;
-            const MAX_ATTEMPTS = 100; // Allow many splits for very large sites
+                    const directories = findLargeDirectories(workingDirectory);
+                    directories.sort((a, b) => b.size - a.size);
 
-            while ((manifestSize > MAX_MANIFEST_SIZE || currentFileCount > TARGET_FILE_COUNT) && attempts < MAX_ATTEMPTS) {
-                attempts++;
+                    if (directories.length > 0) {
+                        const largestDir = directories[0];
+                        console.log(`  Split #${attempts}: ${largestDir.path} (${largestDir.fileCount} files, ${(largestDir.size / 1024).toFixed(1)}KB)`);
 
-                // Find all directories sorted by size (largest first)
-                const directories = findLargeDirectories(workingDirectory);
-                directories.sort((a, b) => b.size - a.size);
+                        let subfsUri: string;
 
-                // Check if we can split subdirectories or need to split flat files
-                if (directories.length > 0) {
-                    // Split the largest subdirectory
-                    const largestDir = directories[0];
-                    console.log(`  Split #${attempts}: ${largestDir.path} (${largestDir.fileCount} files, ${(largestDir.size / 1024).toFixed(1)}KB)`);
+                        if (largestDir.size > MAX_SUBFS_SIZE) {
+                            console.log(`    → Directory too large (${(largestDir.size / 1024).toFixed(1)}KB), splitting into chunks...`);
+                            const chunks = splitDirectoryIntoChunks(largestDir.directory, MAX_SUBFS_SIZE);
+                            console.log(`    → Created ${chunks.length} chunks`);
 
-                    let subfsUri: string;
+                            const chunkUris: string[] = [];
+                            for (let i = 0; i < chunks.length; i++) {
+                                const chunk = chunks[i]!;
+                                const chunkRkey = TID.nextStr();
+                                const chunkFileCount = countFilesInDirectory(chunk);
+                                console.log(`    → Uploading chunk ${i + 1}/${chunks.length} (${chunkFileCount} files)...`);
 
-                    if (largestDir.size > MAX_SUBFS_SIZE) {
-                        // Directory too large for a single subfs — split into chunks
-                        console.log(`    → Directory too large (${(largestDir.size / 1024).toFixed(1)}KB), splitting into chunks...`);
-                        const chunks = splitDirectoryIntoChunks(largestDir.directory, MAX_SUBFS_SIZE);
-                        console.log(`    → Created ${chunks.length} chunks`);
+                                const chunkRecord = await agent.com.atproto.repo.putRecord({
+                                    repo: did,
+                                    collection: 'place.wisp.subfs',
+                                    rkey: chunkRkey,
+                                    record: {
+                                        $type: 'place.wisp.subfs' as const,
+                                        root: chunk,
+                                        fileCount: chunkFileCount,
+                                        createdAt: new Date().toISOString()
+                                    }
+                                });
 
-                        const chunkUris: string[] = [];
-                        for (let i = 0; i < chunks.length; i++) {
-                            const chunk = chunks[i]!;
-                            const chunkRkey = TID.nextStr();
-                            const chunkFileCount = countFilesInDirectory(chunk);
-                            console.log(`    → Uploading chunk ${i + 1}/${chunks.length} (${chunkFileCount} files)...`);
+                                chunkUris.push(chunkRecord.data.uri);
+                            }
 
-                            const chunkRecord = await agent.com.atproto.repo.putRecord({
+                            console.log(`    → Creating parent subfs with ${chunkUris.length} chunk references...`);
+                            const parentDirectory: Directory = {
+                                $type: 'place.wisp.fs#directory' as const,
+                                type: 'directory' as const,
+                                entries: chunkUris.map((uri, i) => ({
+                                    name: `chunk${i}`,
+                                    node: {
+                                        $type: 'place.wisp.fs#subfs' as const,
+                                        type: 'subfs' as const,
+                                        subject: uri,
+                                        flat: true
+                                    }
+                                }))
+                            };
+
+                            const parentRkey = TID.nextStr();
+                            const parentRecord = await agent.com.atproto.repo.putRecord({
                                 repo: did,
                                 collection: 'place.wisp.subfs',
-                                rkey: chunkRkey,
+                                rkey: parentRkey,
                                 record: {
                                     $type: 'place.wisp.subfs' as const,
-                                    root: chunk,
-                                    fileCount: chunkFileCount,
+                                    root: parentDirectory,
+                                    fileCount: largestDir.fileCount,
                                     createdAt: new Date().toISOString()
                                 }
                             });
 
-                            chunkUris.push(chunkRecord.data.uri);
+                            subfsUri = parentRecord.data.uri;
+                            console.log(`    ✓ Created parent subfs with ${chunks.length} chunks`);
+                            logger.info(`Created chunked subfs for ${largestDir.path}: ${subfsUri} (${chunks.length} chunks)`);
+                        } else {
+                            const subfsRkey = TID.nextStr();
+                            const subfsRecord = await agent.com.atproto.repo.putRecord({
+                                repo: did,
+                                collection: 'place.wisp.subfs',
+                                rkey: subfsRkey,
+                                record: {
+                                    $type: 'place.wisp.subfs' as const,
+                                    root: largestDir.directory,
+                                    fileCount: largestDir.fileCount,
+                                    createdAt: new Date().toISOString()
+                                }
+                            });
+
+                            subfsUri = subfsRecord.data.uri;
+                            console.log(`  ✅ Created subfs: ${subfsUri}`);
+                            logger.info(`Created subfs record for ${largestDir.path}: ${subfsUri}`);
                         }
 
-                        // Create parent subfs referencing all chunks with flat: true
-                        console.log(`    → Creating parent subfs with ${chunkUris.length} chunk references...`);
-                        const parentDirectory: Directory = {
+                        subfsRecords.push({ uri: subfsUri, path: largestDir.path });
+                        workingDirectory = replaceDirectoryWithSubfs(workingDirectory, largestDir.path, subfsUri);
+                        currentFileCount -= largestDir.fileCount;
+                    } else {
+                        const rootFiles = workingDirectory.entries.filter(e => 'type' in e.node && e.node.type === 'file');
+
+                        if (rootFiles.length === 0) {
+                            throw new Error(
+                                `Cannot split manifest further - no files or directories available. ` +
+                                `Current: ${currentFileCount} files, ${(manifestSize / 1024).toFixed(1)}KB.`
+                            );
+                        }
+
+                        const CHUNK_SIZE = 100;
+                        const chunkFiles = rootFiles.slice(0, Math.min(CHUNK_SIZE, rootFiles.length));
+                        console.log(`  Split #${attempts}: flat root (${chunkFiles.length} files)`);
+
+                        const chunkDirectory: Directory = {
                             $type: 'place.wisp.fs#directory' as const,
                             type: 'directory' as const,
-                            entries: chunkUris.map((uri, i) => ({
-                                name: `chunk${i}`,
-                                node: {
-                                    $type: 'place.wisp.fs#subfs' as const,
-                                    type: 'subfs' as const,
-                                    subject: uri,
-                                    flat: true
-                                }
-                            }))
+                            entries: chunkFiles
                         };
 
-                        const parentRkey = TID.nextStr();
-                        const parentRecord = await agent.com.atproto.repo.putRecord({
-                            repo: did,
-                            collection: 'place.wisp.subfs',
-                            rkey: parentRkey,
-                            record: {
-                                $type: 'place.wisp.subfs' as const,
-                                root: parentDirectory,
-                                fileCount: largestDir.fileCount,
-                                createdAt: new Date().toISOString()
-                            }
-                        });
-
-                        subfsUri = parentRecord.data.uri;
-                        console.log(`    ✓ Created parent subfs with ${chunks.length} chunks`);
-                        logger.info(`Created chunked subfs for ${largestDir.path}: ${subfsUri} (${chunks.length} chunks)`);
-                    } else {
-                        // Directory fits in a single subfs record
                         const subfsRkey = TID.nextStr();
                         const subfsRecord = await agent.com.atproto.repo.putRecord({
                             repo: did,
@@ -743,137 +736,128 @@ async function processUploadInBackground(
                             rkey: subfsRkey,
                             record: {
                                 $type: 'place.wisp.subfs' as const,
-                                root: largestDir.directory,
-                                fileCount: largestDir.fileCount,
+                                root: chunkDirectory,
+                                fileCount: chunkFiles.length,
                                 createdAt: new Date().toISOString()
                             }
                         });
 
-                        subfsUri = subfsRecord.data.uri;
-                        console.log(`  ✅ Created subfs: ${subfsUri}`);
-                        logger.info(`Created subfs record for ${largestDir.path}: ${subfsUri}`);
-                    }
+                        const subfsUri = subfsRecord.data.uri;
+                        console.log(`  ✅ Created flat subfs: ${subfsUri}`);
+                        logger.info(`Created flat subfs record with ${chunkFiles.length} files: ${subfsUri}`);
 
-                    subfsRecords.push({ uri: subfsUri, path: largestDir.path });
-
-                    // Replace directory with subfs node in the main tree
-                    workingDirectory = replaceDirectoryWithSubfs(workingDirectory, largestDir.path, subfsUri);
-                    currentFileCount -= largestDir.fileCount;
-                } else {
-                    // No subdirectories - split flat files at root level
-                    const rootFiles = workingDirectory.entries.filter(e => 'type' in e.node && e.node.type === 'file');
-
-                    if (rootFiles.length === 0) {
-                        throw new Error(
-                            `Cannot split manifest further - no files or directories available. ` +
-                            `Current: ${currentFileCount} files, ${(manifestSize / 1024).toFixed(1)}KB.`
+                        const remainingEntries = workingDirectory.entries.filter(
+                            e => !chunkFiles.some(cf => cf.name === e.name)
                         );
+
+                        remainingEntries.push({
+                            name: `__subfs_${attempts}`,
+                            node: {
+                                $type: 'place.wisp.fs#subfs' as const,
+                                type: 'subfs' as const,
+                                subject: subfsUri,
+                                flat: true
+                            }
+                        });
+
+                        workingDirectory = {
+                            $type: 'place.wisp.fs#directory' as const,
+                            type: 'directory' as const,
+                            entries: remainingEntries
+                        };
+
+                        subfsRecords.push({ uri: subfsUri, path: `__subfs_${attempts}` });
+                        currentFileCount -= chunkFiles.length;
                     }
 
-                    // Take a chunk of files (aim for ~100 files per chunk)
-                    const CHUNK_SIZE = 100;
-                    const chunkFiles = rootFiles.slice(0, Math.min(CHUNK_SIZE, rootFiles.length));
-                    console.log(`  Split #${attempts}: flat root (${chunkFiles.length} files)`);
+                    manifest = createManifest(siteName, workingDirectory, currentFileCount);
+                    manifestSize = JSON.stringify(manifest).length;
+                    const newSizeKB = (manifestSize / 1024).toFixed(1);
+                    console.log(`  → Manifest now ${newSizeKB}KB with ${currentFileCount} files (${subfsRecords.length} subfs total)`);
 
-                    // Create a directory with just these files
-                    const chunkDirectory: Directory = {
-                        $type: 'place.wisp.fs#directory' as const,
-                        type: 'directory' as const,
-                        entries: chunkFiles
-                    };
+                    if (manifestSize <= MAX_MANIFEST_SIZE && currentFileCount <= TARGET_FILE_COUNT) {
+                        console.log(`  ✅ Manifest fits! (${currentFileCount} files, ${newSizeKB}KB)`);
+                        break;
+                    }
+                }
 
-                    // Create subfs record for this chunk
-                    const subfsRkey = TID.nextStr();
-                    const subfsManifest = {
-                        $type: 'place.wisp.subfs' as const,
-                        root: chunkDirectory,
-                        fileCount: chunkFiles.length,
-                        createdAt: new Date().toISOString()
-                    };
-
-                    // Validate subfs record
-                    // const subfsValidation = validateSubfsRecord(subfsManifest);
-                    // if (!subfsValidation.success) {
-                    //     throw new Error(`Invalid subfs manifest: ${subfsValidation.error?.message || 'Validation failed'}`);
-                    // }
-
-                    // Upload subfs record to PDS
-                    const subfsRecord = await agent.com.atproto.repo.putRecord({
-                        repo: did,
-                        collection: 'place.wisp.subfs',
-                        rkey: subfsRkey,
-                        record: subfsManifest
-                    });
-
-                    const subfsUri = subfsRecord.data.uri;
-                    console.log(`  ✅ Created flat subfs: ${subfsUri}`);
-                    logger.info(`Created flat subfs record with ${chunkFiles.length} files: ${subfsUri}`);
-
-                    // Remove these files from the working directory and add a subfs entry
-                    const remainingEntries = workingDirectory.entries.filter(
-                        e => !chunkFiles.some(cf => cf.name === e.name)
+                if (manifestSize > MAX_MANIFEST_SIZE || currentFileCount > TARGET_FILE_COUNT) {
+                    throw new Error(
+                        `Failed to fit manifest after splitting ${attempts} directories. ` +
+                        `Current: ${currentFileCount} files, ${(manifestSize / 1024).toFixed(1)}KB. ` +
+                        `This should never happen - please report this issue.`
                     );
+                }
 
-                    // Add subfs entry (will be merged flat when expanded)
-                    remainingEntries.push({
-                        name: `__subfs_${attempts}`,  // Placeholder name, will be merged away
-                        node: {
-                            $type: 'place.wisp.fs#subfs' as const,
-                            type: 'subfs' as const,
-                            subject: subfsUri,
-                            flat: true  // Merge entries directly into parent (default, but explicit for clarity)
+                console.log(`✅ Split complete: ${subfsRecords.length} subfs records, ${currentFileCount} files in main, ${(manifestSize / 1024).toFixed(1)}KB manifest`);
+                logger.info(`Split into ${subfsRecords.length} subfs records, ${currentFileCount} files remaining in main tree`);
+            } else {
+                const manifestSizeKB = (manifestSize / 1024).toFixed(1);
+                console.log(`Manifest created (${actualFileCount} files, ${manifestSizeKB}KB JSON) - no splitting needed`);
+            }
+
+            updateJobProgress(jobId, { phase: 'finalizing' });
+            console.log('Putting record to PDS with rkey:', siteName);
+            const record = await agent.com.atproto.repo.putRecord({
+                repo: did,
+                collection: 'place.wisp.fs',
+                rkey: siteName,
+                record: manifest
+            });
+            console.log('Record successfully created on PDS:', record.data.uri);
+            return record;
+        };
+
+        // First attempt: no base64 encoding
+        let record: Awaited<ReturnType<typeof agent.com.atproto.repo.putRecord>>;
+        let finalBlobs = uploadedBlobs;
+        try {
+            record = await buildManifestAndPut(uploadedBlobs);
+        } catch (err: any) {
+            if (err?.status !== 500) throw err;
+
+            // On 500, retry with base64 encoding for compressed text files.
+            // Re-read from the original File objects to avoid holding duplicate buffers in memory.
+            logger.warn('Manifest put returned 500 — retrying with base64-encoded text files', err);
+            console.warn('[Upload] Manifest put failed with 500, retrying with base64 encoding for text files...');
+
+            const base64Blobs = [...uploadedBlobs];
+            for (const uploadedFile of validUploadedFiles) {
+                if (!uploadedFile.compressed || !isTextMimeType(uploadedFile.mimeType)) continue;
+
+                // Find the original File object to re-read content without holding extra buffers
+                const originalFile = fileArray.find(f => {
+                    if (!f) return false;
+                    const wp = 'webkitRelativePath' in f ? String(f.webkitRelativePath) : '';
+                    return (wp || f.name) === uploadedFile.name;
+                });
+                if (!originalFile) continue;
+
+                const originalContent = Buffer.from(await originalFile.arrayBuffer());
+                const base64Content = Buffer.from(compressFile(originalContent).toString('base64'), 'binary');
+                const uploadResult = await uploadBlobWithRetry(agent, base64Content, 'application/octet-stream', uploadedFile.name);
+                const newBlobRef = uploadResult.data.blob;
+
+                const blobIdx = base64Blobs.findIndex(b => b.filePath === uploadedFile.name);
+                if (blobIdx !== -1) {
+                    base64Blobs[blobIdx] = {
+                        ...base64Blobs[blobIdx]!,
+                        result: {
+                            hash: newBlobRef.ref.toString(),
+                            blobRef: newBlobRef,
+                            encoding: 'gzip',
+                            mimeType: uploadedFile.mimeType,
+                            base64: true
                         }
-                    });
-
-                    workingDirectory = {
-                        $type: 'place.wisp.fs#directory' as const,
-                        type: 'directory' as const,
-                        entries: remainingEntries
                     };
-
-                    subfsRecords.push({ uri: subfsUri, path: `__subfs_${attempts}` });
-                    currentFileCount -= chunkFiles.length;
-                }
-
-                // Recreate manifest and check new size
-                manifest = createManifest(siteName, workingDirectory, currentFileCount);
-                manifestSize = JSON.stringify(manifest).length;
-                const newSizeKB = (manifestSize / 1024).toFixed(1);
-                console.log(`  → Manifest now ${newSizeKB}KB with ${currentFileCount} files (${subfsRecords.length} subfs total)`);
-
-                // Check if we're under both limits now
-                if (manifestSize <= MAX_MANIFEST_SIZE && currentFileCount <= TARGET_FILE_COUNT) {
-                    console.log(`  ✅ Manifest fits! (${currentFileCount} files, ${newSizeKB}KB)`);
-                    break;
                 }
             }
 
-            if (manifestSize > MAX_MANIFEST_SIZE || currentFileCount > TARGET_FILE_COUNT) {
-                throw new Error(
-                    `Failed to fit manifest after splitting ${attempts} directories. ` +
-                    `Current: ${currentFileCount} files, ${(manifestSize / 1024).toFixed(1)}KB. ` +
-                    `This should never happen - please report this issue.`
-                );
-            }
-
-            console.log(`✅ Split complete: ${subfsRecords.length} subfs records, ${currentFileCount} files in main, ${(manifestSize / 1024).toFixed(1)}KB manifest`);
-            logger.info(`Split into ${subfsRecords.length} subfs records, ${currentFileCount} files remaining in main tree`);
-        } else {
-            const manifestSizeKB = (manifestSize / 1024).toFixed(1);
-            console.log(`Manifest created (${fileCount} files, ${manifestSizeKB}KB JSON) - no splitting needed`);
+            finalBlobs = base64Blobs;
+            record = await buildManifestAndPut(base64Blobs);
         }
 
         const rkey = siteName;
-        updateJobProgress(jobId, { phase: 'finalizing' });
-
-        console.log('Putting record to PDS with rkey:', rkey);
-        const record = await agent.com.atproto.repo.putRecord({
-            repo: did,
-            collection: 'place.wisp.fs',
-            rkey: rkey,
-            record: manifest
-        });
-        console.log('Record successfully created on PDS:', record.data.uri);
 
         // Store site in database cache
         await upsertSite(did, rkey, siteName);
@@ -881,7 +865,7 @@ async function processUploadInBackground(
         // Cache the site files for the hosting service
         try {
             const fileCids: Record<string, string> = {};
-            for (const blob of uploadedBlobs) {
+            for (const blob of finalBlobs) {
                 const normalizedPath = blob.filePath.replace(/^[^\/]*\//, '');
                 fileCids[normalizedPath] = blob.result.hash;
             }
@@ -889,22 +873,6 @@ async function processUploadInBackground(
         } catch (err) {
             // Don't fail the upload if caching fails
             logger.warn('Failed to cache site files', err as any);
-        }
-
-        // Auto-map claimed domain to this site if user has a claimed domain with no rkey
-        try {
-            const existingDomain = await getDomainByDid(did);
-            if (existingDomain) {
-                const currentSiteMapping = await getWispDomainSite(did);
-                if (!currentSiteMapping) {
-                    // Domain is claimed but not mapped to any site, map it to this new site
-                    await updateWispDomainSite(existingDomain, rkey);
-                    logger.info(`Auto-mapped domain ${existingDomain} to new site ${siteName}`);
-                }
-            }
-        } catch (err) {
-            // Don't fail the upload if domain mapping fails
-            logger.warn('Failed to auto-map domain to new site', err as any);
         }
 
         // Clean up old subfs records if we had any
@@ -1136,22 +1104,6 @@ export const wispRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
                         } catch (err) {
                             // Don't fail the upload if caching fails
                             logger.warn('Failed to cache site', err as any);
-                        }
-
-                        // Auto-map claimed domain to this site if user has a claimed domain with no rkey
-                        try {
-                            const existingDomain = await getDomainByDid(auth.did);
-                            if (existingDomain) {
-                                const currentSiteMapping = await getWispDomainSite(auth.did);
-                                if (!currentSiteMapping) {
-                                    // Domain is claimed but not mapped to any site, map it to this new site
-                                    await updateWispDomainSite(existingDomain, rkey);
-                                    logger.info(`Auto-mapped domain ${existingDomain} to new site ${siteName}`);
-                                }
-                            }
-                        } catch (err) {
-                            // Don't fail the upload if domain mapping fails
-                            logger.warn('Failed to auto-map domain to new site', err as any);
                         }
 
                         return {

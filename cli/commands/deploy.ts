@@ -14,7 +14,7 @@ import {
   type UploadedFile,
   type FileUploadResult
 } from '@wispplace/fs-utils';
-import { computeCID, extractBlobMap, shouldCompressFile, compressFile, extractSubfsUris } from '@wispplace/atproto-utils';
+import { computeCID, extractBlobMap, shouldCompressFile, compressFile, extractSubfsUris, isTextMimeType } from '@wispplace/atproto-utils';
 import { MAX_SITE_SIZE, MAX_FILE_COUNT, MAX_FILE_SIZE, DEFAULT_IGNORE_PATTERNS } from '@wispplace/constants';
 import { readdirSync, statSync, readFileSync, existsSync } from 'fs';
 import { join, relative, basename } from 'path';
@@ -167,7 +167,8 @@ async function processAndUploadFiles(
   agent: Agent,
   files: FileInfo[],
   existingBlobMap: Map<string, { blobRef: BlobRef; cid: string }>,
-  concurrency: number
+  concurrency: number,
+  useBase64 = false
 ): Promise<{ uploadedFiles: UploadedFile[]; uploadResults: FileUploadResult[]; filePaths: string[] }> {
   const spinner = createSpinner(`Processing ${files.length} files...`).start();
 
@@ -201,12 +202,15 @@ async function processAndUploadFiles(
       let base64Encoded = false;
 
       if (shouldCompress) {
-        // Compress with gzip
         const compressed = compressFile(content);
-        // Base64 encode
-        processedContent = Buffer.from(compressed.toString('base64'));
+        if (useBase64 && isTextMimeType(mimeType)) {
+          // Fallback: base64-encode compressed text files for PDSes that reject them otherwise
+          processedContent = Buffer.from(compressed.toString('base64'), 'binary');
+          base64Encoded = true;
+        } else {
+          processedContent = compressed;
+        }
         encoding = 'gzip';
-        base64Encoded = true;
       } else {
         processedContent = content;
       }
@@ -234,7 +238,7 @@ async function processAndUploadFiles(
         mimeType,
         size: processedContent.length,
         compressed: shouldCompress,
-        base64Encoded,
+        ...(base64Encoded && { base64Encoded }),
         originalMimeType: mimeType
       });
 
@@ -243,7 +247,7 @@ async function processAndUploadFiles(
         blobRef,
         encoding,
         mimeType,
-        base64: base64Encoded || undefined
+        base64: base64Encoded
       });
 
       filePaths.push(file.relativePath);
@@ -510,11 +514,12 @@ export async function deploy(
   }
 
   // 4. Process and upload files
-  const { uploadedFiles, uploadResults, filePaths } = await processAndUploadFiles(
+  const concurrency = options.concurrency ?? DEFAULT_CONCURRENT_UPLOADS;
+  let { uploadedFiles, uploadResults, filePaths } = await processAndUploadFiles(
     agent,
     files,
     existingBlobMap,
-    options.concurrency ?? DEFAULT_CONCURRENT_UPLOADS
+    concurrency
   );
 
   // 5. Build directory structure
@@ -523,30 +528,60 @@ export async function deploy(
   const successfulPaths = new Set(filePaths);
   const directory = updateFileBlobs(rawDirectory, uploadResults, filePaths, '', successfulPaths, { skipNormalization: true });
 
-  // 6. Split into subfs if needed
-  let finalDirectory = directory;
-  let subfsRkeys: string[] = [];
-
-  const initialManifest = createManifest(siteName, directory, fileCount);
-  if (
-    fileCount >= FILE_COUNT_THRESHOLD ||
-    JSON.stringify(initialManifest).length > MAX_MANIFEST_SIZE
-  ) {
-    const result = await splitIntoSubfs(agent, did, directory, siteName);
-    finalDirectory = result.directory;
-    subfsRkeys = result.subfsRkeys;
-  }
-
-  // 7. Create manifest
+  // 6+7. Create manifest and put record, retrying with base64 on 500
   const manifestSpinner = createSpinner('Creating manifest...').start();
-  const manifest = createManifest(siteName, finalDirectory, countFilesInDirectory(finalDirectory));
 
-  await agent.com.atproto.repo.putRecord({
-    repo: did,
-    collection: 'place.wisp.fs',
-    rkey: siteName,
-    record: manifest
-  });
+  // Returns subfsRkeys created so old ones can be cleaned up.
+  const attemptManifest = async (useBase64: boolean): Promise<string[]> => {
+    let curDirectory = directory;
+
+    if (useBase64) {
+      // Re-upload only compressed text files with base64 encoding.
+      // Re-read from disk so we don't hold duplicate buffers in memory.
+      const textFiles = files.filter(f => {
+        const mimeType = lookup(f.relativePath) || 'application/octet-stream';
+        return shouldCompressFile(mimeType, f.relativePath) && isTextMimeType(mimeType);
+      });
+      const retryResult = await processAndUploadFiles(agent, textFiles, existingBlobMap, concurrency, true);
+
+      // Merge updated results back: replace matching paths
+      const retryMap = new Map(retryResult.filePaths.map((p, i) => [p, retryResult.uploadResults[i]!]));
+      const mergedResults = uploadResults.map((r, i) => retryMap.get(filePaths[i]!) ?? r);
+
+      // Rebuild directory with updated blob refs
+      curDirectory = updateFileBlobs(rawDirectory, mergedResults, filePaths, '', new Set(filePaths), { skipNormalization: true });
+    }
+
+    let finalDirectory = curDirectory;
+    let subfsRkeys: string[] = [];
+
+    if (
+      fileCount >= FILE_COUNT_THRESHOLD ||
+      JSON.stringify(createManifest(siteName, curDirectory, fileCount)).length > MAX_MANIFEST_SIZE
+    ) {
+      const result = await splitIntoSubfs(agent, did, curDirectory, siteName);
+      finalDirectory = result.directory;
+      subfsRkeys = result.subfsRkeys;
+    }
+
+    const manifest = createManifest(siteName, finalDirectory, countFilesInDirectory(finalDirectory));
+    await agent.com.atproto.repo.putRecord({
+      repo: did,
+      collection: 'place.wisp.fs',
+      rkey: siteName,
+      record: manifest
+    });
+    return subfsRkeys;
+  };
+
+  let subfsRkeys: string[];
+  try {
+    subfsRkeys = await attemptManifest(false);
+  } catch (err: any) {
+    if (err?.status !== 500) throw err;
+    console.warn('\n[Deploy] Manifest put failed with 500, retrying with base64 encoding for text files...');
+    subfsRkeys = await attemptManifest(true);
+  }
 
   manifestSpinner.succeed('Created manifest record');
 

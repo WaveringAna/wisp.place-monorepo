@@ -17,7 +17,7 @@ export interface FileUploadResult {
 	blobRef: BlobRef;
 	encoding?: 'gzip';
 	mimeType?: string;
-	base64?: boolean;
+	base64: boolean;
 }
 
 export interface ProcessedDirectory {
@@ -204,7 +204,7 @@ export function updateFileBlobs(
 						blob: blobRef,
 						...(result.encoding && { encoding: result.encoding }),
 						...(result.mimeType && { mimeType: result.mimeType }),
-						...(result.base64 && { base64: result.base64 })
+						base64: result.base64 ?? false
 					}
 				};
 			} else {
