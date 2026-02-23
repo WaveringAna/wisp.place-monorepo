@@ -14,7 +14,9 @@ echo "=== Generating TypeScript lexicons ==="
 cd "$ROOT_DIR/packages/@wispplace/lexicons"
 eval "$AUTO_ACCEPT bun run codegen"
 
-echo "=== Generating atcute lexicons ==="
-eval "$AUTO_ACCEPT bun run codegen:atcute"
+if [[ ! -f "$ROOT_DIR/packages/@wispplace/lexicons/src/atcute/lexicons/index.ts" ]]; then
+  echo "ERROR: missing generated atcute lexicons index at packages/@wispplace/lexicons/src/atcute/lexicons/index.ts" >&2
+  exit 1
+fi
 
 echo "=== Done ==="

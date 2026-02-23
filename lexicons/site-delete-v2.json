@@ -1,0 +1,73 @@
+{
+  "lexicon": 1,
+  "id": "place.wisp.v2.site.delete",
+  "defs": {
+    "main": {
+      "type": "procedure",
+      "description": "Delete one owned site metadata entry and unmap any domains pointing to it.",
+      "input": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["siteRkey"],
+          "properties": {
+            "siteRkey": {
+              "type": "string",
+              "format": "record-key",
+              "description": "Owned place.wisp.fs record key to delete from wisp metadata."
+            }
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["siteRkey", "deleted", "unmappedDomains"],
+          "properties": {
+            "siteRkey": {
+              "type": "string",
+              "format": "record-key"
+            },
+            "deleted": {
+              "type": "boolean",
+              "const": true
+            },
+            "unmappedDomains": {
+              "type": "array",
+              "description": "Domains that were detached from this site before deletion.",
+              "items": {
+                "type": "ref",
+                "ref": "#unmappedDomain"
+              }
+            }
+          }
+        }
+      },
+      "errors": [
+        { "name": "AuthenticationRequired" },
+        { "name": "InvalidRequest" },
+        { "name": "NotFound" }
+      ]
+    },
+    "unmappedDomain": {
+      "type": "object",
+      "required": ["domain", "kind", "status"],
+      "properties": {
+        "domain": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 253
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["wisp", "custom"]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pendingVerification", "verified"]
+        }
+      }
+    }
+  }
+}

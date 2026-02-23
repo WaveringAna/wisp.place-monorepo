@@ -1,0 +1,64 @@
+{
+  "lexicon": 1,
+  "id": "place.wisp.v2.domain.addSite",
+  "defs": {
+    "main": {
+      "type": "procedure",
+      "description": "Map an owned domain to one owned site record.",
+      "input": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["domain", "siteRkey"],
+          "properties": {
+            "domain": {
+              "type": "string",
+              "description": "Fully-qualified domain to map.",
+              "minLength": 3,
+              "maxLength": 253
+            },
+            "siteRkey": {
+              "type": "string",
+              "format": "record-key",
+              "description": "Owned place.wisp.fs record key to map this domain to."
+            }
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["domain", "kind", "status", "siteRkey", "mapped"],
+          "properties": {
+            "domain": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": ["wisp", "custom"]
+            },
+            "status": {
+              "type": "string",
+              "enum": ["pendingVerification", "verified"]
+            },
+            "siteRkey": {
+              "type": "string",
+              "format": "record-key"
+            },
+            "mapped": {
+              "type": "boolean",
+              "const": true
+            }
+          }
+        }
+      },
+      "errors": [
+        { "name": "AuthenticationRequired" },
+        { "name": "InvalidDomain" },
+        { "name": "InvalidRequest" },
+        { "name": "NotFound" }
+      ]
+    }
+  }
+}

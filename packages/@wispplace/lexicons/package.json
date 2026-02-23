@@ -60,8 +60,10 @@
     }
   },
   "scripts": {
-    "codegen": "lex gen-server ./src ../../../lexicons/*.json",
-    "codegen:atcute": "lex-cli generate -c lex.atcute.config.js"
+    "codegen": "bun run codegen:server && bun run codegen:atcute && bun run codegen:verify",
+    "codegen:server": "lex gen-server ./src ../../../lexicons/*.json",
+    "codegen:atcute": "lex-cli generate -c lex.atcute.config.js",
+    "codegen:verify": "test -f ./src/atcute/lexicons/index.ts"
   },
   "dependencies": {
     "@atcute/lexicons": "^1.2.9",

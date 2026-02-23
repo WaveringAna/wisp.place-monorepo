@@ -1,5 +1,6 @@
 import { SQL } from "bun";
 import { isValidHandle, toDomain } from "./domain-utils";
+import { runDatabaseMigrations } from "./migrations";
 
 export { isValidHandle, toDomain } from "./domain-utils";
 
@@ -66,50 +67,6 @@ await db`
     )
 `;
 
-// Add columns if they don't exist (for existing databases)
-try {
-    await db`ALTER TABLE domains ADD COLUMN IF NOT EXISTS rkey TEXT`;
-} catch (err) {
-    // Column might already exist, ignore
-}
-
-try {
-    await db`ALTER TABLE oauth_sessions ADD COLUMN IF NOT EXISTS expires_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW()) + 2592000`;
-} catch (err) {
-    // Column might already exist, ignore
-}
-
-try {
-    await db`ALTER TABLE oauth_keys ADD COLUMN IF NOT EXISTS created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())`;
-} catch (err) {
-    // Column might already exist, ignore
-}
-
-try {
-    await db`ALTER TABLE oauth_states ADD COLUMN IF NOT EXISTS expires_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) + 3600`;
-} catch (err) {
-    // Column might already exist, ignore
-}
-
-try {
-    await db`ALTER TABLE service_identity_keys ADD COLUMN IF NOT EXISTS updated_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())`;
-} catch (err) {
-    // Column might already exist, ignore
-}
-
-try {
-    await db`ALTER TABLE service_identity_keys ADD COLUMN IF NOT EXISTS private_key_multibase TEXT`;
-} catch (err) {
-    // Column might already exist, ignore
-}
-
-// Remove the unique constraint on domains.did to allow multiple domains per user
-try {
-    await db`ALTER TABLE domains DROP CONSTRAINT IF EXISTS domains_did_key`;
-} catch (err) {
-    // Constraint might already be removed, ignore
-}
-
 // Custom domains table for BYOD (bring your own domain)
 await db`
     CREATE TABLE IF NOT EXISTS custom_domains (
@@ -122,18 +79,6 @@ await db`
         created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())
     )
 `;
-
-// Migrate existing tables to make rkey nullable and remove default
-try {
-    await db`ALTER TABLE custom_domains ALTER COLUMN rkey DROP NOT NULL`;
-} catch (err) {
-    // Column might already be nullable, ignore
-}
-try {
-    await db`ALTER TABLE custom_domains ALTER COLUMN rkey DROP DEFAULT`;
-} catch (err) {
-    // Default might already be removed, ignore
-}
 
 // Sites table - cache of place.wisp.fs records from PDS
 await db`
@@ -186,85 +131,7 @@ await db`
     )
 `;
 
-// Insert initial supporter
-await db`
-    INSERT INTO supporter (did)
-    VALUES ('did:plc:ttdrpj45ibqunmfhdsb4zdwq')
-    ON CONFLICT (did) DO NOTHING
-`;
-
-// Create indexes for common query patterns
-await Promise.all([
-    // oauth_states cleanup queries
-    db`CREATE INDEX IF NOT EXISTS idx_oauth_states_expires_at ON oauth_states(expires_at)`.catch(err => {
-        if (!err.message?.includes('already exists')) {
-            console.error('Failed to create idx_oauth_states_expires_at:', err);
-        }
-    }),
-
-    // oauth_sessions cleanup queries
-    db`CREATE INDEX IF NOT EXISTS idx_oauth_sessions_expires_at ON oauth_sessions(expires_at)`.catch(err => {
-        if (!err.message?.includes('already exists')) {
-            console.error('Failed to create idx_oauth_sessions_expires_at:', err);
-        }
-    }),
-
-    // oauth_keys key rotation queries
-    db`CREATE INDEX IF NOT EXISTS idx_oauth_keys_created_at ON oauth_keys(created_at)`.catch(err => {
-        if (!err.message?.includes('already exists')) {
-            console.error('Failed to create idx_oauth_keys_created_at:', err);
-        }
-    }),
-
-    // domains queries by (did, rkey)
-    db`CREATE INDEX IF NOT EXISTS idx_domains_did_rkey ON domains(did, rkey)`.catch(err => {
-        if (!err.message?.includes('already exists')) {
-            console.error('Failed to create idx_domains_did_rkey:', err);
-        }
-    }),
-
-    // custom_domains queries by did
-    db`CREATE INDEX IF NOT EXISTS idx_custom_domains_did ON custom_domains(did)`.catch(err => {
-        if (!err.message?.includes('already exists')) {
-            console.error('Failed to create idx_custom_domains_did:', err);
-        }
-    }),
-
-    // custom_domains queries by (did, rkey)
-    db`CREATE INDEX IF NOT EXISTS idx_custom_domains_did_rkey ON custom_domains(did, rkey)`.catch(err => {
-        if (!err.message?.includes('already exists')) {
-            console.error('Failed to create idx_custom_domains_did_rkey:', err);
-        }
-    }),
-
-    // custom_domains DNS verification worker queries
-    db`CREATE INDEX IF NOT EXISTS idx_custom_domains_verified ON custom_domains(verified)`.catch(err => {
-        if (!err.message?.includes('already exists')) {
-            console.error('Failed to create idx_custom_domains_verified:', err);
-        }
-    }),
-
-    // sites queries by did
-    db`CREATE INDEX IF NOT EXISTS idx_sites_did ON sites(did)`.catch(err => {
-        if (!err.message?.includes('already exists')) {
-            console.error('Failed to create idx_sites_did:', err);
-        }
-    }),
-
-    // site_cache queries by did
-    db`CREATE INDEX IF NOT EXISTS idx_site_cache_did ON site_cache(did)`.catch(err => {
-        if (!err.message?.includes('already exists')) {
-            console.error('Failed to create idx_site_cache_did:', err);
-        }
-    }),
-
-    // site_cache queries by updated_at (for cleanup/monitoring)
-    db`CREATE INDEX IF NOT EXISTS idx_site_cache_updated ON site_cache(updated_at)`.catch(err => {
-        if (!err.message?.includes('already exists')) {
-            console.error('Failed to create idx_site_cache_updated:', err);
-        }
-    })
-]);
+await runDatabaseMigrations(db);
 
 export const getDomainByDid = async (did: string): Promise<string | null> => {
     const rows = await db`SELECT domain FROM domains WHERE did = ${did} ORDER BY created_at ASC LIMIT 1`;

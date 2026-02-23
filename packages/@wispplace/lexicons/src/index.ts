@@ -10,11 +10,14 @@ import {
   createServer as createXrpcServer,
 } from '@atproto/xrpc-server'
 import { schemas } from './lexicons.js'
+import * as PlaceWispV2DomainAddSite from './types/place/wisp/v2/domain/addSite.js'
 import * as PlaceWispV2DomainClaimSubdomain from './types/place/wisp/v2/domain/claimSubdomain.js'
 import * as PlaceWispV2DomainClaim from './types/place/wisp/v2/domain/claim.js'
 import * as PlaceWispV2DomainDelete from './types/place/wisp/v2/domain/delete.js'
 import * as PlaceWispV2DomainGetList from './types/place/wisp/v2/domain/getList.js'
 import * as PlaceWispV2DomainGetStatus from './types/place/wisp/v2/domain/getStatus.js'
+import * as PlaceWispV2SiteDelete from './types/place/wisp/v2/site/delete.js'
+import * as PlaceWispV2SiteGetList from './types/place/wisp/v2/site/getList.js'
 
 export function createServer(options?: XrpcOptions): Server {
   return new Server(options)
@@ -53,10 +56,12 @@ export class PlaceWispNS {
 export class PlaceWispV2NS {
   _server: Server
   domain: PlaceWispV2DomainNS
+  site: PlaceWispV2SiteNS
 
   constructor(server: Server) {
     this._server = server
     this.domain = new PlaceWispV2DomainNS(server)
+    this.site = new PlaceWispV2SiteNS(server)
   }
 }
 
@@ -65,6 +70,18 @@ export class PlaceWispV2DomainNS {
 
   constructor(server: Server) {
     this._server = server
+  }
+
+  addSite<A extends Auth = void>(
+    cfg: MethodConfigOrHandler<
+      A,
+      PlaceWispV2DomainAddSite.QueryParams,
+      PlaceWispV2DomainAddSite.HandlerInput,
+      PlaceWispV2DomainAddSite.HandlerOutput
+    >,
+  ) {
+    const nsid = 'place.wisp.v2.domain.addSite' // @ts-ignore
+    return this._server.xrpc.method(nsid, cfg)
   }
 
   claimSubdomain<A extends Auth = void>(
@@ -124,6 +141,38 @@ export class PlaceWispV2DomainNS {
     >,
   ) {
     const nsid = 'place.wisp.v2.domain.getStatus' // @ts-ignore
+    return this._server.xrpc.method(nsid, cfg)
+  }
+}
+
+export class PlaceWispV2SiteNS {
+  _server: Server
+
+  constructor(server: Server) {
+    this._server = server
+  }
+
+  delete<A extends Auth = void>(
+    cfg: MethodConfigOrHandler<
+      A,
+      PlaceWispV2SiteDelete.QueryParams,
+      PlaceWispV2SiteDelete.HandlerInput,
+      PlaceWispV2SiteDelete.HandlerOutput
+    >,
+  ) {
+    const nsid = 'place.wisp.v2.site.delete' // @ts-ignore
+    return this._server.xrpc.method(nsid, cfg)
+  }
+
+  getList<A extends Auth = void>(
+    cfg: MethodConfigOrHandler<
+      A,
+      PlaceWispV2SiteGetList.QueryParams,
+      PlaceWispV2SiteGetList.HandlerInput,
+      PlaceWispV2SiteGetList.HandlerOutput
+    >,
+  ) {
+    const nsid = 'place.wisp.v2.site.getList' // @ts-ignore
     return this._server.xrpc.method(nsid, cfg)
   }
 }

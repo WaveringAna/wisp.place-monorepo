@@ -10,6 +10,79 @@ import {
 import { type $Typed, is$typed, maybe$typed } from './util.js'
 
 export const schemaDict = {
+  PlaceWispV2DomainAddSite: {
+    lexicon: 1,
+    id: 'place.wisp.v2.domain.addSite',
+    defs: {
+      main: {
+        type: 'procedure',
+        description: 'Map an owned domain to one owned site record.',
+        input: {
+          encoding: 'application/json',
+          schema: {
+            type: 'object',
+            required: ['domain', 'siteRkey'],
+            properties: {
+              domain: {
+                type: 'string',
+                description: 'Fully-qualified domain to map.',
+                minLength: 3,
+                maxLength: 253,
+              },
+              siteRkey: {
+                type: 'string',
+                format: 'record-key',
+                description:
+                  'Owned place.wisp.fs record key to map this domain to.',
+              },
+            },
+          },
+        },
+        output: {
+          encoding: 'application/json',
+          schema: {
+            type: 'object',
+            required: ['domain', 'kind', 'status', 'siteRkey', 'mapped'],
+            properties: {
+              domain: {
+                type: 'string',
+              },
+              kind: {
+                type: 'string',
+                enum: ['wisp', 'custom'],
+              },
+              status: {
+                type: 'string',
+                enum: ['pendingVerification', 'verified'],
+              },
+              siteRkey: {
+                type: 'string',
+                format: 'record-key',
+              },
+              mapped: {
+                type: 'boolean',
+                const: true,
+              },
+            },
+          },
+        },
+        errors: [
+          {
+            name: 'AuthenticationRequired',
+          },
+          {
+            name: 'InvalidDomain',
+          },
+          {
+            name: 'InvalidRequest',
+          },
+          {
+            name: 'NotFound',
+          },
+        ],
+      },
+    },
+  },
   PlaceWispV2DomainClaimSubdomain: {
     lexicon: 1,
     id: 'place.wisp.v2.domain.claimSubdomain',
@@ -678,6 +751,171 @@ export const schemaDict = {
       },
     },
   },
+  PlaceWispV2SiteDelete: {
+    lexicon: 1,
+    id: 'place.wisp.v2.site.delete',
+    defs: {
+      main: {
+        type: 'procedure',
+        description:
+          'Delete one owned site metadata entry and unmap any domains pointing to it.',
+        input: {
+          encoding: 'application/json',
+          schema: {
+            type: 'object',
+            required: ['siteRkey'],
+            properties: {
+              siteRkey: {
+                type: 'string',
+                format: 'record-key',
+                description:
+                  'Owned place.wisp.fs record key to delete from wisp metadata.',
+              },
+            },
+          },
+        },
+        output: {
+          encoding: 'application/json',
+          schema: {
+            type: 'object',
+            required: ['siteRkey', 'deleted', 'unmappedDomains'],
+            properties: {
+              siteRkey: {
+                type: 'string',
+                format: 'record-key',
+              },
+              deleted: {
+                type: 'boolean',
+                const: true,
+              },
+              unmappedDomains: {
+                type: 'array',
+                description:
+                  'Domains that were detached from this site before deletion.',
+                items: {
+                  type: 'ref',
+                  ref: 'lex:place.wisp.v2.site.delete#unmappedDomain',
+                },
+              },
+            },
+          },
+        },
+        errors: [
+          {
+            name: 'AuthenticationRequired',
+          },
+          {
+            name: 'InvalidRequest',
+          },
+          {
+            name: 'NotFound',
+          },
+        ],
+      },
+      unmappedDomain: {
+        type: 'object',
+        required: ['domain', 'kind', 'status'],
+        properties: {
+          domain: {
+            type: 'string',
+            minLength: 3,
+            maxLength: 253,
+          },
+          kind: {
+            type: 'string',
+            enum: ['wisp', 'custom'],
+          },
+          status: {
+            type: 'string',
+            enum: ['pendingVerification', 'verified'],
+          },
+        },
+      },
+    },
+  },
+  PlaceWispV2SiteGetList: {
+    lexicon: 1,
+    id: 'place.wisp.v2.site.getList',
+    defs: {
+      main: {
+        type: 'query',
+        description:
+          'List owned sites and the domains currently mapped to each site.',
+        output: {
+          encoding: 'application/json',
+          schema: {
+            type: 'object',
+            required: ['sites'],
+            properties: {
+              sites: {
+                type: 'array',
+                items: {
+                  type: 'ref',
+                  ref: 'lex:place.wisp.v2.site.getList#siteSummary',
+                },
+              },
+            },
+          },
+        },
+        errors: [
+          {
+            name: 'AuthenticationRequired',
+          },
+        ],
+      },
+      siteSummary: {
+        type: 'object',
+        required: ['siteRkey', 'domains'],
+        properties: {
+          siteRkey: {
+            type: 'string',
+            format: 'record-key',
+          },
+          displayName: {
+            type: 'string',
+            maxLength: 200,
+          },
+          createdAt: {
+            type: 'string',
+            format: 'datetime',
+          },
+          updatedAt: {
+            type: 'string',
+            format: 'datetime',
+          },
+          domains: {
+            type: 'array',
+            items: {
+              type: 'ref',
+              ref: 'lex:place.wisp.v2.site.getList#siteDomain',
+            },
+          },
+        },
+      },
+      siteDomain: {
+        type: 'object',
+        required: ['domain', 'kind', 'status', 'verified'],
+        properties: {
+          domain: {
+            type: 'string',
+            minLength: 3,
+            maxLength: 253,
+          },
+          kind: {
+            type: 'string',
+            enum: ['wisp', 'custom'],
+          },
+          status: {
+            type: 'string',
+            enum: ['pendingVerification', 'verified'],
+          },
+          verified: {
+            type: 'boolean',
+          },
+        },
+      },
+    },
+  },
   PlaceWispSubfs: {
     lexicon: 1,
     id: 'place.wisp.subfs',
@@ -823,6 +1061,7 @@ export function validate(
 }
 
 export const ids = {
+  PlaceWispV2DomainAddSite: 'place.wisp.v2.domain.addSite',
   PlaceWispV2DomainClaimSubdomain: 'place.wisp.v2.domain.claimSubdomain',
   PlaceWispV2DomainClaim: 'place.wisp.v2.domain.claim',
   PlaceWispV2DomainDelete: 'place.wisp.v2.domain.delete',
@@ -831,5 +1070,7 @@ export const ids = {
   PlaceWispV2Domains: 'place.wisp.v2.domains',
   PlaceWispFs: 'place.wisp.fs',
   PlaceWispSettings: 'place.wisp.settings',
+  PlaceWispV2SiteDelete: 'place.wisp.v2.site.delete',
+  PlaceWispV2SiteGetList: 'place.wisp.v2.site.getList',
   PlaceWispSubfs: 'place.wisp.subfs',
 } as const

@@ -6,11 +6,14 @@ import { CompositeDidDocumentResolver, PlcDidDocumentResolver, WebDidDocumentRes
 import { json, XRPCRouter, XRPCError } from '@atcute/xrpc-server';
 import { ServiceJwtVerifier } from '@atcute/xrpc-server/auth';
 import {
+  PlaceWispV2DomainAddSite,
   PlaceWispV2DomainClaim,
   PlaceWispV2DomainClaimSubdomain,
   PlaceWispV2DomainDelete,
   PlaceWispV2DomainGetList,
   PlaceWispV2DomainGetStatus,
+  PlaceWispV2SiteDelete,
+  PlaceWispV2SiteGetList,
 } from '@wispplace/lexicons/atcute';
 import { BASE_HOST } from '@wispplace/constants';
 
@@ -20,10 +23,13 @@ import {
   claimCustomDomain,
   claimDomain,
   deleteCustomDomain,
+  deleteSite,
   deleteWispDomain,
+  getDomainsBySite,
   getAllWispDomains,
   getCustomDomainsByDid,
   getCustomDomainInfo,
+  getSitesByDid,
   isDomainRegistered,
   updateCustomDomainRkey,
   updateWispDomainSite,
@@ -56,6 +62,8 @@ const serviceJwtVerifier = new ServiceJwtVerifier({
 });
 
 const NSID_ALIASES: Record<string, string> = {
+  'place.wisp.v2.domain.add-site': 'place.wisp.v2.domain.addSite',
+  'place.wisp.v2.domain.addsite': 'place.wisp.v2.domain.addSite',
   'place.wisp.v2.domain.claim-subdomain': 'place.wisp.v2.domain.claimSubdomain',
   'place.wisp.v2.domain.claimsubdomain': 'place.wisp.v2.domain.claimSubdomain',
   'place.wisp.v2.domain.claimsub-domain': 'place.wisp.v2.domain.claimSubdomain',
@@ -63,14 +71,21 @@ const NSID_ALIASES: Record<string, string> = {
   'place.wisp.v2.domain.getlist': 'place.wisp.v2.domain.getList',
   'place.wisp.v2.domain.getstatus': 'place.wisp.v2.domain.getStatus',
   'place.wisp.v2.domain.get-status': 'place.wisp.v2.domain.getStatus',
+  'place.wisp.v2.site.delete-site': 'place.wisp.v2.site.delete',
+  'place.wisp.v2.site.deletesite': 'place.wisp.v2.site.delete',
+  'place.wisp.v2.site.get-list': 'place.wisp.v2.site.getList',
+  'place.wisp.v2.site.getlist': 'place.wisp.v2.site.getList',
 };
 
 const XRPC_NSIDS = {
+  addSite: 'place.wisp.v2.domain.addSite',
   getStatus: 'place.wisp.v2.domain.getStatus',
   getList: 'place.wisp.v2.domain.getList',
+  siteGetList: 'place.wisp.v2.site.getList',
   claimSubdomain: 'place.wisp.v2.domain.claimSubdomain',
   claim: 'place.wisp.v2.domain.claim',
   delete: 'place.wisp.v2.domain.delete',
+  deleteSite: 'place.wisp.v2.site.delete',
 } as const;
 
 const toIsoFromEpoch = (epoch: unknown): string | undefined => {
@@ -139,6 +154,14 @@ const notFound = (description = 'domain not found'): never => {
   throw new XRPCError({
     status: 404,
     error: 'NotFound',
+    description,
+  });
+};
+
+const invalidRequest = (description: string): never => {
+  throw new XRPCError({
+    status: 400,
+    error: 'InvalidRequest',
     description,
   });
 };
@@ -393,16 +416,154 @@ const claimCustomDomainForDid = async (
   });
 };
 
+const mapDomainToSiteForDid = async (
+  did: DidString,
+  input: { domain: string; siteRkey: string },
+) => {
+  const domain = normalizeDomain(input.domain);
+  if (domain.length === 0) {
+    invalidDomain('domain is required');
+  }
+
+  const siteRkey = input.siteRkey.trim();
+  if (siteRkey.length === 0) {
+    invalidRequest('siteRkey is required');
+  }
+
+  const sites = await getSitesByDid(did);
+  const ownsSite = sites.some((entry: { rkey: string }) => entry.rkey === siteRkey);
+  if (!ownsSite) {
+    notFound('site not found');
+  }
+
+  const existing = await isDomainRegistered(domain);
+  if (!existing.registered || existing.did !== did) {
+    notFound('domain not found');
+  }
+
+  if (existing.type === 'wisp') {
+    await updateWispDomainSite(domain, siteRkey);
+
+    return json({
+      domain,
+      kind: 'wisp',
+      status: 'verified',
+      siteRkey,
+      mapped: true,
+    });
+  }
+
+  const custom = await getCustomDomainInfo(domain);
+  if (!custom || custom.did !== did) {
+    notFound('domain not found');
+  }
+
+  await updateCustomDomainRkey(custom.id as string, siteRkey);
+
+  return json({
+    domain,
+    kind: 'custom',
+    status: custom.verified ? 'verified' : 'pendingVerification',
+    siteRkey,
+    mapped: true,
+  });
+};
+
+const deleteSiteForDid = async (
+  did: DidString,
+  input: { siteRkey: string },
+) => {
+  const siteRkey = input.siteRkey.trim();
+  if (siteRkey.length === 0) {
+    invalidRequest('siteRkey is required');
+  }
+
+  const sites = await getSitesByDid(did);
+  const ownsSite = sites.some((entry: { rkey: string }) => entry.rkey === siteRkey);
+  if (!ownsSite) {
+    notFound('site not found');
+  }
+
+  const mappedDomains = await getDomainsBySite(did, siteRkey);
+
+  const unmappedDomains: Array<{
+    domain: string;
+    kind: 'wisp' | 'custom';
+    status: 'pendingVerification' | 'verified';
+  }> = [];
+
+  for (const mapped of mappedDomains as Array<{
+    type: 'wisp' | 'custom';
+    domain: string;
+    id?: string;
+    verified?: boolean;
+  }>) {
+    if (mapped.type === 'wisp') {
+      await updateWispDomainSite(mapped.domain, null);
+      unmappedDomains.push({
+        domain: mapped.domain,
+        kind: 'wisp',
+        status: 'verified',
+      });
+      continue;
+    }
+
+    if (mapped.id) {
+      await updateCustomDomainRkey(mapped.id, null);
+      unmappedDomains.push({
+        domain: mapped.domain,
+        kind: 'custom',
+        status: mapped.verified ? 'verified' : 'pendingVerification',
+      });
+    }
+  }
+
+  const deleted = await deleteSite(did, siteRkey);
+  if (!deleted.success) {
+    throw new XRPCError({
+      status: 500,
+      error: 'InternalServerError',
+      description: 'failed to delete site',
+    });
+  }
+
+  return json({
+    siteRkey,
+    deleted: true,
+    unmappedDomains: unmappedDomains.sort((a, b) => a.domain.localeCompare(b.domain)),
+  });
+};
+
 export const xrpcRoutes = () => {
   const authByRequest = new WeakMap<Request, XrpcAuthContext>();
   const router = new XRPCRouter();
   const registeredNsids = [
+    XRPC_NSIDS.addSite,
     XRPC_NSIDS.getStatus,
     XRPC_NSIDS.getList,
+    XRPC_NSIDS.siteGetList,
     XRPC_NSIDS.claimSubdomain,
     XRPC_NSIDS.claim,
     XRPC_NSIDS.delete,
+    XRPC_NSIDS.deleteSite,
   ];
+
+  addProcedureWithAliases(
+    router,
+    withNsid(PlaceWispV2DomainAddSite.mainSchema as any, XRPC_NSIDS.addSite),
+    ['place.wisp.v2.domain.addsite', 'place.wisp.v2.domain.add-site'],
+    {
+    async handler({ input, request }) {
+      const auth = requireAuthenticated(authByRequest.get(request));
+      const did = auth.did as DidString;
+
+      return mapDomainToSiteForDid(did, {
+        domain: input.domain,
+        siteRkey: input.siteRkey,
+      });
+    },
+    },
+  );
 
   addQueryWithAliases(
     router,
@@ -509,6 +670,58 @@ export const xrpcRoutes = () => {
     },
   );
 
+  addQueryWithAliases(
+    router,
+    withNsid(PlaceWispV2SiteGetList.mainSchema as any, XRPC_NSIDS.siteGetList),
+    ['place.wisp.v2.site.getlist', 'place.wisp.v2.site.get-list'],
+    {
+    async handler({ request }) {
+      const auth = requireAuthenticated(authByRequest.get(request));
+      const did = auth.did as DidString;
+
+      const sites = await getSitesByDid(did);
+
+      const siteSummaries = await Promise.all(
+        sites.map(async (site: {
+          rkey: string;
+          display_name?: string | null;
+          created_at?: number | string | null;
+          updated_at?: number | string | null;
+        }) => {
+          const mappedDomains = await getDomainsBySite(did, site.rkey);
+          const domains = (mappedDomains as Array<{
+            type: 'wisp' | 'custom';
+            domain: string;
+            verified?: boolean;
+          }>)
+            .map((entry) => ({
+              domain: entry.domain,
+              kind: entry.type,
+              status:
+                entry.type === 'wisp'
+                  ? ('verified' as const)
+                  : entry.verified
+                    ? ('verified' as const)
+                    : ('pendingVerification' as const),
+              verified: entry.type === 'wisp' ? true : Boolean(entry.verified),
+            }))
+            .sort((a, b) => a.domain.localeCompare(b.domain));
+
+          return {
+            siteRkey: site.rkey,
+            displayName: site.display_name ?? undefined,
+            createdAt: toIsoFromEpoch(site.created_at),
+            updatedAt: toIsoFromEpoch(site.updated_at),
+            domains,
+          };
+        }),
+      );
+
+      return json({ sites: siteSummaries });
+    },
+    },
+  );
+
   addProcedureWithAliases(
     router,
     withNsid(PlaceWispV2DomainClaimSubdomain.mainSchema as any, XRPC_NSIDS.claimSubdomain),
@@ -585,12 +798,31 @@ export const xrpcRoutes = () => {
     },
   );
 
+  addProcedureWithAliases(
+    router,
+    withNsid(PlaceWispV2SiteDelete.mainSchema as any, XRPC_NSIDS.deleteSite),
+    ['place.wisp.v2.site.deletesite', 'place.wisp.v2.site.delete-site'],
+    {
+    async handler({ input, request }) {
+      const auth = requireAuthenticated(authByRequest.get(request));
+      const did = auth.did as DidString;
+
+      return deleteSiteForDid(did, {
+        siteRkey: input.siteRkey,
+      });
+    },
+    },
+  );
+
   const schemaNsids = {
+    addSite: (PlaceWispV2DomainAddSite.mainSchema as any).nsid,
     getStatus: (PlaceWispV2DomainGetStatus.mainSchema as any).nsid,
     getList: (PlaceWispV2DomainGetList.mainSchema as any).nsid,
+    siteGetList: (PlaceWispV2SiteGetList.mainSchema as any).nsid,
     claimSubdomain: (PlaceWispV2DomainClaimSubdomain.mainSchema as any).nsid,
     claim: (PlaceWispV2DomainClaim.mainSchema as any).nsid,
     delete: (PlaceWispV2DomainDelete.mainSchema as any).nsid,
+    deleteSite: (PlaceWispV2SiteDelete.mainSchema as any).nsid,
   };
   logger.info('[XRPC] Registered methods', {
     expectedNsids: registeredNsids,

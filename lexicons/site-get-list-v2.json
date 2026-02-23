@@ -1,0 +1,80 @@
+{
+  "lexicon": 1,
+  "id": "place.wisp.v2.site.getList",
+  "defs": {
+    "main": {
+      "type": "query",
+      "description": "List owned sites and the domains currently mapped to each site.",
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["sites"],
+          "properties": {
+            "sites": {
+              "type": "array",
+              "items": {
+                "type": "ref",
+                "ref": "#siteSummary"
+              }
+            }
+          }
+        }
+      },
+      "errors": [
+        { "name": "AuthenticationRequired" }
+      ]
+    },
+    "siteSummary": {
+      "type": "object",
+      "required": ["siteRkey", "domains"],
+      "properties": {
+        "siteRkey": {
+          "type": "string",
+          "format": "record-key"
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "datetime"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "datetime"
+        },
+        "domains": {
+          "type": "array",
+          "items": {
+            "type": "ref",
+            "ref": "#siteDomain"
+          }
+        }
+      }
+    },
+    "siteDomain": {
+      "type": "object",
+      "required": ["domain", "kind", "status", "verified"],
+      "properties": {
+        "domain": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 253
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["wisp", "custom"]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pendingVerification", "verified"]
+        },
+        "verified": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

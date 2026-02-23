@@ -60,9 +60,12 @@ LOCAL_DEV=true
 
 - `place.wisp.v2.domain.claimSubdomain` (procedure / POST, wisp handles)
 - `place.wisp.v2.domain.claim` (procedure / POST)
+- `place.wisp.v2.domain.addSite` (procedure / POST)
 - `place.wisp.v2.domain.delete` (procedure / POST)
 - `place.wisp.v2.domain.getList` (query / GET)
 - `place.wisp.v2.domain.getStatus` (query / GET)
+- `place.wisp.v2.site.getList` (query / GET)
+- `place.wisp.v2.site.delete` (procedure / POST)
 
 The server validates **serviceAuth JWTs** on `/xrpc/*`.
 
