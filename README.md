@@ -25,7 +25,6 @@ Your site appears at `https://sites.wisp.place/{your-did}/{site-name}` or your c
 - **`/apps/main-app`** - Main backend (OAuth, site management, custom domains)
 - **`/apps/hosting-service`** - Microservice that serves cached sites from disk
 - **`/cli`** - CLI for direct PDS uploads as well as serving with firehose updates
-- **`/rust-cli`** - Deprecated Rust CLI for direct PDS uploads with firehose updates
 - **`/apps/main-app/public`** - React frontend
 - **`/packages`** - Shared packages
 
@@ -65,15 +64,14 @@ LOCAL_DEV=true
 - `place.wisp.v2.domain.getList` (query / GET)
 - `place.wisp.v2.domain.getStatus` (query / GET)
 
-The server validates **serviceAuth JWTs** (not cookie auth, not direct end-user access JWTs) on `/xrpc/*`.
+The server validates **serviceAuth JWTs** on `/xrpc/*`.
 
 Set these env vars in your active `.env`:
 
 ```env
-LOCAL_DEV=true
-SERVICE_DID=did:web:regentsmacbookair
+SERVICE_DID=did:web:domain
 SERVICE_IDS="#wisp_xrpc"
-SERVICE_ENDPOINT=https://regentsmacbookair
+SERVICE_ENDPOINT=https://domain
 ```
 
 Notes:
@@ -83,12 +81,6 @@ Notes:
 - `SERVICE_IDS` must be quoted when it starts with `#` (otherwise dotenv treats it as a comment).
 - Service identity keys are stored in `service_identity_keys` in Postgres.  
   If `SERVICE_PUBLIC_KEY_MULTIBASE` and `SERVICE_PRIVATE_KEY_MULTIBASE` are not set, a keypair is generated once and persisted.
-
-### Local TLS Requirement (No Auto Cert Generation)
-
-`apps/main-app` now serves HTTP only. If you need HTTPS in local/proxy flows,
-terminate TLS in your reverse proxy or tunnel layer and forward plain HTTP to main-app.
-
 
 ```bash
 # Hosting service
