@@ -1,4 +1,4 @@
-import { NodeOAuthClient, type ClientMetadata } from "@atproto/oauth-client-node";
+import { NodeOAuthClient, requestLocalLock, type ClientMetadata } from "@atproto/oauth-client-node";
 import { JoseKey } from "@atproto/jwk-jose";
 import { db } from "./db";
 import { logger } from "./logger";
@@ -250,6 +250,7 @@ export const getOAuthClient = async (config: { domain: `http://${string}` | `htt
         keyset: keys,
         stateStore,
         sessionStore,
+        requestLock: requestLocalLock,
         handleResolver: new SlingshotHandleResolver()
     });
 };

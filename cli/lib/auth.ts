@@ -1,4 +1,4 @@
-import { NodeOAuthClient, type NodeSavedSession, type NodeSavedState, type NodeSavedStateStore, type NodeSavedSessionStore } from "@atproto/oauth-client-node";
+import { NodeOAuthClient, requestLocalLock, type NodeSavedSession, type NodeSavedState, type NodeSavedStateStore, type NodeSavedSessionStore } from "@atproto/oauth-client-node";
 import { Agent, CredentialSession } from "@atproto/api";
 import { resolvePdsFromHandle } from "@wispplace/atproto-utils";
 import { Hono } from "hono";
@@ -8,9 +8,15 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "
 import { dirname, join } from "path";
 import { homedir } from "os";
 import { isBun } from "@wispplace/bun-firehose";
+import { parseServiceDid } from "./wisp-service.ts";
 
-// OAuth scope for CLI
-const OAUTH_SCOPE = 'atproto repo:place.wisp.fs repo:place.wisp.subfs repo:place.wisp.settings blob:*/*';
+const REQUIRED_BASE_SCOPE = 'atproto';
+const REPO_BLOB_SCOPES = [
+  'repo:place.wisp.fs',
+  'repo:place.wisp.subfs',
+  'repo:place.wisp.settings',
+  'blob:*/*',
+] as const;
 
 // Default session store path
 const DEFAULT_STORE_PATH = join(homedir(), '.wisp', 'oauth-session.json');
@@ -89,6 +95,65 @@ function createSessionStore(storePath: string): NodeSavedSessionStore {
 export interface AuthOptions {
   storePath?: string;
   appPassword?: string;
+  serviceDid?: string;
+  requiredLxms?: readonly string[];
+  includeRepoBlobScopes?: boolean;
+  onStatus?: (message: string) => void;
+}
+
+function buildOAuthScope(options: AuthOptions = {}): string {
+  const requestedLxms = options.requiredLxms ?? [];
+  const rpcScopes = requestedLxms.map((lxm) => `rpc:${lxm}?aud=*`);
+  if (options.serviceDid) {
+    parseServiceDid(options.serviceDid);
+  }
+
+  const scopes = [REQUIRED_BASE_SCOPE];
+  if (options.includeRepoBlobScopes !== false) {
+    scopes.push(...REPO_BLOB_SCOPES);
+  }
+  scopes.push(...rpcScopes);
+
+  return scopes.join(' ');
+}
+
+function normalizeScopeToken(scope: string): string {
+  try {
+    return decodeURIComponent(scope);
+  } catch {
+    return scope;
+  }
+}
+
+function findMissingScopes(grantedScope: string | undefined, requiredScope: string): string[] {
+  const granted = new Set(
+    (grantedScope || '')
+      .split(/\s+/)
+      .filter(Boolean)
+      .map(normalizeScopeToken),
+  );
+  const required = requiredScope
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(normalizeScopeToken);
+
+  return required.filter((scope) => !granted.has(scope));
+}
+
+function emitStatus(options: AuthOptions | undefined, message: string) {
+  if (options?.onStatus) {
+    options.onStatus(message);
+    return;
+  }
+  console.log(message);
+}
+
+function emitWarning(options: AuthOptions | undefined, message: string) {
+  if (options?.onStatus) {
+    options.onStatus(`Warning: ${message}`);
+    return;
+  }
+  console.warn(`Warning: ${message}`);
 }
 
 /**
@@ -99,12 +164,13 @@ export async function authenticateOAuth(
   options: AuthOptions = {}
 ): Promise<{ agent: Agent; did: string }> {
   const storePath = options.storePath || DEFAULT_STORE_PATH;
+  const oauthScope = buildOAuthScope(options);
 
   // Build loopback client metadata
   const redirectUri = `http://${LOOPBACK_HOST}:${LOOPBACK_PORT}/oauth/callback`;
   const clientIdParams = new URLSearchParams();
   clientIdParams.append('redirect_uri', redirectUri);
-  clientIdParams.append('scope', OAUTH_SCOPE);
+  clientIdParams.append('scope', oauthScope);
 
   const client = new NodeOAuthClient({
     clientMetadata: {
@@ -116,11 +182,12 @@ export async function authenticateOAuth(
       response_types: ['code'],
       application_type: 'web',
       token_endpoint_auth_method: 'none',
-      scope: OAUTH_SCOPE,
+      scope: oauthScope,
       dpop_bound_access_tokens: false,
     },
     stateStore: createStateStore(storePath),
     sessionStore: createSessionStore(storePath),
+    requestLock: requestLocalLock,
   });
 
   // Try to restore existing session
@@ -138,7 +205,13 @@ export async function authenticateOAuth(
 
         // Check if this is the handle we want
         if (profile.data.handle === handle || sub === handle) {
-          console.log(`Restored existing session for ${profile.data.handle}`);
+          const tokenInfo = await session.getTokenInfo(false);
+          const missingScopes = findMissingScopes(tokenInfo.scope, oauthScope);
+          if (missingScopes.length > 0) {
+            continue;
+          }
+
+          emitStatus(options, `Restored session for ${profile.data.handle}`);
           return { agent, did: sub };
         }
       }
@@ -148,18 +221,67 @@ export async function authenticateOAuth(
   }
 
   // Start new OAuth flow
-  console.log(`Starting OAuth flow for ${handle}...`);
+  emitStatus(options, `Starting OAuth flow for ${handle}...`);
 
   // Create loopback server to receive callback
   const callbackPromise = new Promise<{ params: URLSearchParams }>((resolve, reject) => {
     const app = new Hono();
     let serverHandle: { close: () => void } | null = null;
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
 
     const successHtml = `
       <html>
-        <head><title>Wisp CLI - Authentication Successful</title></head>
-        <body style="font-family: system-ui; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0;">
-          <div style="text-align: center;">
+        <head>
+          <title>Wisp CLI - Authentication Successful</title>
+          <meta name="viewport" content="width=device-width, initial-scale=1" />
+          <style>
+            :root {
+              color-scheme: light dark;
+            }
+
+            body {
+              margin: 0;
+              min-height: 100vh;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              font-family: system-ui, -apple-system, Segoe UI, sans-serif;
+              background: #f4f5f7;
+              color: #111827;
+              text-align: center;
+              padding: 24px;
+            }
+
+            .content {
+              max-width: 560px;
+            }
+
+            h1 {
+              margin: 0 0 10px;
+              font-size: 22px;
+            }
+
+            p {
+              margin: 0;
+              color: #4b5563;
+              line-height: 1.5;
+            }
+
+            @media (prefers-color-scheme: dark) {
+              body {
+                background: #1e1e1e;
+                color: #f3f4f6;
+              }
+
+              p {
+                color: #d1d5db;
+              }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="content">
             <h1>Authentication Successful</h1>
             <p>You can close this window and return to the CLI.</p>
           </div>
@@ -169,6 +291,10 @@ export async function authenticateOAuth(
 
     app.get('/oauth/callback', (c) => {
       const params = new URLSearchParams(c.req.url.split('?')[1] || '');
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
+      settled = true;
 
       // Close server after receiving callback
       setTimeout(() => serverHandle?.close(), 100);
@@ -199,20 +325,28 @@ export async function authenticateOAuth(
     }
 
     // Timeout after 5 minutes
-    setTimeout(() => {
+    timeoutHandle = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
       serverHandle?.close();
       reject(new Error('OAuth callback timeout'));
     }, 5 * 60 * 1000);
+
+    if (typeof (timeoutHandle as { unref?: () => void }).unref === 'function') {
+      (timeoutHandle as { unref: () => void }).unref();
+    }
   });
 
   // Get authorization URL
   const authUrl = await client.authorize(handle, {
-    scope: OAUTH_SCOPE,
+    scope: oauthScope,
   });
 
   // Open browser
-  console.log(`Opening browser for authentication...`);
-  console.log(`If browser doesn't open, visit: ${authUrl}`);
+  emitStatus(options, 'Opening browser for authentication...');
+  emitStatus(options, `If browser does not open, visit: ${authUrl}`);
   await open(authUrl.toString());
 
   // Wait for callback
@@ -220,11 +354,18 @@ export async function authenticateOAuth(
 
   // Handle callback
   const { session } = await client.callback(params);
+  const tokenInfo = await session.getTokenInfo(false);
+  const missingScopes = findMissingScopes(tokenInfo.scope, oauthScope);
+  if (missingScopes.length > 0) {
+    emitWarning(options,
+      `OAuth token is missing requested scopes (${missingScopes.length}). First missing scope: ${missingScopes[0]}`,
+    );
+  }
 
   const agent = new Agent(session);
   const did = session.did;
 
-  console.log(`Successfully authenticated as ${did}`);
+  emitStatus(options, `Authenticated as ${did}`);
 
   return { agent, did };
 }
@@ -235,15 +376,16 @@ export async function authenticateOAuth(
 export async function authenticateAppPassword(
   identifier: string,
   password: string,
-  pdsUrl?: string
+  pdsUrl?: string,
+  options: AuthOptions = {},
 ): Promise<{ agent: Agent; did: string }> {
   let serviceUrl = pdsUrl;
 
   if (!serviceUrl) {
     // Resolve the handle to find the correct PDS
-    console.log(`Resolving PDS for ${identifier}...`);
+    emitStatus(options, `Resolving PDS for ${identifier}...`);
     serviceUrl = await resolvePdsFromHandle(identifier);
-    console.log(`Found PDS: ${serviceUrl}`);
+    emitStatus(options, `Found PDS: ${serviceUrl}`);
   }
 
   const credSession = new CredentialSession(new URL(serviceUrl));
@@ -252,7 +394,7 @@ export async function authenticateAppPassword(
   const agent = new Agent(credSession);
   const did = credSession.did!;
 
-  console.log(`Successfully authenticated as ${did}`);
+  emitStatus(options, `Authenticated as ${did}`);
 
   return { agent, did };
 }
@@ -265,7 +407,7 @@ export async function authenticate(
   options: AuthOptions = {}
 ): Promise<{ agent: Agent; did: string }> {
   if (options.appPassword) {
-    return authenticateAppPassword(handle, options.appPassword);
+    return authenticateAppPassword(handle, options.appPassword, undefined, options);
   }
   return authenticateOAuth(handle, options);
 }

@@ -34,6 +34,10 @@
       "types": "./src/types/place/wisp/v2/domain/claimSubdomain.ts",
       "default": "./src/types/place/wisp/v2/domain/claimSubdomain.ts"
     },
+    "./types/place/wisp/v2/domain/addSite": {
+      "types": "./src/types/place/wisp/v2/domain/addSite.ts",
+      "default": "./src/types/place/wisp/v2/domain/addSite.ts"
+    },
     "./types/place/wisp/v2/domain/delete": {
       "types": "./src/types/place/wisp/v2/domain/delete.ts",
       "default": "./src/types/place/wisp/v2/domain/delete.ts"
@@ -45,6 +49,14 @@
     "./types/place/wisp/v2/domain/getStatus": {
       "types": "./src/types/place/wisp/v2/domain/getStatus.ts",
       "default": "./src/types/place/wisp/v2/domain/getStatus.ts"
+    },
+    "./types/place/wisp/v2/site/delete": {
+      "types": "./src/types/place/wisp/v2/site/delete.ts",
+      "default": "./src/types/place/wisp/v2/site/delete.ts"
+    },
+    "./types/place/wisp/v2/site/getList": {
+      "types": "./src/types/place/wisp/v2/site/getList.ts",
+      "default": "./src/types/place/wisp/v2/site/getList.ts"
     },
     "./atcute": {
       "types": "./src/atcute/lexicons/index.ts",
