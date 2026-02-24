@@ -24,6 +24,7 @@ import { createLogger } from '@wispplace/observability';
 import { createTrace, span, logTrace, type RequestTrace } from './trace';
 
 const logger = createLogger('file-serving');
+const STANDARD_CACHE_CONTROL = 'public, max-age=600';
 
 type FileStorageResult = StorageResult<Uint8Array>;
 type FileForRequestResult = { result: FileStorageResult; filePath: string; wasRewritten: boolean };
@@ -144,9 +145,7 @@ function buildResponseFromStorageResult(
   const content = Buffer.from(result.data);
   const meta = result.metadata.customMetadata as { encoding?: string; mimeType?: string } | undefined;
   const mimeType = meta?.mimeType || lookup(filePath) || 'application/octet-stream';
-  const cacheControl = mimeType.startsWith('text/html')
-    ? 'public, max-age=300'
-    : 'public, max-age=31536000, immutable';
+  const cacheControl = STANDARD_CACHE_CONTROL;
   const etag = result.metadata.checksum ? `"${result.metadata.checksum}"` : undefined;
 
   // Handle conditional requests (If-None-Match → 304 Not Modified)
@@ -206,9 +205,7 @@ function buildRewrittenHtmlResponse(
     const content = Buffer.from(result.data);
     const meta = result.metadata.customMetadata as { encoding?: string; mimeType?: string } | undefined;
     const mimeType = meta?.mimeType || lookup(filePath) || 'application/octet-stream';
-    const cacheControl = mimeType.startsWith('text/html')
-      ? 'public, max-age=300'
-      : 'public, max-age=31536000, immutable';
+    const cacheControl = STANDARD_CACHE_CONTROL;
 
     const headers: Record<string, string> = {
       'Content-Type': mimeType,
@@ -320,7 +317,7 @@ export async function serveFromCache(
           status,
           headers: {
             'Location': targetPath,
-            'Cache-Control': status === 301 ? 'public, max-age=31536000' : 'public, max-age=0',
+            'Cache-Control': STANDARD_CACHE_CONTROL,
           },
         });
       } else if (status === 404) {
@@ -423,7 +420,7 @@ export async function serveFileInternal(
         return new Response(html, {
           headers: {
             'Content-Type': 'text/html; charset=utf-8',
-            'Cache-Control': 'public, max-age=300',
+            'Cache-Control': STANDARD_CACHE_CONTROL,
           },
         });
       }
@@ -520,7 +517,7 @@ export async function serveFileInternal(
         status: 404,
         headers: {
           'Content-Type': 'text/html; charset=utf-8',
-          'Cache-Control': 'public, max-age=300',
+          'Cache-Control': STANDARD_CACHE_CONTROL,
         },
       });
     }
@@ -550,7 +547,7 @@ export async function serveFileInternal(
     status: 404,
     headers: {
       'Content-Type': 'text/html; charset=utf-8',
-      'Cache-Control': 'public, max-age=300',
+      'Cache-Control': STANDARD_CACHE_CONTROL,
     },
   });
 }
@@ -630,7 +627,7 @@ export async function serveFromCacheWithRewrite(
           status,
           headers: {
             'Location': redirectTarget,
-            'Cache-Control': status === 301 ? 'public, max-age=31536000' : 'public, max-age=0',
+            'Cache-Control': STANDARD_CACHE_CONTROL,
           },
         });
       } else if (status === 404) {
@@ -746,7 +743,7 @@ export async function serveFileInternalWithRewrite(
         return new Response(html, {
           headers: {
             'Content-Type': 'text/html; charset=utf-8',
-            'Cache-Control': 'public, max-age=300',
+            'Cache-Control': STANDARD_CACHE_CONTROL,
           },
         });
       }
@@ -841,7 +838,7 @@ export async function serveFileInternalWithRewrite(
         status: 404,
         headers: {
           'Content-Type': 'text/html; charset=utf-8',
-          'Cache-Control': 'public, max-age=300',
+          'Cache-Control': STANDARD_CACHE_CONTROL,
         },
       });
     }
@@ -871,7 +868,7 @@ export async function serveFileInternalWithRewrite(
     status: 404,
     headers: {
       'Content-Type': 'text/html; charset=utf-8',
-      'Cache-Control': 'public, max-age=300',
+      'Cache-Control': STANDARD_CACHE_CONTROL,
     },
   });
 }

@@ -521,29 +521,92 @@ export async function handleSiteCreateOrUpdate(
 
   logger.info(`Files unchanged: ${newFiles.length - filesToDownload.length}, to download: ${filesToDownload.length}, to delete: ${pathsToDelete.length}`);
 
-  // Download new/changed files (with concurrency limit)
   const DOWNLOAD_CONCURRENCY = 20;
-  for (let i = 0; i < filesToDownload.length; i += DOWNLOAD_CONCURRENCY) {
-    const batch = filesToDownload.slice(i, i + DOWNLOAD_CONCURRENCY);
-    await Promise.allSettled(
-      batch.map(file => downloadAndWriteBlob(did, rkey, file, pdsEndpoint))
-    );
-  }
+  const DELETE_CONCURRENCY = 50;
 
-  // Delete removed files (both original and rewritten) with batching
-  if (pathsToDelete.length > 0) {
-    const keysToDelete: string[] = [];
-    for (const path of pathsToDelete) {
-      keysToDelete.push(`${did}/${rkey}/${path}`);
-      if (isHtmlFile(path)) {
-        keysToDelete.push(`${did}/${rkey}/.rewritten/${path}`);
+  const downloadFiles = async (files: FileInfo[]) => {
+    const failures: Array<{ path: string; error: unknown }> = [];
+    for (let i = 0; i < files.length; i += DOWNLOAD_CONCURRENCY) {
+      const batch = files.slice(i, i + DOWNLOAD_CONCURRENCY);
+      const results = await Promise.allSettled(
+        batch.map(file => downloadAndWriteBlob(did, rkey, file, pdsEndpoint))
+      );
+      for (let j = 0; j < results.length; j++) {
+        const result = results[j];
+        if (result?.status === 'rejected') {
+          const file = batch[j];
+          if (file) failures.push({ path: file.path, error: result.reason });
+        }
       }
     }
+    return failures;
+  };
 
-    const DELETE_CONCURRENCY = 50;
-    for (let i = 0; i < keysToDelete.length; i += DELETE_CONCURRENCY) {
-      const batch = keysToDelete.slice(i, i + DELETE_CONCURRENCY);
-      await Promise.allSettled(batch.map(key => deleteFile(key)));
+  const deleteKeys = async (keys: string[]) => {
+    const failures: Array<{ key: string; error: unknown }> = [];
+    for (let i = 0; i < keys.length; i += DELETE_CONCURRENCY) {
+      const batch = keys.slice(i, i + DELETE_CONCURRENCY);
+      const results = await Promise.allSettled(batch.map(key => deleteFile(key)));
+      for (let j = 0; j < results.length; j++) {
+        const result = results[j];
+        if (result?.status === 'rejected') {
+          const key = batch[j];
+          if (key) failures.push({ key, error: result.reason });
+        }
+      }
+    }
+    return failures;
+  };
+
+  const keysToDelete: string[] = [];
+  for (const path of pathsToDelete) {
+    keysToDelete.push(`${did}/${rkey}/${path}`);
+    if (isHtmlFile(path)) {
+      keysToDelete.push(`${did}/${rkey}/.rewritten/${path}`);
+    }
+  }
+
+  // Incremental sync first
+  const downloadFailures = await downloadFiles(filesToDownload);
+  const deleteFailures = await deleteKeys(keysToDelete);
+
+  // Recovery path: wipe site prefix and perform full rebuild if incremental had failures
+  if (downloadFailures.length > 0 || deleteFailures.length > 0) {
+    logger.warn(`Incremental sync failed for ${did}/${rkey}; falling back to full rebuild`, {
+      did,
+      rkey,
+      downloadFailures: downloadFailures.length,
+      deleteFailures: deleteFailures.length,
+    });
+
+    const prefix = `${did}/${rkey}/`;
+    const existingKeys = await listFiles(prefix);
+    const wipeFailures = await deleteKeys(existingKeys);
+    if (wipeFailures.length > 0) {
+      logger.error(`Failed to wipe site prefix before full rebuild for ${did}/${rkey}`, undefined, {
+        did,
+        rkey,
+        wipeFailures: wipeFailures.length,
+        sampleFailures: wipeFailures.slice(0, 5).map((f) => ({
+          key: f.key,
+          error: f.error instanceof Error ? f.error.message : String(f.error),
+        })),
+      });
+      throw new Error(`Failed to wipe site prefix for ${did}/${rkey}`);
+    }
+
+    const fullDownloadFailures = await downloadFiles(newFiles);
+    if (fullDownloadFailures.length > 0) {
+      logger.error(`Full rebuild failed for ${did}/${rkey}`, undefined, {
+        did,
+        rkey,
+        fullDownloadFailures: fullDownloadFailures.length,
+        sampleFailures: fullDownloadFailures.slice(0, 5).map((f) => ({
+          path: f.path,
+          error: f.error instanceof Error ? f.error.message : String(f.error),
+        })),
+      });
+      throw new Error(`Full rebuild failed for ${did}/${rkey}`);
     }
   }
 
