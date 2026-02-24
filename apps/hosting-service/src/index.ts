@@ -1,5 +1,4 @@
 import app from './server';
-import { serve } from '@hono/node-server';
 import { initializeGrafanaExporters, createLogger } from '@wispplace/observability';
 import { mkdirSync, existsSync } from 'fs';
 import { closeDatabase, CACHE_ONLY } from './lib/db';
@@ -56,8 +55,8 @@ app.get('/health', async (c) => {
   });
 });
 
-// Start HTTP server with Node.js adapter
-const server = serve({
+// Start HTTP server with Bun's native server
+const server = Bun.serve({
   fetch: app.fetch,
   port: PORT,
 });
@@ -92,7 +91,7 @@ process.on('SIGINT', async () => {
   await stopCacheInvalidationSubscriber();
   await closeRevalidateQueue();
   await closeDatabase();
-  server.close();
+  server.stop(true);
   process.exit(0);
 });
 
@@ -102,6 +101,6 @@ process.on('SIGTERM', async () => {
   await stopCacheInvalidationSubscriber();
   await closeRevalidateQueue();
   await closeDatabase();
-  server.close();
+  server.stop(true);
   process.exit(0);
 });

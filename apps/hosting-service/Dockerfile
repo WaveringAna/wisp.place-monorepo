@@ -1,13 +1,12 @@
 # Build from monorepo root: docker build -f apps/hosting-service/Dockerfile .
 
-# Stage 1: Build
+# Stage 1: Compile to standalone binary
 FROM oven/bun:1-alpine AS builder
 
 WORKDIR /app
 
 # Copy workspace configuration files
-COPY package.json bun.lock ./
-COPY tsconfig.json ./
+COPY package.json bun.lock tsconfig.json ./
 
 # Copy all workspace packages (needed for workspace: dependencies)
 COPY packages ./packages
@@ -19,31 +18,26 @@ COPY cli/package.json ./cli/package.json
 # Install dependencies
 RUN bun install --frozen-lockfile
 
-# Build the hosting service
-WORKDIR /app/apps/hosting-service
-RUN bun run build
+# Compile to a single binary
+RUN bun build --compile --minify apps/hosting-service/src/index.ts --outfile /app/hosting
 
-# Stage 2: Production
-FROM node:22-alpine AS production
+# Stage 2: Minimal runtime
+FROM alpine:3.22
 
-WORKDIR /app
+RUN apk add --no-cache libstdc++ libgcc
 
-# Copy only the built file
-COPY --from=builder /app/apps/hosting-service/dist/index.js ./index.js
+COPY --from=builder /app/hosting /usr/local/bin/hosting
 
 # Create cache directory
-RUN mkdir -p ./cache/sites
+RUN mkdir -p /cache/sites
 
-# Set environment variables
 ENV PORT=3001
 ENV NODE_ENV=production
+ENV CACHE_DIR=/cache/sites
 
-# Expose the application port
 EXPOSE 3001
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD wget --no-verbose --tries=1 --spider http://localhost:3001/health || exit 1
 
-# Start the application
-CMD ["node", "index.js"]
+CMD ["hosting"]

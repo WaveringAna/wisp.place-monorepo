@@ -3,7 +3,7 @@
 const result = await Bun.build({
   entrypoints: ['./src/index.ts'],
   outdir: './dist',
-  target: 'node',
+  target: 'bun',
   format: 'esm',
   minify: process.env.NODE_ENV === 'production',
   sourcemap: 'external',

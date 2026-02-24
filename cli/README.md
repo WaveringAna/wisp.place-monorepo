@@ -6,6 +6,12 @@ Run from the `cli/` directory:
 bun run index.ts --help
 ```
 
+Deploying a site
+```bash
+bun run index.ts deploy alice.bsky.social --path . --site my-blog
+bun run index.ts alice.bsky.social --path . --site my-blog
+```
+
 List domains for an account:
 
 ```bash
