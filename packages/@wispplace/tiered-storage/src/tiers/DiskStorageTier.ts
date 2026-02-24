@@ -208,6 +208,9 @@ export class DiskStorageTier implements StorageTier {
 				readFile(metaPath, 'utf-8'),
 			]);
 
+			if (!metaContent.trim()) {
+				return null;
+			}
 			const metadata = JSON.parse(metaContent) as StorageMetadata;
 
 			// Convert date strings back to Date objects
@@ -221,6 +224,9 @@ export class DiskStorageTier implements StorageTier {
 		} catch (error) {
 			const code = (error as NodeJS.ErrnoException).code;
 			if (code === 'ENOENT' || code === 'ENOTDIR') {
+				return null;
+			}
+			if (error instanceof SyntaxError) {
 				return null;
 			}
 			throw error;
@@ -244,6 +250,9 @@ export class DiskStorageTier implements StorageTier {
 		try {
 			// Read metadata first to verify file exists
 			const metaContent = await readFile(metaPath, 'utf-8');
+			if (!metaContent.trim()) {
+				return null;
+			}
 			const metadata = JSON.parse(metaContent) as StorageMetadata;
 
 			// Convert date strings back to Date objects
@@ -260,6 +269,9 @@ export class DiskStorageTier implements StorageTier {
 		} catch (error) {
 			const code = (error as NodeJS.ErrnoException).code;
 			if (code === 'ENOENT' || code === 'ENOTDIR') {
+				return null;
+			}
+			if (error instanceof SyntaxError) {
 				return null;
 			}
 			throw error;
