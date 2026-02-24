@@ -162,6 +162,11 @@ export async function deleteSite(did: string, rkey: string): Promise<void> {
   await sql`DELETE FROM sites WHERE did = ${did} AND rkey = ${rkey}`;
 }
 
+export async function isSupporter(did: string): Promise<boolean> {
+  const rows = await sql`SELECT 1 FROM supporter WHERE did = ${did} LIMIT 1`;
+  return rows.length > 0;
+}
+
 export async function closeDatabase(): Promise<void> {
   await sql.end({ timeout: 5 });
   logger.info('[DB] Database connections closed');

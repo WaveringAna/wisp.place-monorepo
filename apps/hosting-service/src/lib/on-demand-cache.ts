@@ -14,10 +14,10 @@ import { safeFetchJson, safeFetchBlob } from '@wispplace/safe-fetch';
 import { extractBlobCid, getPdsForDid } from '@wispplace/atproto-utils';
 import { shouldCompressMimeType } from '@wispplace/atproto-utils/compression';
 import { collectFileCidsFromEntries, countFilesInDirectory } from '@wispplace/fs-utils';
-import { MAX_BLOB_SIZE, MAX_FILE_COUNT, MAX_SITE_SIZE } from '@wispplace/constants';
+import { MAX_BLOB_SIZE, MAX_FILE_COUNT, MAX_SITE_SIZE, MAX_SITE_SIZE_SUPPORTER } from '@wispplace/constants';
 import { expandSubfsNodes } from './utils';
 import { storage } from './storage';
-import { upsertSiteCache, tryAcquireLock, releaseLock } from './db';
+import { upsertSiteCache, tryAcquireLock, releaseLock, isSupporter } from './db';
 import { enqueueRevalidate } from './revalidate-queue';
 import { gunzipSync } from 'zlib';
 import { createLogger } from '@wispplace/observability';
@@ -115,6 +115,13 @@ async function doFetchAndCache(did: string, rkey: string): Promise<boolean> {
       return false;
     }
 
+    const totalSize = calculateTotalBlobSize(expandedRoot);
+    const sizeLimit = await isSupporter(did) ? MAX_SITE_SIZE_SUPPORTER : MAX_SITE_SIZE;
+    if (totalSize > sizeLimit) {
+      logger.error('Site exceeds size limit', { did, rkey, totalSize, sizeLimit });
+      return false;
+    }
+
     // Collect files
     const files = collectFileInfo(expandedRoot.entries);
 
@@ -159,6 +166,25 @@ async function doFetchAndCache(did: string, rkey: string): Promise<boolean> {
   } finally {
     await releaseLock(lockKey);
   }
+}
+
+function calculateTotalBlobSize(directory: Directory): number {
+  let totalSize = 0;
+
+  function sumBlobSizes(entries: Entry[]) {
+    for (const entry of entries) {
+      const node = entry.node;
+      if ('type' in node && node.type === 'directory' && 'entries' in node) {
+        sumBlobSizes(node.entries);
+      } else if ('type' in node && node.type === 'file' && 'blob' in node) {
+        const fileNode = node as File;
+        totalSize += (fileNode.blob as any)?.size || 0;
+      }
+    }
+  }
+
+  sumBlobSizes(directory.entries);
+  return totalSize;
 }
 
 function collectFileInfo(entries: Entry[], pathPrefix: string = ''): FileInfo[] {

@@ -206,4 +206,9 @@ export async function listSiteCachesForDid(did: string): Promise<SiteCache[]> {
   `;
 }
 
+export async function isSupporter(did: string): Promise<boolean> {
+  const rows = await sql`SELECT 1 FROM supporter WHERE did = ${did} LIMIT 1`;
+  return rows.length > 0;
+}
+
 export { sql };

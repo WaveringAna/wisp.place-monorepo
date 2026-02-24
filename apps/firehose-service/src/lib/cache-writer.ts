@@ -10,10 +10,10 @@ import { safeFetchJson, safeFetchBlob } from '@wispplace/safe-fetch';
 import { extractBlobCid, getPdsForDid } from '@wispplace/atproto-utils';
 import { collectFileCidsFromEntries, countFilesInDirectory, normalizeFileCids } from '@wispplace/fs-utils';
 import { shouldCompressMimeType } from '@wispplace/atproto-utils/compression';
-import { MAX_BLOB_SIZE, MAX_FILE_COUNT, MAX_SITE_SIZE } from '@wispplace/constants';
+import { MAX_BLOB_SIZE, MAX_FILE_COUNT, MAX_SITE_SIZE, MAX_SITE_SIZE_SUPPORTER } from '@wispplace/constants';
 import { createLogger } from '@wispplace/observability';
 import { writeFile, deleteFile, listFiles } from './storage';
-import { getSiteCache, upsertSiteCache, deleteSiteCache, upsertSiteSettingsCache, deleteSiteSettingsCache, upsertSite, deleteSite } from './db';
+import { getSiteCache, upsertSiteCache, deleteSiteCache, upsertSiteSettingsCache, deleteSiteSettingsCache, upsertSite, deleteSite, isSupporter } from './db';
 import { rewriteHtmlPaths, isHtmlFile } from './html-rewriter';
 import { gunzipSync } from 'zlib';
 import { publishCacheInvalidation } from './cache-invalidation';
@@ -477,8 +477,9 @@ export async function handleSiteCreateOrUpdate(
   }
 
   const totalSize = calculateTotalBlobSize(expandedRoot);
-  if (totalSize > MAX_SITE_SIZE) {
-    logger.error(`Site exceeds size limit: ${totalSize} > ${MAX_SITE_SIZE}`);
+  const sizeLimit = await isSupporter(did) ? MAX_SITE_SIZE_SUPPORTER : MAX_SITE_SIZE;
+  if (totalSize > sizeLimit) {
+    logger.error(`Site exceeds size limit: ${totalSize} > ${sizeLimit}`);
     return;
   }
 
