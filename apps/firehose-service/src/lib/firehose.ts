@@ -24,15 +24,16 @@ const logger = createLogger('firehose-service');
 // Track firehose health
 let lastEventTime = Date.now();
 let isConnected = false;
-let eventQueue: Array<() => Promise<void>> = [];
 let activeHandlers = 0;
+let queuedHandlers = 0;
+const siteQueues = new Map<string, Promise<void>>();
 
 export function getFirehoseHealth() {
   return {
     connected: isConnected,
     lastEventTime,
     timeSinceLastEvent: Date.now() - lastEventTime,
-    queueSize: eventQueue.length,
+    queueSize: queuedHandlers,
     activeHandlers,
     healthy: isConnected && (Date.now() - lastEventTime < 60000),
   };
@@ -53,6 +54,30 @@ async function processWithConcurrencyLimit(handler: () => Promise<void>): Promis
   } finally {
     activeHandlers--;
   }
+}
+
+/**
+ * Schedule work so each site (did/rkey) is processed in event order.
+ * This prevents stale writes when multiple updates arrive quickly.
+ */
+function scheduleSiteWork(siteKey: string, handler: () => Promise<void>): void {
+  const previous = siteQueues.get(siteKey) ?? Promise.resolve();
+  queuedHandlers++;
+
+  const next = previous
+    .catch(() => undefined)
+    .then(() => processWithConcurrencyLimit(handler))
+    .catch((err) => {
+      logger.error(`[firehose] Unhandled site work error for ${siteKey}`, err);
+    })
+    .finally(() => {
+      queuedHandlers = Math.max(0, queuedHandlers - 1);
+      if (siteQueues.get(siteKey) === next) {
+        siteQueues.delete(siteKey);
+      }
+    });
+
+  siteQueues.set(siteKey, next);
 }
 
 /**
@@ -77,7 +102,8 @@ async function handleEvent(evt: Event | CommitEvt): Promise<void> {
     // Handle place.wisp.fs events
     if (collection === 'place.wisp.fs') {
       logger.info(`[place.wisp.fs] Received ${commitEvt.event} event`, { did, rkey, cid: cid?.toString() || 'unknown' });
-      processWithConcurrencyLimit(async () => {
+      const siteKey = `${did}/${rkey}`;
+      scheduleSiteWork(siteKey, async () => {
         try {
           logger.debug(`[place.wisp.fs] Processing ${commitEvt.event} event`, { did, rkey });
           if (commitEvt.event === 'delete') {
@@ -96,14 +122,13 @@ async function handleEvent(evt: Event | CommitEvt): Promise<void> {
         } catch (err) {
           logger.error(`[place.wisp.fs] Error handling event`, err, { did, rkey, event: commitEvt.event });
         }
-      }).catch(err => {
-        logger.error(`[place.wisp.fs] Error processing event`, err, { did, rkey, event: commitEvt.event });
       });
     }
 
     // Handle place.wisp.settings events
     if (collection === 'place.wisp.settings') {
-      processWithConcurrencyLimit(async () => {
+      const siteKey = `${did}/${rkey}`;
+      scheduleSiteWork(siteKey, async () => {
         try {
           if (commitEvt.event === 'delete') {
             await handleSettingsDelete(did, rkey);
@@ -114,8 +139,6 @@ async function handleEvent(evt: Event | CommitEvt): Promise<void> {
         } catch (err) {
           logger.error(`[place.wisp.settings] Error handling event`, err, { did, rkey, event: commitEvt.event });
         }
-      }).catch(err => {
-        logger.error(`[place.wisp.settings] Error processing event`, err, { did, rkey, event: commitEvt.event });
       });
     }
   } catch (err) {

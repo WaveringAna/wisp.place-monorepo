@@ -10,7 +10,7 @@ import { shouldCompressMimeType } from '@wispplace/atproto-utils/compression';
 import { getCachedSettings } from './utils';
 import { loadRedirectRules, matchRedirectRule, parseCookies, parseQueryString } from './redirects';
 import { isHtmlContent, rewriteHtmlPaths } from './html-rewriter';
-import { generate404Page, generateDirectoryListing } from './page-generators';
+import { generate404Page, generateDirectoryListing, siteUpdatingResponse } from './page-generators';
 import { getIndexFiles, applyCustomHeaders } from './request-utils';
 import { cache } from './cache-manager';
 import { storage } from './storage';
@@ -65,7 +65,21 @@ async function storageExists(did: string, rkey: string, filePath: string): Promi
   return storage.exists(key);
 }
 
-function buildStorageMissResponse(): Response {
+function shouldServeUpdatingPage(requestHeaders?: Record<string, string>): boolean {
+  const accept = (requestHeaders?.accept ?? '').toLowerCase();
+  if (accept.includes('text/html') || accept.includes('application/xhtml+xml')) {
+    return true;
+  }
+
+  const fetchDest = (requestHeaders?.['sec-fetch-dest'] ?? '').toLowerCase();
+  return fetchDest === 'document' || fetchDest === 'iframe' || fetchDest === 'frame';
+}
+
+function buildStorageMissResponse(requestHeaders?: Record<string, string>): Response {
+  if (shouldServeUpdatingPage(requestHeaders)) {
+    return siteUpdatingResponse();
+  }
+
   return new Response('Storage temporarily unavailable', {
     status: 503,
     headers: {
@@ -368,7 +382,7 @@ export async function serveFileInternal(
     if (!expectedMissPath) return null;
     recordStorageMiss(expectedMissPath);
     await enqueueRevalidate(did, rkey, `storage-miss:${expectedMissPath}`);
-    return buildStorageMissResponse();
+    return buildStorageMissResponse(requestHeaders);
   };
 
   const indexFiles = getIndexFiles(settings);
