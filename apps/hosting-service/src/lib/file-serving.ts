@@ -383,6 +383,7 @@ export async function serveFileInternal(
   };
 
   const indexFiles = getIndexFiles(settings);
+  const isDirectoryPathRequest = filePath.endsWith('/') && filePath.length > 0;
 
   // Normalize the request path (keep empty for root, remove trailing slash for others)
   let requestPath = filePath || '';
@@ -393,7 +394,7 @@ export async function serveFileInternal(
   // For directory-like paths (empty or no file extension in basename), try index files
   if (!requestPath || !hasFileExtension(requestPath)) {
     // For non-empty extensionless paths, try as a direct file first (e.g. binary downloads)
-    if (requestPath) {
+    if (requestPath && !isDirectoryPathRequest) {
       const directResult = await span(trace, `storage:${requestPath}`, () => getFileWithMetadata(did, rkey, requestPath));
       if (directResult) {
         return buildResponseFromStorageResult(directResult, requestPath, settings, requestHeaders);
@@ -694,6 +695,7 @@ export async function serveFileInternalWithRewrite(
   };
 
   const indexFiles = getIndexFiles(settings);
+  const isDirectoryPathRequest = filePath.endsWith('/') && filePath.length > 0;
   const buildResponse = (fileResult: FileForRequestResult): Response => {
     const meta = fileResult.result.metadata.customMetadata as { encoding?: string; mimeType?: string } | undefined;
     const mimeType = meta?.mimeType || lookup(fileResult.filePath) || 'application/octet-stream';
@@ -716,7 +718,7 @@ export async function serveFileInternalWithRewrite(
   // For directory-like paths (empty or no file extension in basename), try index files
   if (!requestPath || !hasFileExtension(requestPath)) {
     // For non-empty extensionless paths, try as a direct file first (e.g. binary downloads)
-    if (requestPath) {
+    if (requestPath && !isDirectoryPathRequest) {
       const directResult = await span(trace, `storage:${requestPath}`, () => getFileForRequest(did, rkey, requestPath, true));
       if (directResult) {
         return buildResponse(directResult);

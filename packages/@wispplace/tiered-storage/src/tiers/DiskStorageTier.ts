@@ -11,6 +11,12 @@ import type {
 } from '../types/index.js';
 import { encodeKey, decodeKey } from '../utils/path-encoding.js';
 
+function getErrnoCode(error: unknown): string | undefined {
+	if (typeof error !== 'object' || error === null) return undefined;
+	const maybeCode = (error as { code?: unknown }).code;
+	return typeof maybeCode === 'string' ? maybeCode : undefined;
+}
+
 /**
  * Eviction policy for disk tier when size limit is reached.
  */
@@ -180,8 +186,8 @@ export class DiskStorageTier implements StorageTier {
 			const data = await readFile(filePath);
 			return new Uint8Array(data);
 		} catch (error) {
-			const code = (error as NodeJS.ErrnoException).code;
-			if (code === 'ENOENT' || code === 'ENOTDIR') {
+			const code = getErrnoCode(error);
+			if (code === 'ENOENT' || code === 'ENOTDIR' || code === 'EISDIR') {
 				return null;
 			}
 			throw error;
@@ -222,8 +228,8 @@ export class DiskStorageTier implements StorageTier {
 
 			return { data: new Uint8Array(dataBuffer), metadata };
 		} catch (error) {
-			const code = (error as NodeJS.ErrnoException).code;
-			if (code === 'ENOENT' || code === 'ENOTDIR') {
+			const code = getErrnoCode(error);
+			if (code === 'ENOENT' || code === 'ENOTDIR' || code === 'EISDIR') {
 				return null;
 			}
 			if (error instanceof SyntaxError) {
@@ -262,13 +268,19 @@ export class DiskStorageTier implements StorageTier {
 				metadata.ttl = new Date(metadata.ttl);
 			}
 
+			// Guard against directories being treated as files (causes EISDIR at read time).
+			const dataStat = await stat(filePath);
+			if (!dataStat.isFile()) {
+				return null;
+			}
+
 			// Create stream - will throw if file doesn't exist
 			const stream = createReadStream(filePath);
 
 			return { stream, metadata };
 		} catch (error) {
-			const code = (error as NodeJS.ErrnoException).code;
-			if (code === 'ENOENT' || code === 'ENOTDIR') {
+			const code = getErrnoCode(error);
+			if (code === 'ENOENT' || code === 'ENOTDIR' || code === 'EISDIR') {
 				return null;
 			}
 			if (error instanceof SyntaxError) {
@@ -311,16 +323,12 @@ export class DiskStorageTier implements StorageTier {
 			await this.evictIfNeeded(metadata.size);
 		}
 
-		// Write metadata first (atomic via temp file)
-		const tempMetaPath = `${metaPath}.tmp`;
-		await writeFile(tempMetaPath, JSON.stringify(metadata, null, 2));
+		// Write metadata first atomically so readers never observe partial JSON.
+		await this.writeMetadataAtomically(metaPath, metadata);
 
 		// Stream data to file
 		const writeStream = createWriteStream(filePath);
 		await pipeline(stream, writeStream);
-
-		// Commit metadata
-		await rename(tempMetaPath, metaPath);
 
 		this.metadataIndex.set(key, {
 			size: metadata.size,
@@ -348,10 +356,8 @@ export class DiskStorageTier implements StorageTier {
 			await this.evictIfNeeded(data.byteLength);
 		}
 
-		const tempMetaPath = `${metaPath}.tmp`;
-		await writeFile(tempMetaPath, JSON.stringify(metadata, null, 2));
+		await this.writeMetadataAtomically(metaPath, metadata);
 		await writeFile(filePath, data);
-		await rename(tempMetaPath, metaPath);
 
 		this.metadataIndex.set(key, {
 			size: data.byteLength,
@@ -379,7 +385,16 @@ export class DiskStorageTier implements StorageTier {
 
 	async exists(key: string): Promise<boolean> {
 		const filePath = this.getFilePath(key);
-		return existsSync(filePath);
+		try {
+			const fileStat = await stat(filePath);
+			return fileStat.isFile();
+		} catch (error) {
+			const code = getErrnoCode(error);
+			if (code === 'ENOENT' || code === 'ENOTDIR') {
+				return false;
+			}
+			throw error;
+		}
 	}
 
 	async *listKeys(prefix?: string): AsyncIterableIterator<string> {
@@ -449,8 +464,8 @@ export class DiskStorageTier implements StorageTier {
 
 			return metadata;
 		} catch (error) {
-			const code = (error as NodeJS.ErrnoException).code;
-			if (code === 'ENOENT' || code === 'ENOTDIR') {
+			const code = getErrnoCode(error);
+			if (code === 'ENOENT' || code === 'ENOTDIR' || code === 'EISDIR') {
 				return null;
 			}
 			if (error instanceof SyntaxError) {
@@ -469,7 +484,7 @@ export class DiskStorageTier implements StorageTier {
 			await mkdir(dir, { recursive: true });
 		}
 
-		await writeFile(metaPath, JSON.stringify(metadata, null, 2));
+		await this.writeMetadataAtomically(metaPath, metadata);
 	}
 
 	async getStats(): Promise<TierStats> {
@@ -540,6 +555,22 @@ export class DiskStorageTier implements StorageTier {
 		} catch {
 			// Directory doesn't exist or can't be read - that's fine
 			return;
+		}
+	}
+
+	/**
+	 * Atomically write metadata to avoid readers seeing partial JSON.
+	 */
+	private async writeMetadataAtomically(metaPath: string, metadata: StorageMetadata): Promise<void> {
+		const tempMetaPath = `${metaPath}.tmp-${process.pid}-${Date.now()}-${Math.random()
+			.toString(16)
+			.slice(2)}`;
+		try {
+			await writeFile(tempMetaPath, JSON.stringify(metadata, null, 2));
+			await rename(tempMetaPath, metaPath);
+		} catch (error) {
+			await unlink(tempMetaPath).catch(() => {});
+			throw error;
 		}
 	}
 
