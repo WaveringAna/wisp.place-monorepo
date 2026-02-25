@@ -5,7 +5,8 @@ import { serve as honoNodeServe } from '@hono/node-server';
 import type { Record as SettingsRecord } from '@wispplace/lexicons/types/place/wisp/settings';
 import { resolveDid, getPdsForDid } from '@wispplace/atproto-utils';
 import { existsSync, readFileSync, statSync, readdirSync } from 'fs';
-import { join, extname } from 'path';
+import { join } from 'path';
+import { generate404Page, generateDirectoryListing } from '@wispplace/page-generators';
 import { lookup } from 'mime-types';
 import { pull } from './pull.ts';
 import { createSpinner, pc } from '../lib/progress.ts';
@@ -16,6 +17,8 @@ export interface ServeOptions {
   site: string;
   path: string;
   port: number;
+  spa?: string | boolean;
+  directoryListing?: boolean;
 }
 
 interface SiteState {
@@ -25,6 +28,9 @@ interface SiteState {
   siteDir: string;
   settings: SettingsRecord | null;
   redirectRules: RedirectRule[];
+  // CLI flag overrides (take precedence over settings record)
+  spaOverride?: string | boolean;
+  directoryListingOverride?: boolean;
 }
 
 async function fetchSettings(pdsEndpoint: string, did: string, rkey: string): Promise<SettingsRecord | null> {
@@ -56,50 +62,13 @@ function getIndexFiles(settings: SettingsRecord | null): string[] {
   return settings?.indexFiles || ['index.html', 'index.htm'];
 }
 
-function generateDirectoryListing(dirPath: string, urlPath: string): string {
+function buildDirectoryListing(dirPath: string, urlPath: string): string {
   const entries = readdirSync(dirPath, { withFileTypes: true });
-
-  const items = entries
+  const normalized = urlPath.replace(/^\//, '').replace(/\/$/, '');
+  return generateDirectoryListing(normalized, entries
     .filter(e => !e.name.startsWith('.'))
-    .sort((a, b) => {
-      if (a.isDirectory() && !b.isDirectory()) return -1;
-      if (!a.isDirectory() && b.isDirectory()) return 1;
-      return a.name.localeCompare(b.name);
-    })
-    .map(entry => {
-      const isDir = entry.isDirectory();
-      const name = isDir ? `${entry.name}/` : entry.name;
-      const href = urlPath === '/' ? `/${entry.name}` : `${urlPath}/${entry.name}`;
-      return `<li><a href="${href}">${name}</a></li>`;
-    });
-
-  const parentLink = urlPath !== '/'
-    ? `<li><a href="${urlPath.split('/').slice(0, -1).join('/') || '/'}">..</a></li>`
-    : '';
-
-  return `<!DOCTYPE html>
-<html>
-<head><title>Index of ${urlPath}</title>
-<style>body{font-family:system-ui;padding:2rem}ul{list-style:none;padding:0}li{padding:0.25rem 0}a{color:#0066cc}</style>
-</head>
-<body>
-<h1>Index of ${urlPath}</h1>
-<ul>${parentLink}${items.join('')}</ul>
-</body>
-</html>`;
-}
-
-function generate404Page(): string {
-  return `<!DOCTYPE html>
-<html>
-<head><title>404 Not Found</title>
-<style>body{font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;margin:0}
-.container{text-align:center}h1{font-size:4rem;margin:0;color:#666}p{color:#999}</style>
-</head>
-<body>
-<div class="container"><h1>404</h1><p>Page not found</p></div>
-</body>
-</html>`;
+    .map(e => ({ name: e.name, isDirectory: e.isDirectory() }))
+  );
 }
 
 function serveFile(filePath: string): Response {
@@ -153,6 +122,12 @@ function handleRequest(req: Request, state: SiteState): Response {
   // Resolve file path
   let filePath = join(state.siteDir, urlPath);
 
+  // Resolve effective settings (CLI flags take precedence over settings record)
+  const directoryListingEnabled = state.directoryListingOverride ?? state.settings?.directoryListing ?? false;
+  const spaFile = state.spaOverride !== undefined
+    ? (state.spaOverride === true ? 'index.html' : state.spaOverride || undefined)
+    : state.settings?.spaMode;
+
   // Check if it's a directory
   if (existsSync(filePath) && statSync(filePath).isDirectory()) {
     // Try index files
@@ -165,8 +140,8 @@ function handleRequest(req: Request, state: SiteState): Response {
     }
 
     // Directory listing if enabled
-    if (state.settings?.directoryListing) {
-      const html = generateDirectoryListing(filePath, urlPath);
+    if (directoryListingEnabled) {
+      const html = buildDirectoryListing(filePath, urlPath);
       return new Response(html, {
         headers: { 'Content-Type': 'text/html' }
       });
@@ -192,9 +167,9 @@ function handleRequest(req: Request, state: SiteState): Response {
     }
   }
 
-  // SPA mode - serve index.html for all routes
-  if (state.settings?.spaMode) {
-    const spaPath = join(state.siteDir, state.settings.spaMode);
+  // SPA mode - serve the SPA file for all unmatched routes
+  if (spaFile) {
+    const spaPath = join(state.siteDir, spaFile);
     if (existsSync(spaPath)) {
       return serveFile(spaPath);
     }
@@ -275,7 +250,9 @@ export async function serve(
     pdsEndpoint,
     siteDir: outputPath,
     settings,
-    redirectRules
+    redirectRules,
+    spaOverride: options.spa,
+    directoryListingOverride: options.directoryListing,
   };
 
   // 5. Start HTTP server with Hono (works on both Bun and Node)

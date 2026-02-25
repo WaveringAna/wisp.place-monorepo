@@ -261,11 +261,15 @@ program
   .requiredOption('-s, --site <name>', 'Site name to serve')
   .option('-p, --path <path>', 'Local directory to cache site', '.wisp-serve')
   .option('-P, --port <port>', 'Port to serve on', '8080')
+  .option('--spa [file]', 'Enable SPA mode (serve file for all unmatched routes, defaults to index.html)')
+  .option('--directory-listing', 'Enable directory listing')
   .action(withExit(async (handle: string, options) => {
     await serve(handle, {
       site: options.site,
       path: options.path,
-      port: parseInt(options.port, 10)
+      port: parseInt(options.port, 10),
+      spa: options.spa,
+      directoryListing: options.directoryListing,
     });
   }));
 

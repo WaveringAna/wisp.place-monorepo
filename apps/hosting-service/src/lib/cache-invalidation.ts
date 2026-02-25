@@ -99,6 +99,7 @@ export function startCacheInvalidationSubscriber(): void {
       // Clear in-memory caches for this site
       cache.delete('redirectRules', `${did}:${rkey}`);
       cache.delete('settings', `${did}:${rkey}`);
+      cache.deletePrefix('siteFiles', `${did}:${rkey}:`);
     } catch (err) {
       console.error('[CacheInvalidation] Error processing message:', err);
     }

@@ -61,9 +61,47 @@ function buildStorageKey(did: string, rkey: string, filePath: string): string {
   return `${did}/${rkey}/${normalized}`;
 }
 
-async function storageExists(did: string, rkey: string, filePath: string): Promise<boolean> {
-  const key = buildStorageKey(did, rkey, filePath);
-  return storage.exists(key);
+/**
+ * Fetch a per-site fallback file (SPA, custom 404, auto-detected 404 pages),
+ * caching null results so repeated 404 responses don't re-hit S3 for files
+ * that don't exist on the site.
+ */
+async function getFallbackFile(
+  did: string,
+  rkey: string,
+  filePath: string,
+  trace?: RequestTrace | null
+): Promise<FileStorageResult | null> {
+  const cacheKey = `${did}:${rkey}:${filePath}`;
+  // null in the cache means we've confirmed this file doesn't exist
+  const negativeCached = cache.get<null>('siteFiles', cacheKey);
+  if (negativeCached === null) return null;
+
+  const result = await span(trace, `storage:${filePath}`, () => getFileWithMetadata(did, rkey, filePath));
+  if (result === null) {
+    cache.set('siteFiles', cacheKey, null);
+  }
+  return result;
+}
+
+/**
+ * Same as getFallbackFile but prefers pre-rewritten HTML (for the WithRewrite path).
+ */
+async function getFallbackFileForRequest(
+  did: string,
+  rkey: string,
+  filePath: string,
+  trace?: RequestTrace | null
+): Promise<FileForRequestResult | null> {
+  const cacheKey = `${did}:${rkey}:${filePath}`;
+  const negativeCached = cache.get<null>('siteFiles', cacheKey);
+  if (negativeCached === null) return null;
+
+  const result = await span(trace, `storage:${filePath}`, () => getFileForRequest(did, rkey, filePath, true));
+  if (result === null) {
+    cache.set('siteFiles', cacheKey, null);
+  }
+  return result;
 }
 
 function shouldServeUpdatingPage(requestHeaders?: Record<string, string>): boolean {
@@ -93,23 +131,45 @@ function buildStorageMissResponse(requestHeaders?: Record<string, string>): Resp
 async function listDirectoryEntries(
   did: string,
   rkey: string,
-  requestPath: string
+  requestPath: string,
+  manifestPaths?: string[] | null
 ): Promise<Array<{ name: string; isDirectory: boolean }>> {
-  const prefix = buildStorageKey(did, rkey, requestPath ? `${requestPath}/` : '');
   const entries = new Map<string, boolean>();
 
-  for await (const key of storage.listKeys(prefix)) {
-    const relative = key.slice(prefix.length);
-    if (!relative) continue;
-    if (relative.startsWith('.rewritten/')) continue;
+  if (manifestPaths != null) {
+    // Use the DB manifest — no disk or S3 I/O
+    const prefix = requestPath ? `${requestPath}/` : '';
+    for (const filePath of manifestPaths) {
+      if (prefix && !filePath.startsWith(prefix)) continue;
+      const relative = prefix ? filePath.slice(prefix.length) : filePath;
+      if (!relative) continue;
+      if (relative.startsWith('.rewritten/')) continue;
 
-    const [name, ...rest] = relative.split('/');
-    if (!name || name === '.metadata.json' || name.endsWith('.meta')) continue;
+      const [name, ...rest] = relative.split('/');
+      if (!name || name === '.metadata.json' || name.endsWith('.meta')) continue;
 
-    const isDirectory = rest.length > 0;
-    const existing = entries.get(name);
-    if (existing === undefined || (isDirectory && !existing)) {
-      entries.set(name, isDirectory);
+      const isDirectory = rest.length > 0;
+      const existing = entries.get(name);
+      if (existing === undefined || (isDirectory && !existing)) {
+        entries.set(name, isDirectory);
+      }
+    }
+  } else {
+    // Fallback: list from storage (only reached when site not yet in DB)
+    const prefix = buildStorageKey(did, rkey, requestPath ? `${requestPath}/` : '');
+    for await (const key of storage.listKeys(prefix)) {
+      const relative = key.slice(prefix.length);
+      if (!relative) continue;
+      if (relative.startsWith('.rewritten/')) continue;
+
+      const [name, ...rest] = relative.split('/');
+      if (!name || name === '.metadata.json' || name.endsWith('.meta')) continue;
+
+      const isDirectory = rest.length > 0;
+      const existing = entries.get(name);
+      if (existing === undefined || (isDirectory && !existing)) {
+        entries.set(name, isDirectory);
+      }
     }
   }
 
@@ -292,10 +352,10 @@ export async function serveFromCache(
           checkPath += indexFiles[0] || 'index.html';
         }
 
-        const fileExistsInStorage = await storageExists(did, rkey, checkPath);
+        const fileInStorage = await span(trace, `storage:${checkPath}`, () => getFileWithMetadata(did, rkey, checkPath));
 
         // If file exists and redirect is not forced, serve the file normally
-        if (fileExistsInStorage) {
+        if (fileInStorage) {
           const response = await serveFileInternal(did, rkey, filePath, settings, headers, trace);
           logTrace(trace, filePath || '/', logger);
           return response;
@@ -413,7 +473,8 @@ export async function serveFileInternal(
 
     // Index not found - check if we need directory listing
     if (settings?.directoryListing) {
-      const directoryEntries = await listDirectoryEntries(did, rkey, requestPath);
+      const fileCids = await getExpectedFileCids();
+      const directoryEntries = await listDirectoryEntries(did, rkey, requestPath, fileCids ? Object.keys(fileCids) : null);
       if (directoryEntries.length > 0) {
         const missResponse = await maybeReturnStorageMiss();
         if (missResponse) return missResponse;
@@ -455,16 +516,18 @@ export async function serveFileInternal(
   // Try clean URLs: /about -> /about.html
   if (settings?.cleanUrls && !hasFileExtension(fileRequestPath)) {
     const htmlPath = `${fileRequestPath}.html`;
-    if (await storageExists(did, rkey, htmlPath)) {
-      return serveFileInternal(did, rkey, htmlPath, settings, requestHeaders, trace);
+    const htmlResult = await span(trace, `storage:${htmlPath}`, () => getFileWithMetadata(did, rkey, htmlPath));
+    if (htmlResult) {
+      return buildResponseFromStorageResult(htmlResult, htmlPath, settings, requestHeaders);
     }
     await markExpectedMiss(htmlPath);
 
     // Also try /about/index.html
     for (const indexFileName of indexFiles) {
       const indexPath = fileRequestPath ? `${fileRequestPath}/${indexFileName}` : indexFileName;
-      if (await storageExists(did, rkey, indexPath)) {
-        return serveFileInternal(did, rkey, indexPath, settings, requestHeaders, trace);
+      const indexResult = await span(trace, `storage:${indexPath}`, () => getFileWithMetadata(did, rkey, indexPath));
+      if (indexResult) {
+        return buildResponseFromStorageResult(indexResult, indexPath, settings, requestHeaders);
       }
       await markExpectedMiss(indexPath);
     }
@@ -473,8 +536,9 @@ export async function serveFileInternal(
   // SPA mode: serve SPA file for all non-existing routes (wins over custom404 but loses to _redirects)
   if (settings?.spaMode) {
     const spaFile = settings.spaMode;
-    if (await storageExists(did, rkey, spaFile)) {
-      return serveFileInternal(did, rkey, spaFile, settings, requestHeaders, trace);
+    const spaResult = await getFallbackFile(did, rkey, spaFile, trace);
+    if (spaResult) {
+      return buildResponseFromStorageResult(spaResult, spaFile, settings, requestHeaders);
     }
     await markExpectedMiss(spaFile);
   }
@@ -482,34 +546,28 @@ export async function serveFileInternal(
   // Custom 404: serve custom 404 file if configured (wins conflict battle)
   if (settings?.custom404) {
     const custom404File = settings.custom404;
-    if (await storageExists(did, rkey, custom404File)) {
-      const response: Response = await serveFileInternal(did, rkey, custom404File, settings, requestHeaders, trace);
-      // Override status to 404
-      return new Response(response.body, {
-        status: 404,
-        headers: response.headers,
-      });
+    const custom404Result = await getFallbackFile(did, rkey, custom404File, trace);
+    if (custom404Result) {
+      const response = buildResponseFromStorageResult(custom404Result, custom404File, settings, requestHeaders);
+      return new Response(response.body, { status: 404, headers: response.headers });
     }
     await markExpectedMiss(custom404File);
   }
 
   // Autodetect 404 pages (GitHub Pages: 404.html, Neocities/Nekoweb: not_found.html)
-  const auto404Pages = ['404.html', 'not_found.html'];
-  for (const auto404Page of auto404Pages) {
-    if (await storageExists(did, rkey, auto404Page)) {
-      const response: Response = await serveFileInternal(did, rkey, auto404Page, settings, requestHeaders, trace);
-      // Override status to 404
-      return new Response(response.body, {
-        status: 404,
-        headers: response.headers,
-      });
+  for (const auto404Page of ['404.html', 'not_found.html']) {
+    const auto404Result = await getFallbackFile(did, rkey, auto404Page, trace);
+    if (auto404Result) {
+      const response = buildResponseFromStorageResult(auto404Result, auto404Page, settings, requestHeaders);
+      return new Response(response.body, { status: 404, headers: response.headers });
     }
     await markExpectedMiss(auto404Page);
   }
 
   // Directory listing fallback: if enabled, show root directory listing on 404
   if (settings?.directoryListing) {
-    const rootEntries = await listDirectoryEntries(did, rkey, '');
+    const fileCids = await getExpectedFileCids();
+    const rootEntries = await listDirectoryEntries(did, rkey, '', fileCids ? Object.keys(fileCids) : null);
     if (rootEntries.length > 0) {
       const missResponse = await maybeReturnStorageMiss();
       if (missResponse) return missResponse;
@@ -598,10 +656,10 @@ export async function serveFromCacheWithRewrite(
           checkPath += indexFiles[0] || 'index.html';
         }
 
-        const fileExistsInStorage = await storageExists(did, rkey, checkPath);
+        const fileInStorage = await span(trace, `storage:${checkPath}`, () => getFileWithMetadata(did, rkey, checkPath));
 
         // If file exists and redirect is not forced, serve the file normally
-        if (fileExistsInStorage) {
+        if (fileInStorage) {
           const response = await serveFileInternalWithRewrite(did, rkey, filePath, basePath, settings, headers, trace);
           logTrace(trace, filePath || '/', logger);
           return response;
@@ -737,7 +795,8 @@ export async function serveFileInternalWithRewrite(
 
     // Index not found - check if we need directory listing
     if (settings?.directoryListing) {
-      const directoryEntries = await listDirectoryEntries(did, rkey, requestPath);
+      const fileCids = await getExpectedFileCids();
+      const directoryEntries = await listDirectoryEntries(did, rkey, requestPath, fileCids ? Object.keys(fileCids) : null);
       if (directoryEntries.length > 0) {
         const missResponse = await maybeReturnStorageMiss();
         if (missResponse) return missResponse;
@@ -777,16 +836,18 @@ export async function serveFileInternalWithRewrite(
   // Try clean URLs: /about -> /about.html
   if (settings?.cleanUrls && !hasFileExtension(fileRequestPath)) {
     const htmlPath = `${fileRequestPath}.html`;
-    if (await storageExists(did, rkey, htmlPath)) {
-      return serveFileInternalWithRewrite(did, rkey, htmlPath, basePath, settings, requestHeaders, trace);
+    const htmlResult = await span(trace, `storage:${htmlPath}`, () => getFileForRequest(did, rkey, htmlPath, true));
+    if (htmlResult) {
+      return buildResponse(htmlResult);
     }
     await markExpectedMiss(htmlPath);
 
     // Also try /about/index.html
     for (const indexFileName of indexFiles) {
       const indexPath = fileRequestPath ? `${fileRequestPath}/${indexFileName}` : indexFileName;
-      if (await storageExists(did, rkey, indexPath)) {
-        return serveFileInternalWithRewrite(did, rkey, indexPath, basePath, settings, requestHeaders, trace);
+      const indexResult = await span(trace, `storage:${indexPath}`, () => getFileForRequest(did, rkey, indexPath, true));
+      if (indexResult) {
+        return buildResponse(indexResult);
       }
       await markExpectedMiss(indexPath);
     }
@@ -795,8 +856,9 @@ export async function serveFileInternalWithRewrite(
   // SPA mode: serve SPA file for all non-existing routes
   if (settings?.spaMode) {
     const spaFile = settings.spaMode;
-    if (await storageExists(did, rkey, spaFile)) {
-      return serveFileInternalWithRewrite(did, rkey, spaFile, basePath, settings, requestHeaders, trace);
+    const spaResult = await getFallbackFileForRequest(did, rkey, spaFile, trace);
+    if (spaResult) {
+      return buildResponse(spaResult);
     }
     await markExpectedMiss(spaFile);
   }
@@ -804,34 +866,28 @@ export async function serveFileInternalWithRewrite(
   // Custom 404: serve custom 404 file if configured (wins conflict battle)
   if (settings?.custom404) {
     const custom404File = settings.custom404;
-    if (await storageExists(did, rkey, custom404File)) {
-      const response: Response = await serveFileInternalWithRewrite(did, rkey, custom404File, basePath, settings, requestHeaders, trace);
-      // Override status to 404
-      return new Response(response.body, {
-        status: 404,
-        headers: response.headers,
-      });
+    const custom404Result = await getFallbackFileForRequest(did, rkey, custom404File, trace);
+    if (custom404Result) {
+      const response = buildResponse(custom404Result);
+      return new Response(response.body, { status: 404, headers: response.headers });
     }
     await markExpectedMiss(custom404File);
   }
 
   // Autodetect 404 pages (GitHub Pages: 404.html, Neocities/Nekoweb: not_found.html)
-  const auto404Pages = ['404.html', 'not_found.html'];
-  for (const auto404Page of auto404Pages) {
-    if (await storageExists(did, rkey, auto404Page)) {
-      const response: Response = await serveFileInternalWithRewrite(did, rkey, auto404Page, basePath, settings, requestHeaders, trace);
-      // Override status to 404
-      return new Response(response.body, {
-        status: 404,
-        headers: response.headers,
-      });
+  for (const auto404Page of ['404.html', 'not_found.html']) {
+    const auto404Result = await getFallbackFileForRequest(did, rkey, auto404Page, trace);
+    if (auto404Result) {
+      const response = buildResponse(auto404Result);
+      return new Response(response.body, { status: 404, headers: response.headers });
     }
     await markExpectedMiss(auto404Page);
   }
 
   // Directory listing fallback: if enabled, show root directory listing on 404
   if (settings?.directoryListing) {
-    const rootEntries = await listDirectoryEntries(did, rkey, '');
+    const fileCids = await getExpectedFileCids();
+    const rootEntries = await listDirectoryEntries(did, rkey, '', fileCids ? Object.keys(fileCids) : null);
     if (rootEntries.length > 0) {
       const missResponse = await maybeReturnStorageMiss();
       if (missResponse) return missResponse;

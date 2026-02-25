@@ -15,6 +15,7 @@
     "@atproto/sync": "^0.1.36",
     "@atproto/xrpc": "^0.7.5",
     "@wispplace/atproto-utils": "workspace:*",
+    "@wispplace/page-generators": "workspace:*",
     "@wispplace/constants": "workspace:*",
     "@wispplace/database": "workspace:*",
     "@wispplace/fs-utils": "workspace:*",

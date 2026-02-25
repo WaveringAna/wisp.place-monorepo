@@ -145,6 +145,20 @@ export class CacheManager<NS extends string = string> {
     }
   }
 
+  deletePrefix(ns: NS, prefix: string): void {
+    const map = this.namespaces.get(ns);
+    const st = this.stats.get(ns);
+    if (!map || !st) return;
+
+    for (const [key, entry] of map) {
+      if (key.startsWith(prefix)) {
+        map.delete(key);
+        st.sizeBytes -= entry.size;
+      }
+    }
+    st.entries = map.size;
+  }
+
   clear(ns: NS): void {
     const map = this.namespaces.get(ns);
     const st = this.stats.get(ns);
@@ -197,7 +211,7 @@ export class CacheManager<NS extends string = string> {
 
 // ── Singleton ────────────────────────────────────────────────────────────
 
-type CacheNamespace = 'domains' | 'customDomains' | 'settings' | 'handles' | 'redirectRules';
+type CacheNamespace = 'domains' | 'customDomains' | 'settings' | 'handles' | 'redirectRules' | 'siteFiles';
 
 export const cache = new CacheManager<CacheNamespace>({
   domains:       { ttl: 5 * 60_000, maxEntries: 5000 },
@@ -205,4 +219,7 @@ export const cache = new CacheManager<CacheNamespace>({
   settings:      { ttl: 5 * 60_000, maxEntries: 1000 },
   handles:       { ttl: 10 * 60_000, maxEntries: 5000 },
   redirectRules: { maxEntries: 1000, maxSize: 10 * 1024 * 1024, estimateSize: (v) => (v as unknown[]).length * 100 },
+  // Negative-result cache for per-site fallback files (SPA, custom 404, auto-detected 404 pages).
+  // Stores null when a file is confirmed absent so repeated 404 responses don't re-hit S3.
+  siteFiles:     { ttl: 5 * 60_000, maxEntries: 10_000 },
 });

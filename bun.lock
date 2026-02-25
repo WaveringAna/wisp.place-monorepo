@@ -57,6 +57,7 @@
         "@wispplace/fs-utils": "workspace:*",
         "@wispplace/lexicons": "workspace:*",
         "@wispplace/observability": "workspace:*",
+        "@wispplace/page-generators": "workspace:*",
         "@wispplace/safe-fetch": "workspace:*",
         "@wispplace/tiered-storage": "workspace:*",
         "hono": "^4.10.4",
@@ -162,6 +163,7 @@
         "@wispplace/constants": "workspace:*",
         "@wispplace/fs-utils": "workspace:*",
         "@wispplace/lexicons": "workspace:*",
+        "@wispplace/page-generators": "workspace:*",
         "commander": "^14.0.2",
         "hono": "^4.7.4",
         "ignore": "^7.0.5",
@@ -264,6 +266,10 @@
         "elysia",
         "hono",
       ],
+    },
+    "packages/@wispplace/page-generators": {
+      "name": "@wispplace/page-generators",
+      "version": "1.0.0",
     },
     "packages/@wispplace/safe-fetch": {
       "name": "@wispplace/safe-fetch",
@@ -1086,6 +1092,8 @@
     "@wispplace/main-app": ["@wispplace/main-app@workspace:apps/main-app"],
 
     "@wispplace/observability": ["@wispplace/observability@workspace:packages/@wispplace/observability"],
+
+    "@wispplace/page-generators": ["@wispplace/page-generators@workspace:packages/@wispplace/page-generators"],
 
     "@wispplace/safe-fetch": ["@wispplace/safe-fetch@workspace:packages/@wispplace/safe-fetch"],
 
@@ -2029,7 +2037,7 @@
 
     "wisp-hosting-service/mime-types": ["mime-types@2.1.35", "", { "dependencies": { "mime-db": "1.52.0" } }, "sha512-ZDY+bPm5zTTF+YpCrAU9nK0UgICYPT0QtT1NZWFv4s++TNkcgVaT0g6+4R2uI4MjQjzysHB1zxuWL50hzaeXiw=="],
 
-    "wispctl/@types/bun": ["@types/bun@1.3.8", "", { "dependencies": { "bun-types": "1.3.8" } }, "sha512-3LvWJ2q5GerAXYxO2mffLTqOzEu5qnhEAlh48Vnu8WQfnmSwbgagjGZV6BoHKJztENYEDn6QmVd949W4uESRJA=="],
+    "wispctl/@types/bun": ["@types/bun@1.3.9", "", { "dependencies": { "bun-types": "1.3.9" } }, "sha512-KQ571yULOdWJiMH+RIWIOZ7B2RXQGpL1YQrBtLIV3FqDcCu6FsbFUBwhdKUlCKUpS3PJDsHlJ1QKlpxoVR+xtw=="],
 
     "wispctl/@types/node": ["@types/node@22.19.7", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-MciR4AKGHWl7xwxkBa6xUGxQJ4VBOmPTF7sL+iGzuahOFaO0jHCsuEfS80pan1ef4gWId1oWOweIhrDEYLuaOw=="],
 
@@ -2268,8 +2276,6 @@
     "wisp-hosting-service/@atproto/lexicon/multiformats": ["multiformats@9.9.0", "", {}, "sha512-HoMUjhH9T8DDBNT+6xzkrd9ga/XiBI4xLr58LJACwK6G3HTOPeMz4nB4KJs33L2BelrIJa7P0VuNaVF3hMYfjg=="],
 
     "wisp-hosting-service/mime-types/mime-db": ["mime-db@1.52.0", "", {}, "sha512-sPU4uV7dYlvtWJxwwxHD0PuihVNiE7TyAbQ5SWxDCB9mUYvOgroQOwYQQOKPJ8CIbE+1ETVlOoK1UC2nU3gYvg=="],
-
-    "wispctl/@types/bun/bun-types": ["bun-types@1.3.8", "", { "dependencies": { "@types/node": "*" } }, "sha512-fL99nxdOWvV4LqjmC+8Q9kW3M4QTtTR1eePs94v5ctGqU8OeceWrSUaRw3JYb7tU3FkMIAjkueehrHPPPGKi5Q=="],
 
     "wispctl/@types/node/undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
 
