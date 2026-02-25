@@ -236,7 +236,14 @@ export class S3StorageTier implements StorageTier {
 				]);
 
 				const json = new TextDecoder().decode(metaBuffer);
-				const metadata = JSON.parse(json) as StorageMetadata;
+				let metadata: StorageMetadata;
+				try {
+					metadata = JSON.parse(json) as StorageMetadata;
+				} catch {
+					// Corrupted or partial .meta file — return null so the caller
+					// falls through to on-demand fetch rather than serving bad data.
+					return null;
+				}
 				metadata.createdAt = new Date(metadata.createdAt);
 				metadata.lastAccessed = new Date(metadata.lastAccessed);
 				if (metadata.ttl) {
@@ -587,7 +594,12 @@ export class S3StorageTier implements StorageTier {
 
 				const buffer = await this.streamToUint8Array(response.Body as Readable);
 				const json = new TextDecoder().decode(buffer);
-				const metadata = JSON.parse(json) as StorageMetadata;
+				let metadata: StorageMetadata;
+				try {
+					metadata = JSON.parse(json) as StorageMetadata;
+				} catch {
+					return null;
+				}
 
 				metadata.createdAt = new Date(metadata.createdAt);
 				metadata.lastAccessed = new Date(metadata.lastAccessed);
