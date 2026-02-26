@@ -78,53 +78,18 @@ export interface S3StorageTierConfig {
 	 */
 	forcePathStyle?: boolean;
 
-	/**
-	 * Optional separate bucket for storing metadata.
-	 *
-	 * @remarks
-	 * **RECOMMENDED for production use!**
-	 *
-	 * By default, metadata is stored in S3 object metadata fields. However, updating
-	 * metadata requires copying the entire object, which is slow and expensive for large files.
-	 *
-	 * When `metadataBucket` is specified, metadata is stored as separate JSON objects
-	 * in this bucket. This allows fast, cheap metadata updates without copying data.
-	 *
-	 * **Benefits:**
-	 * - Fast metadata updates (no object copying)
-	 * - Much cheaper for large objects
-	 * - No impact on data object performance
-	 *
-	 * **Trade-offs:**
-	 * - Requires managing two buckets
-	 * - Metadata and data could become out of sync if not handled carefully
-	 * - Additional S3 API calls for metadata operations
-	 *
-	 * @example
-	 * ```typescript
-	 * const tier = new S3StorageTier({
-	 *	 bucket: 'my-data-bucket',
-	 *	 metadataBucket: 'my-metadata-bucket', // Separate bucket for metadata
-	 *	 region: 'us-east-1',
-	 * });
-	 * ```
-	 */
-	metadataBucket?: string;
+
 }
 
 /**
  * AWS S3 (or compatible) storage tier.
  *
  * @remarks
- * - Supports AWS S3, Cloudflare R2, MinIO, and other S3-compatible services
- * - Uses object metadata for StorageMetadata
+ * - Supports AWS S3, Cloudflare R2, MinIO, Hetzner Object Storage, and other S3-compatible services
+ * - Metadata is stored inline as S3 object metadata headers (x-amz-meta-*)
+ * - Single request per read/write — no separate metadata objects
  * - Requires `@aws-sdk/client-s3` peer dependency
  * - Typically used as the cold tier (source of truth)
- *
- * **Metadata Storage:**
- * Metadata is stored in S3 object metadata fields:
- * - Custom metadata fields are prefixed with `x-amz-meta-`
- * - Built-in fields use standard S3 headers
  *
  * @example
  * ```typescript
@@ -155,7 +120,6 @@ export interface S3StorageTierConfig {
 export class S3StorageTier implements StorageTier {
 	private client: S3Client;
 	private prefix: string;
-	private metadataBucket?: string;
 
 	constructor(private config: S3StorageTierConfig) {
 		const clientConfig: S3ClientConfig = {
@@ -168,9 +132,6 @@ export class S3StorageTier implements StorageTier {
 
 		this.client = new S3Client(clientConfig);
 		this.prefix = config.prefix ?? '';
-		if (config.metadataBucket) {
-			this.metadataBucket = config.metadataBucket;
-		}
 	}
 
 	async get(key: string): Promise<Uint8Array | null> {
@@ -202,73 +163,28 @@ export class S3StorageTier implements StorageTier {
 	 * @returns The data and metadata, or null if not found
 	 *
 	 * @remarks
-	 * When using a separate metadata bucket, fetches data and metadata in parallel.
-	 * Otherwise, uses the data object's embedded metadata.
+	 * Metadata is read from S3 object metadata headers (x-amz-meta-*),
+	 * returned in a single request alongside the file body.
 	 */
 	async getWithMetadata(key: string): Promise<TierGetResult | null> {
 		const s3Key = this.getS3Key(key);
 
 		try {
-			if (this.metadataBucket) {
-				// Fetch data and metadata in parallel
-				const [dataResponse, metadataResponse] = await Promise.all([
-					this.client.send(
-						new GetObjectCommand({
-							Bucket: this.config.bucket,
-							Key: s3Key,
-						}),
-					),
-					this.client.send(
-						new GetObjectCommand({
-							Bucket: this.metadataBucket,
-							Key: s3Key + '.meta',
-						}),
-					),
-				]);
+			const response = await this.client.send(
+				new GetObjectCommand({
+					Bucket: this.config.bucket,
+					Key: s3Key,
+				}),
+			);
 
-				if (!dataResponse.Body || !metadataResponse.Body) {
-					return null;
-				}
-
-				const [data, metaBuffer] = await Promise.all([
-					this.streamToUint8Array(dataResponse.Body as Readable),
-					this.streamToUint8Array(metadataResponse.Body as Readable),
-				]);
-
-				const json = new TextDecoder().decode(metaBuffer);
-				let metadata: StorageMetadata;
-				try {
-					metadata = JSON.parse(json) as StorageMetadata;
-				} catch {
-					// Corrupted or partial .meta file — return null so the caller
-					// falls through to on-demand fetch rather than serving bad data.
-					return null;
-				}
-				metadata.createdAt = new Date(metadata.createdAt);
-				metadata.lastAccessed = new Date(metadata.lastAccessed);
-				if (metadata.ttl) {
-					metadata.ttl = new Date(metadata.ttl);
-				}
-
-				return { data, metadata };
-			} else {
-				// Get data with embedded metadata from response headers
-				const response = await this.client.send(
-					new GetObjectCommand({
-						Bucket: this.config.bucket,
-						Key: s3Key,
-					}),
-				);
-
-				if (!response.Body || !response.Metadata) {
-					return null;
-				}
-
-				const data = await this.streamToUint8Array(response.Body as Readable);
-				const metadata = this.s3ToMetadata(response.Metadata);
-
-				return { data, metadata };
+			if (!response.Body || !response.Metadata) {
+				return null;
 			}
+
+			const data = await this.streamToUint8Array(response.Body as Readable);
+			const metadata = this.s3ToMetadata(response.Metadata);
+
+			return { data, metadata };
 		} catch (error) {
 			if (this.isNoSuchKeyError(error)) {
 				return null;
@@ -291,55 +207,20 @@ export class S3StorageTier implements StorageTier {
 		const s3Key = this.getS3Key(key);
 
 		try {
-			if (this.metadataBucket) {
-				// Fetch data stream and metadata in parallel
-				const [dataResponse, metadataResponse] = await Promise.all([
-					this.client.send(
-						new GetObjectCommand({
-							Bucket: this.config.bucket,
-							Key: s3Key,
-						}),
-					),
-					this.client.send(
-						new GetObjectCommand({
-							Bucket: this.metadataBucket,
-							Key: s3Key + '.meta',
-						}),
-					),
-				]);
+			const response = await this.client.send(
+				new GetObjectCommand({
+					Bucket: this.config.bucket,
+					Key: s3Key,
+				}),
+			);
 
-				if (!dataResponse.Body || !metadataResponse.Body) {
-					return null;
-				}
-
-				// Only buffer the small metadata, stream the data
-				const metaBuffer = await this.streamToUint8Array(metadataResponse.Body as Readable);
-				const json = new TextDecoder().decode(metaBuffer);
-				const metadata = JSON.parse(json) as StorageMetadata;
-				metadata.createdAt = new Date(metadata.createdAt);
-				metadata.lastAccessed = new Date(metadata.lastAccessed);
-				if (metadata.ttl) {
-					metadata.ttl = new Date(metadata.ttl);
-				}
-
-				return { stream: dataResponse.Body as Readable, metadata };
-			} else {
-				// Get data stream with embedded metadata from response headers
-				const response = await this.client.send(
-					new GetObjectCommand({
-						Bucket: this.config.bucket,
-						Key: s3Key,
-					}),
-				);
-
-				if (!response.Body || !response.Metadata) {
-					return null;
-				}
-
-				const metadata = this.s3ToMetadata(response.Metadata);
-
-				return { stream: response.Body as Readable, metadata };
+			if (!response.Body || !response.Metadata) {
+				return null;
 			}
+
+			const metadata = this.s3ToMetadata(response.Metadata);
+
+			return { stream: response.Body as Readable, metadata };
 		} catch (error) {
 			if (this.isNoSuchKeyError(error)) {
 				return null;
@@ -364,43 +245,17 @@ export class S3StorageTier implements StorageTier {
 		stream: NodeJS.ReadableStream,
 		metadata: StorageMetadata,
 	): Promise<void> {
-		const s3Key = this.getS3Key(key);
+		const upload = new Upload({
+			client: this.client,
+			params: {
+				Bucket: this.config.bucket,
+				Key: this.getS3Key(key),
+				Body: stream as Readable,
+				Metadata: this.metadataToS3(metadata),
+			},
+		});
 
-		if (this.metadataBucket) {
-			// Use multipart upload for streaming data
-			const upload = new Upload({
-				client: this.client,
-				params: {
-					Bucket: this.config.bucket,
-					Key: s3Key,
-					Body: stream as Readable,
-				},
-			});
-
-			const metadataJson = JSON.stringify(metadata);
-			const metadataBuffer = new TextEncoder().encode(metadataJson);
-			const metadataCommand = new PutObjectCommand({
-				Bucket: this.metadataBucket,
-				Key: s3Key + '.meta',
-				Body: metadataBuffer,
-				ContentType: 'application/json',
-			});
-
-			await Promise.all([upload.done(), this.client.send(metadataCommand)]);
-		} else {
-			// Use multipart upload with embedded metadata
-			const upload = new Upload({
-				client: this.client,
-				params: {
-					Bucket: this.config.bucket,
-					Key: s3Key,
-					Body: stream as Readable,
-					Metadata: this.metadataToS3(metadata),
-				},
-			});
-
-			await upload.done();
-		}
+		await upload.done();
 	}
 
 	private async streamToUint8Array(stream: Readable): Promise<Uint8Array> {
@@ -437,63 +292,25 @@ export class S3StorageTier implements StorageTier {
 	}
 
 	async set(key: string, data: Uint8Array, metadata: StorageMetadata): Promise<void> {
-		const s3Key = this.getS3Key(key);
-
-		if (this.metadataBucket) {
-			const dataCommand = new PutObjectCommand({
+		await this.client.send(
+			new PutObjectCommand({
 				Bucket: this.config.bucket,
-				Key: s3Key,
-				Body: data,
-				ContentLength: data.byteLength,
-			});
-
-			const metadataJson = JSON.stringify(metadata);
-			const metadataBuffer = new TextEncoder().encode(metadataJson);
-			const metadataCommand = new PutObjectCommand({
-				Bucket: this.metadataBucket,
-				Key: s3Key + '.meta',
-				Body: metadataBuffer,
-				ContentType: 'application/json',
-			});
-
-			await Promise.all([this.client.send(dataCommand), this.client.send(metadataCommand)]);
-		} else {
-			const command = new PutObjectCommand({
-				Bucket: this.config.bucket,
-				Key: s3Key,
+				Key: this.getS3Key(key),
 				Body: data,
 				ContentLength: data.byteLength,
 				Metadata: this.metadataToS3(metadata),
-			});
-
-			await this.client.send(command);
-		}
+			}),
+		);
 	}
 
 	async delete(key: string): Promise<void> {
-		const s3Key = this.getS3Key(key);
-
 		try {
-			const dataCommand = new DeleteObjectCommand({
-				Bucket: this.config.bucket,
-				Key: s3Key,
-			});
-
-			if (this.metadataBucket) {
-				const metadataCommand = new DeleteObjectCommand({
-					Bucket: this.metadataBucket,
-					Key: s3Key + '.meta',
-				});
-
-				await Promise.all([
-					this.client.send(dataCommand),
-					this.client.send(metadataCommand).catch((error) => {
-						if (!this.isNoSuchKeyError(error)) throw error;
-					}),
-				]);
-			} else {
-				await this.client.send(dataCommand);
-			}
+			await this.client.send(
+				new DeleteObjectCommand({
+					Bucket: this.config.bucket,
+					Key: this.getS3Key(key),
+				}),
+			);
 		} catch (error) {
 			if (!this.isNoSuchKeyError(error)) {
 				throw error;
@@ -553,76 +370,25 @@ export class S3StorageTier implements StorageTier {
 		for (let i = 0; i < keys.length; i += batchSize) {
 			const batch = keys.slice(i, i + batchSize);
 
-			const dataCommand = new DeleteObjectsCommand({
-				Bucket: this.config.bucket,
-				Delete: {
-					Objects: batch.map((key) => ({ Key: this.getS3Key(key) })),
-				},
-			});
-
-			if (this.metadataBucket) {
-				const metadataCommand = new DeleteObjectsCommand({
-					Bucket: this.metadataBucket,
+			await this.client.send(
+				new DeleteObjectsCommand({
+					Bucket: this.config.bucket,
 					Delete: {
-						Objects: batch.map((key) => ({ Key: this.getS3Key(key) + '.meta' })),
+						Objects: batch.map((key) => ({ Key: this.getS3Key(key) })),
 					},
-				});
-
-				await Promise.all([
-					this.client.send(dataCommand),
-					this.client.send(metadataCommand).catch(() => {}),
-				]);
-			} else {
-				await this.client.send(dataCommand);
-			}
+				}),
+			);
 		}
 	}
 
 	async getMetadata(key: string): Promise<StorageMetadata | null> {
-		if (this.metadataBucket) {
-			try {
-				const command = new GetObjectCommand({
-					Bucket: this.metadataBucket,
-					Key: this.getS3Key(key) + '.meta',
-				});
-
-				const response = await this.client.send(command);
-
-				if (!response.Body) {
-					return null;
-				}
-
-				const buffer = await this.streamToUint8Array(response.Body as Readable);
-				const json = new TextDecoder().decode(buffer);
-				let metadata: StorageMetadata;
-				try {
-					metadata = JSON.parse(json) as StorageMetadata;
-				} catch {
-					return null;
-				}
-
-				metadata.createdAt = new Date(metadata.createdAt);
-				metadata.lastAccessed = new Date(metadata.lastAccessed);
-				if (metadata.ttl) {
-					metadata.ttl = new Date(metadata.ttl);
-				}
-
-				return metadata;
-			} catch (error) {
-				if (this.isNoSuchKeyError(error)) {
-					return null;
-				}
-				throw error;
-			}
-		}
-
 		try {
-			const command = new HeadObjectCommand({
-				Bucket: this.config.bucket,
-				Key: this.getS3Key(key),
-			});
-
-			const response = await this.client.send(command);
+			const response = await this.client.send(
+				new HeadObjectCommand({
+					Bucket: this.config.bucket,
+					Key: this.getS3Key(key),
+				}),
+			);
 
 			if (!response.Metadata) {
 				return null;
@@ -638,21 +404,6 @@ export class S3StorageTier implements StorageTier {
 	}
 
 	async setMetadata(key: string, metadata: StorageMetadata): Promise<void> {
-		if (this.metadataBucket) {
-			const metadataJson = JSON.stringify(metadata);
-			const buffer = new TextEncoder().encode(metadataJson);
-
-			const command = new PutObjectCommand({
-				Bucket: this.metadataBucket,
-				Key: this.getS3Key(key) + '.meta',
-				Body: buffer,
-				ContentType: 'application/json',
-			});
-
-			await this.client.send(command);
-			return;
-		}
-
 		const s3Key = this.getS3Key(key);
 		const command = new CopyObjectCommand({
 			Bucket: this.config.bucket,

@@ -156,7 +156,7 @@ async function doFetchAndCache(did: string, rkey: string): Promise<boolean> {
     await upsertSiteCache(did, rkey, recordCid, fileCids);
 
     // Enqueue revalidate so firehose-service backfills S3 (cold tier)
-    await enqueueRevalidate(did, rkey, `on-demand-cache`);
+    await enqueueRevalidate(did, rkey, `storage-miss:on-demand`);
 
     logger.info('Successfully cached site', { did, rkey, downloaded });
     return downloaded > 0;

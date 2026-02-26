@@ -50,7 +50,12 @@ export async function enqueueRevalidate(
   }
 
   try {
-    const dedupeKey = `revalidate:site:${did}:${rkey}`;
+    // Separate dedup keys per reason category so a storage-miss is never
+    // silenced by a pending rewrite-miss (which runs with forceDownload=false)
+    const reasonCategory = reason.startsWith('storage-miss') ? 'storage-miss'
+      : reason.startsWith('rewrite-miss') ? 'rewrite-miss'
+      : 'other';
+    const dedupeKey = `revalidate:site:${reasonCategory}:${did}:${rkey}`;
     const set = await redis.set(dedupeKey, '1', 'EX', dedupeTtlSeconds, 'NX');
     if (!set) {
       recordRevalidateResult('deduped');

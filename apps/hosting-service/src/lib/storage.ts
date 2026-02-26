@@ -27,7 +27,6 @@ const WARM_EVICTION_POLICY = (process.env.WARM_EVICTION_POLICY || 'lru') as 'lru
 
 // S3/Cold tier configuration (optional)
 const S3_BUCKET = process.env.S3_BUCKET || '';
-const S3_METADATA_BUCKET = process.env.S3_METADATA_BUCKET;
 const S3_REGION = process.env.S3_REGION || 'us-east-1';
 const S3_ENDPOINT = process.env.S3_ENDPOINT;
 const S3_FORCE_PATH_STYLE = process.env.S3_FORCE_PATH_STYLE !== 'false';
@@ -280,7 +279,6 @@ function initializeStorage(): TieredStorage<Uint8Array> {
 		// Full three-tier setup with S3 as cold storage
 		const s3Tier = new S3StorageTier({
 			bucket: S3_BUCKET,
-			metadataBucket: S3_METADATA_BUCKET,
 			region: S3_REGION,
 			endpoint: S3_ENDPOINT,
 			forcePathStyle: S3_FORCE_PATH_STYLE,
@@ -400,6 +398,5 @@ export function getStorageConfig() {
 		s3Region: S3_REGION,
 		s3Endpoint: S3_ENDPOINT || '(default AWS S3)',
 		s3Prefix: S3_PREFIX,
-		metadataBucket: S3_METADATA_BUCKET || '(embedded in data bucket)',
 	};
 }

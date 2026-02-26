@@ -12,7 +12,6 @@ export const config = {
 
   // S3 storage (write destination)
   s3Bucket: process.env.S3_BUCKET || '',
-  s3MetadataBucket: process.env.S3_METADATA_BUCKET,
   s3Region: process.env.S3_REGION || 'us-east-1',
   s3Endpoint: process.env.S3_ENDPOINT,
   s3ForcePathStyle: process.env.S3_FORCE_PATH_STYLE !== 'false',

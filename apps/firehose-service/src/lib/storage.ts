@@ -29,7 +29,6 @@ if (config.s3Bucket) {
       : undefined,
     prefix: config.s3Prefix,
     forcePathStyle: config.s3ForcePathStyle,
-    metadataBucket: config.s3MetadataBucket,
   });
   logger.info('[Storage] Using S3 cold tier:', { bucket: config.s3Bucket });
 } else {

@@ -79,7 +79,6 @@ Tiered Storage Configuration:
   S3 Region:        ${storageConfig.s3Region}
   S3 Endpoint:      ${storageConfig.s3Endpoint}
   S3 Prefix:        ${storageConfig.s3Prefix}
-  Metadata Bucket:  ${storageConfig.metadataBucket}
 
 Firehose:     DISABLED (read-only)
 `);
