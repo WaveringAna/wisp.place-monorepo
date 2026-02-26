@@ -4,15 +4,16 @@
  * Modes:
  * - Normal: Watch firehose for place.wisp.fs events
  * - Backfill: Process existing sites from database
+ * - DB Fill Only: Collect DIDs and backfill sites table (skip S3 writes)
  */
 
 import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { config } from './config';
 import { startFirehose, stopFirehose, getFirehoseHealth } from './lib/firehose';
-import { closeDatabase, listAllSiteCaches, listAllSites, getSiteCache } from './lib/db';
+import { closeDatabase, listAllKnownDids, listAllSiteCaches, listAllSites, getSiteCache, upsertSite } from './lib/db';
 import { storage } from './lib/storage';
-import { handleSiteCreateOrUpdate, fetchSiteRecord } from './lib/cache-writer';
+import { handleSiteCreateOrUpdate, fetchSiteRecord, listSiteRecordsForDid } from './lib/cache-writer';
 import { startRevalidateWorker, stopRevalidateWorker } from './lib/revalidate-worker';
 import { closeCacheInvalidationPublisher } from './lib/cache-invalidation';
 import { initializeGrafanaExporters, createLogger, logCollector, errorTracker, metricsCollector } from '@wispplace/observability';
@@ -41,7 +42,7 @@ app.get('/health', async (c) => {
 
   return c.json({
     status: firehoseHealth.healthy ? 'healthy' : 'degraded',
-    mode: config.isBackfill ? 'backfill' : 'firehose',
+    mode: config.isDbFillOnly ? 'db-fill-only' : (config.isBackfill ? 'backfill' : 'firehose'),
     firehose: firehoseHealth,
     storage: storageStats,
   });
@@ -69,16 +70,80 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 
 /**
- * Backfill mode - process existing sites from database
+ * Backfill phase 1+2:
+ * - Collect all known DIDs from DB
+ * - Backfill each DID's place.wisp.fs records into the sites table
+ */
+async function backfillSitesTableFromKnownDids(): Promise<void> {
+  logger.info('Phase 1/3: Collecting known DIDs');
+  const dids = await listAllKnownDids();
+  logger.info(`Collected ${dids.length} known DIDs`);
+
+  if (dids.length === 0) {
+    logger.warn('No known DIDs found; skipping sites table backfill');
+    return;
+  }
+
+  logger.info('Phase 2/3: Backfilling place.wisp.fs records into sites table');
+
+  let didsProcessed = 0;
+  let didsFailed = 0;
+  let sitesSynced = 0;
+  let sitesFailed = 0;
+
+  for (const did of dids) {
+    try {
+      const records = await listSiteRecordsForDid(did);
+      for (const row of records) {
+        try {
+          const siteName = typeof row.record.site === 'string' && row.record.site.length > 0
+            ? row.record.site
+            : row.rkey;
+          await upsertSite(did, row.rkey, siteName);
+          sitesSynced++;
+        } catch (err) {
+          logger.error(`[Backfill:sites] Failed to upsert site ${did}/${row.rkey}`, err);
+          sitesFailed++;
+        }
+      }
+      didsProcessed++;
+      logger.info(`[Backfill:sites] Progress ${didsProcessed + didsFailed}/${dids.length} DIDs`);
+    } catch (err) {
+      logger.error(`[Backfill:sites] Failed to list records for DID ${did}`, err);
+      didsFailed++;
+    }
+  }
+
+  logger.info(
+    `Phase 2/3 complete: ${didsProcessed} DIDs processed, ${didsFailed} DIDs failed, ${sitesSynced} sites synced, ${sitesFailed} sites failed`
+  );
+}
+
+/**
+ * Backfill phase 3:
+ * - process sites from database and backfill blobs into S3
  */
 async function runBackfill(): Promise<void> {
   logger.info('Starting backfill mode');
   const startTime = Date.now();
   const forceRewriteHtml = process.env.BACKFILL_FORCE_REWRITE_HTML === 'true';
+  const forceDownload = process.env.BACKFILL_FORCE_DOWNLOAD === 'true';
 
   if (forceRewriteHtml) {
     logger.info('Forcing HTML rewrite for all sites');
   }
+  if (forceDownload) {
+    logger.info('Forcing full file download/write for all backfilled sites');
+  }
+
+  await backfillSitesTableFromKnownDids();
+
+  if (config.isDbFillOnly) {
+    logger.info('DB fill only mode complete; skipping phase 3/3 S3 backfill');
+    return;
+  }
+
+  logger.info('Phase 3/3: Backfilling site blobs into S3');
 
   let sites = await listAllSites();
   if (sites.length === 0) {
@@ -106,7 +171,7 @@ async function runBackfill(): Promise<void> {
 
       const existingCache = await getSiteCache(site.did, site.rkey);
       // Check if CID matches (already up to date)
-      if (!forceRewriteHtml && existingCache && result.cid === existingCache.record_cid) {
+      if (!forceRewriteHtml && !forceDownload && existingCache && result.cid === existingCache.record_cid) {
         logger.info(`Site already up to date: ${site.did}/${site.rkey}`);
         skipped++;
         continue;
@@ -115,6 +180,7 @@ async function runBackfill(): Promise<void> {
       // Process the site
       await handleSiteCreateOrUpdate(site.did, site.rkey, result.record, result.cid, {
         forceRewriteHtml,
+        forceDownload,
       });
       processed++;
 
@@ -164,7 +230,7 @@ app.get('/__internal__/observability/metrics', (c) => {
 // Main entry point
 async function main() {
   logger.info('Starting firehose-service');
-  logger.info(`Mode: ${config.isBackfill ? 'backfill' : 'firehose'}`);
+  logger.info(`Mode: ${config.isDbFillOnly ? 'db-fill-only' : (config.isBackfill ? 'backfill' : 'firehose')}`);
   logger.info(`S3 Bucket: ${config.s3Bucket || '(disk fallback)'}`);
 
   // Start health server

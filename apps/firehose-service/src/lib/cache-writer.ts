@@ -50,6 +50,62 @@ export async function fetchSiteRecord(did: string, rkey: string): Promise<{ reco
 }
 
 /**
+ * List all place.wisp.fs records for a DID.
+ */
+export async function listSiteRecordsForDid(
+  did: string
+): Promise<Array<{ rkey: string; record: WispFsRecord; cid: string }>> {
+  const pdsEndpoint = await getPdsForDid(did);
+  if (!pdsEndpoint) {
+    logger.error('Failed to get PDS endpoint for DID (listRecords)', undefined, { did });
+    return [];
+  }
+
+  const records: Array<{ rkey: string; record: WispFsRecord; cid: string }> = [];
+  let cursor: string | undefined;
+
+  while (true) {
+    const params = new URLSearchParams({
+      repo: did,
+      collection: 'place.wisp.fs',
+      limit: '100',
+    });
+    if (cursor) params.set('cursor', cursor);
+
+    const url = `${pdsEndpoint}/xrpc/com.atproto.repo.listRecords?${params.toString()}`;
+    const data = await safeFetchJson(url) as {
+      records?: Array<{ uri?: string; value?: unknown; cid?: string }>;
+      cursor?: string;
+    };
+
+    const pageRecords = Array.isArray(data.records) ? data.records : [];
+    for (const row of pageRecords) {
+      const uri = row.uri;
+      const record = row.value as WispFsRecord | undefined;
+      if (!uri || !record || record.$type !== 'place.wisp.fs') continue;
+
+      const uriParts = uri.split('/');
+      const rkey = uriParts[uriParts.length - 1];
+      if (!rkey) continue;
+
+      records.push({
+        rkey,
+        record,
+        cid: row.cid || '',
+      });
+    }
+
+    const nextCursor = typeof data.cursor === 'string' && data.cursor.length > 0
+      ? data.cursor
+      : undefined;
+    if (!nextCursor) break;
+    cursor = nextCursor;
+  }
+
+  return records;
+}
+
+/**
  * Fetch a settings record from the PDS
  */
 export async function fetchSettingsRecord(

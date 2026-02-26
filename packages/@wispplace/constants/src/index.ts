@@ -82,9 +82,9 @@ export const DEFAULT_IGNORE_PATTERNS: string[] = [
 // CLI Binary URLs
 export const CLI_BINARY_BASE_URL = "https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries";
 export const CLI_BINARIES = {
-  "darwin-universal": `${CLI_BINARY_BASE_URL}/wisp-cli-darwin-universal`,
+  "darwin-universal": `${CLI_BINARY_BASE_URL}/wisp-cli-universal-darwin`,
   "darwin-arm64": `${CLI_BINARY_BASE_URL}/wisp-cli-aarch64-darwin`,
-  "darwin-x86_64": `${CLI_BINARY_BASE_URL}/wisp-cli-darwin-x86_64`,
+  "darwin-x86_64": `${CLI_BINARY_BASE_URL}/wisp-cli-x86_64-darwin`,
   "linux-arm64": `${CLI_BINARY_BASE_URL}/wisp-cli-aarch64-linux`,
   "linux-x86_64": `${CLI_BINARY_BASE_URL}/wisp-cli-x86_64-linux`,
 } as const;

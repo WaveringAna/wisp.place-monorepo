@@ -49,6 +49,79 @@ export async function listAllSites(): Promise<SiteRecord[]> {
   `;
 }
 
+/**
+ * List all known DIDs from all DID-bearing tables.
+ * Missing tables are skipped to keep bootstrapping resilient.
+ */
+export async function listAllKnownDids(): Promise<string[]> {
+  const sources: Array<{ name: string; fetch: () => Promise<Array<{ did: string }>> }> = [
+    {
+      name: 'sites',
+      fetch: () => sql<Array<{ did: string }>>`
+        SELECT DISTINCT did
+        FROM sites
+        WHERE did IS NOT NULL AND did <> ''
+      `,
+    },
+    {
+      name: 'site_cache',
+      fetch: () => sql<Array<{ did: string }>>`
+        SELECT DISTINCT did
+        FROM site_cache
+        WHERE did IS NOT NULL AND did <> ''
+      `,
+    },
+    {
+      name: 'site_settings_cache',
+      fetch: () => sql<Array<{ did: string }>>`
+        SELECT DISTINCT did
+        FROM site_settings_cache
+        WHERE did IS NOT NULL AND did <> ''
+      `,
+    },
+    {
+      name: 'domains',
+      fetch: () => sql<Array<{ did: string }>>`
+        SELECT DISTINCT did
+        FROM domains
+        WHERE did IS NOT NULL AND did <> ''
+      `,
+    },
+    {
+      name: 'custom_domains',
+      fetch: () => sql<Array<{ did: string }>>`
+        SELECT DISTINCT did
+        FROM custom_domains
+        WHERE did IS NOT NULL AND did <> ''
+      `,
+    },
+    {
+      name: 'supporter',
+      fetch: () => sql<Array<{ did: string }>>`
+        SELECT DISTINCT did
+        FROM supporter
+        WHERE did IS NOT NULL AND did <> ''
+      `,
+    },
+  ];
+  const dids = new Set<string>();
+
+  for (const source of sources) {
+    try {
+      const rows = await source.fetch();
+      for (const row of rows) {
+        if (typeof row.did === 'string' && row.did.length > 0) {
+          dids.add(row.did);
+        }
+      }
+    } catch {
+      logger.warn(`[DB] Skipping DID source table ${source.name}`);
+    }
+  }
+
+  return [...dids].sort();
+}
+
 // Write functions
 
 export async function upsertSiteCache(

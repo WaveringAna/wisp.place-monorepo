@@ -5,10 +5,12 @@
   "scripts": {
     "dev": "NODE_OPTIONS='--max-old-space-size=2048' tsx --env-file=.env src/index.ts",
     "dev:backfill": "NODE_OPTIONS='--max-old-space-size=2048' tsx --env-file=.env src/index.ts --backfill",
+    "dev:db-fill": "NODE_OPTIONS='--max-old-space-size=2048' tsx --env-file=.env src/index.ts --db-fill-only",
     "build": "bun run build.ts",
     "start": "NODE_OPTIONS='--max-old-space-size=2048' tsx src/index.ts",
     "check": "tsc --noEmit",
-    "backfill": "NODE_OPTIONS='--max-old-space-size=2048' tsx src/index.ts --backfill"
+    "backfill": "NODE_OPTIONS='--max-old-space-size=2048' tsx src/index.ts --backfill",
+    "db-fill": "NODE_OPTIONS='--max-old-space-size=2048' tsx src/index.ts --db-fill-only"
   },
   "dependencies": {
     "@atproto/api": "^0.17.4",
