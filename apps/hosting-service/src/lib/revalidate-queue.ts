@@ -3,10 +3,27 @@ import { recordRevalidateResult } from './revalidate-metrics';
 
 const redisUrl = process.env.REDIS_URL;
 const streamName = process.env.WISP_REVALIDATE_STREAM || 'wisp:revalidate';
-const dedupeTtlSeconds = Number.parseInt(process.env.WISP_REVALIDATE_DEDUPE_TTL_SECONDS || '60', 10);
+const dedupeTtlSeconds = parsePositiveInt(process.env.WISP_REVALIDATE_DEDUPE_TTL_SECONDS, 60);
+const storageMissDedupeTtlSeconds = parsePositiveInt(
+  process.env.WISP_REVALIDATE_STORAGE_MISS_DEDUPE_TTL_SECONDS,
+  Math.max(dedupeTtlSeconds, 600)
+);
 
 let client: Redis | null = null;
 let loggedMissingRedis = false;
+
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  if (!value) return fallback;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function getDedupeTtlSeconds(reasonCategory: 'storage-miss' | 'rewrite-miss' | 'other'): number {
+  if (reasonCategory === 'storage-miss') {
+    return storageMissDedupeTtlSeconds;
+  }
+  return dedupeTtlSeconds;
+}
 
 function getRedisClient(): Redis | null {
   if (!redisUrl) {
@@ -56,7 +73,8 @@ export async function enqueueRevalidate(
       : reason.startsWith('rewrite-miss') ? 'rewrite-miss'
       : 'other';
     const dedupeKey = `revalidate:site:${reasonCategory}:${did}:${rkey}`;
-    const set = await redis.set(dedupeKey, '1', 'EX', dedupeTtlSeconds, 'NX');
+    const dedupeTtl = getDedupeTtlSeconds(reasonCategory);
+    const set = await redis.set(dedupeKey, '1', 'EX', dedupeTtl, 'NX');
     if (!set) {
       recordRevalidateResult('deduped');
       return { enqueued: false, result: 'deduped' };
