@@ -33,6 +33,18 @@ class Blob500BackoffError extends Error {
   }
 }
 
+export class SiteBlobBackoffError extends Error {
+  constructor(
+    public readonly did: string,
+    public readonly rkey: string,
+    public readonly until: number,
+    public readonly failures: number
+  ) {
+    super(`Site blob fetch backoff active until ${new Date(until).toISOString()}`);
+    this.name = 'SiteBlobBackoffError';
+  }
+}
+
 function isHttp500Error(err: unknown): boolean {
   if (typeof err === 'object' && err !== null) {
     const value = err as Record<string, unknown>;
@@ -59,6 +71,11 @@ function set500Backoff(blobKey: string): number {
   const until = Date.now() + BLOB_500_BACKOFF_MS;
   blob500BackoffUntil.set(blobKey, until);
   return until;
+}
+
+function getBlobBackoffUntil(error: unknown): number | null {
+  if (error instanceof Blob500BackoffError) return error.until;
+  return null;
 }
 
 /**
@@ -691,6 +708,26 @@ export async function handleSiteCreateOrUpdate(
   const downloadFailures = await downloadFiles(filesToDownload);
   const deleteFailures = await deleteKeys(keysToDelete);
 
+  const incrementalBackoffUntil = downloadFailures.reduce<number | null>((maxUntil, failure) => {
+    const until = getBlobBackoffUntil(failure.error);
+    if (!until) return maxUntil;
+    if (!maxUntil) return until;
+    return Math.max(maxUntil, until);
+  }, null);
+  const allIncrementalDownloadsBackoffed =
+    downloadFailures.length > 0 &&
+    downloadFailures.every((failure) => getBlobBackoffUntil(failure.error) !== null);
+
+  if (allIncrementalDownloadsBackoffed && deleteFailures.length === 0 && incrementalBackoffUntil) {
+    logger.warn(`Incremental sync blocked by blob backoff for ${did}/${rkey}`, {
+      did,
+      rkey,
+      downloadFailures: downloadFailures.length,
+      backoffUntil: new Date(incrementalBackoffUntil).toISOString(),
+    });
+    throw new SiteBlobBackoffError(did, rkey, incrementalBackoffUntil, downloadFailures.length);
+  }
+
   // Recovery path: wipe site prefix and perform full rebuild if incremental had failures
   if (downloadFailures.length > 0 || deleteFailures.length > 0) {
     logger.warn(`Incremental sync failed for ${did}/${rkey}; falling back to full rebuild`, {
@@ -718,6 +755,16 @@ export async function handleSiteCreateOrUpdate(
 
     const fullDownloadFailures = await downloadFiles(newFiles);
     if (fullDownloadFailures.length > 0) {
+      const fullBackoffUntil = fullDownloadFailures.reduce<number | null>((maxUntil, failure) => {
+        const until = getBlobBackoffUntil(failure.error);
+        if (!until) return maxUntil;
+        if (!maxUntil) return until;
+        return Math.max(maxUntil, until);
+      }, null);
+      const allFullDownloadsBackoffed =
+        fullDownloadFailures.length > 0 &&
+        fullDownloadFailures.every((failure) => getBlobBackoffUntil(failure.error) !== null);
+
       logger.error(`Full rebuild failed for ${did}/${rkey}`, undefined, {
         did,
         rkey,
@@ -727,6 +774,11 @@ export async function handleSiteCreateOrUpdate(
           error: f.error instanceof Error ? f.error.message : String(f.error),
         })),
       });
+
+      if (allFullDownloadsBackoffed && fullBackoffUntil) {
+        throw new SiteBlobBackoffError(did, rkey, fullBackoffUntil, fullDownloadFailures.length);
+      }
+
       throw new Error(`Full rebuild failed for ${did}/${rkey}`);
     }
   }

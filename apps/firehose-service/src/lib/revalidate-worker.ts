@@ -2,17 +2,28 @@ import Redis from 'ioredis';
 import os from 'os';
 import { createLogger } from '@wispplace/observability';
 import { config } from '../config';
-import { fetchSiteRecord, handleSiteCreateOrUpdate } from './cache-writer';
+import { SiteBlobBackoffError, fetchSiteRecord, handleSiteCreateOrUpdate } from './cache-writer';
 
 const logger = createLogger('firehose-service');
 const consumerName = process.env.WISP_REVALIDATE_CONSUMER || `${os.hostname()}:${process.pid}`;
 const batchSize = Number.parseInt(process.env.WISP_REVALIDATE_BATCH_SIZE || '10', 10);
 const claimIdleMs = Number.parseInt(process.env.WISP_REVALIDATE_CLAIM_IDLE_MS || '60000', 10);
 const blockMs = Number.parseInt(process.env.WISP_REVALIDATE_BLOCK_MS || '5000', 10);
+const failureBackoffSeconds = parsePositiveInt(process.env.WISP_REVALIDATE_FAILURE_BACKOFF_SECONDS, 600);
 
 let redis: Redis | null = null;
 let running = false;
 let loopPromise: Promise<void> | null = null;
+
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  if (!value) return fallback;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function getFailureBackoffKey(did: string, rkey: string): string {
+  return `revalidate:site:failure-backoff:${did}:${rkey}`;
+}
 
 function parseFields(raw: string[]): Record<string, string> {
   const fields: Record<string, string> = {};
@@ -42,6 +53,14 @@ async function processMessage(id: string, rawFields: string[]): Promise<void> {
 
   logger.info(`[Revalidate] Received message ${id}: ${did}/${rkey} (${reason})`);
 
+  const failureBackoffKey = getFailureBackoffKey(did, rkey);
+  const activeBackoffTtl = await redis.ttl(failureBackoffKey);
+  if (activeBackoffTtl > 0) {
+    logger.info(`[Revalidate] Acking ${id}: ${did}/${rkey} site backoff active (${activeBackoffTtl}s remaining)`);
+    await redis.xack(config.revalidateStream, config.revalidateGroup, id);
+    return;
+  }
+
   const record = await fetchSiteRecord(did, rkey);
   if (!record) {
     logger.warn(`[Revalidate] Site record not found on PDS: ${did}/${rkey}`);
@@ -53,11 +72,30 @@ async function processMessage(id: string, rawFields: string[]): Promise<void> {
   const forceDownload = reason.startsWith('storage-miss');
   const forceRewriteHtml = reason.startsWith('rewrite-miss');
 
-  await handleSiteCreateOrUpdate(did, rkey, record.record, record.cid, {
-    skipInvalidation: true,
-    forceDownload,
-    forceRewriteHtml,
-  });
+  try {
+    await handleSiteCreateOrUpdate(did, rkey, record.record, record.cid, {
+      skipInvalidation: true,
+      forceDownload,
+      forceRewriteHtml,
+    });
+  } catch (err) {
+    if (err instanceof SiteBlobBackoffError) {
+      const now = Date.now();
+      const until = Math.max(err.until, now + 1000);
+      const ttlSeconds = Math.max(failureBackoffSeconds, Math.ceil((until - now) / 1000));
+      await redis.set(failureBackoffKey, until.toString(), 'EX', ttlSeconds);
+      logger.warn(`[Revalidate] Blob backoff for ${did}/${rkey}; acking ${id} and suppressing retries`, {
+        did,
+        rkey,
+        failures: err.failures,
+        backoffUntil: new Date(until).toISOString(),
+        ttlSeconds,
+      });
+      await redis.xack(config.revalidateStream, config.revalidateGroup, id);
+      return;
+    }
+    throw err;
+  }
 
   logger.info(`[Revalidate] Completed ${id}: ${did}/${rkey}`);
   await redis.xack(config.revalidateStream, config.revalidateGroup, id);
