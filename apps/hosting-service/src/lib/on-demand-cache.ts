@@ -26,8 +26,6 @@ const logger = createLogger('on-demand-cache');
 
 // Track in-flight fetches to avoid duplicate work
 const inFlightFetches = new Map<string, Promise<boolean>>();
-const BLOB_500_BACKOFF_MS = 10 * 60 * 1000;
-const blob500BackoffUntil = new Map<string, number>();
 
 interface FileInfo {
   path: string;
@@ -36,45 +34,6 @@ interface FileInfo {
   encoding?: 'gzip';
   mimeType?: string;
   base64?: boolean;
-}
-
-class Blob500BackoffError extends Error {
-  constructor(
-    public readonly blobKey: string,
-    public readonly until: number,
-    public readonly originalError?: unknown
-  ) {
-    super(`Blob fetch backoff active until ${new Date(until).toISOString()}`);
-    this.name = 'Blob500BackoffError';
-  }
-}
-
-function isHttp500Error(err: unknown): boolean {
-  if (typeof err === 'object' && err !== null) {
-    const value = err as Record<string, unknown>;
-    const status = value.status ?? value.statusCode;
-    if (typeof status === 'number' && status === 500) return true;
-    if (typeof status === 'string' && status === '500') return true;
-  }
-
-  const msg = err instanceof Error ? err.message : String(err);
-  return /\bHTTP\s*500\b/i.test(msg);
-}
-
-function getBackoffUntil(blobKey: string): number | null {
-  const until = blob500BackoffUntil.get(blobKey);
-  if (!until) return null;
-  if (Date.now() >= until) {
-    blob500BackoffUntil.delete(blobKey);
-    return null;
-  }
-  return until;
-}
-
-function set500Backoff(blobKey: string): number {
-  const until = Date.now() + BLOB_500_BACKOFF_MS;
-  blob500BackoffUntil.set(blobKey, until);
-  return until;
 }
 
 function formatUnknownError(err: unknown): Record<string, unknown> {
@@ -203,7 +162,6 @@ async function doFetchAndCache(did: string, rkey: string): Promise<boolean> {
     const CONCURRENCY = 10;
     let downloaded = 0;
     let failed = 0;
-    const downloadedPaths = new Set<string>();
 
     for (let i = 0; i < files.length; i += CONCURRENCY) {
       const batch = files.slice(i, i + CONCURRENCY);
@@ -215,19 +173,7 @@ async function doFetchAndCache(did: string, rkey: string): Promise<boolean> {
         const file = batch[idx];
         if (result.status === 'fulfilled') {
           downloaded++;
-          if (file) downloadedPaths.add(file.path);
         } else {
-          if (result.reason instanceof Blob500BackoffError) {
-            logger.warn('Skipping blob download due cached HTTP 500 backoff', {
-              did,
-              rkey,
-              filePath: file?.path,
-              cid: file?.cid,
-              backoffUntil: new Date(result.reason.until).toISOString(),
-            });
-            failed++;
-            return;
-          }
           failed++;
           logger.error('Failed to download blob', undefined, {
             did,
@@ -241,32 +187,7 @@ async function doFetchAndCache(did: string, rkey: string): Promise<boolean> {
     }
 
     logger.info('Downloaded files', { did, rkey, downloaded, failed });
-    if (failed > 0) {
-      logger.warn('Partial on-demand cache: some blobs could not be downloaded', {
-        did,
-        rkey,
-        downloaded,
-        failed,
-      });
-    }
-
-    // Keep site_cache aligned with what we actually fetched to avoid
-    // expected-miss loops ("site is updating" forever) on permanently failing blobs.
-    const successfullyCachedFileCids: Record<string, string> = {};
-    for (const path of downloadedPaths) {
-      const cid = fileCids[path];
-      if (cid) {
-        successfullyCachedFileCids[path] = cid;
-      }
-    }
-
-    if (downloaded === 0) {
-      logger.warn('On-demand cache could not fetch any blobs', { did, rkey, totalFiles: files.length });
-      return false;
-    }
-
-    // Update DB with file CIDs that are actually present in storage.
-    await upsertSiteCache(did, rkey, recordCid, successfullyCachedFileCids);
+    await upsertSiteCache(did, rkey, recordCid, fileCids);
 
     // Enqueue revalidate so firehose-service backfills S3 (cold tier)
     await enqueueRevalidate(did, rkey, `storage-miss:on-demand`);
@@ -335,25 +256,8 @@ async function downloadAndWriteBlob(
   pdsEndpoint: string
 ): Promise<void> {
   const blobUrl = `${pdsEndpoint}/xrpc/com.atproto.sync.getBlob?did=${encodeURIComponent(did)}&cid=${encodeURIComponent(file.cid)}`;
-  const blobKey = `${did}:${file.cid}`;
 
-  const backoffUntil = getBackoffUntil(blobKey);
-  if (backoffUntil) {
-    throw new Blob500BackoffError(blobKey, backoffUntil);
-  }
-
-  let content: Uint8Array;
-  try {
-    content = await safeFetchBlob(blobUrl, { maxSize: MAX_BLOB_SIZE, timeout: 300000 });
-  } catch (err) {
-    if (isHttp500Error(err)) {
-      const until = set500Backoff(blobKey);
-      throw new Blob500BackoffError(blobKey, until, err);
-    }
-    throw err;
-  }
-  // Successful fetch clears any stale backoff for this blob.
-  blob500BackoffUntil.delete(blobKey);
+  let content = await safeFetchBlob(blobUrl, { maxSize: MAX_BLOB_SIZE, timeout: 300000 });
   let encoding = file.encoding;
 
   // Decode base64 if flagged
