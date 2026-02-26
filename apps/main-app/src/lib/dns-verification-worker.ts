@@ -30,6 +30,36 @@ export class DNSVerificationWorker {
     }
   }
 
+  private async cleanupDuplicateDomainRows(): Promise<number> {
+    const rows = await db<Array<{ removed: number | string }>>`
+      WITH ranked AS (
+        SELECT
+          ctid,
+          ROW_NUMBER() OVER (
+            PARTITION BY domain
+            ORDER BY
+              verified DESC,
+              (rkey IS NOT NULL) DESC,
+              last_verified_at DESC NULLS LAST,
+              created_at DESC,
+              id DESC
+          ) AS rn
+        FROM custom_domains
+      ),
+      deleted AS (
+        DELETE FROM custom_domains cd
+        USING ranked r
+        WHERE cd.ctid = r.ctid
+          AND r.rn > 1
+        RETURNING 1
+      )
+      SELECT COUNT(*)::int AS removed FROM deleted
+    `;
+
+    const value = rows[0]?.removed ?? 0;
+    return typeof value === 'string' ? Number.parseInt(value, 10) : value;
+  }
+
   async start() {
     if (this.isRunning) {
       this.log('DNS verification worker already running');
@@ -71,6 +101,11 @@ export class DNSVerificationWorker {
     };
 
     try {
+      const removed = await this.cleanupDuplicateDomainRows();
+      if (removed > 0) {
+        this.log('Cleaned duplicate custom domain rows before verification', { removed });
+      }
+
       // Get all custom domains (both verified and pending)
       const domains = await db<Array<{
         id: string;
@@ -78,7 +113,15 @@ export class DNSVerificationWorker {
         did: string;
         verified: boolean;
       }>>`
-        SELECT id, domain, did, verified FROM custom_domains
+        SELECT DISTINCT ON (domain) id, domain, did, verified
+        FROM custom_domains
+        ORDER BY
+          domain,
+          verified DESC,
+          (rkey IS NOT NULL) DESC,
+          last_verified_at DESC NULLS LAST,
+          created_at DESC,
+          id DESC
       `;
 
       if (!domains || domains.length === 0) {
@@ -107,7 +150,16 @@ export class DNSVerificationWorker {
             // Double-check: ensure this record is still the current owner in database
             // This prevents race conditions where domain ownership changed during verification
             const currentOwner = await db<Array<{ id: string; did: string; verified: boolean }>>`
-              SELECT id, did, verified FROM custom_domains WHERE domain = ${domain}
+              SELECT id, did, verified
+              FROM custom_domains
+              WHERE domain = ${domain}
+              ORDER BY
+                verified DESC,
+                (rkey IS NOT NULL) DESC,
+                last_verified_at DESC NULLS LAST,
+                created_at DESC,
+                id DESC
+              LIMIT 1
             `;
             
             const isStillOwner = currentOwner.length > 0 && currentOwner[0].id === id;

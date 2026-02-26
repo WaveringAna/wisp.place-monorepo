@@ -91,6 +91,10 @@ export const runDatabaseMigrations = async (db: SQL): Promise<void> => {
         `;
     });
 
+    await runMigration("ensure unique custom_domains.domain", async () => {
+        await db`CREATE UNIQUE INDEX IF NOT EXISTS idx_custom_domains_domain_unique ON custom_domains(domain)`;
+    }, { silent: true });
+
     // Enforce mapped site rkeys belong to same DID as mapped domain.
     await runMigration("add fk_domains_site_owner", async () => {
         await db`

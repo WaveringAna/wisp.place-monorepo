@@ -7,10 +7,13 @@ import {
 	ListObjectsV2Command,
 	DeleteObjectsCommand,
 	CopyObjectCommand,
+	type GetObjectCommandOutput,
+	type HeadObjectCommandOutput,
 	type S3ClientConfig,
 } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
 import type { Readable } from 'node:stream';
+import { lookup as mimeLookup } from 'mime-types';
 import type {
 	StorageTier,
 	StorageMetadata,
@@ -177,12 +180,14 @@ export class S3StorageTier implements StorageTier {
 				}),
 			);
 
-			if (!response.Body || !response.Metadata) {
+			if (!response.Body) {
 				return null;
 			}
 
-			const data = await this.streamToUint8Array(response.Body as Readable);
-			const metadata = this.s3ToMetadata(response.Metadata);
+			const rawData = await this.streamToUint8Array(response.Body as Readable);
+			const { data, metadata } = response.Metadata
+				? { data: rawData, metadata: this.s3ToMetadata(response.Metadata) }
+				: this.recoverDataAndMetadataFromObject(key, rawData, response);
 
 			return { data, metadata };
 		} catch (error) {
@@ -214,11 +219,13 @@ export class S3StorageTier implements StorageTier {
 				}),
 			);
 
-			if (!response.Body || !response.Metadata) {
+			if (!response.Body) {
 				return null;
 			}
 
-			const metadata = this.s3ToMetadata(response.Metadata);
+			const metadata = response.Metadata
+				? this.s3ToMetadata(response.Metadata)
+				: this.metadataFromObjectResponse(key, response.ContentLength, response);
 
 			return { stream: response.Body as Readable, metadata };
 		} catch (error) {
@@ -390,11 +397,9 @@ export class S3StorageTier implements StorageTier {
 				}),
 			);
 
-			if (!response.Metadata) {
-				return null;
-			}
-
-			return this.s3ToMetadata(response.Metadata);
+			return response.Metadata
+				? this.s3ToMetadata(response.Metadata)
+				: this.metadataFromObjectResponse(key, response.ContentLength, response);
 		} catch (error) {
 			if (this.isNoSuchKeyError(error)) {
 				return null;
@@ -471,6 +476,141 @@ export class S3StorageTier implements StorageTier {
 			return s3Key.slice(this.prefix.length);
 		}
 		return s3Key;
+	}
+
+	/**
+	 * Build conservative metadata when object metadata headers are missing.
+	 */
+	private metadataFromObjectResponse(
+		key: string,
+		size: number | undefined,
+		response: GetObjectCommandOutput | HeadObjectCommandOutput,
+		inferred?: { mimeType?: string; encoding?: string },
+	): StorageMetadata {
+		const now = new Date();
+		const customMetadata: Record<string, string> = {};
+
+		const mimeType = inferred?.mimeType ?? this.normalizeContentType(response.ContentType);
+		if (mimeType) {
+			customMetadata.mimeType = mimeType;
+		}
+		const encoding = inferred?.encoding ?? response.ContentEncoding;
+		if (encoding) {
+			customMetadata.encoding = encoding;
+		}
+
+		const rawChecksum = typeof response.ETag === 'string' ? response.ETag.replace(/"/g, '') : '';
+
+		return {
+			key,
+			size: Math.max(0, size ?? 0),
+			createdAt: now,
+			lastAccessed: now,
+			accessCount: 0,
+			compressed: false,
+			checksum: rawChecksum,
+			...(Object.keys(customMetadata).length > 0 && { customMetadata }),
+		};
+	}
+
+	/**
+	 * Recover legacy/partial objects when S3 metadata headers are absent.
+	 * Mirrors firehose heuristics: base64 decode for text-like files and gzip detection.
+	 */
+	private recoverDataAndMetadataFromObject(
+		key: string,
+		data: Uint8Array,
+		response: GetObjectCommandOutput,
+	): { data: Uint8Array; metadata: StorageMetadata } {
+		const mimeType = this.normalizeContentType(response.ContentType) ?? this.mimeTypeFromKey(key);
+		let recovered = data;
+		let inferredEncoding: string | undefined;
+
+		if (this.isTextLikeMime(mimeType, key)) {
+			const decoded = this.tryDecodeBase64(recovered);
+			if (decoded) {
+				recovered = decoded;
+			}
+		}
+
+		if (!inferredEncoding && this.shouldDetectGzip(mimeType, key) && this.isGzip(recovered)) {
+			inferredEncoding = 'gzip';
+		}
+
+		const metadata = this.metadataFromObjectResponse(key, recovered.length, response, {
+			...(mimeType ? { mimeType } : {}),
+			...(inferredEncoding ? { encoding: inferredEncoding } : {}),
+		});
+		return { data: recovered, metadata };
+	}
+
+	private normalizeContentType(contentType?: string): string | undefined {
+		if (!contentType) return undefined;
+		return contentType.split(';')[0]?.trim() || undefined;
+	}
+
+	private mimeTypeFromKey(key: string): string | undefined {
+		const guessed = mimeLookup(key);
+		return typeof guessed === 'string' ? guessed : undefined;
+	}
+
+	private shouldDetectGzip(mimeType?: string, key?: string): boolean {
+		if (mimeType) {
+			if (mimeType.startsWith('text/')) return true;
+			if (mimeType === 'application/javascript') return true;
+			if (mimeType === 'application/json') return true;
+			if (mimeType === 'application/xml') return true;
+			if (mimeType === 'image/svg+xml') return true;
+		}
+		if (!key) return false;
+		const lower = key.toLowerCase();
+		return (
+			lower.endsWith('.html') ||
+			lower.endsWith('.htm') ||
+			lower.endsWith('.css') ||
+			lower.endsWith('.js') ||
+			lower.endsWith('.json') ||
+			lower.endsWith('.xml') ||
+			lower.endsWith('.svg')
+		);
+	}
+
+	private isTextLikeMime(mimeType?: string, key?: string): boolean {
+		return this.shouldDetectGzip(mimeType, key);
+	}
+
+	private isGzip(content: Uint8Array): boolean {
+		return content.length >= 2 && content[0] === 0x1f && content[1] === 0x8b;
+	}
+
+	private looksLikeBase64(content: Uint8Array): boolean {
+		if (content.length === 0) return false;
+		let nonWhitespace = 0;
+		for (const byte of content) {
+			if (byte === 0x0a || byte === 0x0d || byte === 0x20 || byte === 0x09) {
+				continue;
+			}
+			nonWhitespace++;
+			const isBase64Char =
+				(byte >= 0x41 && byte <= 0x5a) || // A-Z
+				(byte >= 0x61 && byte <= 0x7a) || // a-z
+				(byte >= 0x30 && byte <= 0x39) || // 0-9
+				byte === 0x2b || // +
+				byte === 0x2f || // /
+				byte === 0x3d; // =
+			if (!isBase64Char) return false;
+		}
+		return nonWhitespace % 4 === 0;
+	}
+
+	private tryDecodeBase64(content: Uint8Array): Uint8Array | null {
+		if (!this.looksLikeBase64(content)) return null;
+		const base64String = new TextDecoder().decode(content).replace(/\s+/g, '');
+		try {
+			return Buffer.from(base64String, 'base64');
+		} catch {
+			return null;
+		}
 	}
 
 	/**

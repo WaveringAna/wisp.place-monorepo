@@ -28,6 +28,12 @@ export const config = {
   revalidateGroup: process.env.WISP_REVALIDATE_GROUP || 'firehose-service',
 
   // Mode
-  isDbFillOnly: process.argv.includes('--db-fill-only'),
-  isBackfill: process.argv.includes('--backfill') || process.argv.includes('--db-fill-only'),
+  isDbFillOnly:
+    process.argv.includes('--db-fill-only') ||
+    process.env.DB_FILL_ONLY === 'true',
+  isBackfill:
+    process.argv.includes('--backfill') ||
+    process.argv.includes('--db-fill-only') ||
+    process.env.BACKFILL === 'true' ||
+    process.env.DB_FILL_ONLY === 'true',
 } as const;

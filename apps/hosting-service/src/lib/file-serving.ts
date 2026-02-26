@@ -409,7 +409,8 @@ export async function serveFileInternal(
   filePath: string,
   settings: WispSettings | null = null,
   requestHeaders?: Record<string, string>,
-  trace?: RequestTrace | null
+  trace?: RequestTrace | null,
+  allowExpectedMissRecovery = true,
 ): Promise<Response> {
   let expectedFileCids: Record<string, string> | null | undefined;
   let expectedMissPath: string | null = null;
@@ -435,8 +436,25 @@ export async function serveFileInternal(
     }
   };
 
-  const maybeReturnStorageMiss = async (): Promise<Response | null> => {
+  const RECOVERED_RETRY = 'RECOVERED_RETRY' as const;
+  const maybeReturnStorageMiss = async (): Promise<Response | typeof RECOVERED_RETRY | null> => {
     if (!expectedMissPath) return null;
+
+    if (allowExpectedMissRecovery) {
+      logger.warn('Expected storage miss, attempting on-demand recovery before returning 503', {
+        did,
+        rkey,
+        path: expectedMissPath,
+      });
+
+      const recovered = await fetchAndCacheSite(did, rkey);
+      if (recovered) {
+        // Clear any per-site negative cache entries so retry can discover restored files.
+        cache.deletePrefix('siteFiles', `${did}:${rkey}:`);
+        return RECOVERED_RETRY;
+      }
+    }
+
     recordStorageMiss(expectedMissPath);
     await enqueueRevalidate(did, rkey, `storage-miss:${expectedMissPath}`);
     return buildStorageMissResponse(requestHeaders);
@@ -477,6 +495,9 @@ export async function serveFileInternal(
       const directoryEntries = await listDirectoryEntries(did, rkey, requestPath, fileCids ? Object.keys(fileCids) : null);
       if (directoryEntries.length > 0) {
         const missResponse = await maybeReturnStorageMiss();
+        if (missResponse === RECOVERED_RETRY) {
+          return serveFileInternal(did, rkey, filePath, settings, requestHeaders, trace, false);
+        }
         if (missResponse) return missResponse;
         const html = generateDirectoryListing(requestPath, directoryEntries);
         return new Response(html, {
@@ -570,6 +591,9 @@ export async function serveFileInternal(
     const rootEntries = await listDirectoryEntries(did, rkey, '', fileCids ? Object.keys(fileCids) : null);
     if (rootEntries.length > 0) {
       const missResponse = await maybeReturnStorageMiss();
+      if (missResponse === RECOVERED_RETRY) {
+        return serveFileInternal(did, rkey, filePath, settings, requestHeaders, trace, false);
+      }
       if (missResponse) return missResponse;
       const html = generateDirectoryListing('', rootEntries);
       return new Response(html, {
@@ -583,6 +607,9 @@ export async function serveFileInternal(
   }
 
   const missResponse = await maybeReturnStorageMiss();
+  if (missResponse === RECOVERED_RETRY) {
+    return serveFileInternal(did, rkey, filePath, settings, requestHeaders, trace, false);
+  }
   if (missResponse) return missResponse;
 
   // Last resort: if site not in DB at all, try on-demand fetch

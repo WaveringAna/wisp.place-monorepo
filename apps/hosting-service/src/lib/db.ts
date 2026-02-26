@@ -28,8 +28,18 @@ export async function getCustomDomain(domain: string): Promise<CustomDomainLooku
   const key = domain.toLowerCase();
   return cache.getOrFetch('customDomains', key, async () => {
     const result = await sql<CustomDomainLookup[]>`
-      SELECT id, domain, did, rkey, verified FROM custom_domains
-      WHERE domain = ${key} AND verified = true LIMIT 1
+      SELECT cd.id, cd.domain, cd.did, cd.rkey, cd.verified
+      FROM custom_domains cd
+      LEFT JOIN site_cache sc
+        ON sc.did = cd.did
+       AND sc.rkey = cd.rkey
+      WHERE cd.domain = ${key} AND cd.verified = true
+      ORDER BY
+        (cd.rkey IS NOT NULL) DESC,
+        (sc.did IS NOT NULL) DESC,
+        cd.last_verified_at DESC NULLS LAST,
+        cd.created_at DESC
+      LIMIT 1
     `;
     return result[0] || null;
   });

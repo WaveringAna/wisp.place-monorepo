@@ -19,6 +19,47 @@ import { gunzipSync } from 'zlib';
 import { publishCacheInvalidation } from './cache-invalidation';
 
 const logger = createLogger('firehose-service');
+const BLOB_500_BACKOFF_MS = Number.parseInt(process.env.BLOB_500_BACKOFF_MS || `${10 * 60 * 1000}`, 10);
+const blob500BackoffUntil = new Map<string, number>();
+
+class Blob500BackoffError extends Error {
+  constructor(
+    public readonly blobKey: string,
+    public readonly until: number,
+    public readonly originalError?: unknown
+  ) {
+    super(`Blob fetch backoff active until ${new Date(until).toISOString()}`);
+    this.name = 'Blob500BackoffError';
+  }
+}
+
+function isHttp500Error(err: unknown): boolean {
+  if (typeof err === 'object' && err !== null) {
+    const value = err as Record<string, unknown>;
+    const status = value.status ?? value.statusCode;
+    if (typeof status === 'number' && status === 500) return true;
+    if (typeof status === 'string' && status === '500') return true;
+  }
+
+  const msg = err instanceof Error ? err.message : String(err);
+  return /\bHTTP\s*500\b/i.test(msg);
+}
+
+function getBackoffUntil(blobKey: string): number | null {
+  const until = blob500BackoffUntil.get(blobKey);
+  if (!until) return null;
+  if (Date.now() >= until) {
+    blob500BackoffUntil.delete(blobKey);
+    return null;
+  }
+  return until;
+}
+
+function set500Backoff(blobKey: string): number {
+  const until = Date.now() + BLOB_500_BACKOFF_MS;
+  blob500BackoffUntil.set(blobKey, until);
+  return until;
+}
 
 /**
  * Fetch a site record from the PDS
@@ -400,10 +441,33 @@ async function downloadAndWriteBlob(
   pdsEndpoint: string
 ): Promise<void> {
   const blobUrl = `${pdsEndpoint}/xrpc/com.atproto.sync.getBlob?did=${encodeURIComponent(did)}&cid=${encodeURIComponent(file.cid)}`;
+  const blobKey = `${did}:${file.cid}`;
+
+  const backoffUntil = getBackoffUntil(blobKey);
+  if (backoffUntil) {
+    throw new Blob500BackoffError(blobKey, backoffUntil);
+  }
 
   logger.debug(`Downloading ${file.path}`);
 
-  let content = await safeFetchBlob(blobUrl, { maxSize: MAX_BLOB_SIZE, timeout: 300000 });
+  let content: Uint8Array;
+  try {
+    content = await safeFetchBlob(blobUrl, { maxSize: MAX_BLOB_SIZE, timeout: 300000 });
+  } catch (err) {
+    if (isHttp500Error(err)) {
+      const until = set500Backoff(blobKey);
+      logger.warn(`Caching blob HTTP 500 for ${BLOB_500_BACKOFF_MS}ms`, {
+        did,
+        rkey,
+        path: file.path,
+        cid: file.cid,
+        backoffUntil: new Date(until).toISOString(),
+      });
+      throw new Blob500BackoffError(blobKey, until, err);
+    }
+    throw err;
+  }
+  blob500BackoffUntil.delete(blobKey);
   let encoding = file.encoding;
 
   // Decode base64 if needed
