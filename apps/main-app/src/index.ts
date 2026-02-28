@@ -295,6 +295,10 @@ export const app = new Elysia({
 		set.headers['Content-Type'] = 'text/html; charset=utf-8'
 		return await Bun.file('./apps/main-app/public/editor/acceptable-use.html').text()
 	})
+	.get('/privacy', async ({ set }) => {
+		set.headers['Content-Type'] = 'text/html; charset=utf-8'
+		return await Bun.file('./apps/main-app/public/privacy.html').text()
+	})
 	.get('/onboarding', async ({ set }) => {
 		set.headers['Content-Type'] = 'text/html; charset=utf-8'
 		return await Bun.file('./apps/main-app/public/editor/onboarding.html').text()

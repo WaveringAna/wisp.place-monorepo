@@ -551,12 +551,20 @@ function Dashboard() {
 								</a>
 							</span>
 						</div>
-						<a
-							href="/acceptable-use"
-							className="text-accent hover:text-accent/80 transition-colors"
-						>
-							Acceptable Use Policy
-						</a>
+						<div className="flex items-center gap-4">
+							<a
+								href="/acceptable-use"
+								className="text-accent hover:text-accent/80 transition-colors"
+							>
+								Acceptable Use Policy
+							</a>
+							<a
+								href="/privacy"
+								className="text-accent hover:text-accent/80 transition-colors"
+							>
+								Privacy Policy
+							</a>
+						</div>
 					</div>
 				</div>
 			</footer>

@@ -159,6 +159,7 @@ program
   .option('--directory', 'Enable directory listing')
   .option('--spa', 'Enable SPA mode (serve index.html for all routes)')
   .option('-c, --concurrency <n>', 'Number of concurrent uploads (backs off to 2 on rate limit)', '3')
+  .option('--force-gzip', 'Force gzip compression for all files regardless of type')
   .option('--password <password>', 'App password for headless authentication')
   .option('--store <path>', 'OAuth session store path')
   .option('-y, --yes', 'Skip confirmation prompts')
@@ -223,6 +224,7 @@ program
       spa: options.spa,
       yes: options.yes,
       concurrency: parseInt(options.concurrency, 10),
+      forceGzip: options.forceGzip,
     });
 
     const handleUrl = `https://sites.wisp.place/${resolvedHandle}/${resolvedSite}`;

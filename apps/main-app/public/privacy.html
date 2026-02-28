@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Privacy Policy - wisp.place</title>
+    <link rel="icon" type="image/x-icon" href="./favicon.ico">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/wisp.css">
+    <style>
+        .hero {
+            background: linear-gradient(to bottom, var(--code-bg), var(--bg));
+            border-bottom: 1px solid var(--border-light);
+            padding: 4rem 1rem;
+            text-align: center;
+        }
+
+        .hero-content { max-width: 900px; margin: 0 auto; }
+
+        .hero-icon {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 4rem;
+            height: 4rem;
+            border-radius: 50%;
+            background: var(--code-bg);
+            margin-bottom: 1.5rem;
+        }
+
+        .hero h1 {
+            font-size: 2.5rem;
+        }
+
+        .meta {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 1.5rem;
+            font-size: 0.875rem;
+            color: var(--text-muted);
+        }
+
+        .meta-divider {
+            width: 1px;
+            height: 1rem;
+            background: var(--border-light);
+        }
+
+        article { margin-bottom: 3rem; }
+        section { margin-bottom: 3rem; }
+        .card { margin-bottom: 2rem; }
+
+        h2 {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        li {
+            display: flex;
+            align-items: start;
+            gap: 0.75rem;
+            margin-bottom: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        .alert p { margin: 0; }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9rem;
+        }
+
+        th {
+            text-align: left;
+            padding: 0.6rem 0.75rem;
+            border-bottom: 1px solid var(--border-light);
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+
+        td {
+            padding: 0.6rem 0.75rem;
+            border-bottom: 1px solid var(--border-light);
+            color: var(--text-muted);
+            vertical-align: top;
+        }
+
+        tr:last-child td { border-bottom: none; }
+
+        @media (max-width: 768px) {
+            .hero h1 { font-size: 2rem; }
+            .meta { flex-direction: column; gap: 0.5rem; }
+            .meta-divider { display: none; }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="header-inner">
+            <div class="logo">
+                <img src="/transparent-full-size-ico.png" alt="wisp.place">
+                <span>wisp.place</span>
+            </div>
+            <a href="/editor" class="back-link">← Back to Dashboard</a>
+        </div>
+    </header>
+
+    <div class="hero">
+        <div class="hero-content">
+            <div class="hero-icon">🔒</div>
+            <h1>Privacy Policy</h1>
+            <div class="meta">
+                <div><strong>Effective:</strong> February 28, 2026</div>
+                <div class="meta-divider"></div>
+                <div><strong>Last Updated:</strong> February 28, 2026</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <article>
+            <section>
+                <h2>Our Principles</h2>
+                <p>
+                    Your privacy is critically important to me. A few fundamental principles:
+                </p>
+                <ul>
+                    <li><span class="bullet accent">•</span><span>I collect your personal information only when I need it to provide the service.</span></li>
+                    <li><span class="bullet accent">•</span><span>I don't share your personal information except to comply with the law or protect my rights.</span></li>
+                    <li><span class="bullet accent">•</span><span>I don't store personal information unless required for the ongoing operation of the service.</span></li>
+                    <li><span class="bullet accent">•</span><span>I make every effort to protect your privacy using secure technology and self-controlled infrastructure wherever possible.</span></li>
+                </ul>
+            </section>
+
+            <section>
+                <h2>How I Collect Information</h2>
+                <p>
+                    wisp.place uses the AT Protocol for authentication. When you log in, you authenticate directly with your Personal Data Server (PDS) — I never see your password. What I receive and store is your <strong>Decentralized Identifier (DID)</strong>, a public pseudonymous identifier that is the foundation of your AT Protocol identity. I do not collect email addresses or phone numbers.
+                </p>
+                <p>
+                    During the login process, your <strong>AT Protocol handle</strong> (e.g. <code>you.bsky.social</code>) may appear in application logs. It is not stored in the database.
+                </p>
+                <p>
+                    When you publish a site, I store metadata about it: the site name, display name, your wisp.place subdomain, any custom domains you configure, content hashes, timestamps, and your site settings. The actual files you upload live on your PDS as blobs — I hold a derived cache to serve them to visitors.
+                </p>
+                <p>
+                    I retain server logs and collect non-personally-identifying operational data — request paths, HTTP methods, status codes, and response durations — to monitor service health and diagnose issues. <strong>I do not log IP addresses, User-Agent strings, or Referer headers.</strong>
+                </p>
+                <p>
+                    Request counts are aggregated into periodic hit totals per site. These aggregate statistics contain no personally identifying information — no IP addresses, no geographic data, no visitor identifiers of any kind — and are made available to site owners who support the project.
+                </p>
+                <p>
+                    I use a signed session cookie to keep you logged into your account. Session records are stored in the database and expire after 30 days.
+                </p>
+            </section>
+
+            <section>
+                <h2>How I Use Information</h2>
+                <ul>
+                    <li><span class="bullet accent">•</span><span>Authenticate you and associate you with your sites and domains</span></li>
+                    <li><span class="bullet accent">•</span><span>Serve your published sites to visitors</span></li>
+                    <li><span class="bullet accent">•</span><span>Resolve your custom domains and subdomains correctly</span></li>
+                    <li><span class="bullet accent">•</span><span>Monitor service health, diagnose errors, and measure performance</span></li>
+                    <li><span class="bullet accent">•</span><span>Enforce usage limits and prevent abuse</span></li>
+                    <li><span class="bullet accent">•</span><span>Provide site owners who support the project with aggregate hit statistics for their own sites</span></li>
+                </ul>
+            </section>
+
+            <section>
+                <h2>Infrastructure and Third Parties</h2>
+                <p>
+                    wisp.place runs on infrastructure I own and operate directly. There are no advertising networks, analytics platforms, or data brokers involved.
+                </p>
+
+                <div class="card thick">
+                    <table>
+                        <tr>
+                            <th>Service</th>
+                            <th>Provider</th>
+                            <th>Location</th>
+                            <th>Purpose</th>
+                        </tr>
+                        <tr>
+                            <td>Web servers &amp; application</td>
+                            <td>Netcup</td>
+                            <td>Germany</td>
+                            <td>Serving sites to visitors, main application</td>
+                        </tr>
+                        <tr>
+                            <td>Web servers &amp; application</td>
+                            <td>UpCloud</td>
+                            <td>California, Singapore</td>
+                            <td>Serving sites to visitors, main application</td>
+                        </tr>
+                        <tr>
+                            <td>Web servers, application &amp; monitoring</td>
+                            <td>Oracle Cloud</td>
+                            <td>Virginia, US</td>
+                            <td>Serving sites to visitors, main application, VictoriaLogs, VictoriaMetrics</td>
+                        </tr>
+                        <tr>
+                            <td>Object storage</td>
+                            <td>Hetzner</td>
+                            <td>Finland</td>
+                            <td>Cold-tier site file cache</td>
+                        </tr>
+                        <tr>
+                            <td>DNS</td>
+                            <td>Bunny</td>
+                            <td>Global CDN</td>
+                            <td>Domain resolution</td>
+                        </tr>
+                    </table>
+                </div>
+
+                <p>
+                    Application logs and request metrics are collected by VictoriaLogs and VictoriaMetrics running on an Oracle Cloud VPS I operate. This data does not leave my infrastructure.
+                </p>
+                <p>
+                    DNS queries for wisp.place domains pass through Bunny's network. See <a href="https://bunny.net/privacy" target="_blank">Bunny's privacy policy</a> for details.
+                </p>
+                <p>
+                    Your site content is fetched from your AT Protocol PDS. I do not control the data practices of your PDS provider.
+                </p>
+            </section>
+
+            <section>
+                <h2>How I Protect Your Information</h2>
+                <p>
+                    Session cookies are <code>httpOnly</code>, <code>Secure</code>, and use <code>SameSite=Lax</code>. OAuth authorization states expire after one hour. Signing keys are rotated every six months.
+                </p>
+                <p>
+                    No method of transmission or storage is 100% secure. While I strive to protect your information, I cannot guarantee its absolute security.
+                </p>
+            </section>
+
+            <section>
+                <h2>Data Retention</h2>
+                <p>
+                    Session records expire automatically after 30 days. Site and domain records persist until you delete your site. When you delete your <code>place.wisp.fs</code> record from your PDS, the hosting service receives that event via the AT Protocol firehose and automatically removes the corresponding cache and database entries. For complete removal of your data from my systems, contact <a href="mailto:privacy@wisp.place">privacy@wisp.place</a> in addition to deleting your PDS records.
+                </p>
+                <p>
+                    In-memory log buffers, error traces, and metrics are rolling windows and are not persisted beyond the monitoring stack.
+                </p>
+            </section>
+
+            <div class="card info">
+                <h2 style="margin-top: 0;">The AT Protocol and Public Data</h2>
+                <p style="margin-bottom: 0;">
+                    wisp.place is built on the AT Protocol. Your sites, their files, and the records describing them are public on your PDS. Anyone operating a compatible service can read your published site records and blobs — this is inherent to how the protocol works and is not specific to wisp.place.
+                </p>
+            </div>
+
+            <section>
+                <h2>The CLI Tool</h2>
+                <p>
+                    The wisp.place CLI operates entirely on your local machine. It communicates directly with your PDS and sends no usage data or telemetry to me. OAuth sessions are stored locally in a directory of your choice.
+                </p>
+            </section>
+
+            <section>
+                <h2>Your Data Rights</h2>
+                <p>
+                    You may request a copy of all personal data I store about you, ask me to correct any inaccurate data, or request deletion of all your personal data from my systems. Email <a href="mailto:privacy@wisp.place">privacy@wisp.place</a> and I'll get back to you within 48 hours.
+                </p>
+            </section>
+
+            <section>
+                <h2>European General Data Protection Regulation (GDPR)</h2>
+                <p>
+                    If you are located in the EEA, UK, or Switzerland, the following applies. The data controller for wisp.place is reachable at <a href="mailto:privacy@wisp.place">privacy@wisp.place</a>.
+                </p>
+
+                <div class="card thick">
+                    <table>
+                        <tr>
+                            <th>Processing activity</th>
+                            <th>Legal basis</th>
+                        </tr>
+                        <tr>
+                            <td>Authenticating you and maintaining your session</td>
+                            <td>Performance of a contract (Art. 6(1)(b))</td>
+                        </tr>
+                        <tr>
+                            <td>Storing your DID, site records, and domain assignments</td>
+                            <td>Performance of a contract (Art. 6(1)(b))</td>
+                        </tr>
+                        <tr>
+                            <td>Application logs, error traces, and request metrics</td>
+                            <td>Legitimate interests (Art. 6(1)(f)) — operating and securing the service</td>
+                        </tr>
+                        <tr>
+                            <td>VictoriaLogs / VictoriaMetrics on self-operated infrastructure</td>
+                            <td>Legitimate interests (Art. 6(1)(f)) — service monitoring on infrastructure I control</td>
+                        </tr>
+                    </table>
+                </div>
+
+                <p>
+                    I do not process special category data and do not use your data for automated decision-making or profiling.
+                </p>
+
+                <p>You have the right to:</p>
+                <ul>
+                    <li><span class="bullet accent">•</span><span><strong>Access</strong> — request a copy of the personal data I hold about you</span></li>
+                    <li><span class="bullet accent">•</span><span><strong>Rectification</strong> — ask me to correct inaccurate data</span></li>
+                    <li><span class="bullet accent">•</span><span><strong>Erasure</strong> — ask me to delete your data (see retention note above)</span></li>
+                    <li><span class="bullet accent">•</span><span><strong>Restriction</strong> — ask me to limit how I process your data</span></li>
+                    <li><span class="bullet accent">•</span><span><strong>Portability</strong> — receive your data in a structured, machine-readable format</span></li>
+                    <li><span class="bullet accent">•</span><span><strong>Object</strong> — object to processing based on legitimate interests</span></li>
+                    <li><span class="bullet accent">•</span><span><strong>Lodge a complaint</strong> — with your national data protection supervisory authority</span></li>
+                </ul>
+
+                <div class="alert">
+                    <p>
+                        <strong>International transfers:</strong> Your data may be processed on servers outside the EEA, including the United States and Singapore. Where this occurs, I rely on Standard Contractual Clauses to ensure an equivalent level of protection.
+                    </p>
+                </div>
+
+                <p>
+                    To exercise your rights, email <a href="mailto:privacy@wisp.place">privacy@wisp.place</a>. I will respond within 30 days.
+                </p>
+            </section>
+
+            <section>
+                <h2>California Consumer Privacy Act (CCPA / CPRA)</h2>
+                <p>In the last 12 months, I collected the following categories of personal information from California residents:</p>
+
+                <div class="card thick">
+                    <table>
+                        <tr>
+                            <th>Category</th>
+                            <th>Examples</th>
+                            <th>Collected</th>
+                        </tr>
+                        <tr>
+                            <td>Identifiers</td>
+                            <td>AT Protocol DID, wisp.place subdomain, custom domain names</td>
+                            <td>Yes</td>
+                        </tr>
+                        <tr>
+                            <td>Internet or network activity</td>
+                            <td>Request paths, HTTP methods, status codes, response durations</td>
+                            <td>Yes</td>
+                        </tr>
+                        <tr>
+                            <td>Sensitive personal information</td>
+                            <td>—</td>
+                            <td>No</td>
+                        </tr>
+                    </table>
+                </div>
+
+                <p>
+                    <strong>I do not sell or share your personal information</strong> for cross-context behavioral advertising.
+                </p>
+
+                <p>California residents have the right to:</p>
+                <ul>
+                    <li><span class="bullet accent">•</span><span>Know what personal information I collect, its sources, the purposes for collection, and any third parties with whom I share it</span></li>
+                    <li><span class="bullet accent">•</span><span>Request deletion of personal information I have collected</span></li>
+                    <li><span class="bullet accent">•</span><span>Request correction of inaccurate personal information</span></li>
+                    <li><span class="bullet accent">•</span><span>Not receive discriminatory treatment for exercising these rights</span></li>
+                </ul>
+
+                <p>
+                    To make a request, email <a href="mailto:privacy@wisp.place">privacy@wisp.place</a>. I will verify your identity before disclosing or deleting anything, and will respond within 45 days. You may designate an authorized agent by providing written authorization.
+                </p>
+            </section>
+
+            <section>
+                <h2>COPPA</h2>
+                <p>
+                    wisp.place is directed to people who are at least 13 years old. If you are under 13, do not use this site.
+                </p>
+            </section>
+
+            <section>
+                <h2>Changes to This Privacy Policy</h2>
+                <p>
+                    I may update this policy from time to time. Significant changes will be noted in the changelog below.
+                </p>
+            </section>
+
+            <section>
+                <h2>Contact</h2>
+                <p>
+                    Questions or concerns? Email <a href="mailto:privacy@wisp.place">privacy@wisp.place</a>.
+                </p>
+            </section>
+
+            <div class="card thick">
+                <p style="font-weight: 600; margin-bottom: 0.5rem;">Changelog</p>
+                <p style="color: var(--text-muted); margin: 0;">February 28, 2026 — Initial version published</p>
+            </div>
+        </article>
+    </div>
+
+    <footer class="simple">
+        <p>
+            Built by <a href="https://bsky.app/profile/nekomimi.pet" target="_blank">@nekomimi.pet</a> •
+            Contact: <a href="mailto:contact@wisp.place">contact@wisp.place</a> •
+            Legal/DMCA: <a href="mailto:legal@wisp.place">legal@wisp.place</a>
+        </p>
+        <p>
+            <a href="/editor">Back to Dashboard</a>
+        </p>
+    </footer>
+</body>
+</html>

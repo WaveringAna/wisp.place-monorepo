@@ -37,6 +37,7 @@ export interface DeployOptions {
   spa?: boolean;
   yes?: boolean;
   concurrency?: number;
+  forceGzip?: boolean;
 }
 
 interface FileInfo {
@@ -168,7 +169,8 @@ async function processAndUploadFiles(
   files: FileInfo[],
   existingBlobMap: Map<string, { blobRef: BlobRef; cid: string }>,
   concurrency: number,
-  useBase64 = false
+  useBase64 = false,
+  forceGzip = false
 ): Promise<{ uploadedFiles: UploadedFile[]; uploadResults: FileUploadResult[]; filePaths: string[] }> {
   const spinner = createSpinner(`Processing ${files.length} files...`).start();
 
@@ -195,7 +197,7 @@ async function processAndUploadFiles(
     await Promise.all(batch.map(async (file) => {
       const content = readFileSync(file.path);
       const mimeType = lookup(file.relativePath) || 'application/octet-stream';
-      const shouldCompress = shouldCompressFile(mimeType, file.relativePath);
+      const shouldCompress = forceGzip || shouldCompressFile(mimeType, file.relativePath);
 
       let processedContent: Buffer;
       let encoding: 'gzip' | undefined;
@@ -203,7 +205,7 @@ async function processAndUploadFiles(
 
       if (shouldCompress) {
         const compressed = compressFile(content);
-        if (useBase64 && isTextMimeType(mimeType)) {
+        if (!forceGzip && useBase64 && isTextMimeType(mimeType)) {
           // Fallback: base64-encode compressed text files for PDSes that reject them otherwise
           processedContent = Buffer.from(compressed.toString('base64'), 'binary');
           base64Encoded = true;
@@ -515,11 +517,14 @@ export async function deploy(
 
   // 4. Process and upload files
   const concurrency = options.concurrency ?? DEFAULT_CONCURRENT_UPLOADS;
+  const forceGzip = options.forceGzip ?? false;
   let { uploadedFiles, uploadResults, filePaths } = await processAndUploadFiles(
     agent,
     files,
     existingBlobMap,
-    concurrency
+    concurrency,
+    false,
+    forceGzip
   );
 
   // 5. Build directory structure
@@ -542,7 +547,7 @@ export async function deploy(
         const mimeType = lookup(f.relativePath) || 'application/octet-stream';
         return shouldCompressFile(mimeType, f.relativePath) && isTextMimeType(mimeType);
       });
-      const retryResult = await processAndUploadFiles(agent, textFiles, existingBlobMap, concurrency, true);
+      const retryResult = await processAndUploadFiles(agent, textFiles, existingBlobMap, concurrency, true, forceGzip);
 
       // Merge updated results back: replace matching paths
       const retryMap = new Map(retryResult.filePaths.map((p, i) => [p, retryResult.uploadResults[i]!]));
