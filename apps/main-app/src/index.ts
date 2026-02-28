@@ -333,7 +333,8 @@ export const app = new Elysia({
 	.get('/.well-known/did.json', ({ request, set }) => {
 		set.headers['Content-Type'] = 'application/did+json'
 
-		const serviceEndpoint = Bun.env.SERVICE_ENDPOINT ?? new URL(request.url).origin
+		const origin = new URL(request.url).origin
+		const serviceEndpoint = Bun.env.SERVICE_ENDPOINT ?? origin.replace(/^http:/, 'https:')
 		const contexts = ['https://www.w3.org/ns/did/v1']
 		if (servicePublicKeyMultibase) {
 			contexts.push('https://w3id.org/security/multikey/v1')
