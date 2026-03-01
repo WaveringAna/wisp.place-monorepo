@@ -1,5 +1,5 @@
 ---
-title: Wisp CLI 0.5.0 (alpha)
+title: Wisp CLI v1.0.0
 description: Command-line tool for deploying static sites to the AT Protocol
 ---
 
@@ -19,13 +19,7 @@ The Wisp CLI is a command-line tool for deploying static websites directly to yo
 
 <div class="downloads">
 
-<h2>Download v0.5.0</h2>
-
-<a href="https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-darwin-universal" class="download-link" download="">
-
-<span class="platform">macOS (Universal):</span> wisp-cli-darwin-universal
-
-</a>
+<h2>Download v1.0.0</h2>
 
 <a href="https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-aarch64-darwin" class="download-link" download="">
 
@@ -33,9 +27,9 @@ The Wisp CLI is a command-line tool for deploying static websites directly to yo
 
 </a>
 
-<a href="https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-darwin-x86_64" class="download-link" download="">
+<a href="https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-x86_64-darwin" class="download-link" download="">
 
-<span class="platform">macOS (Intel):</span> wisp-cli-darwin-x86_64
+<span class="platform">macOS (Intel):</span> wisp-cli-x86_64-darwin
 
 </a>
 
@@ -51,26 +45,13 @@ The Wisp CLI is a command-line tool for deploying static websites directly to yo
 
 </a>
 
-<a href="https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-x86_64-windows.exe" class="download-link" download="">
-
-<span class="platform">Windows (x86_64):</span> wisp-cli-x86_64-windows.exe
-
-</a>
-
-<h3 style="margin-top: 1.5rem; margin-bottom: 0.5rem;">SHA-1 Checksums</h3>
+<h3 style="margin-top: 1.5rem; margin-bottom: 0.5rem;">SHA-256 Checksums</h3>
 
 <pre style="font-size: 0.75rem; padding: 1rem;" class="language-bash" tabindex="0"><code class="language-bash">
-7d0cc968d2a130158c3b204d9a15bcc29b8af252  wisp-cli-darwin-universal
-
-912f8f99c2b55ca6ad75e0a89903688bd2c1cb4b  wisp-cli-aarch64-darwin
-
-40d26d4a9c058e42e7911a195c3e078e8a4b5e82  wisp-cli-darwin-x86_64
-
-ef1992d8850f8fef1d719e4e8fab5431475c352e  wisp-cli-aarch64-linux
-
-3018dde8fec495abcae044079564ced93cdeb4f8  wisp-cli-x86_64-linux
-
-d6bc789d7fd7c787e5520eb476cee70c97ccb3ce  wisp-cli-x86_64-windows.exe
+560eface5029dbecdb4adb6cca169651cc301dd6d48263a1cddf1906a2295b0b  wisp-cli-aarch64-darwin
+fc759aa8d412948f735420536ee3f7944bda6119ad2c9169583a9b188ae889e5  wisp-cli-x86_64-darwin
+2ff51a5411a20c45fd05d29f90acd24410bdce31f6fc8a91a125691b275e1216  wisp-cli-aarch64-linux
+8cf27698daf2d1371f1a4eb1ec1e24c4da9185639dc09edc3f8bc3d358f08738  wisp-cli-x86_64-linux
 </code></pre>
 
 </div>
@@ -143,6 +124,41 @@ chmod +x wisp-cli-aarch64-darwin
 ```
 
 Your site will be available at: `https://sites.wisp.place/your-handle/my-site`
+
+### Domain Management
+
+```bash
+# Claim a custom domain
+./wisp-cli domain claim your-handle.bsky.social --domain example.com
+
+# Claim a subdomain
+./wisp-cli domain claim-subdomain your-handle.bsky.social --subdomain alice
+
+# Check domain status
+./wisp-cli domain status your-handle.bsky.social --domain example.com
+
+# Attach a site to a domain
+./wisp-cli domain add-site your-handle.bsky.social --domain example.com --site mysite
+
+# Delete a domain or site
+./wisp-cli domain delete your-handle.bsky.social --domain example.com
+./wisp-cli site delete your-handle.bsky.social --site mysite
+```
+
+### List Domains & Sites
+
+```bash
+./wisp-cli list domains your-handle.bsky.social
+./wisp-cli list sites your-handle.bsky.social
+```
+
+### Options
+
+Use an alternate proxy service DID:
+
+```bash
+./wisp-cli list domains your-handle.bsky.social --service did:web:example.com
+```
 
 ### Pull a Site from PDS
 
