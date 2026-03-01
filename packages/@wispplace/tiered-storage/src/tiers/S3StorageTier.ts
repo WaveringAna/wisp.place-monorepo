@@ -622,7 +622,7 @@ export class S3StorageTier implements StorageTier {
 	 */
 	private metadataToS3(metadata: StorageMetadata): Record<string, string> {
 		return {
-			key: metadata.key,
+			key: encodeURIComponent(metadata.key),
 			size: metadata.size.toString(),
 			createdat: metadata.createdAt.toISOString(),
 			lastaccessed: metadata.lastAccessed.toISOString(),
@@ -641,7 +641,7 @@ export class S3StorageTier implements StorageTier {
 	 */
 	private s3ToMetadata(s3Metadata: Record<string, string>): StorageMetadata {
 		const metadata: StorageMetadata = {
-			key: s3Metadata.key ?? '',
+			key: s3Metadata.key ? decodeURIComponent(s3Metadata.key) : '',
 			size: parseInt(s3Metadata.size ?? '0', 10),
 			createdAt: new Date(s3Metadata.createdat ?? Date.now()),
 			lastAccessed: new Date(s3Metadata.lastaccessed ?? Date.now()),

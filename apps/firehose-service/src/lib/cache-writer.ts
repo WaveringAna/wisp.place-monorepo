@@ -734,58 +734,69 @@ export async function handleSiteCreateOrUpdate(
     throw new SiteBlobBackoffError(did, rkey, incrementalBackoffUntil, downloadFailures.length);
   }
 
-  // Recovery path: wipe site prefix and perform full rebuild if incremental had failures
+  // Recovery path: retry only the files/keys that failed, keeping successful downloads intact
   if (downloadFailures.length > 0 || deleteFailures.length > 0) {
-    logger.warn(`Incremental sync failed for ${did}/${rkey}; falling back to full rebuild`, {
+    logger.warn(`Incremental sync had failures for ${did}/${rkey}; retrying failed operations`, {
       did,
       rkey,
       downloadFailures: downloadFailures.length,
       deleteFailures: deleteFailures.length,
     });
 
-    const prefix = `${did}/${rkey}/`;
-    const existingKeys = await listFiles(prefix);
-    const wipeFailures = await deleteKeys(existingKeys);
-    if (wipeFailures.length > 0) {
-      logger.error(`Failed to wipe site prefix before full rebuild for ${did}/${rkey}`, undefined, {
-        did,
-        rkey,
-        wipeFailures: wipeFailures.length,
-        sampleFailures: wipeFailures.slice(0, 5).map((f) => ({
-          key: f.key,
-          error: f.error instanceof Error ? f.error.message : String(f.error),
-        })),
-      });
-      throw new Error(`Failed to wipe site prefix for ${did}/${rkey}`);
+    if (downloadFailures.length > 0) {
+      const failedPaths = new Set(downloadFailures.map((f) => f.path));
+      const failedFiles = filesToDownload.filter((f) => failedPaths.has(f.path));
+      const retryDownloadFailures = await downloadFiles(failedFiles);
+
+      if (retryDownloadFailures.length > 0) {
+        const retryBackoffUntil = retryDownloadFailures.reduce<number | null>((maxUntil, failure) => {
+          const until = getBlobBackoffUntil(failure.error);
+          if (!until) return maxUntil;
+          if (!maxUntil) return until;
+          return Math.max(maxUntil, until);
+        }, null);
+        const allRetryBackoffed =
+          retryDownloadFailures.every((failure) => getBlobBackoffUntil(failure.error) !== null);
+
+        logger.error(`Retry of failed downloads failed for ${did}/${rkey}`, undefined, {
+          did,
+          rkey,
+          retryDownloadFailures: retryDownloadFailures.length,
+          sampleFailures: retryDownloadFailures.slice(0, 5).map((f) => ({
+            path: f.path,
+            error: f.error instanceof Error ? f.error.message : String(f.error),
+          })),
+        });
+
+        if (!options?.skipInvalidation) {
+          await publishCacheInvalidation(did, rkey, 'update').catch(() => undefined);
+        }
+
+        if (allRetryBackoffed && retryBackoffUntil) {
+          throw new SiteBlobBackoffError(did, rkey, retryBackoffUntil, retryDownloadFailures.length);
+        }
+
+        throw new Error(`Failed to download files for ${did}/${rkey}`);
+      }
     }
 
-    const fullDownloadFailures = await downloadFiles(newFiles);
-    if (fullDownloadFailures.length > 0) {
-      const fullBackoffUntil = fullDownloadFailures.reduce<number | null>((maxUntil, failure) => {
-        const until = getBlobBackoffUntil(failure.error);
-        if (!until) return maxUntil;
-        if (!maxUntil) return until;
-        return Math.max(maxUntil, until);
-      }, null);
-      const allFullDownloadsBackoffed =
-        fullDownloadFailures.length > 0 &&
-        fullDownloadFailures.every((failure) => getBlobBackoffUntil(failure.error) !== null);
-
-      logger.error(`Full rebuild failed for ${did}/${rkey}`, undefined, {
-        did,
-        rkey,
-        fullDownloadFailures: fullDownloadFailures.length,
-        sampleFailures: fullDownloadFailures.slice(0, 5).map((f) => ({
-          path: f.path,
-          error: f.error instanceof Error ? f.error.message : String(f.error),
-        })),
-      });
-
-      if (allFullDownloadsBackoffed && fullBackoffUntil) {
-        throw new SiteBlobBackoffError(did, rkey, fullBackoffUntil, fullDownloadFailures.length);
+    if (deleteFailures.length > 0) {
+      const retryDeleteFailures = await deleteKeys(deleteFailures.map((f) => f.key));
+      if (retryDeleteFailures.length > 0) {
+        logger.error(`Retry of failed deletes failed for ${did}/${rkey}`, undefined, {
+          did,
+          rkey,
+          retryDeleteFailures: retryDeleteFailures.length,
+          sampleFailures: retryDeleteFailures.slice(0, 5).map((f) => ({
+            key: f.key,
+            error: f.error instanceof Error ? f.error.message : String(f.error),
+          })),
+        });
+        if (!options?.skipInvalidation) {
+          await publishCacheInvalidation(did, rkey, 'update').catch(() => undefined);
+        }
+        throw new Error(`Failed to delete files for ${did}/${rkey}`);
       }
-
-      throw new Error(`Full rebuild failed for ${did}/${rkey}`);
     }
   }
 
