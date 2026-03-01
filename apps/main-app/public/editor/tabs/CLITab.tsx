@@ -17,25 +17,25 @@ const BINARIES = [
     platform: "macOS (Apple Silicon)",
     filename: "wisp-cli-aarch64-darwin",
     sha256:
-      "560eface5029dbecdb4adb6cca169651cc301dd6d48263a1cddf1906a2295b0b",
+      "06544b3a3e27a4b8d7b3a46a39fb7205cf90b3061e19fe533b090facd604f375",
   },
   {
     platform: "macOS (Intel)",
     filename: "wisp-cli-x86_64-darwin",
     sha256:
-      "fc759aa8d412948f735420536ee3f7944bda6119ad2c9169583a9b188ae889e5",
+      "9ec523e3ceef927b37adc52d449dcd9e13ea84fa49b0b77f0d5932c94cfe262e",
   },
   {
     platform: "Linux (ARM64)",
     filename: "wisp-cli-aarch64-linux",
     sha256:
-      "2ff51a5411a20c45fd05d29f90acd24410bdce31f6fc8a91a125691b275e1216",
+      "42a262668e13dce36173a4096cdc2b22358b805cf192335f84534c7f695d395b",
   },
   {
     platform: "Linux (x86_64)",
     filename: "wisp-cli-x86_64-linux",
     sha256:
-      "8cf27698daf2d1371f1a4eb1ec1e24c4da9185639dc09edc3f8bc3d358f08738",
+      "589ee59f3959ddfbc12fea38d2bcb91701f1362f560ae6fd506bebea3150e2cc",
   },
 ] as const;
 
