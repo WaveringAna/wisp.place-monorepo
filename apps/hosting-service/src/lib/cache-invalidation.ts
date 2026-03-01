@@ -4,6 +4,9 @@
  * Listens to Redis pub/sub for cache invalidation messages from the firehose-service.
  * When a site is updated/deleted, clears the hosting-service's local caches
  * (tiered storage hot+warm tiers, redirect rules) so stale data isn't served.
+ *
+ * Also tracks sites that are actively being downloaded ('updating' action) so
+ * the serving layer can show a "site updating" page instead of stale/partial content.
  */
 
 import Redis from 'ioredis';
@@ -12,6 +15,24 @@ import { hotTier, warmTier } from './storage';
 import { cache } from './cache-manager';
 
 const CHANNEL = 'wisp:cache-invalidate';
+
+// Sites currently being downloaded by the firehose-service.
+// Maps `${did}/${rkey}` → timestamp when the update started.
+// Used to show an "updating" page instead of serving stale files.
+const UPDATING_TTL_MS = 10 * 60 * 1000; // 10 minutes safety timeout
+const updatingSites = new Map<string, number>();
+
+export function isSiteUpdating(did: string, rkey: string): boolean {
+  const key = `${did}/${rkey}`;
+  const since = updatingSites.get(key);
+  if (since === undefined) return false;
+  if (Date.now() - since > UPDATING_TTL_MS) {
+    // Firehose must have crashed; remove the stale entry
+    updatingSites.delete(key);
+    return false;
+  }
+  return true;
+}
 
 let subscriber: Redis | null = null;
 
@@ -73,7 +94,7 @@ export function startCacheInvalidationSubscriber(): void {
       const { did, rkey, action } = JSON.parse(message) as {
         did: string;
         rkey: string;
-        action: 'update' | 'delete' | 'settings';
+        action: 'updating' | 'update' | 'delete' | 'settings';
       };
 
       if (!did || !rkey) {
@@ -81,7 +102,17 @@ export function startCacheInvalidationSubscriber(): void {
         return;
       }
 
-      console.log(`[CacheInvalidation] Invalidating ${did}/${rkey} (${action})`);
+      console.log(`[CacheInvalidation] Received ${action} for ${did}/${rkey}`);
+
+      if (action === 'updating') {
+        // Firehose is about to download new files — mark site as updating
+        updatingSites.set(`${did}/${rkey}`, Date.now());
+        console.log(`[CacheInvalidation] Marked ${did}/${rkey} as updating`);
+        return;
+      }
+
+      // For update/delete/settings: clear the updating flag and invalidate caches
+      updatingSites.delete(`${did}/${rkey}`);
 
       const prefix = `${did}/${rkey}/`;
 

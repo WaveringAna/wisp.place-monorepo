@@ -637,6 +637,12 @@ export async function handleSiteCreateOrUpdate(
     });
   }
 
+  // Notify hosting-service that this site is about to be updated so it can
+  // show the "updating" page instead of serving stale or partially-updated files.
+  if (!options?.skipInvalidation) {
+    await publishCacheInvalidation(did, rkey, 'updating');
+  }
+
   // Compare CIDs to determine what to download/delete
   const newFiles = collectFileInfo(expandedRoot.entries);
   const filesToDownload: FileInfo[] = [];

@@ -47,7 +47,7 @@ function getPublisher(): Redis | null {
 export async function publishCacheInvalidation(
   did: string,
   rkey: string,
-  action: 'update' | 'delete' | 'settings'
+  action: 'updating' | 'update' | 'delete' | 'settings'
 ): Promise<void> {
   const redis = getPublisher();
   if (!redis) return;

@@ -11,6 +11,7 @@ import { getCachedSettings } from './utils';
 import { loadRedirectRules, matchRedirectRule, parseCookies, parseQueryString } from './redirects';
 import { isHtmlContent, rewriteHtmlPaths } from './html-rewriter';
 import { generate404Page, generateDirectoryListing, siteUpdatingResponse } from './page-generators';
+import { isSiteUpdating } from './cache-invalidation';
 import { getIndexFiles, applyCustomHeaders } from './request-utils';
 import { cache } from './cache-manager';
 import { storage } from './storage';
@@ -318,6 +319,12 @@ export async function serveFromCache(
   fullUrl?: string,
   headers?: Record<string, string>
 ): Promise<Response> {
+  if (isSiteUpdating(did, rkey)) {
+    return shouldServeUpdatingPage(headers)
+      ? siteUpdatingResponse()
+      : new Response('Site is updating', { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' } });
+  }
+
   const trace = createTrace();
 
   // Load settings for this site
@@ -622,6 +629,12 @@ export async function serveFromCacheWithRewrite(
   fullUrl?: string,
   headers?: Record<string, string>
 ): Promise<Response> {
+  if (isSiteUpdating(did, rkey)) {
+    return shouldServeUpdatingPage(headers)
+      ? siteUpdatingResponse()
+      : new Response('Site is updating', { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' } });
+  }
+
   const trace = createTrace();
 
   // Load settings for this site
