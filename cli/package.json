@@ -1,6 +1,6 @@
 {
   "name": "wispctl",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "description": "CLI for wisp.place - deploy static sites to the AT Protocol",
   "type": "module",
   "main": "./dist/index.js",

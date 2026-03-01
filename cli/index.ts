@@ -26,6 +26,7 @@ import { createSpinner, pc } from './lib/progress.ts';
 import { callWispXrpc } from './lib/xrpc.ts';
 
 const program = new Command();
+program.enablePositionalOptions();
 
 async function promptRequiredText(
   message: string,
@@ -278,7 +279,8 @@ program
 // Logout command
 const listCommand = program
   .command('list')
-  .description('List sites and domains from wisp XRPC routes');
+  .description('List sites and domains from wisp XRPC routes')
+  .enablePositionalOptions();
 
 addXrpcAuthOptions(listCommand).action(withExit(async (options) => {
   intro(pc.cyan('wisp.place list'));
@@ -317,7 +319,9 @@ addXrpcAuthOptions(
 
 const domainCommand = program
   .command('domain')
-  .description('Manage domains with wisp XRPC');
+  .alias('domains')
+  .description('Manage domains with wisp XRPC')
+  .enablePositionalOptions();
 
 addXrpcAuthOptions(
   domainCommand
@@ -399,7 +403,8 @@ addXrpcAuthOptions(
 
 const siteCommand = program
   .command('site')
-  .description('Manage sites with wisp XRPC');
+  .description('Manage sites with wisp XRPC')
+  .enablePositionalOptions();
 
 addXrpcAuthOptions(domainCommand).action(withExit(async (options) => {
   intro(pc.cyan('wisp.place domain'));
