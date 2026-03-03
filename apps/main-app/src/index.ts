@@ -216,6 +216,23 @@ export const app = new Elysia({
 		const html = await Bun.file('./apps/main-app/public/landingpage.html').text()
 		return html.replaceAll('{{ATPROTO_LOGIN_URL}}', atprotoLoginUrl)
 	})
+	.get('/home', async ({ request, set }) => {
+		// Same as / but without the auto-redirect script for signed-in users
+		const loginUrl = isLocalDev
+			? `${new URL(request.url).origin}/api/auth/login`
+			: `${config.domain}/api/auth/login`
+		const atprotoLoginUrl = `https://atproto.wisp.place/?next=${encodeURIComponent(loginUrl)}`
+
+		set.headers['Content-Type'] = 'text/html; charset=utf-8'
+
+		const html = await Bun.file('./apps/main-app/public/landingpage.html').text()
+		return html
+			.replaceAll('{{ATPROTO_LOGIN_URL}}', atprotoLoginUrl)
+			.replace(
+				/<script>\s*\/\/ Check if user is already signed in[\s\S]*?<\/script>/,
+				''
+			)
+	})
 	.use(authRoutes(client, cookieSecret))
 	.use(wispRoutes(client, cookieSecret))
 	.use(domainRoutes(client, cookieSecret))
