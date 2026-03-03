@@ -1,10 +1,3 @@
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@public/components/ui/card";
 import { Badge } from "@public/components/ui/badge";
 import { Download, ExternalLink } from "lucide-react";
 import { CodeBlock } from "@public/components/ui/code-block";
@@ -16,242 +9,215 @@ const BINARIES = [
   {
     platform: "macOS (Apple Silicon)",
     filename: "wisp-cli-aarch64-darwin",
-    sha256:
-      "06544b3a3e27a4b8d7b3a46a39fb7205cf90b3061e19fe533b090facd604f375",
+    sha256: "06544b3a3e27a4b8d7b3a46a39fb7205cf90b3061e19fe533b090facd604f375",
   },
   {
     platform: "macOS (Intel)",
     filename: "wisp-cli-x86_64-darwin",
-    sha256:
-      "9ec523e3ceef927b37adc52d449dcd9e13ea84fa49b0b77f0d5932c94cfe262e",
+    sha256: "9ec523e3ceef927b37adc52d449dcd9e13ea84fa49b0b77f0d5932c94cfe262e",
   },
   {
     platform: "Linux (ARM64)",
     filename: "wisp-cli-aarch64-linux",
-    sha256:
-      "42a262668e13dce36173a4096cdc2b22358b805cf192335f84534c7f695d395b",
+    sha256: "42a262668e13dce36173a4096cdc2b22358b805cf192335f84534c7f695d395b",
   },
   {
     platform: "Linux (x86_64)",
     filename: "wisp-cli-x86_64-linux",
-    sha256:
-      "589ee59f3959ddfbc12fea38d2bcb91701f1362f560ae6fd506bebea3150e2cc",
-  },
-] as const;
-
-const FEATURES = [
-  { label: "Deploy", desc: "Push static sites directly from your terminal" },
-  {
-    label: "Pull",
-    desc: "Download sites from the PDS for development or backup",
-  },
-  {
-    label: "Serve",
-    desc: "Run a local server with real-time firehose updates",
-  },
-  {
-    label: "Domains",
-    desc: "Claim, manage, and assign custom domains on wisp.place",
+    sha256: "589ee59f3959ddfbc12fea38d2bcb91701f1362f560ae6fd506bebea3150e2cc",
   },
 ] as const;
 
 const LINKS = [
-  { label: "CLI Documentation", href: "https://docs.wisp.place/cli" },
+  { label: "Docs", href: "https://docs.wisp.place/cli" },
   {
-    label: "Source Code",
+    label: "Source",
     href: "https://tangled.org/@nekomimi.pet/wisp.place-monorepo/tree/main/cli",
   },
-  { label: "Tangled Spindle CI/CD", href: "https://blog.tangled.org/ci" },
+  { label: "Spindle CI/CD", href: "https://blog.tangled.org/ci" },
 ] as const;
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="text-xs uppercase tracking-wider text-muted-foreground pb-2 mb-3 border-b border-border/50">
+      {children}
+    </p>
+  );
+}
 
 export function CLITab() {
   return (
-    <div className="space-y-4 min-h-[400px]">
-      {/* Header + Features */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center gap-2">
-            <CardTitle>Wisp CLI</CardTitle>
-            <Badge variant="secondary" className="text-xs">
-              v1.0.0
-            </Badge>
-          </div>
-          <CardDescription>
-            Deploy static sites directly from your terminal
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <ul className="space-y-2">
-            {FEATURES.map(({ label, desc }) => (
-              <li key={label} className="flex items-start gap-3 text-sm">
-                <span className="text-muted-foreground mt-0.5 shrink-0 select-none">
-                  &gt;
-                </span>
-                <span className="text-muted-foreground">
-                  <strong className="text-foreground">{label}</strong> — {desc}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </CardContent>
-      </Card>
-
-      {/* Downloads */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Download v1.0.0</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-1.5">
-          {BINARIES.map(({ platform, filename, sha256 }) => (
+    <div className="h-full flex flex-col border border-border/30 bg-card/50 font-mono">
+      {/* Header */}
+      <div className="px-4 py-3 border-b border-border/50 flex-shrink-0 flex items-center justify-between gap-4 bg-card">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-semibold">Wisp CLI</span>
+          <Badge variant="secondary" className="text-xs">v1.0.0</Badge>
+        </div>
+        <div className="flex items-center gap-4">
+          {LINKS.map(({ label, href }) => (
             <a
-              key={filename}
-              href={`${BASE_URL}/${filename}`}
-              download
-              className="flex flex-col gap-1 p-3 rounded-lg border border-border bg-muted/30 hover:bg-muted hover:border-muted-foreground/30 transition-colors group"
+              key={href}
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1 text-xs text-accent hover:text-accent/80 transition-colors"
             >
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium">{platform}</span>
-                <Download className="w-4 h-4 text-muted-foreground group-hover:text-foreground transition-colors" />
-              </div>
-              <span className="font-mono text-[11px] text-muted-foreground break-all leading-relaxed">
-                SHA-256: {sha256}
-              </span>
+              {label}
+              <ExternalLink className="w-3 h-3" />
             </a>
           ))}
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
-      {/* Basic Usage */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Basic Usage</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-5">
+      {/* Scrollable content */}
+      <div className="flex-1 min-h-0 overflow-y-auto">
+
+        {/* Quick install */}
+        <div className="p-4 border-b border-border/50">
+          <SectionLabel>Install</SectionLabel>
           <div className="space-y-2">
-            <p className="text-sm font-medium">Deploy a Site</p>
-            <CodeBlock
-              code={`./wisp-cli deploy your-handle.bsky.social \\
+            <div className="flex items-center gap-3 px-3 py-2.5 bg-muted/40 border border-border/60">
+              <span className="text-accent text-xs select-none shrink-0">$</span>
+              <code className="text-sm flex-1">npm install -g wispctl</code>
+              <span className="text-[10px] text-muted-foreground border border-border/50 px-1.5 py-0.5 shrink-0">recommended</span>
+            </div>
+            <div className="flex items-center gap-3 px-3 py-2.5 bg-muted/40 border border-border/60">
+              <span className="text-accent text-xs select-none shrink-0">$</span>
+              <code className="text-sm flex-1">npm create wisp@latest</code>
+              <span className="text-[10px] text-muted-foreground shrink-0">scaffold a project</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Binary downloads */}
+        <div className="p-4 border-b border-border/50">
+          <SectionLabel>Binary Downloads v1.0.0</SectionLabel>
+          <div className="grid grid-cols-2 gap-2">
+            {BINARIES.map(({ platform, filename, sha256 }) => (
+              <a
+                key={filename}
+                href={`${BASE_URL}/${filename}`}
+                download
+                className="flex items-start justify-between gap-2 p-3 bg-card border border-border/60 hover:bg-muted/40 hover:border-border transition-colors group"
+              >
+                <div className="min-w-0">
+                  <div className="text-xs font-medium leading-snug">{platform}</div>
+                  <div className="font-mono text-[10px] text-muted-foreground mt-1 truncate">
+                    sha256: {sha256.slice(0, 12)}…
+                  </div>
+                </div>
+                <Download className="w-3.5 h-3.5 text-muted-foreground group-hover:text-accent transition-colors flex-shrink-0 mt-0.5" />
+              </a>
+            ))}
+          </div>
+        </div>
+
+        {/* Commands */}
+        <div className="p-4 space-y-2">
+          <SectionLabel>Commands</SectionLabel>
+
+          <details className="group border border-border/60 open:border-accent/40">
+            <summary className="flex items-center justify-between px-3 py-2.5 bg-muted/30 cursor-pointer hover:bg-muted/50 select-none list-none [&::-webkit-details-marker]:hidden transition-colors">
+              <span className="text-sm">
+                <span className="text-accent mr-2">$</span>
+                deploy · pull · serve
+              </span>
+              <span className="text-accent font-medium text-sm leading-none group-open:hidden">+</span>
+              <span className="text-accent font-medium text-sm leading-none hidden group-open:inline">−</span>
+            </summary>
+            <div className="border-t border-border/50 p-4 space-y-4 bg-background">
+              <div className="space-y-1.5">
+                <p className="text-xs text-muted-foreground font-medium">Deploy</p>
+                <CodeBlock
+                  code={`./wisp-cli deploy your-handle.bsky.social \\
   --path ./dist \\
   --site my-site
 
-# Available at:
 # https://sites.wisp.place/your-handle/my-site`}
-              language="bash"
-            />
-          </div>
-
-          <div className="space-y-2">
-            <p className="text-sm font-medium">Pull a Site</p>
-            <CodeBlock
-              code={`./wisp-cli pull your-handle.bsky.social \\
-  --site my-site \\
-  --output ./my-site`}
-              language="bash"
-            />
-          </div>
-
-          <div className="space-y-2">
-            <p className="text-sm font-medium">Serve with Live Updates</p>
-            <CodeBlock
-              code={`# Serve on http://localhost:8080 (default)
-./wisp-cli serve your-handle.bsky.social --site my-site
-
-# Custom port, SPA mode, or directory listing
+                  language="bash"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <p className="text-xs text-muted-foreground font-medium">Pull</p>
+                <CodeBlock
+                  code={`./wisp-cli pull your-handle.bsky.social \\
+  --site my-site --output ./my-site`}
+                  language="bash"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <p className="text-xs text-muted-foreground font-medium">Serve with live updates</p>
+                <CodeBlock
+                  code={`./wisp-cli serve your-handle.bsky.social --site my-site
 ./wisp-cli serve your-handle.bsky.social --site my-site --port 3000
-./wisp-cli serve your-handle.bsky.social --site my-site --spa
-./wisp-cli serve your-handle.bsky.social --site my-site --directory`}
-              language="bash"
-            />
-          </div>
+./wisp-cli serve your-handle.bsky.social --site my-site --spa`}
+                  language="bash"
+                />
+              </div>
+            </div>
+          </details>
 
-          <div className="space-y-2">
-            <p className="text-sm font-medium">Domain Management</p>
-            <CodeBlock
-              code={`./wisp-cli domain claim your-handle.bsky.social --domain example.com
+          <details className="group border border-border/60 open:border-accent/40">
+            <summary className="flex items-center justify-between px-3 py-2.5 bg-muted/30 cursor-pointer hover:bg-muted/50 select-none list-none [&::-webkit-details-marker]:hidden transition-colors">
+              <span className="text-sm">
+                <span className="text-accent mr-2">$</span>
+                domain · site management
+              </span>
+              <span className="text-accent font-medium text-sm leading-none group-open:hidden">+</span>
+              <span className="text-accent font-medium text-sm leading-none hidden group-open:inline">−</span>
+            </summary>
+            <div className="border-t border-border/50 p-4 bg-background">
+              <CodeBlock
+                code={`./wisp-cli domain claim your-handle.bsky.social --domain example.com
 ./wisp-cli domain claim-subdomain your-handle.bsky.social --subdomain alice
 ./wisp-cli domain status your-handle.bsky.social --domain example.com
 ./wisp-cli domain add-site your-handle.bsky.social --domain example.com --site mysite
 ./wisp-cli domain delete your-handle.bsky.social --domain example.com
-./wisp-cli site delete your-handle.bsky.social --site mysite`}
-              language="bash"
-            />
-          </div>
-
-          <div className="space-y-2">
-            <p className="text-sm font-medium">List Domains & Sites</p>
-            <CodeBlock
-              code={`./wisp-cli list domains your-handle.bsky.social
+./wisp-cli site delete your-handle.bsky.social --site mysite
+./wisp-cli list domains your-handle.bsky.social
 ./wisp-cli list sites your-handle.bsky.social`}
-              language="bash"
-            />
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* CI/CD */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">CI/CD with Tangled Spindle</CardTitle>
-          <CardDescription>
-            Deploy automatically on every push using{" "}
-            <a
-              href="https://blog.tangled.org/ci"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline underline-offset-2"
-            >
-              Tangled Spindle
-            </a>
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="space-y-2">
-            <div className="flex items-center gap-2">
-              <p className="text-sm font-medium">Simple Deploy</p>
-              <Badge variant="secondary" className="text-xs">
-                Copy Files
-              </Badge>
+                language="bash"
+              />
             </div>
-            <CodeBlock
-              code={`steps:
+          </details>
+
+          <details className="group border border-border/60 open:border-accent/40">
+            <summary className="flex items-center justify-between px-3 py-2.5 bg-muted/30 cursor-pointer hover:bg-muted/50 select-none list-none [&::-webkit-details-marker]:hidden transition-colors">
+              <span className="text-sm">
+                <span className="text-accent mr-2">$</span>
+                CI/CD — Tangled Spindle
+              </span>
+              <span className="text-accent font-medium text-sm leading-none group-open:hidden">+</span>
+              <span className="text-accent font-medium text-sm leading-none hidden group-open:inline">−</span>
+            </summary>
+            <div className="border-t border-border/50 p-4 space-y-4 bg-background">
+              <div className="space-y-1.5">
+                <p className="text-xs text-muted-foreground font-medium">Simple deploy</p>
+                <CodeBlock
+                  code={`steps:
   - name: deploy to wisp
     command: |
-      curl https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-x86_64-linux -o wisp-cli
+      curl ${BASE_URL}/wisp-cli-x86_64-linux -o wisp-cli
       chmod +x wisp-cli
       ./wisp-cli deploy "$WISP_HANDLE" \\
         --path "$SITE_PATH" \\
         --site "$SITE_NAME" \\
         --password "$WISP_APP_PASSWORD"`}
-              language="yaml"
-            />
-          </div>
-
-          <div className="space-y-2">
-            <div className="flex items-center gap-2">
-              <p className="text-sm font-medium">React / Vite Build & Deploy</p>
-              <Badge variant="secondary" className="text-xs">
-                Full Build
-              </Badge>
-            </div>
-            <CodeBlock
-              code={`when:
+                  language="yaml"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <p className="text-xs text-muted-foreground font-medium">React / Vite build &amp; deploy</p>
+                <CodeBlock
+                  code={`when:
   - event: ['push']
     branch: ['main']
-  - event: ['manual']
 
 engine: 'nixery'
-
-clone:
-  skip: false
-  depth: 1
-
 dependencies:
-  nixpkgs:
-    - nodejs
-    - coreutils
-    - curl
-  github:NixOS/nixpkgs/nixpkgs-unstable:
-    - bun
+  nixpkgs: [nodejs, coreutils, curl]
+  github:NixOS/nixpkgs/nixpkgs-unstable: [bun]
 
 environment:
   SITE_PATH: 'dist'
@@ -259,51 +225,29 @@ environment:
   WISP_HANDLE: 'your-handle.bsky.social'
 
 steps:
-  - name: build site
+  - name: build
     command: |
       export PATH="$HOME/.nix-profile/bin:$PATH"
       bun install --frozen-lockfile
       bun node_modules/.bin/vite build
-
-  - name: deploy to wisp
+  - name: deploy
     command: |
-      curl https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-x86_64-linux -o wisp-cli
+      curl ${BASE_URL}/wisp-cli-x86_64-linux -o wisp-cli
       chmod +x wisp-cli
       ./wisp-cli deploy "$WISP_HANDLE" \\
         --path "$SITE_PATH" \\
         --site "$SITE_NAME" \\
         --password "$WISP_APP_PASSWORD"`}
-              language="yaml"
-            />
-          </div>
-
-          <div className="p-3 bg-muted/30 rounded-lg border-l-4 border-accent text-xs text-muted-foreground">
-            <strong className="text-foreground">Note:</strong> Set{" "}
-            <code className="px-1 py-0.5 bg-background rounded">
-              WISP_APP_PASSWORD
-            </code>{" "}
-            as a secret in your Tangled Spindle repository settings.
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Learn More */}
-      <Card>
-        <CardContent className="pt-6 space-y-1.5">
-          {LINKS.map(({ label, href }) => (
-            <a
-              key={href}
-              href={href}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center justify-between p-3 rounded-lg border border-border bg-muted/30 hover:bg-muted transition-colors"
-            >
-              <span className="text-sm">{label}</span>
-              <ExternalLink className="w-4 h-4 text-muted-foreground" />
-            </a>
-          ))}
-        </CardContent>
-      </Card>
+                  language="yaml"
+                />
+              </div>
+              <p className="text-xs text-muted-foreground border-l-2 border-accent/60 pl-3">
+                Set <code className="px-1 py-0.5 bg-muted/60 border border-border/50">WISP_APP_PASSWORD</code> as a secret in your Spindle repo settings.
+              </p>
+            </div>
+          </details>
+        </div>
+      </div>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 /**
  * Bun-compatible AT Protocol Firehose
- * Uses our BunSubscription with the SDK's parsing/validation logic
+ * Uses BunSubscription with the SDK's parsing/validation logic
  */
 
 import { IdResolver } from '@atproto/identity';

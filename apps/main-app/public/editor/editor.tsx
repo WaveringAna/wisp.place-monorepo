@@ -483,7 +483,7 @@ function Dashboard() {
 						</TabsContent>
 
 						{/* Domains Tab */}
-						<TabsContent value="domains" className="flex-1 m-0 mt-4 overflow-y-auto border border-border/30 bg-card/50 p-4 data-[state=inactive]:hidden">
+						<TabsContent value="domains" className="flex-1 m-0 mt-4 overflow-hidden data-[state=inactive]:hidden">
 							<DomainsTab
 								wispDomains={wispDomains}
 								customDomains={customDomains}
@@ -500,7 +500,7 @@ function Dashboard() {
 						</TabsContent>
 
 						{/* Upload Tab */}
-						<TabsContent value="upload" className="flex-1 m-0 mt-4 overflow-y-auto border border-border/30 bg-card/50 p-4 data-[state=inactive]:hidden">
+						<TabsContent value="upload" className="flex-1 m-0 mt-4 overflow-hidden data-[state=inactive]:hidden">
 							<UploadTab
 								sites={sites}
 								sitesLoading={sitesLoading}
@@ -509,7 +509,7 @@ function Dashboard() {
 						</TabsContent>
 
 						{/* CLI Tab */}
-						<TabsContent value="cli" className="flex-1 m-0 mt-4 overflow-y-auto border border-border/30 bg-card/50 p-4 data-[state=inactive]:hidden">
+						<TabsContent value="cli" className="flex-1 m-0 mt-4 overflow-hidden data-[state=inactive]:hidden">
 							<CLITab />
 						</TabsContent>
 					</Tabs>

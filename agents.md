@@ -103,7 +103,7 @@ The project is a monorepo. The package handler it uses is bun. Please when you w
 
 Bun workspaces: `packages/@wisp/*`, `apps/main-app`, `apps/hosting-service`
 
-There are two typescript apps
+There are three typescript apps
 **`apps/main-app`** - Main backend (Bun + Elysia)
 
 - OAuth authentication and session management
@@ -112,13 +112,16 @@ There are two typescript apps
 - Admin database view in /admin
 - React frontend in public/
 
-**`apps/hosting-service`** - CDN static file server (Node + Hono)
-
-- Watches AT Protocol firehose for `place.wisp.fs` record changes
-- Downloads and caches site files to disk
+**`apps/hosting-service`** - CDN static file server (Bun + Hono)
 - Serves sites at `https://sites.wisp.place/{did}/{site-name}` and custom domains
 - Handles redirects (`_redirects` file support) and routing logic
+- Pulls sites from Tiered Storage (packages/@wispplace/tiered-storage)
+
+**`apps/firehose-service`** - ATProto Firehose consumer (Bun or Node)
+- Watches AT Protocol firehose for `place.wisp.*` record changes
+- Downloads and caches site files to S3
 - Backfill mode for syncing existing sites
+
 
 ### Shared Packages (`packages/@wisp/*`)
 
@@ -130,6 +133,7 @@ There are two typescript apps
 - **`constants`** - Shared constants (limits, file patterns, default settings)
 - **`observability`** - OpenTelemetry instrumentation
 - **`safe-fetch`** - Wrapped fetch with timeout/retry logic
+- **`tiered-storage`** - KV caching where reads bubble up from cold tier to warm/hot tier and writes bubble down from selected tier down. Streaming as well as buffering support. Used to store files in S3 cold tier as source of truth
 
 ### CLI
 

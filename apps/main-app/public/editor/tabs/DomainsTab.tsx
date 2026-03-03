@@ -1,11 +1,4 @@
-import { useState } from 'react'
-import {
-	Card,
-	CardContent,
-	CardDescription,
-	CardHeader,
-	CardTitle
-} from '@public/components/ui/card'
+import { useState, useEffect, useRef } from 'react'
 import { Button } from '@public/components/ui/button'
 import { Input } from '@public/components/ui/input'
 import { Label } from '@public/components/ui/label'
@@ -51,6 +44,10 @@ interface DomainsTabProps {
 	onCheckWispAvailability: (handle: string) => Promise<{ available: boolean | null }>
 }
 
+const Kbd = ({ children }: { children: React.ReactNode }) => (
+	<kbd className="px-2 py-1 bg-muted/50 rounded border border-border/50">{children}</kbd>
+)
+
 export function DomainsTab({
 	wispDomains,
 	customDomains,
@@ -79,12 +76,124 @@ export function DomainsTab({
 	const [viewDomainDNS, setViewDomainDNS] = useState<string | null>(null)
 	const [copiedField, setCopiedField] = useState<string | null>(null)
 
+	// Keyboard nav state
+	const [focusedIndex, setFocusedIndex] = useState(0)
+	const containerRef = useRef<HTMLDivElement>(null)
+	const itemRefs = useRef<(HTMLDivElement | null)[]>([])
+	const scrollContainerRef = useRef<HTMLDivElement>(null)
+
+	const totalDomains = wispDomains.length + customDomains.length
+
+	// Clamp focusedIndex when domains change
+	useEffect(() => {
+		if (totalDomains > 0 && focusedIndex >= totalDomains) {
+			setFocusedIndex(totalDomains - 1)
+		}
+	}, [totalDomains])
+
+	// Auto-focus when domains first load
+	useEffect(() => {
+		if (!domainsLoading && totalDomains > 0 && containerRef.current) {
+			const timer = setTimeout(() => containerRef.current?.focus(), 100)
+			return () => clearTimeout(timer)
+		}
+	}, [domainsLoading])
+
+	// Refocus container when a dialog closes
+	useEffect(() => {
+		let wasOpen = document.querySelector('[role="dialog"]') !== null
+		const observer = new MutationObserver(() => {
+			const isOpen = document.querySelector('[role="dialog"]') !== null
+			if (wasOpen && !isOpen) setTimeout(() => containerRef.current?.focus(), 50)
+			wasOpen = isOpen
+		})
+		observer.observe(document.body, { childList: true, subtree: true })
+		return () => observer.disconnect()
+	}, [])
+
+	// Scroll focused item into view
+	useEffect(() => {
+		const element = itemRefs.current[focusedIndex]
+		if (element && scrollContainerRef.current) {
+			const container = scrollContainerRef.current
+			const elementRect = element.getBoundingClientRect()
+			const containerRect = container.getBoundingClientRect()
+			const isOutOfView =
+				elementRect.bottom > containerRect.bottom - 50 ||
+				elementRect.top < containerRect.top + 50
+			if (isOutOfView) element.scrollIntoView({ behavior: 'smooth', block: 'center' })
+		}
+	}, [focusedIndex])
+
+	// Keyboard navigation
+	useEffect(() => {
+		const handleKeyDown = (e: KeyboardEvent) => {
+			const target = e.target as HTMLElement
+			const isTyping = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA'
+			const isDialogOpen = document.querySelector('[role="dialog"]') !== null
+			const hasFocus = containerRef.current?.contains(document.activeElement)
+
+			if (isTyping || isDialogOpen || !hasFocus || totalDomains === 0) return
+
+			const isWisp = focusedIndex < wispDomains.length
+			const domain = isWisp
+				? wispDomains[focusedIndex]
+				: customDomains[focusedIndex - wispDomains.length]
+
+			switch (e.key) {
+				case 'ArrowUp':
+					e.preventDefault()
+					setFocusedIndex(prev => Math.max(0, prev - 1))
+					break
+				case 'ArrowDown':
+					e.preventDefault()
+					setFocusedIndex(prev => Math.min(totalDomains - 1, prev + 1))
+					break
+				case 'd':
+					e.preventDefault()
+					if (isWisp) {
+						onDeleteWispDomain((domain as WispDomain).domain)
+					} else {
+						onDeleteCustomDomain((domain as CustomDomain).id)
+					}
+					break
+				case 'v':
+					if (!isWisp) {
+						const cd = domain as CustomDomain
+						if (!cd.verified && verificationStatus[cd.id] !== 'verifying') {
+							e.preventDefault()
+							onVerifyDomain(cd.id)
+						}
+					}
+					break
+				case 'Enter':
+					if (!isWisp) {
+						e.preventDefault()
+						setViewDomainDNS((domain as CustomDomain).id)
+					}
+					break
+			}
+		}
+
+		window.addEventListener('keydown', handleKeyDown)
+		return () => window.removeEventListener('keydown', handleKeyDown)
+	}, [
+		totalDomains,
+		focusedIndex,
+		wispDomains,
+		customDomains,
+		verificationStatus,
+		onDeleteWispDomain,
+		onDeleteCustomDomain,
+		onVerifyDomain
+	])
+
 	const copyToClipboard = async (value: string, label: string) => {
 		try {
 			await navigator.clipboard.writeText(value)
 			setCopiedField(label)
 			window.setTimeout(() => {
-				setCopiedField((current) => (current === label ? null : current))
+				setCopiedField(current => (current === label ? null : current))
 			}, 1400)
 		} catch {
 			setCopiedField(null)
@@ -92,26 +201,21 @@ export function DomainsTab({
 	}
 
 	const checkWispAvailability = async (handle: string) => {
-		const trimmedHandle = handle.trim().toLowerCase()
-		if (!trimmedHandle) {
+		const trimmed = handle.trim().toLowerCase()
+		if (!trimmed) {
 			setWispAvailability({ available: null, checking: false })
 			return
 		}
-
 		setWispAvailability({ available: null, checking: true })
-		const result = await onCheckWispAvailability(trimmedHandle)
+		const result = await onCheckWispAvailability(trimmed)
 		setWispAvailability({ available: result.available, checking: false })
 	}
 
 	const handleClaimWispDomain = async () => {
-		const trimmedHandle = wispHandle.trim().toLowerCase()
-		if (!trimmedHandle) {
-			alert('Please enter a handle')
-			return
-		}
-
+		const trimmed = wispHandle.trim().toLowerCase()
+		if (!trimmed) { alert('Please enter a handle'); return }
 		setIsClaimingWisp(true)
-		const result = await onClaimWispDomain(trimmedHandle)
+		const result = await onClaimWispDomain(trimmed)
 		if (result.success) {
 			setWispHandle('')
 			setWispAvailability({ available: null, checking: false })
@@ -120,305 +224,290 @@ export function DomainsTab({
 	}
 
 	const handleAddCustomDomain = async () => {
-		if (!customDomain) {
-			alert('Please enter a domain')
-			return
-		}
-
+		if (!customDomain) { alert('Please enter a domain'); return }
 		setIsAddingDomain(true)
 		const result = await onAddCustomDomain(customDomain)
 		setIsAddingDomain(false)
-
 		if (result.success) {
 			setCustomDomain('')
 			setAddDomainModalOpen(false)
-			// Automatically show DNS configuration for the newly added domain
-			if (result.id) {
-				setViewDomainDNS(result.id)
-			}
+			if (result.id) setViewDomainDNS(result.id)
 		}
 	}
 
+	const canClaimMore = wispDomains.length < 3 || !!userInfo?.isSupporter
+
 	return (
 		<>
-			<div className="space-y-4 min-h-[400px]">
-				<Card>
-					<CardHeader>
-						<CardTitle>wisp.place Subdomains</CardTitle>
-						<CardDescription>
-							{userInfo?.isSupporter
-								? 'Your free subdomains on the wisp.place network (unlimited as a supporter)'
-								: 'Your free subdomains on the wisp.place network (up to 3)'}
-						</CardDescription>
-					</CardHeader>
-					<CardContent>
-						{domainsLoading ? (
-							<div className="space-y-4">
-								<div className="space-y-2">
-									{[...Array(2)].map((_, i) => (
-										<div
-											key={i}
-											className="flex items-center justify-between p-3 border border-border rounded-lg"
-										>
-											<div className="flex flex-col gap-2 flex-1">
-												<div className="flex items-center gap-2">
-													<SkeletonShimmer className="h-4 w-4 rounded-full" />
-													<SkeletonShimmer className="h-4 w-40" />
-												</div>
-												<SkeletonShimmer className="h-3 w-32 ml-6" />
-											</div>
-											<SkeletonShimmer className="h-8 w-8" />
-										</div>
-									))}
-								</div>
-								<div className="p-4 bg-muted/30 rounded-lg space-y-3">
-									<SkeletonShimmer className="h-4 w-full" />
-									<div className="space-y-2">
-										<SkeletonShimmer className="h-4 w-24" />
-										<SkeletonShimmer className="h-10 w-full" />
-									</div>
-									<SkeletonShimmer className="h-10 w-full" />
-								</div>
+			<div
+				ref={containerRef}
+				tabIndex={0}
+				className="h-full flex flex-col border border-border/30 bg-card/50 font-mono outline-none"
+				onClick={e => {
+				const t = e.target as HTMLElement
+				if (!t.closest('input, textarea, button, select, a, label')) {
+					containerRef.current?.focus()
+				}
+			}}
+			>
+				{/* Keyboard hints */}
+				<div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground p-4 pb-3 border-b border-border/30 flex-shrink-0">
+					{totalDomains > 0 ? (
+						<>
+							<div className="flex items-center gap-2">
+								<Kbd>↑</Kbd><Kbd>↓</Kbd>
+								<span>navigate</span>
 							</div>
-						) : (
-							<div className="space-y-4">
-								{wispDomains.length > 0 && (
-									<div className="space-y-2">
-										{wispDomains.map((domain) => (
-											<div
-												key={domain.domain}
-												className="flex items-center justify-between p-3 border border-border rounded-lg"
-											>
-												<div className="flex flex-col gap-1 flex-1">
-													<div className="flex items-center gap-2">
-														<CheckCircle2 className="w-4 h-4 text-green-500" />
-														<span className="font-mono">
-															{domain.domain}
-														</span>
-													</div>
-													{domain.rkey && (
-														<p className="text-xs text-muted-foreground ml-6">
-															→ Mapped to site: {domain.rkey}
-														</p>
-													)}
-												</div>
-												<Button
-													variant="ghost"
-													size="sm"
-													onClick={() => onDeleteWispDomain(domain.domain)}
-												>
-													<Trash2 className="w-4 h-4" />
-												</Button>
-											</div>
-										))}
-									</div>
-								)}
-
-								{(wispDomains.length < 3 || userInfo?.isSupporter) && (
-									<div className="p-4 bg-muted/30 rounded-lg">
-										<p className="text-sm text-muted-foreground mb-4">
-											{wispDomains.length === 0
-												? 'Claim your free wisp.place subdomain'
-												: userInfo?.isSupporter
-												? `Claim another wisp.place subdomain (${wispDomains.length} claimed)`
-												: `Claim another wisp.place subdomain (${wispDomains.length}/3)`}
-										</p>
-										<div className="space-y-3">
-											<div className="space-y-2">
-												<Label htmlFor="wisp-handle">Choose your handle</Label>
-												<div className="flex gap-2">
-													<div className="flex-1 relative">
-														<Input
-															id="wisp-handle"
-															placeholder="mysite"
-															value={wispHandle}
-															onChange={(e) => {
-																setWispHandle(e.target.value)
-																if (e.target.value.trim()) {
-																	checkWispAvailability(e.target.value)
-																} else {
-																	setWispAvailability({ available: null, checking: false })
-																}
-															}}
-															disabled={isClaimingWisp}
-															className="pr-24"
-														/>
-														<span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-															.wisp.place
-														</span>
-													</div>
-												</div>
-												{wispAvailability.checking && (
-													<p className="text-xs text-muted-foreground flex items-center gap-1">
-														<Loader2 className="w-3 h-3 animate-spin" />
-														Checking availability...
-													</p>
-												)}
-												{!wispAvailability.checking && wispAvailability.available === true && (
-													<p className="text-xs text-green-600 flex items-center gap-1">
-														<CheckCircle2 className="w-3 h-3" />
-														Available
-													</p>
-												)}
-												{!wispAvailability.checking && wispAvailability.available === false && (
-													<p className="text-xs text-red-600 flex items-center gap-1">
-														<XCircle className="w-3 h-3" />
-														Not available
-													</p>
-												)}
-											</div>
-											<Button
-												onClick={handleClaimWispDomain}
-												disabled={!wispHandle.trim() || isClaimingWisp || wispAvailability.available !== true}
-												className="w-full"
-											>
-												{isClaimingWisp ? (
-													<>
-														<Loader2 className="w-4 h-4 mr-2 animate-spin" />
-														Claiming...
-													</>
-												) : (
-													'Claim Subdomain'
-												)}
-											</Button>
-										</div>
-									</div>
-								)}
-
-								{wispDomains.length === 3 && !userInfo?.isSupporter && (
-									<div className="p-3 bg-muted/30 rounded-lg text-center">
-										<p className="text-sm text-muted-foreground">
-											You have claimed the maximum of 3 wisp.place subdomains
-										</p>
-									</div>
-								)}
+							<span>•</span>
+							<div className="flex items-center gap-2">
+								<Kbd>d</Kbd><span className="text-red-400">delete</span>
 							</div>
-						)}
-					</CardContent>
-				</Card>
+							<span>•</span>
+							<div className="flex items-center gap-2">
+								<Kbd>v</Kbd><span>verify</span>
+							</div>
+							<span>•</span>
+							<div className="flex items-center gap-2">
+								<Kbd>Enter</Kbd><span>view DNS</span>
+							</div>
+						</>
+					) : (
+						<span>No domains yet — claim a subdomain or add a custom domain below</span>
+					)}
+				</div>
 
-				<Card>
-					<CardHeader>
-						<CardTitle>Custom Domains</CardTitle>
-						<CardDescription>
-							Bring your own domain with DNS verification
-						</CardDescription>
-					</CardHeader>
-					<CardContent className="space-y-4">
-						<Button
-							onClick={() => setAddDomainModalOpen(true)}
-							className="w-full"
-						>
-							Add Custom Domain
-						</Button>
+				{/* Scrollable content */}
+				<div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-y-auto">
+
+					{/* Wisp Domains */}
+					<div className="p-4 space-y-2">
+						<div className="flex items-center justify-between mb-3">
+							<p className="text-xs uppercase tracking-wider text-muted-foreground">
+								Wisp Domains
+							</p>
+							{!userInfo?.isSupporter && (
+								<span className="text-xs text-muted-foreground">{wispDomains.length}/3</span>
+							)}
+						</div>
 
 						{domainsLoading ? (
 							<div className="space-y-2">
 								{[...Array(2)].map((_, i) => (
-									<div
-										key={i}
-										className="flex items-center justify-between p-3 border border-border rounded-lg"
-									>
-										<div className="flex flex-col gap-2 flex-1">
-											<div className="flex items-center gap-2">
-												<SkeletonShimmer className="h-4 w-4 rounded-full" />
-												<SkeletonShimmer className="h-4 w-48" />
+									<div key={i} className="p-3 border border-border/30">
+										<SkeletonShimmer className="h-5 w-full" />
+									</div>
+								))}
+							</div>
+						) : wispDomains.length > 0 ? (
+							<div className="space-y-2">
+								{wispDomains.map((domain, idx) => {
+									const isFocused = idx === focusedIndex
+									return (
+										<div
+											key={domain.domain}
+											ref={el => { itemRefs.current[idx] = el }}
+											className={`flex items-center justify-between p-3 border transition-colors ${
+												isFocused
+													? 'border-accent bg-accent/10'
+													: 'border-border/30 hover:bg-muted/10'
+											}`}
+										>
+											<div>
+												<div className="flex items-center gap-2">
+													<CheckCircle2 className="w-3 h-3 text-green-500 flex-shrink-0" />
+													<span className="text-sm">{domain.domain}</span>
+													<Badge variant="secondary" className="text-[10px]">wisp</Badge>
+												</div>
+												{domain.rkey && (
+													<p className="text-xs text-muted-foreground mt-1 ml-5">
+														→ {domain.rkey}
+													</p>
+												)}
 											</div>
-											<SkeletonShimmer className="h-3 w-36 ml-6" />
+											<Button
+												variant="ghost"
+												size="sm"
+												className="h-7 px-2 flex-shrink-0"
+												onClick={() => onDeleteWispDomain(domain.domain)}
+											>
+												<Trash2 className="w-3 h-3" />
+											</Button>
 										</div>
-										<div className="flex items-center gap-2">
-											<SkeletonShimmer className="h-8 w-20" />
-											<SkeletonShimmer className="h-8 w-20" />
-											<SkeletonShimmer className="h-8 w-8" />
+									)
+								})}
+							</div>
+						) : null}
+
+						{/* Claim form */}
+						{!domainsLoading && canClaimMore && (
+							<div className="mt-2 p-3 border border-dashed border-border/50">
+								<p className="text-xs text-muted-foreground mb-3">
+									{wispDomains.length === 0
+										? 'Claim your free wisp.place subdomain'
+										: userInfo?.isSupporter
+										? `Claim another (${wispDomains.length} claimed)`
+										: `Claim another (${wispDomains.length}/3)`}
+								</p>
+								<div className="space-y-2">
+									<Label htmlFor="wisp-handle" className="text-xs">Handle</Label>
+									<div className="flex gap-2">
+										<div className="flex-1 relative">
+											<Input
+												id="wisp-handle"
+												placeholder="mysite"
+												value={wispHandle}
+												onChange={e => {
+													setWispHandle(e.target.value)
+													if (e.target.value.trim()) checkWispAvailability(e.target.value)
+													else setWispAvailability({ available: null, checking: false })
+												}}
+												onKeyDown={e => { if (e.key === 'Enter') handleClaimWispDomain() }}
+												disabled={isClaimingWisp}
+												className="pr-24 h-8 text-sm"
+											/>
+											<span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+												.wisp.place
+											</span>
 										</div>
+										<Button
+											onClick={handleClaimWispDomain}
+											disabled={!wispHandle.trim() || isClaimingWisp || wispAvailability.available !== true}
+											size="sm"
+											className="h-8 flex-shrink-0"
+										>
+											{isClaimingWisp ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Claim'}
+										</Button>
+									</div>
+									{wispAvailability.checking && (
+										<p className="text-xs text-muted-foreground flex items-center gap-1">
+											<Loader2 className="w-3 h-3 animate-spin" />
+											Checking...
+										</p>
+									)}
+									{!wispAvailability.checking && wispAvailability.available === true && (
+										<p className="text-xs text-green-600 flex items-center gap-1">
+											<CheckCircle2 className="w-3 h-3" />
+											Available
+										</p>
+									)}
+									{!wispAvailability.checking && wispAvailability.available === false && (
+										<p className="text-xs text-red-600 flex items-center gap-1">
+											<XCircle className="w-3 h-3" />
+											Not available
+										</p>
+									)}
+								</div>
+							</div>
+						)}
+
+						{!domainsLoading && wispDomains.length === 3 && !userInfo?.isSupporter && (
+							<p className="text-xs text-muted-foreground text-center py-2">
+								Maximum of 3 wisp.place subdomains claimed
+							</p>
+						)}
+					</div>
+
+					{/* Custom Domains */}
+					<div className="p-4 border-t border-border/30 space-y-2">
+						<div className="flex items-center justify-between mb-3">
+							<p className="text-xs uppercase tracking-wider text-muted-foreground">
+								Custom Domains
+							</p>
+							<Button
+								variant="outline"
+								size="sm"
+								className="h-7 text-xs px-3"
+								onClick={() => setAddDomainModalOpen(true)}
+							>
+								+ Add Domain
+							</Button>
+						</div>
+
+						{domainsLoading ? (
+							<div className="space-y-2">
+								{[...Array(2)].map((_, i) => (
+									<div key={i} className="p-3 border border-border/30">
+										<SkeletonShimmer className="h-5 w-full" />
 									</div>
 								))}
 							</div>
 						) : customDomains.length === 0 ? (
-							<div className="text-center py-4 text-muted-foreground text-sm">
+							<p className="text-xs text-muted-foreground py-2">
 								No custom domains added yet
-							</div>
+							</p>
 						) : (
 							<div className="space-y-2">
-								{customDomains.map((domain) => (
-									<div
-										key={domain.id}
-										className="flex items-center justify-between p-3 border border-border rounded-lg"
-									>
-										<div className="flex flex-col gap-1 flex-1">
-											<div className="flex items-center gap-2">
-												{domain.verified ? (
-													<CheckCircle2 className="w-4 h-4 text-green-500" />
-												) : (
-													<XCircle className="w-4 h-4 text-red-500" />
+								{customDomains.map((domain, idx) => {
+									const globalIndex = wispDomains.length + idx
+									const isFocused = globalIndex === focusedIndex
+									const isVerifying = verificationStatus[domain.id] === 'verifying'
+									return (
+										<div
+											key={domain.id}
+											ref={el => { itemRefs.current[globalIndex] = el }}
+											className={`flex items-center justify-between p-3 border transition-colors ${
+												isFocused
+													? 'border-accent bg-accent/10'
+													: 'border-border/30 hover:bg-muted/10'
+											}`}
+										>
+											<div className="min-w-0 flex-1">
+												<div className="flex items-center gap-2 flex-wrap">
+													{domain.verified
+														? <CheckCircle2 className="w-3 h-3 text-green-500 flex-shrink-0" />
+														: <XCircle className="w-3 h-3 text-red-500 flex-shrink-0" />
+													}
+													<span className="text-sm truncate">{domain.domain}</span>
+													<Badge variant="outline" className="text-[10px]">custom</Badge>
+													{domain.verified
+														? <Badge variant="secondary" className="text-[10px]">✓ verified</Badge>
+														: <Badge variant="secondary" className="text-[10px] text-yellow-500">⏳ pending</Badge>
+													}
+												</div>
+												{domain.rkey && domain.rkey !== 'self' && (
+													<p className="text-xs text-muted-foreground mt-1 ml-5">
+														→ {domain.rkey}
+													</p>
 												)}
-												<span className="font-mono">
-													{domain.domain}
-												</span>
 											</div>
-											{domain.rkey && domain.rkey !== 'self' && (
-												<p className="text-xs text-muted-foreground ml-6">
-													→ Mapped to site: {domain.rkey}
-												</p>
-											)}
-										</div>
-										<div className="flex items-center gap-2">
-											<Button
-												variant="outline"
-												size="sm"
-												onClick={() =>
-													setViewDomainDNS(domain.id)
-												}
-											>
-												View DNS
-											</Button>
-											{domain.verified ? (
-												<Badge variant="secondary">
-													Verified
-												</Badge>
-											) : (
+											<div className="flex items-center gap-1 flex-shrink-0 ml-2">
 												<Button
 													variant="outline"
 													size="sm"
-													onClick={() =>
-														onVerifyDomain(domain.id)
-													}
-													disabled={
-														verificationStatus[
-															domain.id
-														] === 'verifying'
-													}
+													className="h-7 text-xs px-2"
+													onClick={() => setViewDomainDNS(domain.id)}
 												>
-													{verificationStatus[
-														domain.id
-													] === 'verifying' ? (
-														<>
-															<Loader2 className="w-3 h-3 mr-1 animate-spin" />
-															Verifying...
-														</>
-													) : (
-														'Verify DNS'
-													)}
+													DNS
 												</Button>
-											)}
-											<Button
-												variant="ghost"
-												size="sm"
-												onClick={() =>
-													onDeleteCustomDomain(
-														domain.id
-													)
-												}
-											>
-												<Trash2 className="w-4 h-4" />
-											</Button>
+												{!domain.verified && (
+													<Button
+														variant="outline"
+														size="sm"
+														className="h-7 text-xs px-2"
+														onClick={() => onVerifyDomain(domain.id)}
+														disabled={isVerifying}
+													>
+														{isVerifying
+															? <Loader2 className="w-3 h-3 animate-spin" />
+															: 'Verify'}
+													</Button>
+												)}
+												<Button
+													variant="ghost"
+													size="sm"
+													className="h-7 px-2"
+													onClick={() => onDeleteCustomDomain(domain.id)}
+												>
+													<Trash2 className="w-3 h-3" />
+												</Button>
+											</div>
 										</div>
-									</div>
-								))}
+									)
+								})}
 							</div>
 						)}
-					</CardContent>
-				</Card>
+					</div>
+				</div>
 			</div>
 
 			{/* Add Custom Domain Modal */}
@@ -438,7 +527,8 @@ export function DomainsTab({
 								id="new-domain"
 								placeholder="example.com"
 								value={customDomain}
-								onChange={(e) => setCustomDomain(e.target.value)}
+								onChange={e => setCustomDomain(e.target.value)}
+								onKeyDown={e => { if (e.key === 'Enter') handleAddCustomDomain() }}
 							/>
 							<p className="text-xs text-muted-foreground">
 								After adding, click "View DNS" to see the records you
@@ -449,10 +539,7 @@ export function DomainsTab({
 					<DialogFooter className="flex-col sm:flex-row gap-2">
 						<Button
 							variant="outline"
-							onClick={() => {
-								setAddDomainModalOpen(false)
-								setCustomDomain('')
-							}}
+							onClick={() => { setAddDomainModalOpen(false); setCustomDomain('') }}
 							className="w-full sm:w-auto"
 							disabled={isAddingDomain}
 						>
@@ -464,10 +551,7 @@ export function DomainsTab({
 							className="w-full sm:w-auto"
 						>
 							{isAddingDomain ? (
-								<>
-									<Loader2 className="w-4 h-4 mr-2 animate-spin" />
-									Adding...
-								</>
+								<><Loader2 className="w-4 h-4 mr-2 animate-spin" />Adding...</>
 							) : (
 								'Add Domain'
 							)}
@@ -479,7 +563,7 @@ export function DomainsTab({
 			{/* View DNS Records Modal */}
 			<Dialog
 				open={viewDomainDNS !== null}
-				onOpenChange={(open) => !open && setViewDomainDNS(null)}
+				onOpenChange={open => !open && setViewDomainDNS(null)}
 			>
 				<DialogContent className="sm:max-w-lg max-h-[80vh] overflow-hidden">
 					<DialogHeader>
@@ -492,81 +576,41 @@ export function DomainsTab({
 						<div className="relative max-h-[62vh] overflow-y-auto pr-2">
 							<div className="pointer-events-none sticky top-0 z-10 h-3 bg-gradient-to-b from-background to-transparent" />
 							{(() => {
-								const domain = customDomains.find(
-									(d) => d.id === viewDomainDNS
-								)
+								const domain = customDomains.find(d => d.id === viewDomainDNS)
 								if (!domain) return null
-
 								return (
 									<div className="space-y-4 py-4">
 										<div className="p-3 bg-muted/30 rounded-lg">
-											<p className="text-xs uppercase tracking-wide text-muted-foreground">
-												Domain
-											</p>
-											<p className="font-mono text-sm mt-1">
-												{domain.domain}
-											</p>
+											<p className="text-xs uppercase tracking-wide text-muted-foreground">Domain</p>
+											<p className="font-mono text-sm mt-1">{domain.domain}</p>
 										</div>
 
 										<div className="space-y-3">
 											<div className="p-4 bg-background rounded border border-border">
 												<div className="flex items-center justify-between gap-3">
 													<div>
-														<p className="text-xs uppercase tracking-wide text-muted-foreground">
-															Step 1
-														</p>
-														<p className="text-sm font-semibold">
-															Verify ownership (TXT)
-														</p>
+														<p className="text-xs uppercase tracking-wide text-muted-foreground">Step 1</p>
+														<p className="text-sm font-semibold">Verify ownership (TXT)</p>
 													</div>
-													<Badge variant="secondary" className="text-xs">
-														Required
-													</Badge>
+													<Badge variant="secondary" className="text-xs">Required</Badge>
 												</div>
 												<div className="mt-3 space-y-2">
 													<div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/30 px-3 py-2">
 														<div className="min-w-0">
-															<p className="text-xs text-muted-foreground">
-																Name
-															</p>
-															<p className="font-mono text-sm select-all">
-																_wisp.{domain.domain}
-															</p>
+															<p className="text-xs text-muted-foreground">Name</p>
+															<p className="font-mono text-sm select-all">_wisp.{domain.domain}</p>
 														</div>
-														<Button
-															variant="outline"
-															size="sm"
-															onClick={() =>
-																copyToClipboard(
-																	`_wisp.${domain.domain}`,
-																	'txt-name'
-																)
-															}
-														>
-															{copiedField === 'txt-name'
-																? 'Copied'
-																: 'Copy'}
+														<Button variant="outline" size="sm" onClick={() => copyToClipboard(`_wisp.${domain.domain}`, 'txt-name')}>
+															{copiedField === 'txt-name' ? 'Copied' : 'Copy'}
 														</Button>
 													</div>
 													<div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/30 px-3 py-2">
 														<div className="min-w-0">
-															<p className="text-xs text-muted-foreground">
-																Value
-															</p>
-															<p className="font-mono text-sm break-all select-all">
-																{userInfo.did}
-															</p>
+															<p className="text-xs text-muted-foreground">Value</p>
+															<p className="font-mono text-sm break-all select-all">{userInfo.did}</p>
 														</div>
-														<Button
-															variant="outline"
-															size="sm"
-															onClick={() =>
-																copyToClipboard(userInfo.did, 'txt-value')
-															}
-														>
-															{copiedField === 'txt-value'
-																? 'Copied'
-																: 'Copy'}
+														<Button variant="outline" size="sm" onClick={() => copyToClipboard(userInfo.did, 'txt-value')}>
+															{copiedField === 'txt-value' ? 'Copied' : 'Copy'}
 														</Button>
 													</div>
 												</div>
@@ -575,61 +619,28 @@ export function DomainsTab({
 											<div className="p-4 bg-background rounded border border-border">
 												<div className="flex items-center justify-between gap-3">
 													<div>
-														<p className="text-xs uppercase tracking-wide text-muted-foreground">
-															Step 2
-														</p>
-														<p className="text-sm font-semibold">
-															Point your domain (CNAME)
-														</p>
+														<p className="text-xs uppercase tracking-wide text-muted-foreground">Step 2</p>
+														<p className="text-sm font-semibold">Point your domain (CNAME)</p>
 													</div>
-													<Badge variant="secondary" className="text-xs">
-														Recommended
-													</Badge>
+													<Badge variant="secondary" className="text-xs">Recommended</Badge>
 												</div>
 												<div className="mt-3 space-y-2">
 													<div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/30 px-3 py-2">
 														<div className="min-w-0">
-															<p className="text-xs text-muted-foreground">
-																Name
-															</p>
-															<p className="font-mono text-sm select-all">
-																{domain.domain}
-															</p>
+															<p className="text-xs text-muted-foreground">Name</p>
+															<p className="font-mono text-sm select-all">{domain.domain}</p>
 														</div>
-														<Button
-															variant="outline"
-															size="sm"
-															onClick={() =>
-																copyToClipboard(domain.domain, 'cname-name')
-															}
-														>
-															{copiedField === 'cname-name'
-																? 'Copied'
-																: 'Copy'}
+														<Button variant="outline" size="sm" onClick={() => copyToClipboard(domain.domain, 'cname-name')}>
+															{copiedField === 'cname-name' ? 'Copied' : 'Copy'}
 														</Button>
 													</div>
 													<div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/30 px-3 py-2">
 														<div className="min-w-0">
-															<p className="text-xs text-muted-foreground">
-																Value
-															</p>
-															<p className="font-mono text-sm select-all">
-																{domain.id}.dns.wisp.place
-															</p>
+															<p className="text-xs text-muted-foreground">Value</p>
+															<p className="font-mono text-sm select-all">{domain.id}.dns.wisp.place</p>
 														</div>
-														<Button
-															variant="outline"
-															size="sm"
-															onClick={() =>
-																copyToClipboard(
-																	`${domain.id}.dns.wisp.place`,
-																	'cname-value'
-																)
-															}
-														>
-															{copiedField === 'cname-value'
-																? 'Copied'
-																: 'Copy'}
+														<Button variant="outline" size="sm" onClick={() => copyToClipboard(`${domain.id}.dns.wisp.place`, 'cname-value')}>
+															{copiedField === 'cname-value' ? 'Copied' : 'Copy'}
 														</Button>
 													</div>
 												</div>
@@ -655,49 +666,26 @@ export function DomainsTab({
 														</p>
 													</div>
 													<div className="space-y-3">
-														{HOSTING_NODES.map((node) => (
+														{HOSTING_NODES.map(node => (
 															<div key={node.ip} className="space-y-2 pl-3 border-l-2 border-muted">
-																<div className="font-semibold text-muted-foreground mb-1">
-																	{node.region}
-																</div>
+																<div className="font-semibold text-muted-foreground mb-1">{node.region}</div>
 																<div className="font-mono text-xs space-y-1">
 																	<div>
-																		<span className="text-muted-foreground">
-																			Name:
-																		</span>{' '}
-																		<span className="select-all">
-																			{domain.domain}
-																		</span>
+																		<span className="text-muted-foreground">Name:</span>{' '}
+																		<span className="select-all">{domain.domain}</span>
 																	</div>
 																	<div>
-																		<span className="text-muted-foreground">
-																			Type:
-																		</span>{' '}
+																		<span className="text-muted-foreground">Type:</span>{' '}
 																		<span>A</span>
 																	</div>
 																</div>
 																<div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/30 px-3 py-2 font-mono text-xs">
 																	<div className="min-w-0">
-																		<p className="text-xs text-muted-foreground">
-																			Value
-																		</p>
-																		<p className="select-all">
-																			{node.ip}
-																		</p>
+																		<p className="text-xs text-muted-foreground">Value</p>
+																		<p className="select-all">{node.ip}</p>
 																	</div>
-																	<Button
-																		variant="outline"
-																		size="sm"
-																		onClick={() =>
-																			copyToClipboard(
-																				node.ip,
-																				`a-value-${node.ip}`
-																			)
-																		}
-																	>
-																		{copiedField === `a-value-${node.ip}`
-																			? 'Copied'
-																			: 'Copy'}
+																	<Button variant="outline" size="sm" onClick={() => copyToClipboard(node.ip, `a-value-${node.ip}`)}>
+																		{copiedField === `a-value-${node.ip}` ? 'Copied' : 'Copy'}
 																	</Button>
 																</div>
 															</div>
@@ -721,9 +709,7 @@ export function DomainsTab({
 								)
 							})()}
 							<div className="pointer-events-none sticky bottom-0 z-10 flex h-8 items-end justify-center bg-gradient-to-t from-background to-transparent">
-								<span className="text-[10px] text-muted-foreground">
-									Scroll for more
-								</span>
+								<span className="text-[10px] text-muted-foreground">Scroll for more</span>
 							</div>
 						</div>
 					)}
