@@ -104,7 +104,7 @@ export function CLITab() {
                 <div className="min-w-0">
                   <div className="text-xs font-medium leading-snug">{platform}</div>
                   <div className="font-mono text-[10px] text-muted-foreground mt-1 truncate">
-                    sha256: {sha256.slice(0, 12)}…
+                    sha256: {sha256}
                   </div>
                 </div>
                 <Download className="w-3.5 h-3.5 text-muted-foreground group-hover:text-accent transition-colors flex-shrink-0 mt-0.5" />
