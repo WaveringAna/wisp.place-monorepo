@@ -1,5 +1,5 @@
 # Build stage
-FROM oven/bun:1.3 AS build
+FROM oven/bun:1-alpine AS build
 
 WORKDIR /app
 
@@ -30,16 +30,23 @@ RUN bun build \
 	--outfile server \
 	apps/main-app/src/index.ts
 
+# Remove source files from public that don't need to be served
+RUN find apps/main-app/public -name "*.tsx" -delete && \
+    find apps/main-app/public -name "*.ts" -delete && \
+    rm -rf apps/main-app/public/editor/.claude
+
 # Final stage - slim image with just the compiled binary
-FROM debian:bookworm-slim
+FROM alpine:3.22
+
+RUN apk add --no-cache libstdc++ libgcc ca-certificates
 
 WORKDIR /app
 
 # Copy compiled server (standalone binary - no node_modules needed)
 COPY --from=build /app/server /app/server
 
-# Copy public static assets
-COPY apps/main-app/public apps/main-app/public
+# Copy public static assets (source files already stripped in build stage)
+COPY --from=build /app/apps/main-app/public apps/main-app/public
 
 # Copy built frontend assets
 COPY --from=build /app/apps/main-app/dist apps/main-app/dist

@@ -412,7 +412,7 @@ export const app = new Elysia({
 		try {
 			const screenshotsDir = './apps/main-app/public/screenshots'
 			const files = await fs.readdir(screenshotsDir)
-			const screenshots = files.filter(file => file.endsWith('.png'))
+			const screenshots = files.filter(file => file.endsWith('.webp'))
 			return { screenshots }
 		} catch (error) {
 			return { screenshots: [] }
