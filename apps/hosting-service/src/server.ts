@@ -51,7 +51,8 @@ app.get('/*', async (c) => {
   const hostname = c.req.header('host') || '';
   const hostnameWithoutPort = hostname.split(':')[0] || '';
   const rawPath = url.pathname.replace(/^\//, '');
-  const path = sanitizePath(rawPath);
+  const hasTrailingSlash = rawPath.endsWith('/');
+  const path = hasTrailingSlash ? sanitizePath(rawPath) + '/' : sanitizePath(rawPath);
 
   logger.debug(`Request: host=${hostname} hostnameWithoutPort=${hostnameWithoutPort} path=${path}`, { BASE_HOST });
 

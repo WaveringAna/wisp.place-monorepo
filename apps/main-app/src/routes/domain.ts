@@ -327,8 +327,22 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 					throw new Error('Domain parameter required');
 				}
 
+				// Verify domain belongs to user
+				const domainLower = normalizeDomain(domain);
+				const info = await isDomainRegistered(domainLower);
+
+				if (!info.registered || info.type !== 'wisp') {
+					set.status = 404
+					throw new Error('Domain not found');
+				}
+
+				if (info.did !== auth.did) {
+					set.status = 403
+					throw new Error('Unauthorized: You do not own this domain');
+				}
+
 				// Update wisp.place domain to point to this site
-				await updateWispDomainSite(domain, siteRkey);
+				await updateWispDomainSite(domainLower, siteRkey);
 
 				return { success: true };
 			} catch (err) {
