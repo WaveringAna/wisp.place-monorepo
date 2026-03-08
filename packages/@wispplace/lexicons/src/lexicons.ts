@@ -1028,6 +1028,91 @@ export const schemaDict = {
       },
     },
   },
+  PlaceWispV2Wh: {
+    lexicon: 1,
+    id: 'place.wisp.v2.wh',
+    defs: {
+      main: {
+        type: 'record',
+        description:
+          'Webhook configuration for AT Protocol record events. Fires an HTTP POST to a URL before or after a matching record event is processed.',
+        key: 'any',
+        record: {
+          type: 'object',
+          required: ['scope', 'url', 'phase', 'events', 'createdAt'],
+          properties: {
+            scope: {
+              type: 'union',
+              refs: ['lex:place.wisp.v2.wh#atUri', 'lex:place.wisp.v2.wh#nsid'],
+              description:
+                'What to watch. An AT-URI scopes to a specific DID, collection, or record. An NSID watches that collection globally across all DIDs.',
+            },
+            url: {
+              type: 'string',
+              format: 'uri',
+              maxLength: 2048,
+              description: 'HTTPS endpoint to POST the webhook payload to.',
+            },
+            phase: {
+              type: 'string',
+              enum: ['pre', 'post'],
+              description:
+                "Whether the webhook should fire before ('pre') or after ('post') the record event is processed.",
+            },
+            events: {
+              type: 'array',
+              items: {
+                type: 'string',
+                enum: ['create', 'update', 'delete'],
+              },
+              description:
+                "Which record events to trigger on. 'create' fires when a new record is created. 'update' fires when an existing record is updated. 'delete' fires when a record is deleted.",
+              maxLength: 3,
+            },
+            secret: {
+              type: 'string',
+              description:
+                "Optional secret used to sign the webhook payload with HMAC-SHA256. The signature is included in the 'X-Webhook-Signature' header of the webhook request.",
+            },
+            enabled: {
+              type: 'boolean',
+              description:
+                'Whether the webhook is active. Default to true if omitted.',
+            },
+            createdAt: {
+              type: 'string',
+              format: 'datetime',
+              description: 'Timestamp of when the webhook was created.',
+            },
+          },
+        },
+      },
+      atUri: {
+        type: 'object',
+        description:
+          'Watch by AT-URI. at://did watches all collections for a DID. at://did/collection watches all records of that collection for a DID. at://did/collection/record watches a specific record.',
+        required: ['aturi'],
+        properties: {
+          aturi: {
+            type: 'string',
+            format: 'at-uri',
+          },
+        },
+      },
+      nsid: {
+        type: 'object',
+        description:
+          'Watch all records of this collection type globally across any DID.',
+        required: ['nsid'],
+        properties: {
+          nsid: {
+            type: 'string',
+            format: 'nsid',
+          },
+        },
+      },
+    },
+  },
 } as const satisfies Record<string, LexiconDoc>
 export const schemas = Object.values(schemaDict) satisfies LexiconDoc[]
 export const lexicons: Lexicons = new Lexicons(schemas)
@@ -1073,4 +1158,5 @@ export const ids = {
   PlaceWispV2SiteDelete: 'place.wisp.v2.site.delete',
   PlaceWispV2SiteGetList: 'place.wisp.v2.site.getList',
   PlaceWispSubfs: 'place.wisp.subfs',
+  PlaceWispV2Wh: 'place.wisp.v2.wh',
 } as const

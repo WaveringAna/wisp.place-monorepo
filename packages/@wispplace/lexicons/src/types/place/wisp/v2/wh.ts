@@ -1,0 +1,81 @@
+/**
+ * GENERATED CODE - DO NOT MODIFY
+ */
+import { type ValidationResult, BlobRef } from '@atproto/lexicon'
+import { CID } from 'multiformats/cid'
+import { validate as _validate } from '../../../../lexicons'
+import {
+  type $Typed,
+  is$typed as _is$typed,
+  type OmitKey,
+} from '../../../../util'
+
+const is$typed = _is$typed,
+  validate = _validate
+const id = 'place.wisp.v2.wh'
+
+export interface Main {
+  $type: 'place.wisp.v2.wh'
+  scope: $Typed<AtUri> | $Typed<Nsid> | { $type: string }
+  /** HTTPS endpoint to POST the webhook payload to. */
+  url: string
+  /** Whether the webhook should fire before ('pre') or after ('post') the record event is processed. */
+  phase: 'pre' | 'post'
+  /** Which record events to trigger on. 'create' fires when a new record is created. 'update' fires when an existing record is updated. 'delete' fires when a record is deleted. */
+  events: ('create' | 'update' | 'delete')[]
+  /** Optional secret used to sign the webhook payload with HMAC-SHA256. The signature is included in the 'X-Webhook-Signature' header of the webhook request. */
+  secret?: string
+  /** Whether the webhook is active. Default to true if omitted. */
+  enabled?: boolean
+  /** Timestamp of when the webhook was created. */
+  createdAt: string
+  [k: string]: unknown
+}
+
+const hashMain = 'main'
+
+export function isMain<V>(v: V) {
+  return is$typed(v, id, hashMain)
+}
+
+export function validateMain<V>(v: V) {
+  return validate<Main & V>(v, id, hashMain, true)
+}
+
+export {
+  type Main as Record,
+  isMain as isRecord,
+  validateMain as validateRecord,
+}
+
+/** Watch by AT-URI. at://did watches all collections for a DID. at://did/collection watches all records of that collection for a DID. at://did/collection/record watches a specific record. */
+export interface AtUri {
+  $type?: 'place.wisp.v2.wh#atUri'
+  aturi: string
+}
+
+const hashAtUri = 'atUri'
+
+export function isAtUri<V>(v: V) {
+  return is$typed(v, id, hashAtUri)
+}
+
+export function validateAtUri<V>(v: V) {
+  return validate<AtUri & V>(v, id, hashAtUri)
+}
+
+/** Watch all records of this collection type globally across any DID. */
+export interface Nsid {
+  $type?: 'place.wisp.v2.wh#nsid'
+  nsid: string
+}
+
+const hashNsid = 'nsid'
+
+export function isNsid<V>(v: V) {
+  return is$typed(v, id, hashNsid)
+}
+
+export function validateNsid<V>(v: V) {
+  return validate<Nsid & V>(v, id, hashNsid)
+}
