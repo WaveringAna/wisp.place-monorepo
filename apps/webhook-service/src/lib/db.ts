@@ -40,6 +40,27 @@ await db`
   )
 `;
 
+await db`
+  CREATE TABLE IF NOT EXISTS webhook_event_logs (
+    id               BIGSERIAL PRIMARY KEY,
+    owner_did        TEXT NOT NULL,
+    rkey             TEXT NOT NULL,
+    url              TEXT NOT NULL,
+    event_kind       TEXT NOT NULL,
+    event_did        TEXT NOT NULL,
+    event_collection TEXT NOT NULL,
+    event_rkey       TEXT NOT NULL,
+    cid              TEXT,
+    status           TEXT NOT NULL,
+    delivered_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )
+`;
+
+await db`
+  CREATE INDEX IF NOT EXISTS webhook_event_logs_owner_did_idx
+  ON webhook_event_logs (owner_did, delivered_at DESC)
+`;
+
 /**
  * Find all webhook records whose scope AT-URI targets the given DID.
  * Matches exact DID scope (`at://did`) and collection/rkey sub-scopes (`at://did/...`).
@@ -135,6 +156,73 @@ export async function deleteWebhookRecord(did: string, rkey: string): Promise<vo
     logger.error(`[DB] deleteWebhookRecord error for ${k}`, err);
     throw err;
   }
+}
+
+export interface EventLogEntry {
+  ownerDid: string;
+  rkey: string;
+  url: string;
+  eventKind: string;
+  eventDid: string;
+  eventCollection: string;
+  eventRkey: string;
+  cid?: string;
+  status: 'ok' | 'failed';
+  deliveredAt: string;
+}
+
+/** Insert a webhook delivery event into the persistent log. Keeps the last 500 rows per owner. */
+export async function insertEventLog(entry: EventLogEntry): Promise<void> {
+  try {
+    await db`
+      INSERT INTO webhook_event_logs
+        (owner_did, rkey, url, event_kind, event_did, event_collection, event_rkey, cid, status, delivered_at)
+      VALUES
+        (${entry.ownerDid}, ${entry.rkey}, ${entry.url}, ${entry.eventKind},
+         ${entry.eventDid}, ${entry.eventCollection}, ${entry.eventRkey},
+         ${entry.cid ?? null}, ${entry.status}, ${entry.deliveredAt}::timestamptz)
+    `;
+    // Prune to last 500 per owner
+    await db`
+      DELETE FROM webhook_event_logs
+      WHERE owner_did = ${entry.ownerDid}
+        AND id NOT IN (
+          SELECT id FROM webhook_event_logs
+          WHERE owner_did = ${entry.ownerDid}
+          ORDER BY delivered_at DESC
+          LIMIT 500
+        )
+    `;
+  } catch (err) {
+    logger.error('[DB] insertEventLog error', err);
+  }
+}
+
+/** Return up to `limit` most-recent delivery events for an owner DID. */
+export async function listEventLogs(ownerDid: string, limit = 100): Promise<EventLogEntry[]> {
+  const rows = await db<Array<{
+    rkey: string; url: string; event_kind: string; event_did: string;
+    event_collection: string; event_rkey: string; cid: string | null;
+    status: string; delivered_at: string;
+  }>>`
+    SELECT rkey, url, event_kind, event_did, event_collection, event_rkey, cid, status, delivered_at
+    FROM webhook_event_logs
+    WHERE owner_did = ${ownerDid}
+    ORDER BY delivered_at DESC
+    LIMIT ${limit}
+  `;
+  return rows.map(r => ({
+    ownerDid,
+    rkey: r.rkey,
+    url: r.url,
+    eventKind: r.event_kind,
+    eventDid: r.event_did,
+    eventCollection: r.event_collection,
+    eventRkey: r.event_rkey,
+    cid: r.cid ?? undefined,
+    status: r.status as 'ok' | 'failed',
+    deliveredAt: r.delivered_at,
+  }));
 }
 
 /** Close all database connections gracefully. */

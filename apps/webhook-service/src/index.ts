@@ -2,6 +2,7 @@ import { createLogger } from '@wispplace/observability';
 import { config } from './config';
 import { startFirehose, stopFirehose, getFirehoseHealth } from './lib/firehose';
 import { closeDatabase, db } from './lib/db';
+import { closeRedisPublisher } from './lib/redis';
 
 const logger = createLogger('webhook-service');
 
@@ -93,6 +94,7 @@ async function shutdown(signal: string) {
   isShuttingDown = true;
   logger.info(`Received ${signal}, shutting down...`);
   stopFirehose();
+  closeRedisPublisher();
   await closeDatabase();
   process.exit(0);
 }

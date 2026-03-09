@@ -16,12 +16,14 @@ import {
 	rotateKeysIfNeeded
 } from './lib/oauth-client'
 import { getCookieSecret, closeDatabase } from './lib/db'
+import { getRedisClient, closeRedisClient } from './lib/redis'
 import { ensureServiceIdentityKeypair } from './lib/service-identity'
 import { authRoutes } from './routes/auth'
 import { wispRoutes } from './routes/wisp'
 import { domainRoutes } from './routes/domain'
 import { userRoutes } from './routes/user'
 import { siteRoutes } from './routes/site'
+import { webhookRoutes } from './routes/webhook'
 import { xrpcRoutes } from './routes/xrpc'
 import { csrfProtection } from './lib/csrf'
 import { DNSVerificationWorker } from './lib/dns-verification-worker'
@@ -62,6 +64,9 @@ const config: Config = {
 
 // Initialize admin setup (prompt if no admin exists)
 await promptAdminSetup()
+
+// Establish Redis connection (used for webhook event logs)
+getRedisClient()
 
 // Get or generate cookie signing secret
 const cookieSecret = await getCookieSecret()
@@ -238,6 +243,7 @@ export const app = new Elysia({
 	.use(domainRoutes(client, cookieSecret))
 	.use(userRoutes(client, cookieSecret))
 	.use(siteRoutes(client, cookieSecret))
+	.use(webhookRoutes(client, cookieSecret))
 	.use(adminRoutes(cookieSecret))
 	.use(
 		await staticPlugin({
@@ -478,6 +484,7 @@ console.log(
 process.on('SIGINT', async () => {
 	console.log('\n🛑 Shutting down...')
 	dnsVerifier.stop()
+	closeRedisClient()
 	await closeDatabase()
 	process.exit(0)
 })
@@ -485,6 +492,7 @@ process.on('SIGINT', async () => {
 process.on('SIGTERM', async () => {
 	console.log('\n🛑 Shutting down...')
 	dnsVerifier.stop()
+	closeRedisClient()
 	await closeDatabase()
 	process.exit(0)
 })

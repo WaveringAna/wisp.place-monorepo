@@ -31,15 +31,23 @@ import Layout from '@public/layouts'
 import { useUserInfo } from './hooks/useUserInfo'
 import { useSiteData, type SiteWithDomains } from './hooks/useSiteData'
 import { useDomainData } from './hooks/useDomainData'
+import { useWebhookData } from './hooks/useWebhookData'
 import { SitesTab } from './tabs/SitesTab'
 import { DomainsTab } from './tabs/DomainsTab'
 import { UploadTab } from './tabs/UploadTab'
 import { CLITab } from './tabs/CLITab'
+import { WebhooksTab } from './tabs/WebhooksTab'
 
 function Dashboard() {
 	// Use custom hooks
 	const { userInfo, loading, isAuthenticated, fetchUserInfo } = useUserInfo()
 	const { sites, sitesLoading, isSyncing, fetchSites, syncSites, deleteSite } = useSiteData()
+	const {
+		webhooks, webhooksLoading, fetchWebhooks,
+		eventLogs, eventLogsLoading, fetchEventLogs,
+		isCreating, createWebhook, deleteWebhook,
+	} = useWebhookData()
+
 	const {
 		wispDomains,
 		customDomains,
@@ -82,6 +90,8 @@ function Dashboard() {
 		fetchUserInfo()
 		fetchSites()
 		fetchDomains()
+		fetchWebhooks()
+		fetchEventLogs()
 	}, [])
 
 	// Redirect to home if not authenticated
@@ -107,7 +117,7 @@ function Dashboard() {
 
 			// Handle tab navigation with arrow keys (Left/Right only)
 			if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-				const tabs = ['sites', 'domains', 'upload', 'cli']
+				const tabs = ['sites', 'domains', 'upload', 'webhooks', 'cli']
 				const currentIndex = tabs.indexOf(activeTab)
 
 				if (e.key === 'ArrowLeft' && currentIndex > 0) {
@@ -370,8 +380,8 @@ function Dashboard() {
 
 					{/* Tabs Skeleton */}
 					<div className="space-y-6 w-full">
-						<div className="grid w-full grid-cols-4 border-b border-border/50">
-							{[...Array(4)].map((_, i) => (
+						<div className="grid w-full grid-cols-5 border-b border-border/50">
+							{[...Array(5)].map((_, i) => (
 								<SkeletonShimmer key={i} className="h-10 w-full" />
 							))}
 						</div>
@@ -444,7 +454,7 @@ function Dashboard() {
 					</div>
 
 					<Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col flex-1 overflow-hidden">
-						<TabsList className="grid w-full grid-cols-4 bg-card border-b border-border/50 rounded-none h-auto p-0 flex-shrink-0">
+						<TabsList className="grid w-full grid-cols-5 bg-card border-b border-border/50 rounded-none h-auto p-0 flex-shrink-0">
 							<TabsTrigger
 								value="sites"
 								className="rounded-none border-b-2 border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/50 data-[state=active]:border-accent data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none py-3"
@@ -462,6 +472,12 @@ function Dashboard() {
 								className="rounded-none border-b-2 border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/50 data-[state=active]:border-accent data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none py-3"
 							>
 								Upload
+							</TabsTrigger>
+							<TabsTrigger
+								value="webhooks"
+								className="rounded-none border-b-2 border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/50 data-[state=active]:border-accent data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none py-3"
+							>
+								Webhooks
 							</TabsTrigger>
 							<TabsTrigger
 								value="cli"
@@ -505,6 +521,20 @@ function Dashboard() {
 								sites={sites}
 								sitesLoading={sitesLoading}
 								onUploadComplete={handleUploadComplete}
+							/>
+						</TabsContent>
+
+						{/* Webhooks Tab */}
+						<TabsContent value="webhooks" className="flex-1 m-0 mt-4 overflow-hidden data-[state=inactive]:hidden">
+							<WebhooksTab
+								webhooks={webhooks}
+								webhooksLoading={webhooksLoading}
+								eventLogs={eventLogs}
+								eventLogsLoading={eventLogsLoading}
+								isCreating={isCreating}
+								onCreateWebhook={createWebhook}
+								onDeleteWebhook={deleteWebhook}
+								onRefreshEvents={fetchEventLogs}
 							/>
 						</TabsContent>
 

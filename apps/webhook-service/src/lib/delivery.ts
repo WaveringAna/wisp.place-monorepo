@@ -1,8 +1,10 @@
 import { createHmac, randomUUID } from 'node:crypto';
 import type { WebhookEntry } from './db';
+import { insertEventLog } from './db';
 import type { EventKind } from './matcher';
 import { config } from '../config';
 import { createLogger } from '@wispplace/observability';
+import { publishWebhookEvent } from './redis';
 
 const logger = createLogger('webhook-service:delivery');
 
@@ -80,11 +82,17 @@ export async function deliverWebhook(
     try {
       await attempt(record.url, body, signature);
       logger.info(`[delivery] ok ${ownerDid}/${rkey} → ${record.url}`);
+      const okEvent = { ownerDid, rkey, url: record.url, eventKind, eventDid, eventCollection, eventRkey, cid: eventCid, deliveredAt: payload.timestamp, status: 'ok' as const };
+      publishWebhookEvent(okEvent).catch(() => {});
+      insertEventLog(okEvent).catch(() => {});
       return;
     } catch (err) {
       const isLast = attempt_n === config.deliveryMaxRetries;
       if (isLast) {
         logger.warn(`Failed to deliver webhook ${ownerDid}/${rkey} → ${record.url} after ${attempt_n} attempts`, { err });
+        const failEvent = { ownerDid, rkey, url: record.url, eventKind, eventDid, eventCollection, eventRkey, cid: eventCid, deliveredAt: new Date().toISOString(), status: 'failed' as const };
+        publishWebhookEvent(failEvent).catch(() => {});
+        insertEventLog(failEvent).catch(() => {});
       } else {
         const delay = 1000 * 2 ** (attempt_n - 1);
         await new Promise(r => setTimeout(r, delay));
