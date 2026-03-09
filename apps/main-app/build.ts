@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 
-import { rm, mkdir } from 'fs/promises'
-import { existsSync } from 'fs'
-import path from 'path'
+import { existsSync } from 'node:fs'
+import { mkdir, rm } from 'node:fs/promises'
+import path from 'node:path'
 import { css as wispCss } from '@wispplace/css'
 
 console.log('🔨 Building main-app frontend...')
@@ -32,8 +32,8 @@ const editorResult = await Bun.build({
 	naming: {
 		entry: '[name].[hash].js',
 		chunk: '[name].[hash].js',
-		asset: '[name].[hash][ext]'
-	}
+		asset: '[name].[hash][ext]',
+	},
 })
 
 if (!editorResult.success) {
@@ -45,7 +45,7 @@ if (!editorResult.success) {
 }
 
 // Find the main entry bundle
-const editorBundle = editorResult.outputs.find(o => o.path.includes('editor.') && o.path.endsWith('.js'))
+const editorBundle = editorResult.outputs.find((o) => o.path.includes('editor.') && o.path.endsWith('.js'))
 
 if (!editorBundle) {
 	console.error('❌ Could not find editor bundle in outputs')
@@ -128,8 +128,8 @@ const adminResult = await Bun.build({
 	naming: {
 		entry: '[name].[hash].js',
 		chunk: '[name].[hash].js',
-		asset: '[name].[hash][ext]'
-	}
+		asset: '[name].[hash][ext]',
+	},
 })
 
 if (!adminResult.success) {
@@ -141,7 +141,7 @@ if (!adminResult.success) {
 }
 
 // Find the main entry bundle for admin
-const adminBundle = adminResult.outputs.find(o => o.path.includes('admin.') && o.path.endsWith('.js'))
+const adminBundle = adminResult.outputs.find((o) => o.path.includes('admin.') && o.path.endsWith('.js'))
 
 if (!adminBundle) {
 	console.error('❌ Could not find admin bundle in outputs')

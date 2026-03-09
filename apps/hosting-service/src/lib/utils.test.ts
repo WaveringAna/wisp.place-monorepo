@@ -1,22 +1,22 @@
-import { describe, test, expect } from 'bun:test'
-import { sanitizePath, extractBlobCid, extractSubfsUris, expandSubfsNodes } from './utils'
-import { CID } from 'multiformats'
+import { describe, expect, test } from 'bun:test'
 import { BlobRef } from '@atproto/lexicon'
 import type {
-	Record as WispFsRecord,
 	Directory as FsDirectory,
 	Entry as FsEntry,
 	File as FsFile,
 	Subfs as FsSubfs,
+	Record as WispFsRecord,
 } from '@wispplace/lexicons/types/place/wisp/fs'
 import type {
-	Record as SubfsRecord,
 	Directory as SubfsDirectory,
 	Entry as SubfsEntry,
 	File as SubfsFile,
+	Record as SubfsRecord,
 	Subfs as SubfsSubfs,
 } from '@wispplace/lexicons/types/place/wisp/subfs'
 import type { $Typed } from '@wispplace/lexicons/util'
+import { CID } from 'multiformats'
+import { expandSubfsNodes, extractBlobCid, extractSubfsUris, sanitizePath } from './utils'
 
 describe('sanitizePath', () => {
 	test('allows normal file paths', () => {
@@ -117,7 +117,7 @@ describe('extractBlobCid', () => {
 
 	test('extracts CID from typed BlobRef with IPLD link', () => {
 		const blobRef = {
-			ref: { $link: TEST_CID }
+			ref: { $link: TEST_CID },
 		}
 		expect(extractBlobCid(blobRef)).toBe(TEST_CID)
 	})
@@ -146,7 +146,7 @@ describe('extractBlobCid', () => {
 			$type: 'blob',
 			ref: CID.parse(TEST_CID),
 			mimeType: 'text/html',
-			size: 1234
+			size: 1234,
 		}
 		expect(extractBlobCid(blobRef)).toBe(TEST_CID)
 	})
@@ -156,7 +156,7 @@ describe('extractBlobCid', () => {
 			ref: { $link: TEST_CID },
 			mimeType: 'image/png',
 			size: 5678,
-			someOtherField: 'value'
+			someOtherField: 'value',
 		}
 		expect(extractBlobCid(blobRef)).toBe(TEST_CID)
 	})
@@ -181,14 +181,14 @@ describe('extractBlobCid', () => {
 
 const TEST_CID_BASE = 'bafkreid7ybejd5s2vv2j7d4aajjlmdgazguemcnuliiyfn6coxpwp2mi6y'
 
-function createMockBlobRef(cidSuffix: string = '', size: number = 100, mimeType: string = 'text/plain'): BlobRef {
+function createMockBlobRef(_cidSuffix: string = '', size: number = 100, mimeType: string = 'text/plain'): BlobRef {
 	const cidString = TEST_CID_BASE
 	return new BlobRef(CID.parse(cidString), mimeType, size)
 }
 
 function createFsFile(
 	name: string,
-	options: { mimeType?: string; size?: number; encoding?: 'gzip'; base64?: boolean } = {}
+	options: { mimeType?: string; size?: number; encoding?: 'gzip'; base64?: boolean } = {},
 ): FsEntry {
 	const { mimeType = 'text/plain', size = 100, encoding, base64 } = options
 	const file: $Typed<FsFile, 'place.wisp.fs#file'> = {
@@ -241,7 +241,7 @@ function createFsRecord(site: string, entries: FsEntry[], fileCount?: number): W
 
 function createSubfsFile(
 	name: string,
-	options: { mimeType?: string; size?: number; encoding?: 'gzip'; base64?: boolean } = {}
+	options: { mimeType?: string; size?: number; encoding?: 'gzip'; base64?: boolean } = {},
 ): SubfsEntry {
 	const { mimeType = 'text/plain', size = 100, encoding, base64 } = options
 	const file: $Typed<SubfsFile, 'place.wisp.subfs#file'> = {
@@ -293,10 +293,7 @@ function createSubfsRecord(entries: SubfsEntry[], fileCount?: number): SubfsReco
 describe('extractSubfsUris', () => {
 	test('extracts subfs URIs from flat directory structure', () => {
 		const subfsUri = 'at://did:plc:test/place.wisp.subfs/a'
-		const dir = createFsRootDirectory([
-			createFsSubfs('a', subfsUri),
-			createFsFile('file.txt'),
-		])
+		const dir = createFsRootDirectory([createFsSubfs('a', subfsUri), createFsFile('file.txt')])
 
 		const uris = extractSubfsUris(dir)
 
@@ -310,10 +307,7 @@ describe('extractSubfsUris', () => {
 
 		const dir = createFsRootDirectory([
 			createFsSubfs('a', subfsAUri),
-			createFsDirectory('nested', [
-				createFsSubfs('b', subfsBUri),
-				createFsFile('file.txt'),
-			]),
+			createFsDirectory('nested', [createFsSubfs('b', subfsBUri), createFsFile('file.txt')]),
 		])
 
 		const uris = extractSubfsUris(dir)
@@ -336,13 +330,7 @@ describe('extractSubfsUris', () => {
 	test('handles deeply nested subfs', () => {
 		const subfsUri = 'at://did:plc:test/place.wisp.subfs/deep'
 		const dir = createFsRootDirectory([
-			createFsDirectory('a', [
-				createFsDirectory('b', [
-					createFsDirectory('c', [
-						createFsSubfs('deep', subfsUri),
-					]),
-				]),
-			]),
+			createFsDirectory('a', [createFsDirectory('b', [createFsDirectory('c', [createFsSubfs('deep', subfsUri)])])]),
 		])
 
 		const uris = extractSubfsUris(dir)
@@ -403,13 +391,10 @@ describe('expandSubfsNodes caching', () => {
 		subfsCache.set(subfsBUri, createSubfsRecord([createSubfsSubfs('c', subfsCUri)]))
 		subfsCache.set(subfsCUri, createSubfsRecord([createSubfsFile('shared.txt')]))
 
-		const dir = createFsRootDirectory([
-			createFsSubfs('a', subfsAUri),
-			createFsSubfs('b', subfsBUri),
-		])
+		const dir = createFsRootDirectory([createFsSubfs('a', subfsAUri), createFsSubfs('b', subfsBUri)])
 		const result = await expandSubfsNodes(dir, 'https://pds.example.com', 0, subfsCache)
 
-		expect(result.entries.filter(e => e.name === 'shared.txt')).toHaveLength(2)
+		expect(result.entries.filter((e) => e.name === 'shared.txt')).toHaveLength(2)
 	})
 
 	test('handles null records in cache gracefully', async () => {
@@ -417,14 +402,11 @@ describe('expandSubfsNodes caching', () => {
 		const subfsUri = 'at://did:plc:test/place.wisp.subfs/missing'
 		subfsCache.set(subfsUri, null)
 
-		const dir = createFsRootDirectory([
-			createFsFile('file.txt'),
-			createFsSubfs('missing', subfsUri),
-		])
+		const dir = createFsRootDirectory([createFsFile('file.txt'), createFsSubfs('missing', subfsUri)])
 		const result = await expandSubfsNodes(dir, 'https://pds.example.com', 0, subfsCache)
 
-		expect(result.entries.some(e => e.name === 'file.txt')).toBe(true)
-		expect(result.entries.some(e => e.name === 'missing')).toBe(true)
+		expect(result.entries.some((e) => e.name === 'file.txt')).toBe(true)
+		expect(result.entries.some((e) => e.name === 'missing')).toBe(true)
 	})
 
 	test('non-flat subfs merge creates directory instead of hoisting', async () => {
@@ -432,18 +414,15 @@ describe('expandSubfsNodes caching', () => {
 		const subfsUri = 'at://did:plc:test/place.wisp.subfs/nested'
 		subfsCache.set(subfsUri, createSubfsRecord([createSubfsFile('nested-file.txt')]))
 
-		const dir = createFsRootDirectory([
-			createFsFile('root.txt'),
-			createFsSubfs('subdir', subfsUri, false),
-		])
+		const dir = createFsRootDirectory([createFsFile('root.txt'), createFsSubfs('subdir', subfsUri, false)])
 		const result = await expandSubfsNodes(dir, 'https://pds.example.com', 0, subfsCache)
 
 		expect(result.entries).toHaveLength(2)
 
-		const rootFile = result.entries.find(e => e.name === 'root.txt')
+		const rootFile = result.entries.find((e) => e.name === 'root.txt')
 		expect(rootFile).toBeDefined()
 
-		const subdir = result.entries.find(e => e.name === 'subdir')
+		const subdir = result.entries.find((e) => e.name === 'subdir')
 		expect(subdir).toBeDefined()
 
 		if (subdir && 'entries' in subdir.node) {
@@ -458,9 +437,7 @@ describe('WispFsRecord mock builders', () => {
 	test('createFsRecord creates valid record structure', () => {
 		const record = createFsRecord('my-site', [
 			createFsFile('index.html', { mimeType: 'text/html' }),
-			createFsDirectory('assets', [
-				createFsFile('style.css', { mimeType: 'text/css' }),
-			]),
+			createFsDirectory('assets', [createFsFile('style.css', { mimeType: 'text/css' })]),
 		])
 
 		expect(record.$type).toBe('place.wisp.fs')
@@ -503,10 +480,7 @@ describe('WispFsRecord mock builders', () => {
 	})
 
 	test('createFsDirectory creates valid directory entry', () => {
-		const entry = createFsDirectory('assets', [
-			createFsFile('file1.txt'),
-			createFsFile('file2.txt'),
-		])
+		const entry = createFsDirectory('assets', [createFsFile('file1.txt'), createFsFile('file2.txt')])
 
 		expect(entry.name).toBe('assets')
 
@@ -551,9 +525,7 @@ describe('SubfsRecord mock builders', () => {
 	test('createSubfsRecord creates valid record structure', () => {
 		const record = createSubfsRecord([
 			createSubfsFile('file1.txt'),
-			createSubfsDirectory('nested', [
-				createSubfsFile('file2.txt'),
-			]),
+			createSubfsDirectory('nested', [createSubfsFile('file2.txt')]),
 		])
 
 		expect(record.$type).toBe('place.wisp.subfs')

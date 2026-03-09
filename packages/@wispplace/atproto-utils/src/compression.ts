@@ -1,5 +1,5 @@
-import { gzipSync } from 'zlib';
-import { charsets } from 'mime-types';
+import { gzipSync } from 'node:zlib'
+import { charsets } from 'mime-types'
 
 /**
  * Determine if a file should be gzip compressed based on its MIME type and filename
@@ -7,7 +7,7 @@ import { charsets } from 'mime-types';
 export function shouldCompressFile(mimeType: string, fileName?: string): boolean {
 	// Never compress _redirects file - it needs to be plain text for the hosting service
 	if (fileName && (fileName.endsWith('/_redirects') || fileName === '_redirects')) {
-		return false;
+		return false
 	}
 
 	// Compress text-based files and uncompressed audio formats
@@ -27,11 +27,11 @@ export function shouldCompressFile(mimeType: string, fileName?: string): boolean
 		'audio/wave',
 		'audio/x-wav',
 		'audio/aiff',
-		'audio/x-aiff'
-	];
+		'audio/x-aiff',
+	]
 
 	// Check if mime type starts with any compressible type
-	return compressibleTypes.some(type => mimeType.startsWith(type));
+	return compressibleTypes.some((type) => mimeType.startsWith(type))
 }
 
 /**
@@ -40,9 +40,9 @@ export function shouldCompressFile(mimeType: string, fileName?: string): boolean
  * Returns false for already-compressed formats (images, video, audio, PDFs).
  */
 export function shouldCompressMimeType(mimeType: string | undefined): boolean {
-	if (!mimeType) return false;
+	if (!mimeType) return false
 
-	const mime = mimeType.toLowerCase();
+	const mime = mimeType.toLowerCase()
 
 	// Text-based web assets and uncompressed audio that benefit from compression
 	const compressibleTypes = [
@@ -62,10 +62,10 @@ export function shouldCompressMimeType(mimeType: string | undefined): boolean {
 		'audio/x-wav',
 		'audio/aiff',
 		'audio/x-aiff',
-	];
+	]
 
-	if (compressibleTypes.some(type => mime === type || mime.startsWith(type))) {
-		return true;
+	if (compressibleTypes.some((type) => mime === type || mime.startsWith(type))) {
+		return true
 	}
 
 	// Already-compressed formats that should NOT be double-compressed
@@ -76,14 +76,14 @@ export function shouldCompressMimeType(mimeType: string | undefined): boolean {
 		'application/pdf',
 		'application/zip',
 		'application/gzip',
-	];
+	]
 
-	if (alreadyCompressedPrefixes.some(prefix => mime.startsWith(prefix))) {
-		return false;
+	if (alreadyCompressedPrefixes.some((prefix) => mime.startsWith(prefix))) {
+		return false
 	}
 
 	// Default to not compressing for unknown types
-	return false;
+	return false
 }
 
 /**
@@ -91,7 +91,7 @@ export function shouldCompressMimeType(mimeType: string | undefined): boolean {
  * Uses mime-types library instead of a hardcoded list.
  */
 export function isTextMimeType(mimeType: string): boolean {
-	return charsets.lookup(mimeType) === 'UTF-8';
+	return charsets.lookup(mimeType) === 'UTF-8'
 }
 
 /**
@@ -99,6 +99,6 @@ export function isTextMimeType(mimeType: string): boolean {
  */
 export function compressFile(content: Buffer): Buffer {
 	return gzipSync(content, {
-		level: 9
-	});
+		level: 9,
+	})
 }

@@ -1,11 +1,5 @@
-import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
-import {
-	claimCustomDomain,
-	getCustomDomainInfo,
-	deleteCustomDomain,
-	updateCustomDomainVerification,
-	db
-} from './db'
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { claimCustomDomain, db, getCustomDomainInfo, updateCustomDomainVerification } from './db'
 
 describe('custom domain claiming', () => {
 	const testDid1 = 'did:plc:testuser1'
@@ -19,7 +13,7 @@ describe('custom domain claiming', () => {
 		// Clean up any existing test data
 		try {
 			await db`DELETE FROM custom_domains WHERE domain = ${testDomain}`
-		} catch (err) {
+		} catch (_err) {
 			// Ignore errors if table doesn't exist or other issues
 		}
 	})
@@ -28,7 +22,7 @@ describe('custom domain claiming', () => {
 		// Clean up test data
 		try {
 			await db`DELETE FROM custom_domains WHERE domain = ${testDomain}`
-		} catch (err) {
+		} catch (_err) {
 			// Ignore cleanup errors
 		}
 	})
@@ -101,9 +95,9 @@ describe('custom domain claiming', () => {
 		const promise2 = claimCustomDomain(testDid2, testDomain, hash2)
 
 		const [result1, result2] = await Promise.allSettled([promise1, promise2])
-		
+
 		// At least one should succeed
-		const successCount = [result1, result2].filter(r => r.status === 'fulfilled').length
+		const successCount = [result1, result2].filter((r) => r.status === 'fulfilled').length
 		expect(successCount).toBeGreaterThan(0)
 		expect(successCount).toBeLessThanOrEqual(2)
 

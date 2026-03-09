@@ -1,9 +1,9 @@
-import { gzip, gunzip, createGzip, createGunzip } from 'node:zlib';
-import { promisify } from 'node:util';
-import type { Transform } from 'node:stream';
+import type { Transform } from 'node:stream'
+import { promisify } from 'node:util'
+import { createGunzip, createGzip, gunzip, gzip } from 'node:zlib'
 
-const gzipAsync = promisify(gzip);
-const gunzipAsync = promisify(gunzip);
+const gzipAsync = promisify(gzip)
+const gunzipAsync = promisify(gunzip)
 
 /**
  * Compress data using gzip.
@@ -23,9 +23,9 @@ const gunzipAsync = promisify(gunzip);
  * ```
  */
 export async function compress(data: Uint8Array): Promise<Uint8Array> {
-	const buffer = Buffer.from(data);
-	const compressed = await gzipAsync(buffer);
-	return new Uint8Array(compressed);
+	const buffer = Buffer.from(data)
+	const compressed = await gzipAsync(buffer)
+	return new Uint8Array(compressed)
 }
 
 /**
@@ -47,12 +47,12 @@ export async function compress(data: Uint8Array): Promise<Uint8Array> {
 export async function decompress(data: Uint8Array): Promise<Uint8Array> {
 	// Validate gzip magic bytes
 	if (data.length < 2 || data[0] !== 0x1f || data[1] !== 0x8b) {
-		throw new Error('Invalid gzip data: missing magic bytes');
+		throw new Error('Invalid gzip data: missing magic bytes')
 	}
 
-	const buffer = Buffer.from(data);
-	const decompressed = await gunzipAsync(buffer);
-	return new Uint8Array(decompressed);
+	const buffer = Buffer.from(data)
+	const decompressed = await gunzipAsync(buffer)
+	return new Uint8Array(decompressed)
 }
 
 /**
@@ -75,7 +75,7 @@ export async function decompress(data: Uint8Array): Promise<Uint8Array> {
  * ```
  */
 export function isGzipped(data: Uint8Array): boolean {
-	return data.length >= 2 && data[0] === 0x1f && data[1] === 0x8b;
+	return data.length >= 2 && data[0] === 0x1f && data[1] === 0x8b
 }
 
 /**
@@ -94,7 +94,7 @@ export function isGzipped(data: Uint8Array): boolean {
  * ```
  */
 export function createCompressStream(): Transform {
-	return createGzip();
+	return createGzip()
 }
 
 /**
@@ -113,5 +113,5 @@ export function createCompressStream(): Transform {
  * ```
  */
 export function createDecompressStream(): Transform {
-	return createGunzip();
+	return createGunzip()
 }

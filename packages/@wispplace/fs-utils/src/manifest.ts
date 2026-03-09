@@ -1,21 +1,17 @@
-import type { Record, Directory } from "@wispplace/lexicons/types/place/wisp/fs";
+import type { Directory, Record } from '@wispplace/lexicons/types/place/wisp/fs'
 // import { validateRecord } from "@wispplace/lexicons/types/place/wisp/fs";
 
 /**
  * Create the manifest record for a site
  */
-export function createManifest(
-	siteName: string,
-	root: Directory,
-	fileCount: number
-): Record {
+export function createManifest(siteName: string, root: Directory, fileCount: number): Record {
 	const manifest = {
 		$type: 'place.wisp.fs' as const,
 		site: siteName,
 		root,
 		fileCount,
-		createdAt: new Date().toISOString()
-	};
+		createdAt: new Date().toISOString(),
+	}
 
 	// Validate the manifest before returning
 	// const validationResult = validateRecord(manifest);
@@ -23,5 +19,5 @@ export function createManifest(
 	// 	throw new Error(`Invalid manifest: ${validationResult.error?.message || 'Validation failed'}`);
 	// }
 
-	return manifest;
+	return manifest
 }

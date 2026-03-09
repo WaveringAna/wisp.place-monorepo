@@ -1,26 +1,20 @@
+import type { Readable } from 'node:stream'
 import {
-	S3Client,
-	PutObjectCommand,
-	GetObjectCommand,
-	DeleteObjectCommand,
-	HeadObjectCommand,
-	ListObjectsV2Command,
-	DeleteObjectsCommand,
 	CopyObjectCommand,
+	DeleteObjectCommand,
+	DeleteObjectsCommand,
+	GetObjectCommand,
 	type GetObjectCommandOutput,
+	HeadObjectCommand,
 	type HeadObjectCommandOutput,
+	ListObjectsV2Command,
+	PutObjectCommand,
+	S3Client,
 	type S3ClientConfig,
-} from '@aws-sdk/client-s3';
-import { Upload } from '@aws-sdk/lib-storage';
-import type { Readable } from 'node:stream';
-import { lookup as mimeLookup } from 'mime-types';
-import type {
-	StorageTier,
-	StorageMetadata,
-	TierStats,
-	TierGetResult,
-	TierStreamResult,
-} from '../types/index.js';
+} from '@aws-sdk/client-s3'
+import { Upload } from '@aws-sdk/lib-storage'
+import { lookup as mimeLookup } from 'mime-types'
+import type { StorageMetadata, StorageTier, TierGetResult, TierStats, TierStreamResult } from '../types/index.js'
 
 /**
  * Configuration for S3StorageTier.
@@ -29,12 +23,12 @@ export interface S3StorageTierConfig {
 	/**
 	 * S3 bucket name.
 	 */
-	bucket: string;
+	bucket: string
 
 	/**
 	 * AWS region.
 	 */
-	region: string;
+	region: string
 
 	/**
 	 * Optional S3-compatible endpoint (for R2, Minio, etc.).
@@ -42,7 +36,7 @@ export interface S3StorageTierConfig {
 	 * @example 'https://s3.us-east-1.amazonaws.com'
 	 * @example 'https://account-id.r2.cloudflarestorage.com'
 	 */
-	endpoint?: string;
+	endpoint?: string
 
 	/**
 	 * Optional AWS credentials.
@@ -52,9 +46,9 @@ export interface S3StorageTierConfig {
 	 * (environment variables, ~/.aws/credentials, IAM roles, etc.)
 	 */
 	credentials?: {
-		accessKeyId: string;
-		secretAccessKey: string;
-	};
+		accessKeyId: string
+		secretAccessKey: string
+	}
 
 	/**
 	 * Optional key prefix for namespacing.
@@ -65,7 +59,7 @@ export interface S3StorageTierConfig {
 	 *
 	 * @example 'tiered-storage/'
 	 */
-	prefix?: string;
+	prefix?: string
 
 	/**
 	 * Force path-style addressing for S3-compatible services.
@@ -79,9 +73,7 @@ export interface S3StorageTierConfig {
 	 * - true: `https://endpoint.com/bucket/key` (path-style)
 	 * - false: `https://bucket.endpoint.com/key` (virtual-hosted-style)
 	 */
-	forcePathStyle?: boolean;
-
-
+	forcePathStyle?: boolean
 }
 
 /**
@@ -121,8 +113,8 @@ export interface S3StorageTierConfig {
  * ```
  */
 export class S3StorageTier implements StorageTier {
-	private client: S3Client;
-	private prefix: string;
+	private client: S3Client
+	private prefix: string
 
 	constructor(private config: S3StorageTierConfig) {
 		const clientConfig: S3ClientConfig = {
@@ -131,10 +123,10 @@ export class S3StorageTier implements StorageTier {
 			forcePathStyle: config.forcePathStyle ?? true,
 			...(config.endpoint && { endpoint: config.endpoint }),
 			...(config.credentials && { credentials: config.credentials }),
-		};
+		}
 
-		this.client = new S3Client(clientConfig);
-		this.prefix = config.prefix ?? '';
+		this.client = new S3Client(clientConfig)
+		this.prefix = config.prefix ?? ''
 	}
 
 	async get(key: string): Promise<Uint8Array | null> {
@@ -142,20 +134,20 @@ export class S3StorageTier implements StorageTier {
 			const command = new GetObjectCommand({
 				Bucket: this.config.bucket,
 				Key: this.getS3Key(key),
-			});
+			})
 
-			const response = await this.client.send(command);
+			const response = await this.client.send(command)
 
 			if (!response.Body) {
-				return null;
+				return null
 			}
 
-			return await this.streamToUint8Array(response.Body as Readable);
+			return await this.streamToUint8Array(response.Body as Readable)
 		} catch (error) {
 			if (this.isNoSuchKeyError(error)) {
-				return null;
+				return null
 			}
-			throw error;
+			throw error
 		}
 	}
 
@@ -170,7 +162,7 @@ export class S3StorageTier implements StorageTier {
 	 * returned in a single request alongside the file body.
 	 */
 	async getWithMetadata(key: string): Promise<TierGetResult | null> {
-		const s3Key = this.getS3Key(key);
+		const s3Key = this.getS3Key(key)
 
 		try {
 			const response = await this.client.send(
@@ -178,23 +170,23 @@ export class S3StorageTier implements StorageTier {
 					Bucket: this.config.bucket,
 					Key: s3Key,
 				}),
-			);
+			)
 
 			if (!response.Body) {
-				return null;
+				return null
 			}
 
-			const rawData = await this.streamToUint8Array(response.Body as Readable);
+			const rawData = await this.streamToUint8Array(response.Body as Readable)
 			const { data, metadata } = response.Metadata
 				? { data: rawData, metadata: this.s3ToMetadata(response.Metadata) }
-				: this.recoverDataAndMetadataFromObject(key, rawData, response);
+				: this.recoverDataAndMetadataFromObject(key, rawData, response)
 
-			return { data, metadata };
+			return { data, metadata }
 		} catch (error) {
 			if (this.isNoSuchKeyError(error)) {
-				return null;
+				return null
 			}
-			throw error;
+			throw error
 		}
 	}
 
@@ -209,7 +201,7 @@ export class S3StorageTier implements StorageTier {
 	 * The stream must be consumed or destroyed by the caller.
 	 */
 	async getStream(key: string): Promise<TierStreamResult | null> {
-		const s3Key = this.getS3Key(key);
+		const s3Key = this.getS3Key(key)
 
 		try {
 			const response = await this.client.send(
@@ -217,22 +209,22 @@ export class S3StorageTier implements StorageTier {
 					Bucket: this.config.bucket,
 					Key: s3Key,
 				}),
-			);
+			)
 
 			if (!response.Body) {
-				return null;
+				return null
 			}
 
 			const metadata = response.Metadata
 				? this.s3ToMetadata(response.Metadata)
-				: this.metadataFromObjectResponse(key, response.ContentLength, response);
+				: this.metadataFromObjectResponse(key, response.ContentLength, response)
 
-			return { stream: response.Body as Readable, metadata };
+			return { stream: response.Body as Readable, metadata }
 		} catch (error) {
 			if (this.isNoSuchKeyError(error)) {
-				return null;
+				return null
 			}
-			throw error;
+			throw error
 		}
 	}
 
@@ -247,11 +239,7 @@ export class S3StorageTier implements StorageTier {
 	 * Uses multipart upload for efficient streaming of large files.
 	 * The stream will be fully consumed by this operation.
 	 */
-	async setStream(
-		key: string,
-		stream: NodeJS.ReadableStream,
-		metadata: StorageMetadata,
-	): Promise<void> {
+	async setStream(key: string, stream: NodeJS.ReadableStream, metadata: StorageMetadata): Promise<void> {
 		const upload = new Upload({
 			client: this.client,
 			params: {
@@ -260,33 +248,33 @@ export class S3StorageTier implements StorageTier {
 				Body: stream as Readable,
 				Metadata: this.metadataToS3(metadata),
 			},
-		});
+		})
 
-		await upload.done();
+		await upload.done()
 	}
 
 	private async streamToUint8Array(stream: Readable): Promise<Uint8Array> {
-		const chunks: Uint8Array[] = [];
+		const chunks: Uint8Array[] = []
 
 		for await (const chunk of stream) {
 			if (Buffer.isBuffer(chunk)) {
-				chunks.push(new Uint8Array(chunk));
+				chunks.push(new Uint8Array(chunk))
 			} else if (chunk instanceof Uint8Array) {
-				chunks.push(chunk);
+				chunks.push(chunk)
 			} else {
-				throw new Error('Unexpected chunk type in S3 stream');
+				throw new Error('Unexpected chunk type in S3 stream')
 			}
 		}
 
-		const totalLength = chunks.reduce((acc, chunk) => acc + chunk.length, 0);
-		const result = new Uint8Array(totalLength);
-		let offset = 0;
+		const totalLength = chunks.reduce((acc, chunk) => acc + chunk.length, 0)
+		const result = new Uint8Array(totalLength)
+		let offset = 0
 		for (const chunk of chunks) {
-			result.set(chunk, offset);
-			offset += chunk.length;
+			result.set(chunk, offset)
+			offset += chunk.length
 		}
 
-		return result;
+		return result
 	}
 
 	private isNoSuchKeyError(error: unknown): boolean {
@@ -295,7 +283,7 @@ export class S3StorageTier implements StorageTier {
 			error !== null &&
 			'name' in error &&
 			(error.name === 'NoSuchKey' || error.name === 'NotFound')
-		);
+		)
 	}
 
 	async set(key: string, data: Uint8Array, metadata: StorageMetadata): Promise<void> {
@@ -307,7 +295,7 @@ export class S3StorageTier implements StorageTier {
 				ContentLength: data.byteLength,
 				Metadata: this.metadataToS3(metadata),
 			}),
-		);
+		)
 	}
 
 	async delete(key: string): Promise<void> {
@@ -317,10 +305,10 @@ export class S3StorageTier implements StorageTier {
 					Bucket: this.config.bucket,
 					Key: this.getS3Key(key),
 				}),
-			);
+			)
 		} catch (error) {
 			if (!this.isNoSuchKeyError(error)) {
-				throw error;
+				throw error
 			}
 		}
 	}
@@ -330,52 +318,52 @@ export class S3StorageTier implements StorageTier {
 			const command = new HeadObjectCommand({
 				Bucket: this.config.bucket,
 				Key: this.getS3Key(key),
-			});
+			})
 
-			await this.client.send(command);
-			return true;
+			await this.client.send(command)
+			return true
 		} catch (error) {
 			if (this.isNoSuchKeyError(error)) {
-				return false;
+				return false
 			}
-			throw error;
+			throw error
 		}
 	}
 
 	async *listKeys(prefix?: string): AsyncIterableIterator<string> {
-		const s3Prefix = prefix ? this.getS3Key(prefix) : this.prefix;
-		let continuationToken: string | undefined;
+		const s3Prefix = prefix ? this.getS3Key(prefix) : this.prefix
+		let continuationToken: string | undefined
 
 		do {
 			const command = new ListObjectsV2Command({
 				Bucket: this.config.bucket,
 				Prefix: s3Prefix,
 				ContinuationToken: continuationToken,
-			});
+			})
 
-			const response = await this.client.send(command);
+			const response = await this.client.send(command)
 
 			if (response.Contents) {
 				for (const object of response.Contents) {
 					if (object.Key) {
 						// Remove prefix to get original key
-						const key = this.removePrefix(object.Key);
-						yield key;
+						const key = this.removePrefix(object.Key)
+						yield key
 					}
 				}
 			}
 
-			continuationToken = response.NextContinuationToken;
-		} while (continuationToken);
+			continuationToken = response.NextContinuationToken
+		} while (continuationToken)
 	}
 
 	async deleteMany(keys: string[]): Promise<void> {
-		if (keys.length === 0) return;
+		if (keys.length === 0) return
 
-		const batchSize = 1000;
+		const batchSize = 1000
 
 		for (let i = 0; i < keys.length; i += batchSize) {
-			const batch = keys.slice(i, i + batchSize);
+			const batch = keys.slice(i, i + batchSize)
 
 			await this.client.send(
 				new DeleteObjectsCommand({
@@ -384,7 +372,7 @@ export class S3StorageTier implements StorageTier {
 						Objects: batch.map((key) => ({ Key: this.getS3Key(key) })),
 					},
 				}),
-			);
+			)
 		}
 	}
 
@@ -395,77 +383,77 @@ export class S3StorageTier implements StorageTier {
 					Bucket: this.config.bucket,
 					Key: this.getS3Key(key),
 				}),
-			);
+			)
 
 			return response.Metadata
 				? this.s3ToMetadata(response.Metadata)
-				: this.metadataFromObjectResponse(key, response.ContentLength, response);
+				: this.metadataFromObjectResponse(key, response.ContentLength, response)
 		} catch (error) {
 			if (this.isNoSuchKeyError(error)) {
-				return null;
+				return null
 			}
-			throw error;
+			throw error
 		}
 	}
 
 	async setMetadata(key: string, metadata: StorageMetadata): Promise<void> {
-		const s3Key = this.getS3Key(key);
+		const s3Key = this.getS3Key(key)
 		const command = new CopyObjectCommand({
 			Bucket: this.config.bucket,
 			Key: s3Key,
 			CopySource: `${this.config.bucket}/${s3Key}`,
 			Metadata: this.metadataToS3(metadata),
 			MetadataDirective: 'REPLACE',
-		});
+		})
 
-		await this.client.send(command);
+		await this.client.send(command)
 	}
 
 	async getStats(): Promise<TierStats> {
-		let bytes = 0;
-		let items = 0;
+		let bytes = 0
+		let items = 0
 
 		// List all objects and sum up sizes
-		let continuationToken: string | undefined;
+		let continuationToken: string | undefined
 
 		do {
 			const command = new ListObjectsV2Command({
 				Bucket: this.config.bucket,
 				Prefix: this.prefix,
 				ContinuationToken: continuationToken,
-			});
+			})
 
-			const response = await this.client.send(command);
+			const response = await this.client.send(command)
 
 			if (response.Contents) {
 				for (const object of response.Contents) {
-					items++;
-					bytes += object.Size ?? 0;
+					items++
+					bytes += object.Size ?? 0
 				}
 			}
 
-			continuationToken = response.NextContinuationToken;
-		} while (continuationToken);
+			continuationToken = response.NextContinuationToken
+		} while (continuationToken)
 
-		return { bytes, items };
+		return { bytes, items }
 	}
 
 	async clear(): Promise<void> {
 		// List and delete all objects with the prefix
-		const keys: string[] = [];
+		const keys: string[] = []
 
 		for await (const key of this.listKeys()) {
-			keys.push(key);
+			keys.push(key)
 		}
 
-		await this.deleteMany(keys);
+		await this.deleteMany(keys)
 	}
 
 	/**
 	 * Get the full S3 key including prefix.
 	 */
 	private getS3Key(key: string): string {
-		return this.prefix + key;
+		return this.prefix + key
 	}
 
 	/**
@@ -473,9 +461,9 @@ export class S3StorageTier implements StorageTier {
 	 */
 	private removePrefix(s3Key: string): string {
 		if (this.prefix && s3Key.startsWith(this.prefix)) {
-			return s3Key.slice(this.prefix.length);
+			return s3Key.slice(this.prefix.length)
 		}
-		return s3Key;
+		return s3Key
 	}
 
 	/**
@@ -487,19 +475,19 @@ export class S3StorageTier implements StorageTier {
 		response: GetObjectCommandOutput | HeadObjectCommandOutput,
 		inferred?: { mimeType?: string; encoding?: string },
 	): StorageMetadata {
-		const now = new Date();
-		const customMetadata: Record<string, string> = {};
+		const now = new Date()
+		const customMetadata: Record<string, string> = {}
 
-		const mimeType = inferred?.mimeType ?? this.normalizeContentType(response.ContentType);
+		const mimeType = inferred?.mimeType ?? this.normalizeContentType(response.ContentType)
 		if (mimeType) {
-			customMetadata.mimeType = mimeType;
+			customMetadata.mimeType = mimeType
 		}
-		const encoding = inferred?.encoding ?? response.ContentEncoding;
+		const encoding = inferred?.encoding ?? response.ContentEncoding
 		if (encoding) {
-			customMetadata.encoding = encoding;
+			customMetadata.encoding = encoding
 		}
 
-		const rawChecksum = typeof response.ETag === 'string' ? response.ETag.replace(/"/g, '') : '';
+		const rawChecksum = typeof response.ETag === 'string' ? response.ETag.replace(/"/g, '') : ''
 
 		return {
 			key,
@@ -510,7 +498,7 @@ export class S3StorageTier implements StorageTier {
 			compressed: false,
 			checksum: rawChecksum,
 			...(Object.keys(customMetadata).length > 0 && { customMetadata }),
-		};
+		}
 	}
 
 	/**
@@ -522,48 +510,48 @@ export class S3StorageTier implements StorageTier {
 		data: Uint8Array,
 		response: GetObjectCommandOutput,
 	): { data: Uint8Array; metadata: StorageMetadata } {
-		const mimeType = this.normalizeContentType(response.ContentType) ?? this.mimeTypeFromKey(key);
-		let recovered = data;
-		let inferredEncoding: string | undefined;
+		const mimeType = this.normalizeContentType(response.ContentType) ?? this.mimeTypeFromKey(key)
+		let recovered = data
+		let inferredEncoding: string | undefined
 
 		if (this.isTextLikeMime(mimeType, key)) {
-			const decoded = this.tryDecodeBase64(recovered);
+			const decoded = this.tryDecodeBase64(recovered)
 			if (decoded) {
-				recovered = decoded;
+				recovered = decoded
 			}
 		}
 
 		if (!inferredEncoding && this.shouldDetectGzip(mimeType, key) && this.isGzip(recovered)) {
-			inferredEncoding = 'gzip';
+			inferredEncoding = 'gzip'
 		}
 
 		const metadata = this.metadataFromObjectResponse(key, recovered.length, response, {
 			...(mimeType ? { mimeType } : {}),
 			...(inferredEncoding ? { encoding: inferredEncoding } : {}),
-		});
-		return { data: recovered, metadata };
+		})
+		return { data: recovered, metadata }
 	}
 
 	private normalizeContentType(contentType?: string): string | undefined {
-		if (!contentType) return undefined;
-		return contentType.split(';')[0]?.trim() || undefined;
+		if (!contentType) return undefined
+		return contentType.split(';')[0]?.trim() || undefined
 	}
 
 	private mimeTypeFromKey(key: string): string | undefined {
-		const guessed = mimeLookup(key);
-		return typeof guessed === 'string' ? guessed : undefined;
+		const guessed = mimeLookup(key)
+		return typeof guessed === 'string' ? guessed : undefined
 	}
 
 	private shouldDetectGzip(mimeType?: string, key?: string): boolean {
 		if (mimeType) {
-			if (mimeType.startsWith('text/')) return true;
-			if (mimeType === 'application/javascript') return true;
-			if (mimeType === 'application/json') return true;
-			if (mimeType === 'application/xml') return true;
-			if (mimeType === 'image/svg+xml') return true;
+			if (mimeType.startsWith('text/')) return true
+			if (mimeType === 'application/javascript') return true
+			if (mimeType === 'application/json') return true
+			if (mimeType === 'application/xml') return true
+			if (mimeType === 'image/svg+xml') return true
 		}
-		if (!key) return false;
-		const lower = key.toLowerCase();
+		if (!key) return false
+		const lower = key.toLowerCase()
 		return (
 			lower.endsWith('.html') ||
 			lower.endsWith('.htm') ||
@@ -572,44 +560,44 @@ export class S3StorageTier implements StorageTier {
 			lower.endsWith('.json') ||
 			lower.endsWith('.xml') ||
 			lower.endsWith('.svg')
-		);
+		)
 	}
 
 	private isTextLikeMime(mimeType?: string, key?: string): boolean {
-		return this.shouldDetectGzip(mimeType, key);
+		return this.shouldDetectGzip(mimeType, key)
 	}
 
 	private isGzip(content: Uint8Array): boolean {
-		return content.length >= 2 && content[0] === 0x1f && content[1] === 0x8b;
+		return content.length >= 2 && content[0] === 0x1f && content[1] === 0x8b
 	}
 
 	private looksLikeBase64(content: Uint8Array): boolean {
-		if (content.length === 0) return false;
-		let nonWhitespace = 0;
+		if (content.length === 0) return false
+		let nonWhitespace = 0
 		for (const byte of content) {
 			if (byte === 0x0a || byte === 0x0d || byte === 0x20 || byte === 0x09) {
-				continue;
+				continue
 			}
-			nonWhitespace++;
+			nonWhitespace++
 			const isBase64Char =
 				(byte >= 0x41 && byte <= 0x5a) || // A-Z
 				(byte >= 0x61 && byte <= 0x7a) || // a-z
 				(byte >= 0x30 && byte <= 0x39) || // 0-9
 				byte === 0x2b || // +
 				byte === 0x2f || // /
-				byte === 0x3d; // =
-			if (!isBase64Char) return false;
+				byte === 0x3d // =
+			if (!isBase64Char) return false
 		}
-		return nonWhitespace % 4 === 0;
+		return nonWhitespace % 4 === 0
 	}
 
 	private tryDecodeBase64(content: Uint8Array): Uint8Array | null {
-		if (!this.looksLikeBase64(content)) return null;
-		const base64String = new TextDecoder().decode(content).replace(/\s+/g, '');
+		if (!this.looksLikeBase64(content)) return null
+		const base64String = new TextDecoder().decode(content).replace(/\s+/g, '')
 		try {
-			return Buffer.from(base64String, 'base64');
+			return Buffer.from(base64String, 'base64')
 		} catch {
-			return null;
+			return null
 		}
 	}
 
@@ -633,7 +621,7 @@ export class S3StorageTier implements StorageTier {
 			...(metadata.mimeType && { mimetype: metadata.mimeType }),
 			...(metadata.encoding && { encoding: metadata.encoding }),
 			...(metadata.customMetadata && { custom: JSON.stringify(metadata.customMetadata) }),
-		};
+		}
 	}
 
 	/**
@@ -648,23 +636,23 @@ export class S3StorageTier implements StorageTier {
 			accessCount: parseInt(s3Metadata.accesscount ?? '0', 10),
 			compressed: s3Metadata.compressed === 'true',
 			checksum: s3Metadata.checksum ?? '',
-		};
+		}
 
 		if (s3Metadata.ttl) {
-			metadata.ttl = new Date(s3Metadata.ttl);
+			metadata.ttl = new Date(s3Metadata.ttl)
 		}
 
 		if (s3Metadata.mimetype) {
-			metadata.mimeType = s3Metadata.mimetype;
+			metadata.mimeType = s3Metadata.mimetype
 		}
 
 		if (s3Metadata.encoding) {
-			metadata.encoding = s3Metadata.encoding;
+			metadata.encoding = s3Metadata.encoding
 		}
 
 		if (s3Metadata.custom) {
 			try {
-				const parsed: unknown = JSON.parse(s3Metadata.custom);
+				const parsed: unknown = JSON.parse(s3Metadata.custom)
 				// Validate it's a Record<string, string>
 				if (
 					parsed &&
@@ -672,13 +660,13 @@ export class S3StorageTier implements StorageTier {
 					!Array.isArray(parsed) &&
 					Object.values(parsed).every((v) => typeof v === 'string')
 				) {
-					metadata.customMetadata = parsed as Record<string, string>;
+					metadata.customMetadata = parsed as Record<string, string>
 				}
 			} catch {
 				// Ignore invalid JSON
 			}
 		}
 
-		return metadata;
+		return metadata
 	}
 }

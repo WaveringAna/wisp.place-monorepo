@@ -43,7 +43,7 @@ export function useDomainData() {
 			const response = await fetch('/api/domain/custom/add', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ domain })
+				body: JSON.stringify({ domain }),
 			})
 
 			const data = await response.json()
@@ -55,9 +55,7 @@ export function useDomainData() {
 			}
 		} catch (err) {
 			console.error('Add domain error:', err)
-			alert(
-				`Failed to add domain: ${err instanceof Error ? err.message : 'Unknown error'}`
-			)
+			alert(`Failed to add domain: ${err instanceof Error ? err.message : 'Unknown error'}`)
 			return { success: false }
 		}
 	}
@@ -69,7 +67,7 @@ export function useDomainData() {
 			const response = await fetch('/api/domain/custom/verify', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ id })
+				body: JSON.stringify({ id }),
 			})
 
 			const data = await response.json()
@@ -85,9 +83,7 @@ export function useDomainData() {
 		} catch (err) {
 			console.error('Verify domain error:', err)
 			setVerificationStatus({ ...verificationStatus, [id]: 'error' })
-			alert(
-				`Verification failed: ${err instanceof Error ? err.message : 'Unknown error'}`
-			)
+			alert(`Verification failed: ${err instanceof Error ? err.message : 'Unknown error'}`)
 		}
 	}
 
@@ -98,7 +94,7 @@ export function useDomainData() {
 
 		try {
 			const response = await fetch(`/api/domain/custom/${id}`, {
-				method: 'DELETE'
+				method: 'DELETE',
 			})
 
 			const data = await response.json()
@@ -110,9 +106,7 @@ export function useDomainData() {
 			}
 		} catch (err) {
 			console.error('Delete domain error:', err)
-			alert(
-				`Failed to delete domain: ${err instanceof Error ? err.message : 'Unknown error'}`
-			)
+			alert(`Failed to delete domain: ${err instanceof Error ? err.message : 'Unknown error'}`)
 			return false
 		}
 	}
@@ -122,7 +116,7 @@ export function useDomainData() {
 			const response = await fetch('/api/domain/wisp/map-site', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ domain, siteRkey })
+				body: JSON.stringify({ domain, siteRkey }),
 			})
 			const data = await response.json()
 			if (!data.success) throw new Error('Failed to map wisp domain')
@@ -140,7 +134,7 @@ export function useDomainData() {
 
 		try {
 			const response = await fetch(`/api/domain/wisp/${encodeURIComponent(domain)}`, {
-				method: 'DELETE'
+				method: 'DELETE',
 			})
 
 			const data = await response.json()
@@ -152,9 +146,7 @@ export function useDomainData() {
 			}
 		} catch (err) {
 			console.error('Delete wisp domain error:', err)
-			alert(
-				`Failed to delete domain: ${err instanceof Error ? err.message : 'Unknown error'}`
-			)
+			alert(`Failed to delete domain: ${err instanceof Error ? err.message : 'Unknown error'}`)
 			return false
 		}
 	}
@@ -164,7 +156,7 @@ export function useDomainData() {
 			const response = await fetch(`/api/domain/custom/${domainId}/map-site`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ siteRkey })
+				body: JSON.stringify({ siteRkey }),
 			})
 			const data = await response.json()
 			if (!data.success) throw new Error(`Failed to map custom domain ${domainId}`)
@@ -180,7 +172,7 @@ export function useDomainData() {
 			const response = await fetch('/api/domain/claim', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ handle })
+				body: JSON.stringify({ handle }),
 			})
 
 			const data = await response.json()
@@ -234,6 +226,6 @@ export function useDomainData() {
 		deleteWispDomain,
 		mapCustomDomain,
 		claimWispDomain,
-		checkWispAvailability
+		checkWispAvailability,
 	}
 }

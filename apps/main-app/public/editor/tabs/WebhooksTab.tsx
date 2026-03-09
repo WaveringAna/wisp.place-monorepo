@@ -1,22 +1,22 @@
-import { useState, useEffect } from 'react'
-import { Button } from '@public/components/ui/button'
-import { Input } from '@public/components/ui/input'
-import { Checkbox } from '@public/components/ui/checkbox'
-import { Label } from '@public/components/ui/label'
 import { Badge } from '@public/components/ui/badge'
+import { Button } from '@public/components/ui/button'
+import { Checkbox } from '@public/components/ui/checkbox'
+import { Input } from '@public/components/ui/input'
+import { Label } from '@public/components/ui/label'
 import { SkeletonShimmer } from '@public/components/ui/skeleton'
 import { Loader2, RefreshCw, Trash2 } from 'lucide-react'
-import type { WebhookRecord, WebhookEventLog } from '../hooks/useWebhookData'
+import { useEffect, useState } from 'react'
+import type { WebhookEventLog, WebhookRecord } from '../hooks/useWebhookData'
 
 const APPS = [
-	{ id: 'bluesky',  label: 'Bluesky',  path: 'app.bsky.*' },
-	{ id: 'tangled',  label: 'Tangled',   path: 'chat.tangled.*' },
-	{ id: 'leaflet',  label: 'Leaflet',   path: 'pub.leaflet.*' },
-	{ id: 'wisp',     label: 'wisp',      path: 'place.wisp.*' },
-	{ id: 'blento',   label: 'Blento',    path: 'blue.blento.*' },
+	{ id: 'bluesky', label: 'Bluesky', path: 'app.bsky.*' },
+	{ id: 'tangled', label: 'Tangled', path: 'chat.tangled.*' },
+	{ id: 'leaflet', label: 'Leaflet', path: 'pub.leaflet.*' },
+	{ id: 'wisp', label: 'wisp', path: 'place.wisp.*' },
+	{ id: 'blento', label: 'Blento', path: 'blue.blento.*' },
 ] as const
 
-type AppId = typeof APPS[number]['id'] | 'other'
+type AppId = (typeof APPS)[number]['id'] | 'other'
 type OtherMode = 'all' | 'collection' | 'rkey'
 
 interface WebhooksTabProps {
@@ -38,13 +38,20 @@ interface WebhooksTabProps {
 	onRefreshEvents: () => Promise<void>
 }
 
-function buildScope(userDid: string, selectedApp: AppId | null, scopePath: string, otherMode: OtherMode, otherCollection: string, otherRkey: string): string {
+function buildScope(
+	userDid: string,
+	selectedApp: AppId | null,
+	scopePath: string,
+	otherMode: OtherMode,
+	otherCollection: string,
+	otherRkey: string,
+): string {
 	if (!userDid) return ''
 	if (!selectedApp) return ''
 	if (selectedApp === 'other') {
 		if (otherMode === 'all') return `at://${userDid}`
 		if (otherMode === 'collection') return otherCollection ? `at://${userDid}/${otherCollection}` : ''
-		return (otherCollection && otherRkey) ? `at://${userDid}/${otherCollection}/${otherRkey}` : ''
+		return otherCollection && otherRkey ? `at://${userDid}/${otherCollection}/${otherRkey}` : ''
 	}
 	return scopePath ? `at://${userDid}/${scopePath}` : `at://${userDid}`
 }
@@ -82,7 +89,7 @@ export function WebhooksTab({
 	const selectApp = (id: AppId) => {
 		setSelectedApp(id)
 		if (id !== 'other') {
-			const app = APPS.find(a => a.id === id)
+			const app = APPS.find((a) => a.id === id)
 			setScopePath(app?.path ?? '')
 		}
 		setError(null)
@@ -110,7 +117,14 @@ export function WebhooksTab({
 		if (eventDelete) events.push('delete')
 
 		try {
-			await onCreateWebhook({ url, scopeAturi, backlinks, events: events.length === 3 ? [] : events, secret: '', enabled: true })
+			await onCreateWebhook({
+				url,
+				scopeAturi,
+				backlinks,
+				events: events.length === 3 ? [] : events,
+				secret: '',
+				enabled: true,
+			})
 			setSuccess('Webhook created.')
 			setUrl('')
 			setSelectedApp(null)
@@ -147,18 +161,19 @@ export function WebhooksTab({
 			</div>
 
 			<div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-6">
-
 				{/* Create form */}
 				<form onSubmit={handleCreate} className="space-y-4">
 					<p className="text-xs uppercase tracking-wider text-muted-foreground">Create Webhook</p>
 
 					{/* URL */}
 					<div className="space-y-1">
-						<Label htmlFor="wh-url" className="text-xs text-muted-foreground">URL</Label>
+						<Label htmlFor="wh-url" className="text-xs text-muted-foreground">
+							URL
+						</Label>
 						<Input
 							id="wh-url"
 							value={url}
-							onChange={e => setUrl(e.target.value)}
+							onChange={(e) => setUrl(e.target.value)}
 							placeholder="https://example.com/webhook"
 							required
 							className="h-8 text-sm"
@@ -169,7 +184,7 @@ export function WebhooksTab({
 					<div className="space-y-2">
 						<Label className="text-xs text-muted-foreground">App</Label>
 						<div className="flex flex-wrap gap-1.5">
-							{APPS.map(app => (
+							{APPS.map((app) => (
 								<button
 									key={app.id}
 									type="button"
@@ -200,7 +215,9 @@ export function WebhooksTab({
 					{/* Scope detail — known app */}
 					{selectedApp && selectedApp !== 'other' && (
 						<div className="space-y-1">
-							<Label htmlFor="wh-path" className="text-xs text-muted-foreground">Collection / glob</Label>
+							<Label htmlFor="wh-path" className="text-xs text-muted-foreground">
+								Collection / glob
+							</Label>
 							<div className="flex items-center gap-0 border border-border/40 focus-within:border-border">
 								<span className="px-2 py-1.5 text-xs text-muted-foreground bg-muted/40 border-r border-border/40 whitespace-nowrap select-none">
 									at://{userDid || 'did'}/
@@ -208,7 +225,7 @@ export function WebhooksTab({
 								<input
 									id="wh-path"
 									value={scopePath}
-									onChange={e => setScopePath(e.target.value)}
+									onChange={(e) => setScopePath(e.target.value)}
 									placeholder="app.bsky.*"
 									className="flex-1 px-2 py-1.5 text-xs bg-transparent outline-none font-mono"
 								/>
@@ -221,11 +238,13 @@ export function WebhooksTab({
 						<div className="space-y-2">
 							<Label className="text-xs text-muted-foreground">Scope</Label>
 							<div className="space-y-1.5">
-								{([
-									['all', 'All my records', `at://${userDid || 'did'}`],
-									['collection', 'Specific collection', ''],
-									['rkey', 'Specific record', ''],
-								] as const).map(([mode, label, hint]) => (
+								{(
+									[
+										['all', 'All my records', `at://${userDid || 'did'}`],
+										['collection', 'Specific collection', ''],
+										['rkey', 'Specific record', ''],
+									] as const
+								).map(([mode, label, hint]) => (
 									<label key={mode} className="flex items-start gap-2 cursor-pointer group">
 										<input
 											type="radio"
@@ -244,7 +263,7 @@ export function WebhooksTab({
 							{otherMode === 'collection' && (
 								<Input
 									value={otherCollection}
-									onChange={e => setOtherCollection(e.target.value)}
+									onChange={(e) => setOtherCollection(e.target.value)}
 									placeholder="app.bsky.feed.post"
 									className="h-8 text-xs"
 								/>
@@ -253,13 +272,13 @@ export function WebhooksTab({
 								<div className="flex gap-2">
 									<Input
 										value={otherCollection}
-										onChange={e => setOtherCollection(e.target.value)}
+										onChange={(e) => setOtherCollection(e.target.value)}
 										placeholder="collection"
 										className="h-8 text-xs flex-1"
 									/>
 									<Input
 										value={otherRkey}
-										onChange={e => setOtherRkey(e.target.value)}
+										onChange={(e) => setOtherRkey(e.target.value)}
 										placeholder="rkey"
 										className="h-8 text-xs flex-1"
 									/>
@@ -278,9 +297,10 @@ export function WebhooksTab({
 					{/* Backlinks */}
 					{selectedApp && (
 						<div className="flex items-center gap-2">
-							<Checkbox id="wh-backlinks" checked={backlinks} onCheckedChange={v => setBacklinks(!!v)} />
+							<Checkbox id="wh-backlinks" checked={backlinks} onCheckedChange={(v) => setBacklinks(!!v)} />
 							<Label htmlFor="wh-backlinks" className="cursor-pointer text-xs">
-								Backlinks <span className="text-muted-foreground">— also fire when other records reference this scope</span>
+								Backlinks{' '}
+								<span className="text-muted-foreground">— also fire when other records reference this scope</span>
 							</Label>
 						</div>
 					)}
@@ -290,10 +310,18 @@ export function WebhooksTab({
 						<div className="space-y-1.5">
 							<Label className="text-xs text-muted-foreground">Events</Label>
 							<div className="flex gap-4">
-								{([['create', eventCreate, setEventCreate], ['update', eventUpdate, setEventUpdate], ['delete', eventDelete, setEventDelete]] as const).map(([name, val, set]) => (
+								{(
+									[
+										['create', eventCreate, setEventCreate],
+										['update', eventUpdate, setEventUpdate],
+										['delete', eventDelete, setEventDelete],
+									] as const
+								).map(([name, val, set]) => (
 									<div key={name} className="flex items-center gap-1.5">
-										<Checkbox id={`wh-event-${name}`} checked={val} onCheckedChange={v => set(!!v)} />
-										<Label htmlFor={`wh-event-${name}`} className="cursor-pointer text-xs capitalize">{name}</Label>
+										<Checkbox id={`wh-event-${name}`} checked={val} onCheckedChange={(v) => set(!!v)} />
+										<Label htmlFor={`wh-event-${name}`} className="cursor-pointer text-xs capitalize">
+											{name}
+										</Label>
 									</div>
 								))}
 							</div>
@@ -306,7 +334,14 @@ export function WebhooksTab({
 
 					{selectedApp && (
 						<Button type="submit" disabled={isCreating || !scopeAturi} size="sm">
-							{isCreating ? <><Loader2 className="w-3 h-3 mr-2 animate-spin" />Creating...</> : 'Create Webhook'}
+							{isCreating ? (
+								<>
+									<Loader2 className="w-3 h-3 mr-2 animate-spin" />
+									Creating...
+								</>
+							) : (
+								'Create Webhook'
+							)}
 						</Button>
 					)}
 				</form>
@@ -316,21 +351,36 @@ export function WebhooksTab({
 					<p className="text-xs uppercase tracking-wider text-muted-foreground">Your Webhooks</p>
 					{webhooksLoading ? (
 						<div className="space-y-2">
-							{[...Array(2)].map((_, i) => <SkeletonShimmer key={i} className="h-12 w-full" />)}
+							{['a', 'b'].map((id) => (
+								<SkeletonShimmer key={id} className="h-12 w-full" />
+							))}
 						</div>
 					) : webhooks.length === 0 ? (
 						<p className="text-xs text-muted-foreground py-1">No webhooks configured.</p>
 					) : (
 						<div className="space-y-1.5">
-							{webhooks.map(wh => (
+							{webhooks.map((wh) => (
 								<div key={wh.rkey} className="flex items-start justify-between p-3 border border-border/30 gap-4">
 									<div className="space-y-0.5 min-w-0">
 										<p className="text-xs truncate">{wh.url}</p>
 										<p className="text-xs text-muted-foreground truncate">{wh.scopeAturi}</p>
 										<div className="flex gap-1 flex-wrap mt-1">
-											{!wh.enabled && <Badge variant="secondary" className="text-[10px]">disabled</Badge>}
-											{wh.backlinks && <Badge variant="outline" className="text-[10px]">backlinks</Badge>}
-											{wh.events.length > 0 && wh.events.map(e => <Badge key={e} variant="outline" className="text-[10px]">{e}</Badge>)}
+											{!wh.enabled && (
+												<Badge variant="secondary" className="text-[10px]">
+													disabled
+												</Badge>
+											)}
+											{wh.backlinks && (
+												<Badge variant="outline" className="text-[10px]">
+													backlinks
+												</Badge>
+											)}
+											{wh.events.length > 0 &&
+												wh.events.map((e) => (
+													<Badge key={e} variant="outline" className="text-[10px]">
+														{e}
+													</Badge>
+												))}
 										</div>
 									</div>
 									<Button
@@ -340,7 +390,11 @@ export function WebhooksTab({
 										disabled={deletingRkey === wh.rkey}
 										className="flex-shrink-0 h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
 									>
-										{deletingRkey === wh.rkey ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+										{deletingRkey === wh.rkey ? (
+											<Loader2 className="w-3 h-3 animate-spin" />
+										) : (
+											<Trash2 className="w-3 h-3" />
+										)}
 									</Button>
 								</div>
 							))}
@@ -354,7 +408,13 @@ export function WebhooksTab({
 						<p className="text-xs uppercase tracking-wider text-muted-foreground">
 							Event Logs <span className="font-normal normal-case">(60s refresh)</span>
 						</p>
-						<Button variant="outline" size="sm" onClick={onRefreshEvents} disabled={eventLogsLoading} className="h-7 px-2 gap-1.5 text-xs">
+						<Button
+							variant="outline"
+							size="sm"
+							onClick={onRefreshEvents}
+							disabled={eventLogsLoading}
+							className="h-7 px-2 gap-1.5 text-xs"
+						>
 							<RefreshCw className={`w-3 h-3 ${eventLogsLoading ? 'animate-spin' : ''}`} />
 							Refresh
 						</Button>
@@ -362,7 +422,9 @@ export function WebhooksTab({
 
 					{eventLogsLoading ? (
 						<div className="space-y-1.5">
-							{[...Array(3)].map((_, i) => <SkeletonShimmer key={i} className="h-7 w-full" />)}
+							{['a', 'b', 'c'].map((id) => (
+								<SkeletonShimmer key={id} className="h-7 w-full" />
+							))}
 						</div>
 					) : eventLogs.length === 0 ? (
 						<p className="text-xs text-muted-foreground py-1">No events yet.</p>
@@ -381,11 +443,15 @@ export function WebhooksTab({
 									</tr>
 								</thead>
 								<tbody>
-									{eventLogs.map((log, i) => (
-										<tr key={i} className="border-b border-border/20 hover:bg-muted/20">
-											<td className="py-1.5 px-3 text-muted-foreground whitespace-nowrap">{new Date(log.deliveredAt).toLocaleTimeString()}</td>
+									{eventLogs.map((log) => (
+										<tr key={`${log.rkey}-${log.deliveredAt}`} className="border-b border-border/20 hover:bg-muted/20">
+											<td className="py-1.5 px-3 text-muted-foreground whitespace-nowrap">
+												{new Date(log.deliveredAt).toLocaleTimeString()}
+											</td>
 											<td className="py-1.5 px-3">
-												<Badge variant={log.status === 'ok' ? 'default' : 'destructive'} className="text-[10px]">{log.status}</Badge>
+												<Badge variant={log.status === 'ok' ? 'default' : 'destructive'} className="text-[10px]">
+													{log.status}
+												</Badge>
 											</td>
 											<td className="py-1.5 px-3">{log.eventKind}</td>
 											<td className="py-1.5 px-3 truncate max-w-[8rem]">{log.eventDid}</td>

@@ -8,43 +8,41 @@
  */
 
 // Main class
-export { TieredStorage } from './TieredStorage.js';
-
-// Built-in tier implementations
-export { MemoryStorageTier, type MemoryStorageTierConfig } from './tiers/MemoryStorageTier.js';
+export { TieredStorage } from './TieredStorage.js'
 export {
 	DiskStorageTier,
 	type DiskStorageTierConfig,
 	type EvictionPolicy,
-} from './tiers/DiskStorageTier.js';
-export { S3StorageTier, type S3StorageTierConfig } from './tiers/S3StorageTier.js';
+} from './tiers/DiskStorageTier.js'
+// Built-in tier implementations
+export { MemoryStorageTier, type MemoryStorageTierConfig } from './tiers/MemoryStorageTier.js'
+export { S3StorageTier, type S3StorageTierConfig } from './tiers/S3StorageTier.js'
 
 // Types
 export type {
-	StorageTier,
-	StorageMetadata,
-	TierStats,
-	TierGetResult,
-	TierStreamResult,
 	AllTierStats,
-	TieredStorageConfig,
 	PlacementRule,
 	SetOptions,
-	StreamSetOptions,
-	StorageResult,
-	StreamResult,
 	SetResult,
+	StorageMetadata,
+	StorageResult,
 	StorageSnapshot,
-} from './types/index.js';
-
+	StorageTier,
+	StreamResult,
+	StreamSetOptions,
+	TieredStorageConfig,
+	TierGetResult,
+	TierStats,
+	TierStreamResult,
+} from './types/index.js'
+export { calculateChecksum, verifyChecksum } from './utils/checksum.js'
 // Utilities
 export {
 	compress,
-	decompress,
-	isGzipped,
 	createCompressStream,
 	createDecompressStream,
-} from './utils/compression.js';
-export { defaultSerialize, defaultDeserialize } from './utils/serialization.js';
-export { calculateChecksum, verifyChecksum } from './utils/checksum.js';
-export { encodeKey, decodeKey } from './utils/path-encoding.js';
+	decompress,
+	isGzipped,
+} from './utils/compression.js'
+export { decodeKey, encodeKey } from './utils/path-encoding.js'
+export { defaultDeserialize, defaultSerialize } from './utils/serialization.js'

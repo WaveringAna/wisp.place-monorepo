@@ -1,25 +1,19 @@
-import { useState, useEffect, useRef } from 'react'
-import { Button } from '@public/components/ui/button'
-import { Input } from '@public/components/ui/input'
-import { Label } from '@public/components/ui/label'
 import { Badge } from '@public/components/ui/badge'
-import { SkeletonShimmer } from '@public/components/ui/skeleton'
+import { Button } from '@public/components/ui/button'
 import {
 	Dialog,
 	DialogContent,
 	DialogDescription,
+	DialogFooter,
 	DialogHeader,
 	DialogTitle,
-	DialogFooter
 } from '@public/components/ui/dialog'
-import {
-	CheckCircle2,
-	XCircle,
-	Loader2,
-	Trash2,
-	AlertCircle
-} from 'lucide-react'
-import type { WispDomain, CustomDomain } from '../hooks/useDomainData'
+import { Input } from '@public/components/ui/input'
+import { Label } from '@public/components/ui/label'
+import { SkeletonShimmer } from '@public/components/ui/skeleton'
+import { AlertCircle, CheckCircle2, Loader2, Trash2, XCircle } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import type { CustomDomain, WispDomain } from '../hooks/useDomainData'
 import type { UserInfo } from '../hooks/useUserInfo'
 
 // Hosting node IP addresses for A record fallback
@@ -59,7 +53,7 @@ export function DomainsTab({
 	onDeleteCustomDomain,
 	onDeleteWispDomain,
 	onClaimWispDomain,
-	onCheckWispAvailability
+	onCheckWispAvailability,
 }: DomainsTabProps) {
 	// Wisp domain claim state
 	const [wispHandle, setWispHandle] = useState('')
@@ -89,7 +83,7 @@ export function DomainsTab({
 		if (totalDomains > 0 && focusedIndex >= totalDomains) {
 			setFocusedIndex(totalDomains - 1)
 		}
-	}, [totalDomains])
+	}, [totalDomains, focusedIndex])
 
 	// Auto-focus when domains first load
 	useEffect(() => {
@@ -97,7 +91,7 @@ export function DomainsTab({
 			const timer = setTimeout(() => containerRef.current?.focus(), 100)
 			return () => clearTimeout(timer)
 		}
-	}, [domainsLoading])
+	}, [domainsLoading, totalDomains])
 
 	// Refocus container when a dialog closes
 	useEffect(() => {
@@ -118,9 +112,7 @@ export function DomainsTab({
 			const container = scrollContainerRef.current
 			const elementRect = element.getBoundingClientRect()
 			const containerRect = container.getBoundingClientRect()
-			const isOutOfView =
-				elementRect.bottom > containerRect.bottom - 50 ||
-				elementRect.top < containerRect.top + 50
+			const isOutOfView = elementRect.bottom > containerRect.bottom - 50 || elementRect.top < containerRect.top + 50
 			if (isOutOfView) element.scrollIntoView({ behavior: 'smooth', block: 'center' })
 		}
 	}, [focusedIndex])
@@ -136,18 +128,16 @@ export function DomainsTab({
 			if (isTyping || isDialogOpen || !hasFocus || totalDomains === 0) return
 
 			const isWisp = focusedIndex < wispDomains.length
-			const domain = isWisp
-				? wispDomains[focusedIndex]
-				: customDomains[focusedIndex - wispDomains.length]
+			const domain = isWisp ? wispDomains[focusedIndex] : customDomains[focusedIndex - wispDomains.length]
 
 			switch (e.key) {
 				case 'ArrowUp':
 					e.preventDefault()
-					setFocusedIndex(prev => Math.max(0, prev - 1))
+					setFocusedIndex((prev) => Math.max(0, prev - 1))
 					break
 				case 'ArrowDown':
 					e.preventDefault()
-					setFocusedIndex(prev => Math.min(totalDomains - 1, prev + 1))
+					setFocusedIndex((prev) => Math.min(totalDomains - 1, prev + 1))
 					break
 				case 'd':
 					e.preventDefault()
@@ -185,7 +175,7 @@ export function DomainsTab({
 		verificationStatus,
 		onDeleteWispDomain,
 		onDeleteCustomDomain,
-		onVerifyDomain
+		onVerifyDomain,
 	])
 
 	const copyToClipboard = async (value: string, label: string) => {
@@ -193,7 +183,7 @@ export function DomainsTab({
 			await navigator.clipboard.writeText(value)
 			setCopiedField(label)
 			window.setTimeout(() => {
-				setCopiedField(current => (current === label ? null : current))
+				setCopiedField((current) => (current === label ? null : current))
 			}, 1400)
 		} catch {
 			setCopiedField(null)
@@ -213,7 +203,10 @@ export function DomainsTab({
 
 	const handleClaimWispDomain = async () => {
 		const trimmed = wispHandle.trim().toLowerCase()
-		if (!trimmed) { alert('Please enter a handle'); return }
+		if (!trimmed) {
+			alert('Please enter a handle')
+			return
+		}
 		setIsClaimingWisp(true)
 		const result = await onClaimWispDomain(trimmed)
 		if (result.success) {
@@ -224,7 +217,10 @@ export function DomainsTab({
 	}
 
 	const handleAddCustomDomain = async () => {
-		if (!customDomain) { alert('Please enter a domain'); return }
+		if (!customDomain) {
+			alert('Please enter a domain')
+			return
+		}
 		setIsAddingDomain(true)
 		const result = await onAddCustomDomain(customDomain)
 		setIsAddingDomain(false)
@@ -239,36 +235,42 @@ export function DomainsTab({
 
 	return (
 		<>
+			{/* biome-ignore lint/a11y/noStaticElementInteractions: keyboard nav focus container */}
 			<div
 				ref={containerRef}
-				tabIndex={0}
 				className="h-full flex flex-col border border-border/30 bg-card/50 font-mono outline-none"
-				onClick={e => {
-				const t = e.target as HTMLElement
-				if (!t.closest('input, textarea, button, select, a, label')) {
-					containerRef.current?.focus()
-				}
-			}}
+				tabIndex={-1}
+				onKeyDown={() => {}}
+				onClick={(e) => {
+					const t = e.target as HTMLElement
+					if (!t.closest('input, textarea, button, select, a, label')) {
+						containerRef.current?.focus()
+					}
+				}}
 			>
 				{/* Keyboard hints */}
 				<div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground p-4 pb-3 border-b border-border/30 flex-shrink-0">
 					{totalDomains > 0 ? (
 						<>
 							<div className="flex items-center gap-2">
-								<Kbd>↑</Kbd><Kbd>↓</Kbd>
+								<Kbd>↑</Kbd>
+								<Kbd>↓</Kbd>
 								<span>navigate</span>
 							</div>
 							<span>•</span>
 							<div className="flex items-center gap-2">
-								<Kbd>d</Kbd><span className="text-red-400">delete</span>
+								<Kbd>d</Kbd>
+								<span className="text-red-400">delete</span>
 							</div>
 							<span>•</span>
 							<div className="flex items-center gap-2">
-								<Kbd>v</Kbd><span>verify</span>
+								<Kbd>v</Kbd>
+								<span>verify</span>
 							</div>
 							<span>•</span>
 							<div className="flex items-center gap-2">
-								<Kbd>Enter</Kbd><span>view DNS</span>
+								<Kbd>Enter</Kbd>
+								<span>view DNS</span>
 							</div>
 						</>
 					) : (
@@ -278,22 +280,17 @@ export function DomainsTab({
 
 				{/* Scrollable content */}
 				<div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-y-auto">
-
 					{/* Wisp Domains */}
 					<div className="p-4 space-y-2">
 						<div className="flex items-center justify-between mb-3">
-							<p className="text-xs uppercase tracking-wider text-muted-foreground">
-								Wisp Domains
-							</p>
-							{!userInfo?.isSupporter && (
-								<span className="text-xs text-muted-foreground">{wispDomains.length}/3</span>
-							)}
+							<p className="text-xs uppercase tracking-wider text-muted-foreground">Wisp Domains</p>
+							{!userInfo?.isSupporter && <span className="text-xs text-muted-foreground">{wispDomains.length}/3</span>}
 						</div>
 
 						{domainsLoading ? (
 							<div className="space-y-2">
-								{[...Array(2)].map((_, i) => (
-									<div key={i} className="p-3 border border-border/30">
+								{['a', 'b'].map((id) => (
+									<div key={id} className="p-3 border border-border/30">
 										<SkeletonShimmer className="h-5 w-full" />
 									</div>
 								))}
@@ -305,24 +302,22 @@ export function DomainsTab({
 									return (
 										<div
 											key={domain.domain}
-											ref={el => { itemRefs.current[idx] = el }}
+											ref={(el) => {
+												itemRefs.current[idx] = el
+											}}
 											className={`flex items-center justify-between p-3 border transition-colors ${
-												isFocused
-													? 'border-accent bg-accent/10'
-													: 'border-border/30 hover:bg-muted/10'
+												isFocused ? 'border-accent bg-accent/10' : 'border-border/30 hover:bg-muted/10'
 											}`}
 										>
 											<div>
 												<div className="flex items-center gap-2">
 													<CheckCircle2 className="w-3 h-3 text-green-500 flex-shrink-0" />
 													<span className="text-sm">{domain.domain}</span>
-													<Badge variant="secondary" className="text-[10px]">wisp</Badge>
+													<Badge variant="secondary" className="text-[10px]">
+														wisp
+													</Badge>
 												</div>
-												{domain.rkey && (
-													<p className="text-xs text-muted-foreground mt-1 ml-5">
-														→ {domain.rkey}
-													</p>
-												)}
+												{domain.rkey && <p className="text-xs text-muted-foreground mt-1 ml-5">→ {domain.rkey}</p>}
 											</div>
 											<Button
 												variant="ghost"
@@ -345,23 +340,27 @@ export function DomainsTab({
 									{wispDomains.length === 0
 										? 'Claim your free wisp.place subdomain'
 										: userInfo?.isSupporter
-										? `Claim another (${wispDomains.length} claimed)`
-										: `Claim another (${wispDomains.length}/3)`}
+											? `Claim another (${wispDomains.length} claimed)`
+											: `Claim another (${wispDomains.length}/3)`}
 								</p>
 								<div className="space-y-2">
-									<Label htmlFor="wisp-handle" className="text-xs">Handle</Label>
+									<Label htmlFor="wisp-handle" className="text-xs">
+										Handle
+									</Label>
 									<div className="flex gap-2">
 										<div className="flex-1 relative">
 											<Input
 												id="wisp-handle"
 												placeholder="mysite"
 												value={wispHandle}
-												onChange={e => {
+												onChange={(e) => {
 													setWispHandle(e.target.value)
 													if (e.target.value.trim()) checkWispAvailability(e.target.value)
 													else setWispAvailability({ available: null, checking: false })
 												}}
-												onKeyDown={e => { if (e.key === 'Enter') handleClaimWispDomain() }}
+												onKeyDown={(e) => {
+													if (e.key === 'Enter') handleClaimWispDomain()
+												}}
 												disabled={isClaimingWisp}
 												className="pr-24 h-8 text-sm"
 											/>
@@ -410,9 +409,7 @@ export function DomainsTab({
 					{/* Custom Domains */}
 					<div className="p-4 border-t border-border/30 space-y-2">
 						<div className="flex items-center justify-between mb-3">
-							<p className="text-xs uppercase tracking-wider text-muted-foreground">
-								Custom Domains
-							</p>
+							<p className="text-xs uppercase tracking-wider text-muted-foreground">Custom Domains</p>
 							<Button
 								variant="outline"
 								size="sm"
@@ -425,16 +422,14 @@ export function DomainsTab({
 
 						{domainsLoading ? (
 							<div className="space-y-2">
-								{[...Array(2)].map((_, i) => (
-									<div key={i} className="p-3 border border-border/30">
+								{['a', 'b'].map((id) => (
+									<div key={id} className="p-3 border border-border/30">
 										<SkeletonShimmer className="h-5 w-full" />
 									</div>
 								))}
 							</div>
 						) : customDomains.length === 0 ? (
-							<p className="text-xs text-muted-foreground py-2">
-								No custom domains added yet
-							</p>
+							<p className="text-xs text-muted-foreground py-2">No custom domains added yet</p>
 						) : (
 							<div className="space-y-2">
 								{customDomains.map((domain, idx) => {
@@ -444,30 +439,36 @@ export function DomainsTab({
 									return (
 										<div
 											key={domain.id}
-											ref={el => { itemRefs.current[globalIndex] = el }}
+											ref={(el) => {
+												itemRefs.current[globalIndex] = el
+											}}
 											className={`flex items-center justify-between p-3 border transition-colors ${
-												isFocused
-													? 'border-accent bg-accent/10'
-													: 'border-border/30 hover:bg-muted/10'
+												isFocused ? 'border-accent bg-accent/10' : 'border-border/30 hover:bg-muted/10'
 											}`}
 										>
 											<div className="min-w-0 flex-1">
 												<div className="flex items-center gap-2 flex-wrap">
-													{domain.verified
-														? <CheckCircle2 className="w-3 h-3 text-green-500 flex-shrink-0" />
-														: <XCircle className="w-3 h-3 text-red-500 flex-shrink-0" />
-													}
+													{domain.verified ? (
+														<CheckCircle2 className="w-3 h-3 text-green-500 flex-shrink-0" />
+													) : (
+														<XCircle className="w-3 h-3 text-red-500 flex-shrink-0" />
+													)}
 													<span className="text-sm truncate">{domain.domain}</span>
-													<Badge variant="outline" className="text-[10px]">custom</Badge>
-													{domain.verified
-														? <Badge variant="secondary" className="text-[10px]">✓ verified</Badge>
-														: <Badge variant="secondary" className="text-[10px] text-yellow-500">⏳ pending</Badge>
-													}
+													<Badge variant="outline" className="text-[10px]">
+														custom
+													</Badge>
+													{domain.verified ? (
+														<Badge variant="secondary" className="text-[10px]">
+															✓ verified
+														</Badge>
+													) : (
+														<Badge variant="secondary" className="text-[10px] text-yellow-500">
+															⏳ pending
+														</Badge>
+													)}
 												</div>
 												{domain.rkey && domain.rkey !== 'self' && (
-													<p className="text-xs text-muted-foreground mt-1 ml-5">
-														→ {domain.rkey}
-													</p>
+													<p className="text-xs text-muted-foreground mt-1 ml-5">→ {domain.rkey}</p>
 												)}
 											</div>
 											<div className="flex items-center gap-1 flex-shrink-0 ml-2">
@@ -487,9 +488,7 @@ export function DomainsTab({
 														onClick={() => onVerifyDomain(domain.id)}
 														disabled={isVerifying}
 													>
-														{isVerifying
-															? <Loader2 className="w-3 h-3 animate-spin" />
-															: 'Verify'}
+														{isVerifying ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Verify'}
 													</Button>
 												)}
 												<Button
@@ -516,8 +515,7 @@ export function DomainsTab({
 					<DialogHeader>
 						<DialogTitle>Add Custom Domain</DialogTitle>
 						<DialogDescription>
-							Enter your domain name. After adding, you'll see the DNS
-							records to configure.
+							Enter your domain name. After adding, you'll see the DNS records to configure.
 						</DialogDescription>
 					</DialogHeader>
 					<div className="space-y-4 py-4">
@@ -527,19 +525,23 @@ export function DomainsTab({
 								id="new-domain"
 								placeholder="example.com"
 								value={customDomain}
-								onChange={e => setCustomDomain(e.target.value)}
-								onKeyDown={e => { if (e.key === 'Enter') handleAddCustomDomain() }}
+								onChange={(e) => setCustomDomain(e.target.value)}
+								onKeyDown={(e) => {
+									if (e.key === 'Enter') handleAddCustomDomain()
+								}}
 							/>
 							<p className="text-xs text-muted-foreground">
-								After adding, click "View DNS" to see the records you
-								need to configure.
+								After adding, click "View DNS" to see the records you need to configure.
 							</p>
 						</div>
 					</div>
 					<DialogFooter className="flex-col sm:flex-row gap-2">
 						<Button
 							variant="outline"
-							onClick={() => { setAddDomainModalOpen(false); setCustomDomain('') }}
+							onClick={() => {
+								setAddDomainModalOpen(false)
+								setCustomDomain('')
+							}}
 							className="w-full sm:w-auto"
 							disabled={isAddingDomain}
 						>
@@ -551,7 +553,10 @@ export function DomainsTab({
 							className="w-full sm:w-auto"
 						>
 							{isAddingDomain ? (
-								<><Loader2 className="w-4 h-4 mr-2 animate-spin" />Adding...</>
+								<>
+									<Loader2 className="w-4 h-4 mr-2 animate-spin" />
+									Adding...
+								</>
 							) : (
 								'Add Domain'
 							)}
@@ -561,22 +566,17 @@ export function DomainsTab({
 			</Dialog>
 
 			{/* View DNS Records Modal */}
-			<Dialog
-				open={viewDomainDNS !== null}
-				onOpenChange={open => !open && setViewDomainDNS(null)}
-			>
+			<Dialog open={viewDomainDNS !== null} onOpenChange={(open) => !open && setViewDomainDNS(null)}>
 				<DialogContent className="sm:max-w-lg max-h-[80vh] overflow-hidden">
 					<DialogHeader>
 						<DialogTitle>DNS Configuration</DialogTitle>
-						<DialogDescription>
-							Add these DNS records to your domain provider
-						</DialogDescription>
+						<DialogDescription>Add these DNS records to your domain provider</DialogDescription>
 					</DialogHeader>
 					{viewDomainDNS && userInfo && (
 						<div className="relative max-h-[62vh] overflow-y-auto pr-2">
 							<div className="pointer-events-none sticky top-0 z-10 h-3 bg-gradient-to-b from-background to-transparent" />
 							{(() => {
-								const domain = customDomains.find(d => d.id === viewDomainDNS)
+								const domain = customDomains.find((d) => d.id === viewDomainDNS)
 								if (!domain) return null
 								return (
 									<div className="space-y-4 py-4">
@@ -592,7 +592,9 @@ export function DomainsTab({
 														<p className="text-xs uppercase tracking-wide text-muted-foreground">Step 1</p>
 														<p className="text-sm font-semibold">Verify ownership (TXT)</p>
 													</div>
-													<Badge variant="secondary" className="text-xs">Required</Badge>
+													<Badge variant="secondary" className="text-xs">
+														Required
+													</Badge>
 												</div>
 												<div className="mt-3 space-y-2">
 													<div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/30 px-3 py-2">
@@ -600,7 +602,11 @@ export function DomainsTab({
 															<p className="text-xs text-muted-foreground">Name</p>
 															<p className="font-mono text-sm select-all">_wisp.{domain.domain}</p>
 														</div>
-														<Button variant="outline" size="sm" onClick={() => copyToClipboard(`_wisp.${domain.domain}`, 'txt-name')}>
+														<Button
+															variant="outline"
+															size="sm"
+															onClick={() => copyToClipboard(`_wisp.${domain.domain}`, 'txt-name')}
+														>
 															{copiedField === 'txt-name' ? 'Copied' : 'Copy'}
 														</Button>
 													</div>
@@ -609,7 +615,11 @@ export function DomainsTab({
 															<p className="text-xs text-muted-foreground">Value</p>
 															<p className="font-mono text-sm break-all select-all">{userInfo.did}</p>
 														</div>
-														<Button variant="outline" size="sm" onClick={() => copyToClipboard(userInfo.did, 'txt-value')}>
+														<Button
+															variant="outline"
+															size="sm"
+															onClick={() => copyToClipboard(userInfo.did, 'txt-value')}
+														>
 															{copiedField === 'txt-value' ? 'Copied' : 'Copy'}
 														</Button>
 													</div>
@@ -622,7 +632,9 @@ export function DomainsTab({
 														<p className="text-xs uppercase tracking-wide text-muted-foreground">Step 2</p>
 														<p className="text-sm font-semibold">Point your domain (CNAME)</p>
 													</div>
-													<Badge variant="secondary" className="text-xs">Recommended</Badge>
+													<Badge variant="secondary" className="text-xs">
+														Recommended
+													</Badge>
 												</div>
 												<div className="mt-3 space-y-2">
 													<div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/30 px-3 py-2">
@@ -630,7 +642,11 @@ export function DomainsTab({
 															<p className="text-xs text-muted-foreground">Name</p>
 															<p className="font-mono text-sm select-all">{domain.domain}</p>
 														</div>
-														<Button variant="outline" size="sm" onClick={() => copyToClipboard(domain.domain, 'cname-name')}>
+														<Button
+															variant="outline"
+															size="sm"
+															onClick={() => copyToClipboard(domain.domain, 'cname-name')}
+														>
 															{copiedField === 'cname-name' ? 'Copied' : 'Copy'}
 														</Button>
 													</div>
@@ -639,7 +655,11 @@ export function DomainsTab({
 															<p className="text-xs text-muted-foreground">Value</p>
 															<p className="font-mono text-sm select-all">{domain.id}.dns.wisp.place</p>
 														</div>
-														<Button variant="outline" size="sm" onClick={() => copyToClipboard(`${domain.id}.dns.wisp.place`, 'cname-value')}>
+														<Button
+															variant="outline"
+															size="sm"
+															onClick={() => copyToClipboard(`${domain.id}.dns.wisp.place`, 'cname-value')}
+														>
 															{copiedField === 'cname-value' ? 'Copied' : 'Copy'}
 														</Button>
 													</div>
@@ -647,8 +667,8 @@ export function DomainsTab({
 												<div className="mt-3 flex gap-2 rounded-md border border-blue-500/20 bg-blue-500/10 p-2 text-xs text-blue-200">
 													<AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-blue-300" />
 													<p>
-														Some DNS providers (like Cloudflare) flatten CNAMEs to A records.
-														That&apos;s okay and won&apos;t affect verification.
+														Some DNS providers (like Cloudflare) flatten CNAMEs to A records. That&apos;s okay and
+														won&apos;t affect verification.
 													</p>
 												</div>
 											</div>
@@ -661,12 +681,12 @@ export function DomainsTab({
 													<div className="p-2 bg-yellow-500/10 border border-yellow-500/20 rounded mb-3 flex gap-2">
 														<AlertCircle className="w-4 h-4 text-yellow-600 shrink-0 mt-0.5" />
 														<p className="text-sm text-yellow-700 dark:text-yellow-500">
-															<strong>Warning:</strong> A records disable GeoDNS. Your site
-															will always be served from the single region you choose.
+															<strong>Warning:</strong> A records disable GeoDNS. Your site will always be served from
+															the single region you choose.
 														</p>
 													</div>
 													<div className="space-y-3">
-														{HOSTING_NODES.map(node => (
+														{HOSTING_NODES.map((node) => (
 															<div key={node.ip} className="space-y-2 pl-3 border-l-2 border-muted">
 																<div className="font-semibold text-muted-foreground mb-1">{node.region}</div>
 																<div className="font-mono text-xs space-y-1">
@@ -675,8 +695,7 @@ export function DomainsTab({
 																		<span className="select-all">{domain.domain}</span>
 																	</div>
 																	<div>
-																		<span className="text-muted-foreground">Type:</span>{' '}
-																		<span>A</span>
+																		<span className="text-muted-foreground">Type:</span> <span>A</span>
 																	</div>
 																</div>
 																<div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/30 px-3 py-2 font-mono text-xs">
@@ -684,7 +703,11 @@ export function DomainsTab({
 																		<p className="text-xs text-muted-foreground">Value</p>
 																		<p className="select-all">{node.ip}</p>
 																	</div>
-																	<Button variant="outline" size="sm" onClick={() => copyToClipboard(node.ip, `a-value-${node.ip}`)}>
+																	<Button
+																		variant="outline"
+																		size="sm"
+																		onClick={() => copyToClipboard(node.ip, `a-value-${node.ip}`)}
+																	>
 																		{copiedField === `a-value-${node.ip}` ? 'Copied' : 'Copy'}
 																	</Button>
 																</div>
@@ -700,9 +723,8 @@ export function DomainsTab({
 
 										<div className="p-3 bg-muted/30 rounded-lg">
 											<p className="text-sm text-muted-foreground">
-												After configuring DNS, click "Verify DNS" to check
-												everything. DNS changes can take a few minutes to
-												propagate.
+												After configuring DNS, click "Verify DNS" to check everything. DNS changes can take a few
+												minutes to propagate.
 											</p>
 										</div>
 									</div>
@@ -714,11 +736,7 @@ export function DomainsTab({
 						</div>
 					)}
 					<DialogFooter>
-						<Button
-							variant="outline"
-							onClick={() => setViewDomainDNS(null)}
-							className="w-full sm:w-auto"
-						>
+						<Button variant="outline" onClick={() => setViewDomainDNS(null)} className="w-full sm:w-auto">
 							Close
 						</Button>
 					</DialogFooter>

@@ -1,4 +1,4 @@
-import { StrictMode, useState, useEffect } from 'react'
+import { StrictMode, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 
@@ -21,16 +21,6 @@ interface ErrorEntry {
 	service: string
 	count: number
 	lastSeen: string
-}
-
-interface MetricsStats {
-	totalRequests: number
-	avgDuration: number
-	p50Duration: number
-	p95Duration: number
-	p99Duration: number
-	errorRate: number
-	requestsPerMinute: number
 }
 
 // Helper function to format Unix timestamp from database
@@ -56,7 +46,7 @@ function Login({ onLogin }: { onLogin: () => void }) {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ username, password }),
-				credentials: 'include'
+				credentials: 'include',
 			})
 
 			if (res.ok) {
@@ -64,7 +54,7 @@ function Login({ onLogin }: { onLogin: () => void }) {
 			} else {
 				setError('Invalid credentials')
 			}
-		} catch (err) {
+		} catch (_err) {
 			setError('Failed to login')
 		} finally {
 			setLoading(false)
@@ -78,9 +68,7 @@ function Login({ onLogin }: { onLogin: () => void }) {
 					<h1 className="text-2xl font-bold text-white mb-6">Admin Login</h1>
 					<form onSubmit={handleSubmit} className="space-y-4">
 						<div>
-							<label className="block text-sm font-medium text-gray-300 mb-2">
-								Username
-							</label>
+							<label className="block text-sm font-medium text-gray-300 mb-2">Username</label>
 							<input
 								type="text"
 								value={username}
@@ -90,9 +78,7 @@ function Login({ onLogin }: { onLogin: () => void }) {
 							/>
 						</div>
 						<div>
-							<label className="block text-sm font-medium text-gray-300 mb-2">
-								Password
-							</label>
+							<label className="block text-sm font-medium text-gray-300 mb-2">Password</label>
 							<input
 								type="password"
 								value={password}
@@ -101,9 +87,7 @@ function Login({ onLogin }: { onLogin: () => void }) {
 								required
 							/>
 						</div>
-						{error && (
-							<div className="text-red-400 text-sm">{error}</div>
-						)}
+						{error && <div className="text-red-400 text-sm">{error}</div>}
 						<button
 							type="submit"
 							disabled={loading}
@@ -217,17 +201,17 @@ function Dashboard() {
 				data.supporters.map(async (supporter: any) => {
 					try {
 						const profileRes = await fetch(
-							`https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor=${supporter.did}`
+							`https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor=${supporter.did}`,
 						)
 						if (profileRes.ok) {
 							const profile = await profileRes.json()
 							return { ...supporter, handle: profile.handle }
 						}
-					} catch (err) {
+					} catch (_err) {
 						// Failed to fetch handle, just use DID
 					}
 					return { ...supporter, handle: null }
-				})
+				}),
 			)
 			setSupporters(supportersWithHandles)
 		}
@@ -248,7 +232,7 @@ function Dashboard() {
 
 			const response = await fetch(url.toString(), {
 				headers: {
-					'Accept': 'application/json',
+					Accept: 'application/json',
 				},
 			})
 
@@ -282,7 +266,7 @@ function Dashboard() {
 		}, 300)
 
 		return () => clearTimeout(timeoutId)
-	}, [newSupporterIdentifier])
+	}, [newSupporterIdentifier, searchActors])
 
 	const selectActor = (actor: any) => {
 		setNewSupporterIdentifier(actor.handle)
@@ -301,7 +285,7 @@ function Dashboard() {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ identifier: newSupporterIdentifier }),
-				credentials: 'include'
+				credentials: 'include',
 			})
 
 			if (res.ok) {
@@ -313,7 +297,7 @@ function Dashboard() {
 				const error = await res.json()
 				setSupporterError(error.message || 'Failed to add supporter')
 			}
-		} catch (err) {
+		} catch (_err) {
 			setSupporterError('Failed to add supporter')
 		} finally {
 			setSupporterLoading(false)
@@ -326,13 +310,13 @@ function Dashboard() {
 		try {
 			const res = await fetch(`/api/admin/supporters/${encodeURIComponent(did)}`, {
 				method: 'DELETE',
-				credentials: 'include'
+				credentials: 'include',
 			})
 
 			if (res.ok) {
 				await fetchSupporters()
 			}
-		} catch (err) {
+		} catch (_err) {
 			alert('Failed to remove supporter')
 		}
 	}
@@ -351,11 +335,11 @@ function Dashboard() {
 		fetchErrors()
 		fetchSites()
 		fetchSupporters()
-	}, [])
+	}, [fetchDatabase, fetchErrors, fetchFirehose, fetchHealth, fetchLogs, fetchMetrics, fetchSites, fetchSupporters])
 
 	useEffect(() => {
 		fetchLogs()
-	}, [logLevel, logService, logSearch])
+	}, [fetchLogs])
 
 	useEffect(() => {
 		if (!autoRefresh) return
@@ -379,9 +363,20 @@ function Dashboard() {
 		}, 5000)
 
 		return () => clearInterval(interval)
-	}, [tab, autoRefresh, logLevel, logService, logSearch])
+	}, [
+		tab,
+		autoRefresh,
+		fetchDatabase,
+		fetchErrors,
+		fetchFirehose,
+		fetchHealth,
+		fetchLogs,
+		fetchMetrics,
+		fetchSites,
+		fetchSupporters,
+	])
 
-	const formatDuration = (ms: number) => {
+	const _formatDuration = (ms: number) => {
 		if (ms < 1000) return `${ms}ms`
 		return `${(ms / 1000).toFixed(2)}s`
 	}
@@ -408,10 +403,7 @@ function Dashboard() {
 							/>
 							Auto-refresh
 						</label>
-						<button
-							onClick={logout}
-							className="px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded text-sm"
-						>
+						<button onClick={logout} className="px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded text-sm">
 							Logout
 						</button>
 					</div>
@@ -426,9 +418,7 @@ function Dashboard() {
 							key={t}
 							onClick={() => setTab(t)}
 							className={`px-4 py-3 text-sm font-medium capitalize transition-colors ${
-								tab === t
-									? 'text-white border-b-2 border-blue-500'
-									: 'text-gray-400 hover:text-white'
+								tab === t ? 'text-white border-b-2 border-blue-500' : 'text-gray-400 hover:text-white'
 							}`}
 						>
 							{t}
@@ -468,8 +458,12 @@ function Dashboard() {
 										<div>
 											<div className="text-sm text-gray-400">Status</div>
 											<div className="flex items-center gap-2 mt-1">
-												<span className={`inline-block w-3 h-3 rounded-full ${firehose.firehose?.healthy ? 'bg-green-500' : 'bg-red-500'}`}></span>
-												<span className="text-lg font-bold">{firehose.firehose?.connected ? 'Connected' : 'Disconnected'}</span>
+												<span
+													className={`inline-block w-3 h-3 rounded-full ${firehose.firehose?.healthy ? 'bg-green-500' : 'bg-red-500'}`}
+												></span>
+												<span className="text-lg font-bold">
+													{firehose.firehose?.connected ? 'Connected' : 'Disconnected'}
+												</span>
 											</div>
 										</div>
 										<div>
@@ -487,8 +481,8 @@ function Dashboard() {
 									</div>
 									{firehose.firehose?.lastEventTime && (
 										<div className="mt-3 text-sm text-gray-400">
-											Last event: {new Date(firehose.firehose.lastEventTime).toLocaleString()}
-											({Math.round(firehose.firehose.timeSinceLastEvent / 1000)}s ago)
+											Last event: {new Date(firehose.firehose.lastEventTime).toLocaleString()}(
+											{Math.round(firehose.firehose.timeSinceLastEvent / 1000)}s ago)
 										</div>
 									)}
 								</div>
@@ -649,10 +643,10 @@ function Dashboard() {
 															log.level === 'error'
 																? 'bg-red-900 text-red-200'
 																: log.level === 'warn'
-																? 'bg-yellow-900 text-yellow-200'
-																: log.level === 'info'
-																? 'bg-blue-900 text-blue-200'
-																: 'bg-gray-700 text-gray-300'
+																	? 'bg-yellow-900 text-yellow-200'
+																	: log.level === 'info'
+																		? 'bg-blue-900 text-blue-200'
+																		: 'bg-gray-700 text-gray-300'
 														}`}
 													>
 														{log.level}
@@ -669,9 +663,7 @@ function Dashboard() {
 												<td className="px-4 py-2">
 													<div>{log.message}</div>
 													{log.context && Object.keys(log.context).length > 0 && (
-														<div className="text-xs text-gray-500 mt-1">
-															{JSON.stringify(log.context)}
-														</div>
+														<div className="text-xs text-gray-500 mt-1">{JSON.stringify(log.context)}</div>
 													)}
 												</td>
 											</tr>
@@ -705,9 +697,7 @@ function Dashboard() {
 									)}
 								</div>
 							))}
-							{errors.length === 0 && (
-								<div className="text-center text-gray-500 py-8">No errors found</div>
-							)}
+							{errors.length === 0 && <div className="text-center text-gray-500 py-8">No errors found</div>}
 						</div>
 					</div>
 				)}
@@ -789,9 +779,7 @@ function Dashboard() {
 														)}
 													</div>
 												</td>
-												<td className="px-4 py-2 text-gray-400 font-mono text-xs">
-													{site.did}
-												</td>
+												<td className="px-4 py-2 text-gray-400 font-mono text-xs">{site.did}</td>
 												<td className="px-4 py-2 text-gray-400">{site.rkey || 'self'}</td>
 												<td className="px-4 py-2 text-gray-400">
 													{formatDbDate(site.created_at).toLocaleDateString()}
@@ -805,7 +793,12 @@ function Dashboard() {
 														title="View on PDSls.dev"
 													>
 														<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-															<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+															<path
+																strokeLinecap="round"
+																strokeLinejoin="round"
+																strokeWidth={2}
+																d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
+															/>
 														</svg>
 													</a>
 												</td>
@@ -847,16 +840,12 @@ function Dashboard() {
 														<span className="text-gray-400">{domain.domain}</span>
 													)}
 												</td>
-												<td className="px-4 py-2 text-gray-400 font-mono text-xs">
-													{domain.did}
-												</td>
+												<td className="px-4 py-2 text-gray-400 font-mono text-xs">{domain.did}</td>
 												<td className="px-4 py-2 text-gray-400">{domain.rkey || 'self'}</td>
 												<td className="px-4 py-2">
 													<span
 														className={`px-2 py-1 rounded text-xs ${
-															domain.verified
-																? 'bg-green-900 text-green-200'
-																: 'bg-yellow-900 text-yellow-200'
+															domain.verified ? 'bg-green-900 text-green-200' : 'bg-yellow-900 text-yellow-200'
 														}`}
 													>
 														{domain.verified ? 'Yes' : 'No'}
@@ -927,13 +916,9 @@ function Dashboard() {
 														)}
 													</div>
 												</td>
-												<td className="px-4 py-2 text-gray-400 font-mono text-xs">
-													{site.did}
-												</td>
+												<td className="px-4 py-2 text-gray-400 font-mono text-xs">{site.did}</td>
 												<td className="px-4 py-2 text-gray-400">{site.rkey || 'self'}</td>
-												<td className="px-4 py-2 text-gray-400">
-													{formatDbDate(site.created_at).toLocaleString()}
-												</td>
+												<td className="px-4 py-2 text-gray-400">{formatDbDate(site.created_at).toLocaleString()}</td>
 												<td className="px-4 py-2">
 													<a
 														href={`https://pdsls.dev/at://${site.did}/place.wisp.fs/${site.rkey || 'self'}`}
@@ -943,7 +928,12 @@ function Dashboard() {
 														title="View on PDSls.dev"
 													>
 														<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-															<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+															<path
+																strokeLinecap="round"
+																strokeLinejoin="round"
+																strokeWidth={2}
+																d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
+															/>
 														</svg>
 													</a>
 												</td>
@@ -989,21 +979,15 @@ function Dashboard() {
 												<td className="px-4 py-2">
 													<span
 														className={`px-2 py-1 rounded text-xs ${
-															domain.verified
-																? 'bg-green-900 text-green-200'
-																: 'bg-yellow-900 text-yellow-200'
+															domain.verified ? 'bg-green-900 text-green-200' : 'bg-yellow-900 text-yellow-200'
 														}`}
 													>
 														{domain.verified ? 'Yes' : 'Pending'}
 													</span>
 												</td>
-												<td className="px-4 py-2 text-gray-400 font-mono text-xs">
-													{domain.did}
-												</td>
+												<td className="px-4 py-2 text-gray-400 font-mono text-xs">{domain.did}</td>
 												<td className="px-4 py-2 text-gray-400">{domain.rkey || 'self'}</td>
-												<td className="px-4 py-2 text-gray-400">
-													{formatDbDate(domain.created_at).toLocaleString()}
-												</td>
+												<td className="px-4 py-2 text-gray-400">{formatDbDate(domain.created_at).toLocaleString()}</td>
 												<td className="px-4 py-2">
 													<a
 														href={`https://pdsls.dev/at://${domain.did}/place.wisp.fs/${domain.rkey || 'self'}`}
@@ -1013,7 +997,12 @@ function Dashboard() {
 														title="View on PDSls.dev"
 													>
 														<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-															<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+															<path
+																strokeLinecap="round"
+																strokeLinejoin="round"
+																strokeWidth={2}
+																d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
+															/>
 														</svg>
 													</a>
 												</td>
@@ -1033,9 +1022,7 @@ function Dashboard() {
 							<h3 className="text-lg font-semibold mb-4">Add Supporter</h3>
 							<form onSubmit={addNewSupporter} className="space-y-4">
 								<div className="relative">
-									<label className="block text-sm font-medium text-gray-300 mb-2">
-										Bluesky Handle or DID
-									</label>
+									<label className="block text-sm font-medium text-gray-300 mb-2">Bluesky Handle or DID</label>
 									<input
 										type="text"
 										value={newSupporterIdentifier}
@@ -1060,9 +1047,25 @@ function Dashboard() {
 									/>
 									{searchLoading && (
 										<div className="absolute right-3 top-9 text-gray-500">
-											<svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-												<circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-												<path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+											<svg
+												className="animate-spin h-4 w-4"
+												xmlns="http://www.w3.org/2000/svg"
+												fill="none"
+												viewBox="0 0 24 24"
+											>
+												<circle
+													className="opacity-25"
+													cx="12"
+													cy="12"
+													r="10"
+													stroke="currentColor"
+													strokeWidth="4"
+												></circle>
+												<path
+													className="opacity-75"
+													fill="currentColor"
+													d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+												></path>
 											</svg>
 										</div>
 									)}
@@ -1083,16 +1086,10 @@ function Dashboard() {
 														/>
 													)}
 													<div className="flex-1 min-w-0">
-														<div className="font-medium text-white truncate">
-															{actor.displayName || actor.handle}
-														</div>
-														<div className="text-sm text-gray-400 truncate">
-															@{actor.handle}
-														</div>
+														<div className="font-medium text-white truncate">{actor.displayName || actor.handle}</div>
+														<div className="text-sm text-gray-400 truncate">@{actor.handle}</div>
 														{actor.description && (
-															<div className="text-xs text-gray-500 truncate mt-1">
-																{actor.description}
-															</div>
+															<div className="text-xs text-gray-500 truncate mt-1">{actor.description}</div>
 														)}
 													</div>
 												</button>
@@ -1103,12 +1100,8 @@ function Dashboard() {
 										Start typing to search for users, or enter a DID directly
 									</p>
 								</div>
-								{supporterError && (
-									<div className="text-red-400 text-sm">{supporterError}</div>
-								)}
-								{supporterSuccess && (
-									<div className="text-green-400 text-sm">{supporterSuccess}</div>
-								)}
+								{supporterError && <div className="text-red-400 text-sm">{supporterError}</div>}
+								{supporterSuccess && <div className="text-green-400 text-sm">{supporterSuccess}</div>}
 								<button
 									type="submit"
 									disabled={supporterLoading}
@@ -1149,9 +1142,7 @@ function Dashboard() {
 														<span className="text-gray-500 italic">Loading...</span>
 													)}
 												</td>
-												<td className="px-4 py-2 font-mono text-xs text-gray-400">
-													{supporter.did}
-												</td>
+												<td className="px-4 py-2 font-mono text-xs text-gray-400">{supporter.did}</td>
 												<td className="px-4 py-2 text-gray-400">
 													{supporter.created_at ? formatDbDate(supporter.created_at).toLocaleString() : 'N/A'}
 												</td>
@@ -1167,9 +1158,7 @@ function Dashboard() {
 										))}
 									</tbody>
 								</table>
-								{supporters.length === 0 && (
-									<div className="text-center text-gray-500 py-8">No supporters yet</div>
-								)}
+								{supporters.length === 0 && <div className="text-center text-gray-500 py-8">No supporters yet</div>}
 							</div>
 						</div>
 					</div>
@@ -1214,5 +1203,5 @@ function App() {
 createRoot(document.getElementById('root')!).render(
 	<StrictMode>
 		<App />
-	</StrictMode>
+	</StrictMode>,
 )

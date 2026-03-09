@@ -1,7 +1,8 @@
 // Change admin password
+
+import { createHash, randomBytes } from 'node:crypto'
 import { adminAuth } from '../src/lib/admin-auth'
 import { db } from '../src/lib/db'
-import { randomBytes, createHash } from 'crypto'
 
 // Get username and new password from command line
 const username = process.argv[2]
@@ -19,7 +20,9 @@ if (newPassword.length < 8) {
 
 // Hash password
 function hashPassword(password: string, salt: string): string {
-	return createHash('sha256').update(password + salt).digest('hex')
+	return createHash('sha256')
+		.update(password + salt)
+		.digest('hex')
 }
 
 function generateSalt(): string {

@@ -1,41 +1,40 @@
 // Fix for Elysia issue with Bun, (see https://github.com/oven-sh/bun/issues/12161)
-process.getBuiltinModule = require;
+process.getBuiltinModule = require
 
-import { Elysia, t } from 'elysia'
-import type { Context } from 'elysia'
 import { cors } from '@elysiajs/cors'
 import { staticPlugin } from '@elysiajs/static'
-
-import type { Config } from './lib/types'
 import { BASE_HOST } from '@wispplace/constants'
-import {
-	createClientMetadata,
-	getOAuthClient,
-	getCurrentKeys,
-	cleanupExpiredSessions,
-	rotateKeysIfNeeded
-} from './lib/oauth-client'
-import { getCookieSecret, closeDatabase } from './lib/db'
-import { getRedisClient, closeRedisClient } from './lib/redis'
-import { ensureServiceIdentityKeypair } from './lib/service-identity'
-import { authRoutes } from './routes/auth'
-import { wispRoutes } from './routes/wisp'
-import { domainRoutes } from './routes/domain'
-import { userRoutes } from './routes/user'
-import { siteRoutes } from './routes/site'
-import { webhookRoutes } from './routes/webhook'
-import { xrpcRoutes } from './routes/xrpc'
-import { csrfProtection } from './lib/csrf'
-import { DNSVerificationWorker } from './lib/dns-verification-worker'
-import { createLogger, logCollector, initializeGrafanaExporters } from '@wispplace/observability'
+import { createLogger, initializeGrafanaExporters, logCollector } from '@wispplace/observability'
 import { observabilityMiddleware } from '@wispplace/observability/middleware/elysia'
+import type { Context } from 'elysia'
+import { Elysia } from 'elysia'
 import { promptAdminSetup } from './lib/admin-auth'
+import { csrfProtection } from './lib/csrf'
+import { closeDatabase, getCookieSecret } from './lib/db'
+import { DNSVerificationWorker } from './lib/dns-verification-worker'
+import {
+	cleanupExpiredSessions,
+	createClientMetadata,
+	getCurrentKeys,
+	getOAuthClient,
+	rotateKeysIfNeeded,
+} from './lib/oauth-client'
+import { closeRedisClient, getRedisClient } from './lib/redis'
+import { ensureServiceIdentityKeypair } from './lib/service-identity'
+import type { Config } from './lib/types'
 import { adminRoutes } from './routes/admin'
+import { authRoutes } from './routes/auth'
+import { domainRoutes } from './routes/domain'
+import { siteRoutes } from './routes/site'
+import { userRoutes } from './routes/user'
+import { webhookRoutes } from './routes/webhook'
+import { wispRoutes } from './routes/wisp'
+import { xrpcRoutes } from './routes/xrpc'
 
 // Initialize Grafana exporters if configured
 initializeGrafanaExporters({
 	serviceName: 'main-app',
-	serviceVersion: '1.0.50'
+	serviceVersion: '1.0.50',
 })
 
 const logger = createLogger('main-app')
@@ -47,19 +46,17 @@ const parsedServiceIds = (Bun.env.SERVICE_IDS ?? '')
 	.split(',')
 	.map((id) => id.trim())
 	.filter((id) => id.length > 0 && id.startsWith('#'))
-const didServiceIds = parsedServiceIds.length > 0
-	? Array.from(new Set(parsedServiceIds))
-	: ['#wisp_xrpc']
+const didServiceIds = parsedServiceIds.length > 0 ? Array.from(new Set(parsedServiceIds)) : ['#wisp_xrpc']
 const serverPort = Number(Bun.env.PORT ?? (isLocalDev ? '8000' : '80'))
 
 logger.info('[Server] Startup config', {
 	isLocalDev,
-	port: serverPort
+	port: serverPort,
 })
 
 const config: Config = {
 	domain: (Bun.env.DOMAIN ?? `https://${BASE_HOST}`) as Config['domain'],
-	clientName: Bun.env.CLIENT_NAME ?? 'PDS-View'
+	clientName: Bun.env.CLIENT_NAME ?? 'PDS-View',
 }
 
 // Initialize admin setup (prompt if no admin exists)
@@ -72,7 +69,7 @@ getRedisClient()
 const cookieSecret = await getCookieSecret()
 const serviceIdentity = await ensureServiceIdentityKeypair(
 	Bun.env.SERVICE_PUBLIC_KEY_MULTIBASE ?? null,
-	Bun.env.SERVICE_PRIVATE_KEY_MULTIBASE ?? null
+	Bun.env.SERVICE_PRIVATE_KEY_MULTIBASE ?? null,
 )
 const servicePublicKeyMultibase = serviceIdentity.publicKeyMultibase
 
@@ -98,7 +95,7 @@ const dnsVerifier = new DNSVerificationWorker(
 	10 * 60 * 1000, // 10 minutes
 	(msg, data) => {
 		logCollector.info(`[DNS Verifier] ${msg}`, 'main-app', data ? { data } : undefined)
-	}
+	},
 )
 
 if (Bun.env.DISABLE_DNS_WORKER !== 'true') {
@@ -109,16 +106,16 @@ if (Bun.env.DISABLE_DNS_WORKER !== 'true') {
 }
 
 export const app = new Elysia({
-		serve: {
-			maxRequestBodySize: 1024 * 1024 * 128 * 3,
-			development: Bun.env.NODE_ENV !== 'production' ? true : false,
-			id: Bun.env.NODE_ENV !== 'production' ? undefined : null,
-		},
-		cookie: {
-			secrets: cookieSecret,
-			sign: ['did']
-		}
-	})
+	serve: {
+		maxRequestBodySize: 1024 * 1024 * 128 * 3,
+		development: Bun.env.NODE_ENV !== 'production',
+		id: Bun.env.NODE_ENV !== 'production' ? undefined : null,
+	},
+	cookie: {
+		secrets: cookieSecret,
+		sign: ['did'],
+	},
+})
 	// Observability middleware
 	.onBeforeHandle(observabilityMiddleware('main-app').beforeHandle)
 	.onRequest(({ request }) => {
@@ -127,7 +124,7 @@ export const app = new Elysia({
 			if (pathname.startsWith('/xrpc/')) {
 				console.log('[Server] Incoming /xrpc request', {
 					method: request.method,
-					path: pathname
+					path: pathname,
 				})
 			}
 		}
@@ -179,8 +176,12 @@ export const app = new Elysia({
 				statusCode = 401
 			} else if (errorMessage.includes('Forbidden') || errorMessage.includes('forbidden')) {
 				statusCode = 403
-			} else if (errorMessage.includes('Invalid') || errorMessage.includes('required') ||
-					   errorMessage.includes('validation') || errorMessage.includes('bad request')) {
+			} else if (
+				errorMessage.includes('Invalid') ||
+				errorMessage.includes('required') ||
+				errorMessage.includes('validation') ||
+				errorMessage.includes('bad request')
+			) {
 				statusCode = 400
 			} else if ((error as any).status) {
 				statusCode = (error as any).status
@@ -205,15 +206,13 @@ export const app = new Elysia({
 		return {
 			success: false,
 			error: errorMessage,
-			statusCode
+			statusCode,
 		}
 	})
 	.use(csrfProtection())
 	.get('/', async ({ request, set }) => {
 		// Build dynamic login URL for AT Protocol OAuth entryway
-		const loginUrl = isLocalDev
-			? `${new URL(request.url).origin}/api/auth/login`
-			: `${config.domain}/api/auth/login`
+		const loginUrl = isLocalDev ? `${new URL(request.url).origin}/api/auth/login` : `${config.domain}/api/auth/login`
 		const atprotoLoginUrl = `https://atproto.wisp.place/?next=${encodeURIComponent(loginUrl)}`
 
 		set.headers['Content-Type'] = 'text/html; charset=utf-8'
@@ -223,9 +222,7 @@ export const app = new Elysia({
 	})
 	.get('/home', async ({ request, set }) => {
 		// Same as / but without the auto-redirect script for signed-in users
-		const loginUrl = isLocalDev
-			? `${new URL(request.url).origin}/api/auth/login`
-			: `${config.domain}/api/auth/login`
+		const loginUrl = isLocalDev ? `${new URL(request.url).origin}/api/auth/login` : `${config.domain}/api/auth/login`
 		const atprotoLoginUrl = `https://atproto.wisp.place/?next=${encodeURIComponent(loginUrl)}`
 
 		set.headers['Content-Type'] = 'text/html; charset=utf-8'
@@ -233,10 +230,7 @@ export const app = new Elysia({
 		const html = await Bun.file('./apps/main-app/public/landingpage.html').text()
 		return html
 			.replaceAll('{{ATPROTO_LOGIN_URL}}', atprotoLoginUrl)
-			.replace(
-				/<script>\s*\/\/ Check if user is already signed in[\s\S]*?<\/script>/,
-				''
-			)
+			.replace(/<script>\s*\/\/ Check if user is already signed in[\s\S]*?<\/script>/, '')
 	})
 	.use(authRoutes(client, cookieSecret))
 	.use(wispRoutes(client, cookieSecret))
@@ -251,39 +245,39 @@ export const app = new Elysia({
 			prefix: '/',
 			// Prevent dev-mode GET /* fallback from swallowing XRPC GET routes.
 			alwaysStatic: true,
-			staticLimit: 10000
-		})
+			staticLimit: 10000,
+		}),
 	)
 	// Production only: serve built assets from dist
 	.use(
 		Bun.env.NODE_ENV === 'production'
 			? await staticPlugin({
 					assets: './apps/main-app/dist',
-					prefix: '/dist'
+					prefix: '/dist',
 				})
-			: (app) => app
+			: (app) => app,
 	)
 	.use(
 		Bun.env.NODE_ENV === 'production'
 			? await staticPlugin({
 					assets: './apps/main-app/dist/editor',
-					prefix: '/editor'
+					prefix: '/editor',
 				})
-			: (app) => app
+			: (app) => app,
 	)
 	// Production only: serve built HTML for /editor
 	.use(
 		Bun.env.NODE_ENV === 'production'
 			? new Elysia()
-				.get('/editor', async ({ set }) => {
-					set.headers['Content-Type'] = 'text/html; charset=utf-8'
-					return await Bun.file('./apps/main-app/dist/editor/index.html').text()
-				})
-				.get('/editor/*', async ({ set }) => {
-					set.headers['Content-Type'] = 'text/html; charset=utf-8'
-					return await Bun.file('./apps/main-app/dist/editor/index.html').text()
-				})
-			: (app) => app
+					.get('/editor', async ({ set }) => {
+						set.headers['Content-Type'] = 'text/html; charset=utf-8'
+						return await Bun.file('./apps/main-app/dist/editor/index.html').text()
+					})
+					.get('/editor/*', async ({ set }) => {
+						set.headers['Content-Type'] = 'text/html; charset=utf-8'
+						return await Bun.file('./apps/main-app/dist/editor/index.html').text()
+					})
+			: (app) => app,
 	)
 	// Keep XRPC after static in dev, since staticPlugin(prefix='/') installs GET /* fallback.
 	.use(xrpcRoutes())
@@ -292,23 +286,23 @@ export const app = new Elysia({
 		Bun.env.NODE_ENV === 'production'
 			? await staticPlugin({
 					assets: './apps/main-app/dist/admin',
-					prefix: '/admin'
+					prefix: '/admin',
 				})
-			: (app) => app
+			: (app) => app,
 	)
 	// Production only: serve built HTML for /admin
 	.use(
 		Bun.env.NODE_ENV === 'production'
 			? new Elysia()
-				.get('/admin', async ({ set }) => {
-					set.headers['Content-Type'] = 'text/html; charset=utf-8'
-					return await Bun.file('./apps/main-app/dist/admin/index.html').text()
-				})
-				.get('/admin/*', async ({ set }) => {
-					set.headers['Content-Type'] = 'text/html; charset=utf-8'
-					return await Bun.file('./apps/main-app/dist/admin/index.html').text()
-				})
-			: (app) => app
+					.get('/admin', async ({ set }) => {
+						set.headers['Content-Type'] = 'text/html; charset=utf-8'
+						return await Bun.file('./apps/main-app/dist/admin/index.html').text()
+					})
+					.get('/admin/*', async ({ set }) => {
+						set.headers['Content-Type'] = 'text/html; charset=utf-8'
+						return await Bun.file('./apps/main-app/dist/admin/index.html').text()
+					})
+			: (app) => app,
 	)
 	.get('/acceptable-use', async ({ set }) => {
 		set.headers['Content-Type'] = 'text/html; charset=utf-8'
@@ -335,12 +329,12 @@ export const app = new Elysia({
 			LOCAL_DEV: Bun.env.LOCAL_DEV,
 			DOMAIN: Bun.env.DOMAIN,
 			BASE_DOMAIN: Bun.env.BASE_DOMAIN,
-			configDomain: config.domain
+			configDomain: config.domain,
 		})
 		const metadata = createClientMetadata(config)
 		logger.debug('[OAuth] Returning metadata', {
 			client_id: metadata.client_id,
-			redirect_uris: metadata.redirect_uris
+			redirect_uris: metadata.redirect_uris,
 		})
 		return metadata
 	})
@@ -366,7 +360,7 @@ export const app = new Elysia({
 		const services = didServiceIds.map((id) => ({
 			id,
 			type: 'AtprotoService',
-			serviceEndpoint
+			serviceEndpoint,
 		}))
 
 		const verificationMethod = servicePublicKeyMultibase
@@ -375,8 +369,8 @@ export const app = new Elysia({
 						id: `${serviceDid}#atproto`,
 						type: 'Multikey',
 						controller: serviceDid,
-						publicKeyMultibase: servicePublicKeyMultibase
-					}
+						publicKeyMultibase: servicePublicKeyMultibase,
+					},
 				]
 			: undefined
 
@@ -384,14 +378,14 @@ export const app = new Elysia({
 			'@context': contexts,
 			id: serviceDid,
 			verificationMethod,
-			service: services
+			service: services,
 		}
 	})
 	.get('/jwks.json', async ({ set }) => {
 		// Prevent caching to ensure clients always get fresh keys after rotation
 		set.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
-		set.headers['Pragma'] = 'no-cache'
-		set.headers['Expires'] = '0'
+		set.headers.Pragma = 'no-cache'
+		set.headers.Expires = '0'
 
 		const keys = await getCurrentKeys()
 		if (!keys.length) return { keys: [] }
@@ -401,7 +395,7 @@ export const app = new Elysia({
 				const jwk = k.publicJwk ?? k
 				const { ...pub } = jwk
 				return pub
-			})
+			}),
 		}
 	})
 	.get('/api/health', () => {
@@ -409,18 +403,18 @@ export const app = new Elysia({
 		return {
 			status: 'ok',
 			timestamp: new Date().toISOString(),
-			dnsVerifier: dnsVerifierHealth
+			dnsVerifier: dnsVerifierHealth,
 		}
 	})
 	.get('/api/screenshots', async () => {
-		const fs = await import('fs/promises')
+		const fs = await import('node:fs/promises')
 
 		try {
 			const screenshotsDir = './apps/main-app/public/screenshots'
 			const files = await fs.readdir(screenshotsDir)
-			const screenshots = files.filter(file => file.endsWith('.webp'))
+			const screenshots = files.filter((file) => file.endsWith('.webp'))
 			return { screenshots }
-		} catch (error) {
+		} catch (_error) {
 			return { screenshots: [] }
 		}
 	})
@@ -432,12 +426,12 @@ export const app = new Elysia({
 			await dnsVerifier.trigger()
 			return {
 				success: true,
-				message: 'DNS verification triggered'
+				message: 'DNS verification triggered',
 			}
 		} catch (error) {
 			return {
 				success: false,
-				error: error instanceof Error ? error.message : String(error)
+				error: error instanceof Error ? error.message : String(error),
 			}
 		}
 	})
@@ -446,39 +440,39 @@ export const app = new Elysia({
 		set.headers['Content-Type'] = 'text/plain'
 		return serviceDid
 	})
-	.use(cors({
-		origin: isLocalDev
-			? [
-					config.domain,
-					/^http:\/\/127\.0\.0\.1:\d+$/,
-					/^http:\/\/localhost:\d+$/,
-					/^https:\/\/127\.0\.0\.1:\d+$/,
-					/^https:\/\/localhost:\d+$/
-				]
-			: config.domain,
-		credentials: true,
-		methods: ['GET', 'POST', 'DELETE', 'PUT', 'PATCH', 'OPTIONS'],
-		allowedHeaders: [
-			'Content-Type',
-			'Authorization',
-			'Origin',
-			'X-Forwarded-Host',
-			'DPoP',
-			'dpop',
-			'DPoP-Nonce',
-			'dpop-nonce'
-		],
-		exposeHeaders: ['Content-Type', 'DPoP-Nonce', 'dpop-nonce'],
-		maxAge: 86400 // 24 hours
-	}))
+	.use(
+		cors({
+			origin: isLocalDev
+				? [
+						config.domain,
+						/^http:\/\/127\.0\.0\.1:\d+$/,
+						/^http:\/\/localhost:\d+$/,
+						/^https:\/\/127\.0\.0\.1:\d+$/,
+						/^https:\/\/localhost:\d+$/,
+					]
+				: config.domain,
+			credentials: true,
+			methods: ['GET', 'POST', 'DELETE', 'PUT', 'PATCH', 'OPTIONS'],
+			allowedHeaders: [
+				'Content-Type',
+				'Authorization',
+				'Origin',
+				'X-Forwarded-Host',
+				'DPoP',
+				'dpop',
+				'DPoP-Nonce',
+				'dpop-nonce',
+			],
+			exposeHeaders: ['Content-Type', 'DPoP-Nonce', 'dpop-nonce'],
+			maxAge: 86400, // 24 hours
+		}),
+	)
 	.listen({
 		port: serverPort,
-		hostname: '0.0.0.0'
+		hostname: '0.0.0.0',
 	})
 
-console.log(
-	`🦊 Elysia is running at http://${app.server?.hostname}:${app.server?.port}`
-)
+console.log(`🦊 Elysia is running at http://${app.server?.hostname}:${app.server?.port}`)
 
 // Graceful shutdown
 process.on('SIGINT', async () => {

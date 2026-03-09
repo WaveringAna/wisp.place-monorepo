@@ -1,17 +1,11 @@
-import { lru, type LRU } from 'tiny-lru';
-import { Readable } from 'node:stream';
-import type {
-	StorageTier,
-	StorageMetadata,
-	TierStats,
-	TierGetResult,
-	TierStreamResult,
-} from '../types/index.js';
+import { Readable } from 'node:stream'
+import { type LRU, lru } from 'tiny-lru'
+import type { StorageMetadata, StorageTier, TierGetResult, TierStats, TierStreamResult } from '../types/index.js'
 
 interface CacheEntry {
-	data: Uint8Array;
-	metadata: StorageMetadata;
-	size: number;
+	data: Uint8Array
+	metadata: StorageMetadata
+	size: number
 }
 
 /**
@@ -24,7 +18,7 @@ export interface MemoryStorageTierConfig {
 	 * @remarks
 	 * When this limit is reached, least-recently-used entries are evicted.
 	 */
-	maxSizeBytes: number;
+	maxSizeBytes: number
 
 	/**
 	 * Maximum number of items.
@@ -33,7 +27,7 @@ export interface MemoryStorageTierConfig {
 	 * When this limit is reached, least-recently-used entries are evicted.
 	 * Useful for limiting memory usage when items have variable sizes.
 	 */
-	maxItems?: number;
+	maxItems?: number
 }
 
 /**
@@ -58,37 +52,37 @@ export interface MemoryStorageTierConfig {
  * ```
  */
 export class MemoryStorageTier implements StorageTier {
-	private cache: LRU<CacheEntry>;
-	private currentSize = 0;
+	private cache: LRU<CacheEntry>
+	private currentSize = 0
 	private stats = {
 		hits: 0,
 		misses: 0,
 		evictions: 0,
-	};
+	}
 
 	constructor(private config: MemoryStorageTierConfig) {
 		if (config.maxSizeBytes <= 0) {
-			throw new Error('maxSizeBytes must be positive');
+			throw new Error('maxSizeBytes must be positive')
 		}
 		if (config.maxItems !== undefined && config.maxItems <= 0) {
-			throw new Error('maxItems must be positive');
+			throw new Error('maxItems must be positive')
 		}
 
 		// Initialize TinyLRU with max items (we'll handle size limits separately)
-		const maxItems = config.maxItems ?? 10000; // Default to 10k items if not specified
-		this.cache = lru<CacheEntry>(maxItems);
+		const maxItems = config.maxItems ?? 10000 // Default to 10k items if not specified
+		this.cache = lru<CacheEntry>(maxItems)
 	}
 
 	async get(key: string): Promise<Uint8Array | null> {
-		const entry = this.cache.get(key);
+		const entry = this.cache.get(key)
 
 		if (!entry) {
-			this.stats.misses++;
-			return null;
+			this.stats.misses++
+			return null
 		}
 
-		this.stats.hits++;
-		return entry.data;
+		this.stats.hits++
+		return entry.data
 	}
 
 	/**
@@ -98,15 +92,15 @@ export class MemoryStorageTier implements StorageTier {
 	 * @returns The data and metadata, or null if not found
 	 */
 	async getWithMetadata(key: string): Promise<TierGetResult | null> {
-		const entry = this.cache.get(key);
+		const entry = this.cache.get(key)
 
 		if (!entry) {
-			this.stats.misses++;
-			return null;
+			this.stats.misses++
+			return null
 		}
 
-		this.stats.hits++;
-		return { data: entry.data, metadata: entry.metadata };
+		this.stats.hits++
+		return { data: entry.data, metadata: entry.metadata }
 	}
 
 	/**
@@ -121,19 +115,19 @@ export class MemoryStorageTier implements StorageTier {
 	 * provides API consistency rather than memory savings.
 	 */
 	async getStream(key: string): Promise<TierStreamResult | null> {
-		const entry = this.cache.get(key);
+		const entry = this.cache.get(key)
 
 		if (!entry) {
-			this.stats.misses++;
-			return null;
+			this.stats.misses++
+			return null
 		}
 
-		this.stats.hits++;
+		this.stats.hits++
 
 		// Create a readable stream from the buffer
-		const stream = Readable.from([entry.data]);
+		const stream = Readable.from([entry.data])
 
-		return { stream, metadata: entry.metadata };
+		return { stream, metadata: entry.metadata }
 	}
 
 	/**
@@ -148,92 +142,88 @@ export class MemoryStorageTier implements StorageTier {
 	 * since the tier stores data in memory. Use disk or S3 tiers for
 	 * truly streaming large file handling.
 	 */
-	async setStream(
-		key: string,
-		stream: NodeJS.ReadableStream,
-		metadata: StorageMetadata,
-	): Promise<void> {
-		const chunks: Uint8Array[] = [];
+	async setStream(key: string, stream: NodeJS.ReadableStream, metadata: StorageMetadata): Promise<void> {
+		const chunks: Uint8Array[] = []
 
 		for await (const chunk of stream) {
 			if (Buffer.isBuffer(chunk)) {
-				chunks.push(new Uint8Array(chunk));
+				chunks.push(new Uint8Array(chunk))
 			} else if (ArrayBuffer.isView(chunk)) {
-				chunks.push(new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength));
+				chunks.push(new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength))
 			} else if (typeof chunk === 'string') {
-				chunks.push(new TextEncoder().encode(chunk));
+				chunks.push(new TextEncoder().encode(chunk))
 			}
 		}
 
-		const totalLength = chunks.reduce((acc, chunk) => acc + chunk.length, 0);
-		const data = new Uint8Array(totalLength);
-		let offset = 0;
+		const totalLength = chunks.reduce((acc, chunk) => acc + chunk.length, 0)
+		const data = new Uint8Array(totalLength)
+		let offset = 0
 		for (const chunk of chunks) {
-			data.set(chunk, offset);
-			offset += chunk.length;
+			data.set(chunk, offset)
+			offset += chunk.length
 		}
 
-		await this.set(key, data, metadata);
+		await this.set(key, data, metadata)
 	}
 
 	async set(key: string, data: Uint8Array, metadata: StorageMetadata): Promise<void> {
-		const size = data.byteLength;
+		const size = data.byteLength
 
 		// Check existing entry for size accounting
-		const existing = this.cache.get(key);
+		const existing = this.cache.get(key)
 		if (existing) {
-			this.currentSize -= existing.size;
+			this.currentSize -= existing.size
 		}
 
 		// Evict entries until we have space for the new entry
-		await this.evictIfNeeded(size);
+		await this.evictIfNeeded(size)
 
 		// Add new entry
-		const entry: CacheEntry = { data, metadata, size };
-		this.cache.set(key, entry);
-		this.currentSize += size;
+		const entry: CacheEntry = { data, metadata, size }
+		this.cache.set(key, entry)
+		this.currentSize += size
 	}
 
 	async delete(key: string): Promise<void> {
-		const entry = this.cache.get(key);
+		const entry = this.cache.get(key)
 		if (entry) {
-			this.cache.delete(key);
-			this.currentSize -= entry.size;
+			this.cache.delete(key)
+			this.currentSize -= entry.size
 		}
 	}
 
 	async exists(key: string): Promise<boolean> {
-		return this.cache.has(key);
+		return this.cache.has(key)
 	}
 
 	async *listKeys(prefix?: string): AsyncIterableIterator<string> {
 		// TinyLRU returns keys as any[] but they are strings in our usage
-		const keys = this.cache.keys() as string[];
+		const keys = this.cache.keys() as string[]
 		for (const key of keys) {
 			if (!prefix || key.startsWith(prefix)) {
-				yield key;
+				yield key
 			}
 		}
 	}
 
 	async deleteMany(keys: string[]): Promise<void> {
 		for (const key of keys) {
-			await this.delete(key);
+			await this.delete(key)
 		}
 	}
 
 	async getMetadata(key: string): Promise<StorageMetadata | null> {
-		const entry = this.cache.get(key);
-		return entry ? entry.metadata : null;
+		const entry = this.cache.get(key)
+		return entry ? entry.metadata : null
 	}
 
 	async setMetadata(key: string, metadata: StorageMetadata): Promise<void> {
-		const entry = this.cache.get(key);
+		const entry = this.cache.get(key)
 		if (entry) {
 			// Update metadata in place
-			entry.metadata = metadata;
+			entry.metadata = metadata
 			// Re-set to mark as recently used
-			this.cache.set(key, entry);
+			this.cache.set(key, entry)
 		}
 	}
 
@@ -244,12 +234,12 @@ export class MemoryStorageTier implements StorageTier {
 			hits: this.stats.hits,
 			misses: this.stats.misses,
 			evictions: this.stats.evictions,
-		};
+		}
 	}
 
 	async clear(): Promise<void> {
-		this.cache.clear();
-		this.currentSize = 0;
+		this.cache.clear()
+		this.currentSize = 0
 	}
 
 	/**
@@ -266,21 +256,21 @@ export class MemoryStorageTier implements StorageTier {
 		// Keep evicting until we have enough space
 		while (this.currentSize + incomingSize > this.config.maxSizeBytes && this.cache.size > 0) {
 			// Get the LRU key (first in the list) without accessing it
-			const keys = this.cache.keys() as string[];
-			if (keys.length === 0) break;
+			const keys = this.cache.keys() as string[]
+			if (keys.length === 0) break
 
-			const lruKey = keys[0];
-			if (!lruKey) break;
+			const lruKey = keys[0]
+			if (!lruKey) break
 
 			// Access the entry directly from internal items without triggering LRU update
 			// items is a public property in LRU interface for this purpose
-			const entry = this.cache.items[lruKey]?.value;
-			if (!entry) break;
+			const entry = this.cache.items[lruKey]?.value
+			if (!entry) break
 
 			// Use TinyLRU's built-in evict() which properly removes the LRU item
-			this.cache.evict();
-			this.currentSize -= entry.size;
-			this.stats.evictions++;
+			this.cache.evict()
+			this.currentSize -= entry.size
+			this.stats.evictions++
 		}
 	}
 }

@@ -1,6 +1,6 @@
-import type { HandleResolver, ResolveHandleOptions, ResolvedHandle } from '@atproto-labs/handle-resolver';
-import type { AtprotoDid } from '@atproto/did';
-import { logger } from './logger';
+import type { AtprotoDid } from '@atproto/did'
+import type { HandleResolver, ResolvedHandle, ResolveHandleOptions } from '@atproto-labs/handle-resolver'
+import { logger } from './logger'
 
 /**
  * Custom HandleResolver that uses Slingshot's identity resolver service
@@ -10,72 +10,72 @@ import { logger } from './logger';
  * Uses: https://slingshot.wisp.place/xrpc/com.atproto.identity.resolveHandle
  */
 export class SlingshotHandleResolver implements HandleResolver {
-    private readonly endpoint = 'https://slingshot.microcosm.blue/xrpc/com.atproto.identity.resolveHandle';
+	private readonly endpoint = 'https://slingshot.microcosm.blue/xrpc/com.atproto.identity.resolveHandle'
 
-    async resolve(handle: string, options?: ResolveHandleOptions): Promise<ResolvedHandle> {
-        try {
-            logger.debug('[SlingshotHandleResolver] Resolving handle', { handle });
+	async resolve(handle: string, options?: ResolveHandleOptions): Promise<ResolvedHandle> {
+		try {
+			logger.debug('[SlingshotHandleResolver] Resolving handle', { handle })
 
-            const url = new URL(this.endpoint);
-            url.searchParams.set('handle', handle);
+			const url = new URL(this.endpoint)
+			url.searchParams.set('handle', handle)
 
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout
+			const controller = new AbortController()
+			const timeoutId = setTimeout(() => controller.abort(), 5000) // 5s timeout
 
-            try {
-                const response = await fetch(url.toString(), {
-                    signal: options?.signal || controller.signal,
-                    headers: {
-                        'Accept': 'application/json',
-                    },
-                });
+			try {
+				const response = await fetch(url.toString(), {
+					signal: options?.signal || controller.signal,
+					headers: {
+						Accept: 'application/json',
+					},
+				})
 
-                clearTimeout(timeoutId);
+				clearTimeout(timeoutId)
 
-                if (!response.ok) {
-                    logger.error('[SlingshotHandleResolver] Failed to resolve handle', {
-                        handle,
-                        status: response.status,
-                        statusText: response.statusText,
-                    });
-                    return null;
-                }
+				if (!response.ok) {
+					logger.error('[SlingshotHandleResolver] Failed to resolve handle', {
+						handle,
+						status: response.status,
+						statusText: response.statusText,
+					})
+					return null
+				}
 
-                const data = await response.json() as { did: string };
+				const data = (await response.json()) as { did: string }
 
-                if (!data.did) {
-                    logger.warn('[SlingshotHandleResolver] No DID in response', { handle });
-                    return null;
-                }
+				if (!data.did) {
+					logger.warn('[SlingshotHandleResolver] No DID in response', { handle })
+					return null
+				}
 
-                // Validate that it's a proper DID format
-                if (!data.did.startsWith('did:')) {
-                    logger.error('[SlingshotHandleResolver] Invalid DID format', { handle, did: data.did });
-                    return null;
-                }
+				// Validate that it's a proper DID format
+				if (!data.did.startsWith('did:')) {
+					logger.error('[SlingshotHandleResolver] Invalid DID format', { handle, did: data.did })
+					return null
+				}
 
-                logger.debug('[SlingshotHandleResolver] Successfully resolved handle', { handle, did: data.did });
-                return data.did as AtprotoDid;
-            } catch (fetchError) {
-                clearTimeout(timeoutId);
+				logger.debug('[SlingshotHandleResolver] Successfully resolved handle', { handle, did: data.did })
+				return data.did as AtprotoDid
+			} catch (fetchError) {
+				clearTimeout(timeoutId)
 
-                if (fetchError instanceof Error && fetchError.name === 'AbortError') {
-                    logger.error('[SlingshotHandleResolver] Request aborted', { handle });
-                    throw fetchError; // Re-throw abort errors
-                }
+				if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+					logger.error('[SlingshotHandleResolver] Request aborted', { handle })
+					throw fetchError // Re-throw abort errors
+				}
 
-                throw fetchError;
-            }
-        } catch (error) {
-            logger.error('[SlingshotHandleResolver] Error resolving handle', error, { handle });
+				throw fetchError
+			}
+		} catch (error) {
+			logger.error('[SlingshotHandleResolver] Error resolving handle', error, { handle })
 
-            // If it's an abort error, propagate it
-            if (error instanceof Error && error.name === 'AbortError') {
-                throw error;
-            }
+			// If it's an abort error, propagate it
+			if (error instanceof Error && error.name === 'AbortError') {
+				throw error
+			}
 
-            // For other unexpected errors, return null (handle not found)
-            return null;
-        }
-    }
+			// For other unexpected errors, return null (handle not found)
+			return null
+		}
+	}
 }

@@ -1,10 +1,10 @@
-import type { BlobRef } from "@atproto/api";
-import type { Directory, File } from "@wispplace/lexicons/types/place/wisp/fs";
-import { CID } from 'multiformats/cid';
-import { sha256 } from 'multiformats/hashes/sha2';
-import * as raw from 'multiformats/codecs/raw';
-import { createHash } from 'crypto';
-import * as mf from 'multiformats';
+import { createHash } from 'node:crypto'
+import type { BlobRef } from '@atproto/api'
+import type { Directory, File } from '@wispplace/lexicons/types/place/wisp/fs'
+import * as mf from 'multiformats'
+import { CID } from 'multiformats/cid'
+import * as raw from 'multiformats/codecs/raw'
+import { sha256 } from 'multiformats/hashes/sha2'
 
 /**
  * Compute CID (Content Identifier) for blob content
@@ -13,12 +13,12 @@ import * as mf from 'multiformats';
  */
 export function computeCID(content: Buffer): string {
 	// Use node crypto to compute sha256 hash (same as AT Protocol)
-	const hash = createHash('sha256').update(content).digest();
+	const hash = createHash('sha256').update(content).digest()
 	// Create digest object from hash bytes
-	const digest = mf.digest.create(sha256.code, hash);
+	const digest = mf.digest.create(sha256.code, hash)
 	// Create CIDv1 with raw codec
-	const cid = CID.createV1(raw.code, digest);
-	return cid.toString();
+	const cid = CID.createV1(raw.code, digest)
+	return cid.toString()
 }
 
 /**
@@ -27,56 +27,56 @@ export function computeCID(content: Buffer): string {
  */
 export function extractBlobMap(
 	directory: Directory,
-	currentPath: string = ''
+	currentPath: string = '',
 ): Map<string, { blobRef: BlobRef; cid: string }> {
-	const blobMap = new Map<string, { blobRef: BlobRef; cid: string }>();
+	const blobMap = new Map<string, { blobRef: BlobRef; cid: string }>()
 
 	for (const entry of directory.entries) {
-		const fullPath = currentPath ? `${currentPath}/${entry.name}` : entry.name;
+		const fullPath = currentPath ? `${currentPath}/${entry.name}` : entry.name
 
 		if ('type' in entry.node && entry.node.type === 'file') {
-			const fileNode = entry.node as File;
+			const fileNode = entry.node as File
 			// AT Protocol SDK returns BlobRef class instances, not plain objects
 			// The ref is a CID instance that can be converted to string
-			if (fileNode.blob && fileNode.blob.ref) {
-				const cidString = fileNode.blob.ref.toString();
+			if (fileNode.blob?.ref) {
+				const cidString = fileNode.blob.ref.toString()
 				blobMap.set(fullPath, {
 					blobRef: fileNode.blob,
-					cid: cidString
-				});
+					cid: cidString,
+				})
 			}
 		} else if ('type' in entry.node && entry.node.type === 'directory') {
-			const subMap = extractBlobMap(entry.node as Directory, fullPath);
-			subMap.forEach((value, key) => blobMap.set(key, value));
+			const subMap = extractBlobMap(entry.node as Directory, fullPath)
+			for (const [key, value] of subMap) blobMap.set(key, value)
 		}
 		// Skip subfs nodes - they don't contain blobs in the main tree
 	}
 
-	return blobMap;
+	return blobMap
 }
 
 interface IpldLink {
-	$link: string;
+	$link: string
 }
 
 interface TypedBlobRef {
-	ref: CID | IpldLink;
+	ref: CID | IpldLink
 }
 
 interface UntypedBlobRef {
-	cid: string;
+	cid: string
 }
 
 function isIpldLink(obj: unknown): obj is IpldLink {
-	return typeof obj === 'object' && obj !== null && '$link' in obj && typeof (obj as IpldLink).$link === 'string';
+	return typeof obj === 'object' && obj !== null && '$link' in obj && typeof (obj as IpldLink).$link === 'string'
 }
 
 function isTypedBlobRef(obj: unknown): obj is TypedBlobRef {
-	return typeof obj === 'object' && obj !== null && 'ref' in obj;
+	return typeof obj === 'object' && obj !== null && 'ref' in obj
 }
 
 function isUntypedBlobRef(obj: unknown): obj is UntypedBlobRef {
-	return typeof obj === 'object' && obj !== null && 'cid' in obj && typeof (obj as UntypedBlobRef).cid === 'string';
+	return typeof obj === 'object' && obj !== null && 'cid' in obj && typeof (obj as UntypedBlobRef).cid === 'string'
 }
 
 /**
@@ -84,25 +84,25 @@ function isUntypedBlobRef(obj: unknown): obj is UntypedBlobRef {
  */
 export function extractBlobCid(blobRef: unknown): string | null {
 	if (isIpldLink(blobRef)) {
-		return blobRef.$link;
+		return blobRef.$link
 	}
 
 	if (isTypedBlobRef(blobRef)) {
-		const ref = blobRef.ref;
+		const ref = blobRef.ref
 
-		const cid = CID.asCID(ref);
+		const cid = CID.asCID(ref)
 		if (cid) {
-			return cid.toString();
+			return cid.toString()
 		}
 
 		if (isIpldLink(ref)) {
-			return ref.$link;
+			return ref.$link
 		}
 	}
 
 	if (isUntypedBlobRef(blobRef)) {
-		return blobRef.cid;
+		return blobRef.cid
 	}
 
-	return null;
+	return null
 }

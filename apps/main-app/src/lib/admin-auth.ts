@@ -1,13 +1,7 @@
 // Admin authentication system
-import { db } from './db'
-import { randomBytes, createHash } from 'crypto'
 
-interface AdminUser {
-	id: number
-	username: string
-	password_hash: string
-	created_at: Date
-}
+import { createHash, randomBytes } from 'node:crypto'
+import { db } from './db'
 
 interface AdminSession {
 	sessionId: string
@@ -21,7 +15,9 @@ const SESSION_DURATION = 24 * 60 * 60 * 1000 // 24 hours
 
 // Hash password using SHA-256 with salt
 function hashPassword(password: string, salt: string): string {
-	return createHash('sha256').update(password + salt).digest('hex')
+	return createHash('sha256')
+		.update(password + salt)
+		.digest('hex')
 }
 
 // Generate random salt
@@ -107,7 +103,7 @@ export const adminAuth = {
 		sessions.set(sessionId, {
 			sessionId,
 			username,
-			expiresAt
+			expiresAt,
 		})
 
 		// Clean up expired sessions
@@ -145,7 +141,7 @@ export const adminAuth = {
 				sessions.delete(sessionId)
 			}
 		}
-	}
+	},
 }
 
 // Prompt for admin creation on startup

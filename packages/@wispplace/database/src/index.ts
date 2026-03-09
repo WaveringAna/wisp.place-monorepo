@@ -7,19 +7,18 @@
  * The actual database client is passed in by the consuming application.
  */
 
-export * from './types';
-
 // Re-export types
 export type {
-	DomainLookup,
-	CustomDomainLookup,
-	SiteRecord,
-	OAuthState,
-	OAuthSession,
-	OAuthKey,
-	CookieSecret,
 	AdminUser,
+	CookieSecret,
+	CustomDomainLookup,
+	DomainLookup,
+	OAuthKey,
+	OAuthSession,
+	OAuthState,
 	SiteCache,
+	SiteRecord,
 	SiteSettingsCache,
-	Supporter
-} from './types';
+	Supporter,
+} from './types'
+export * from './types'

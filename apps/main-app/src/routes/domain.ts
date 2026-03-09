@@ -1,33 +1,26 @@
-import { Elysia, t } from 'elysia'
-import { requireAuth, type AuthenticatedContext } from '../lib/wisp-auth'
-import { NodeOAuthClient } from '@atproto/oauth-client-node'
+import { createHash } from 'node:crypto'
 import { Agent } from '@atproto/api'
+import type { NodeOAuthClient } from '@atproto/oauth-client-node'
+import { createLogger } from '@wispplace/observability'
+import { Elysia } from 'elysia'
 import {
+	claimCustomDomain,
 	claimDomain,
+	deleteCustomDomain,
+	deleteWispDomain,
+	getCustomDomainById,
+	getCustomDomainInfo,
 	getDomainByDid,
 	isDomainAvailable,
 	isDomainRegistered,
-	updateDomain,
-	countWispDomains,
-	deleteWispDomain,
-	getCustomDomainInfo,
-	getCustomDomainById,
-	claimCustomDomain,
-	deleteCustomDomain,
+	updateCustomDomainRkey,
 	updateCustomDomainVerification,
+	updateDomain,
 	updateWispDomainSite,
-	updateCustomDomainRkey
 } from '../lib/db'
-import {
-	extractWispHandle,
-	isValidHandle,
-	normalizeDomain,
-	toDomain,
-	validateCustomDomain
-} from '../lib/domain-utils'
-import { createHash } from 'crypto'
 import { verifyCustomDomain } from '../lib/dns-verify'
-import { createLogger } from '@wispplace/observability'
+import { extractWispHandle, isValidHandle, normalizeDomain, toDomain, validateCustomDomain } from '../lib/domain-utils'
+import { requireAuth } from '../lib/wisp-auth'
 
 const logger = createLogger('main-app')
 
@@ -36,8 +29,8 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		prefix: '/api/domain',
 		cookie: {
 			secrets: cookieSecret,
-			sign: ['did']
-		}
+			sign: ['did'],
+		},
 	})
 		// Public endpoints (no auth required)
 		/**
@@ -47,27 +40,25 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		 */
 		.get('/check', async ({ query }) => {
 			try {
-				const handle = (query.handle || "")
-					.trim()
-					.toLowerCase();
+				const handle = (query.handle || '').trim().toLowerCase()
 
 				if (!isValidHandle(handle)) {
 					return {
 						available: false,
-						reason: "invalid"
-					};
+						reason: 'invalid',
+					}
 				}
 
-				const available = await isDomainAvailable(handle);
+				const available = await isDomainAvailable(handle)
 				return {
 					available,
-					domain: toDomain(handle)
-				};
+					domain: toDomain(handle),
+				}
 			} catch (err) {
-				logger.error('[Domain] Check error', err);
+				logger.error('[Domain] Check error', err)
 				return {
-					available: false
-				};
+					available: false,
+				}
 			}
 		})
 		/**
@@ -81,24 +72,24 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				const domain = normalizeDomain(String(query.domain || ''))
 
 				if (!domain) {
-					set.status = 400;
-					return { error: 'Domain parameter required' };
+					set.status = 400
+					return { error: 'Domain parameter required' }
 				}
 
-				const result = await isDomainRegistered(domain);
+				const result = await isDomainRegistered(domain)
 
 				// For Caddy on-demand TLS: 200 = allow, 404 = deny
 				if (result.registered) {
-					set.status = 200;
-					return result;
+					set.status = 200
+					return result
 				} else {
-					set.status = 404;
-					return { registered: false };
+					set.status = 404
+					return { registered: false }
 				}
 			} catch (err) {
-				logger.error('[Domain] Registered check error', err);
-				set.status = 500;
-				return { error: 'Failed to check domain' };
+				logger.error('[Domain] Registered check error', err)
+				set.status = 500
+				return { error: 'Failed to check domain' }
 			}
 		})
 		// Authenticated endpoints (require auth)
@@ -112,48 +103,48 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		 */
 		.post('/claim', async ({ body, auth, set }) => {
 			try {
-				const { handle } = body as { handle?: string };
-				const normalizedHandle = (handle || "").trim().toLowerCase();
+				const { handle } = body as { handle?: string }
+				const normalizedHandle = (handle || '').trim().toLowerCase()
 
 				if (!isValidHandle(normalizedHandle)) {
 					set.status = 400
-					throw new Error("Invalid handle");
+					throw new Error('Invalid handle')
 				}
 
 				// Check if user already has 3 domains (handled in claimDomain)
 				// claim in DB
-				let domain: string;
+				let domain: string
 				try {
-					domain = await claimDomain(auth.did, normalizedHandle);
+					domain = await claimDomain(auth.did, normalizedHandle)
 				} catch (err) {
-					const message = err instanceof Error ? err.message : 'Unknown error';
+					const message = err instanceof Error ? err.message : 'Unknown error'
 					if (message === 'domain_limit_reached') {
 						set.status = 400
-						throw new Error("Domain limit reached: You can only claim up to 3 wisp.place domains");
+						throw new Error('Domain limit reached: You can only claim up to 3 wisp.place domains')
 					}
 					set.status = 409
-					throw new Error("Handle taken or error claiming domain");
+					throw new Error('Handle taken or error claiming domain')
 				}
 
 				// write place.wisp.domain record with unique rkey
-				const agent = new Agent((url, init) => auth.session.fetchHandler(url, init));
-				const rkey = normalizedHandle; // Use handle as rkey for uniqueness
+				const agent = new Agent((url, init) => auth.session.fetchHandler(url, init))
+				const rkey = normalizedHandle // Use handle as rkey for uniqueness
 				await agent.com.atproto.repo.putRecord({
 					repo: auth.did,
-					collection: "place.wisp.domain",
+					collection: 'place.wisp.domain',
 					rkey,
 					record: {
-						$type: "place.wisp.domain",
+						$type: 'place.wisp.domain',
 						domain,
 						createdAt: new Date().toISOString(),
 					} as any,
 					validate: false,
-				});
+				})
 
-				return { success: true, domain };
+				return { success: true, domain }
 			} catch (err) {
-				logger.error('[Domain] Claim error', err);
-				throw new Error(`Failed to claim: ${err instanceof Error ? err.message : 'Unknown error'}`);
+				logger.error('[Domain] Claim error', err)
+				throw new Error(`Failed to claim: ${err instanceof Error ? err.message : 'Unknown error'}`)
 			}
 		})
 		/**
@@ -162,46 +153,46 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		 */
 		.post('/update', async ({ body, auth, set }) => {
 			try {
-				const { handle } = body as { handle?: string };
-				const normalizedHandle = (handle || "").trim().toLowerCase();
+				const { handle } = body as { handle?: string }
+				const normalizedHandle = (handle || '').trim().toLowerCase()
 
 				if (!isValidHandle(normalizedHandle)) {
 					set.status = 400
-					throw new Error("Invalid handle");
+					throw new Error('Invalid handle')
 				}
 
-				const desiredDomain = toDomain(normalizedHandle);
-				const current = await getDomainByDid(auth.did);
+				const desiredDomain = toDomain(normalizedHandle)
+				const current = await getDomainByDid(auth.did)
 
 				if (current === desiredDomain) {
-					return { success: true, domain: current };
+					return { success: true, domain: current }
 				}
 
-				let domain: string;
+				let domain: string
 				try {
-					domain = await updateDomain(auth.did, normalizedHandle);
-				} catch (err) {
+					domain = await updateDomain(auth.did, normalizedHandle)
+				} catch (_err) {
 					set.status = 409
-					throw new Error("Handle taken");
+					throw new Error('Handle taken')
 				}
 
-				const agent = new Agent((url, init) => auth.session.fetchHandler(url, init));
+				const agent = new Agent((url, init) => auth.session.fetchHandler(url, init))
 				await agent.com.atproto.repo.putRecord({
 					repo: auth.did,
-					collection: "place.wisp.domain",
-					rkey: "self",
+					collection: 'place.wisp.domain',
+					rkey: 'self',
 					record: {
-						$type: "place.wisp.domain",
+						$type: 'place.wisp.domain',
 						domain,
 						createdAt: new Date().toISOString(),
 					} as any,
 					validate: false,
-				});
+				})
 
-				return { success: true, domain };
+				return { success: true, domain }
 			} catch (err) {
-				logger.error('[Domain] Update error', err);
-				throw new Error(`Failed to update: ${err instanceof Error ? err.message : 'Unknown error'}`);
+				logger.error('[Domain] Update error', err)
+				throw new Error(`Failed to update: ${err instanceof Error ? err.message : 'Unknown error'}`)
 			}
 		})
 		/**
@@ -210,7 +201,7 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		 */
 		.post('/custom/add', async ({ body, auth, set }) => {
 			try {
-				const { domain } = body as { domain: string };
+				const { domain } = body as { domain: string }
 				const domainLower = normalizeDomain(domain || '')
 
 				const domainError = validateCustomDomain(domainLower)
@@ -220,10 +211,10 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				}
 
 				// Verified claims are DID-locked. Pending claims can be reclaimed.
-				const existing = await getCustomDomainInfo(domainLower);
-				if (existing && existing.verified && existing.did !== auth.did) {
+				const existing = await getCustomDomainInfo(domainLower)
+				if (existing?.verified && existing.did !== auth.did) {
 					set.status = 409
-					throw new Error('Domain already claimed');
+					throw new Error('Domain already claimed')
 				}
 
 				if (existing && existing.did === auth.did) {
@@ -231,25 +222,25 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 						success: true,
 						id: existing.id,
 						domain: domainLower,
-						verified: Boolean(existing.verified)
-					};
+						verified: Boolean(existing.verified),
+					}
 				}
 
 				// Create hash for ID
-				const hash = createHash('sha256').update(`${auth.did}:${domainLower}`).digest('hex').substring(0, 16);
+				const hash = createHash('sha256').update(`${auth.did}:${domainLower}`).digest('hex').substring(0, 16)
 
 				// Store in database only
-				await claimCustomDomain(auth.did, domainLower, hash);
+				await claimCustomDomain(auth.did, domainLower, hash)
 
 				return {
 					success: true,
 					id: hash,
 					domain: domainLower,
-					verified: false
-				};
+					verified: false,
+				}
 			} catch (err) {
-				logger.error('[Domain] Custom domain add error', err);
-				throw new Error(`Failed to add domain: ${err instanceof Error ? err.message : 'Unknown error'}`);
+				logger.error('[Domain] Custom domain add error', err)
+				throw new Error(`Failed to add domain: ${err instanceof Error ? err.message : 'Unknown error'}`)
 			}
 		})
 		/**
@@ -258,31 +249,31 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		 */
 		.post('/custom/verify', async ({ body, auth, set }) => {
 			try {
-				const { id } = body as { id: string };
+				const { id } = body as { id: string }
 
 				// Get domain from database
-				const domainInfo = await getCustomDomainById(id);
+				const domainInfo = await getCustomDomainById(id)
 				if (!domainInfo) {
 					set.status = 404
-					throw new Error('Domain not found');
+					throw new Error('Domain not found')
 				}
 
 				// Verify DNS records (TXT + CNAME)
-				logger.debug(`[Domain] Verifying custom domain: ${domainInfo.domain}`);
-				const result = await verifyCustomDomain(domainInfo.domain, auth.did, id);
+				logger.debug(`[Domain] Verifying custom domain: ${domainInfo.domain}`)
+				const result = await verifyCustomDomain(domainInfo.domain, auth.did, id)
 
 				// Update verification status in database
-				await updateCustomDomainVerification(id, result.verified);
+				await updateCustomDomainVerification(id, result.verified)
 
 				return {
 					success: true,
 					verified: result.verified,
 					error: result.error,
-					found: result.found
-				};
+					found: result.found,
+				}
 			} catch (err) {
-				logger.error('[Domain] Custom domain verify error', err);
-				throw new Error(`Failed to verify domain: ${err instanceof Error ? err.message : 'Unknown error'}`);
+				logger.error('[Domain] Custom domain verify error', err)
+				throw new Error(`Failed to verify domain: ${err instanceof Error ? err.message : 'Unknown error'}`)
 			}
 		})
 		/**
@@ -291,27 +282,27 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		 */
 		.delete('/custom/:id', async ({ params, auth, set }) => {
 			try {
-				const { id } = params;
+				const { id } = params
 
 				// Verify ownership before deleting
-				const domainInfo = await getCustomDomainById(id);
+				const domainInfo = await getCustomDomainById(id)
 				if (!domainInfo) {
 					set.status = 404
-					throw new Error('Domain not found');
+					throw new Error('Domain not found')
 				}
 
 				if (domainInfo.did !== auth.did) {
 					set.status = 403
-					throw new Error('Unauthorized: You do not own this domain');
+					throw new Error('Unauthorized: You do not own this domain')
 				}
 
 				// Delete from database
-				await deleteCustomDomain(id);
+				await deleteCustomDomain(id)
 
-				return { success: true };
+				return { success: true }
 			} catch (err) {
-				logger.error('[Domain] Custom domain delete error', err);
-				throw new Error(`Failed to delete domain: ${err instanceof Error ? err.message : 'Unknown error'}`);
+				logger.error('[Domain] Custom domain delete error', err)
+				throw new Error(`Failed to delete domain: ${err instanceof Error ? err.message : 'Unknown error'}`)
 			}
 		})
 		/**
@@ -320,34 +311,34 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		 */
 		.post('/wisp/map-site', async ({ body, auth, set }) => {
 			try {
-				const { domain, siteRkey } = body as { domain: string; siteRkey: string | null };
+				const { domain, siteRkey } = body as { domain: string; siteRkey: string | null }
 
 				if (!domain) {
 					set.status = 400
-					throw new Error('Domain parameter required');
+					throw new Error('Domain parameter required')
 				}
 
 				// Verify domain belongs to user
-				const domainLower = normalizeDomain(domain);
-				const info = await isDomainRegistered(domainLower);
+				const domainLower = normalizeDomain(domain)
+				const info = await isDomainRegistered(domainLower)
 
 				if (!info.registered || info.type !== 'wisp') {
 					set.status = 404
-					throw new Error('Domain not found');
+					throw new Error('Domain not found')
 				}
 
 				if (info.did !== auth.did) {
 					set.status = 403
-					throw new Error('Unauthorized: You do not own this domain');
+					throw new Error('Unauthorized: You do not own this domain')
 				}
 
 				// Update wisp.place domain to point to this site
-				await updateWispDomainSite(domainLower, siteRkey);
+				await updateWispDomainSite(domainLower, siteRkey)
 
-				return { success: true };
+				return { success: true }
 			} catch (err) {
-				logger.error('[Domain] Wisp domain map error', err);
-				throw new Error(`Failed to map site: ${err instanceof Error ? err.message : 'Unknown error'}`);
+				logger.error('[Domain] Wisp domain map error', err)
+				throw new Error(`Failed to map site: ${err instanceof Error ? err.message : 'Unknown error'}`)
 			}
 		})
 		/**
@@ -356,47 +347,47 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		 */
 		.delete('/wisp/:domain', async ({ params, auth, set }) => {
 			try {
-				const { domain } = params;
+				const { domain } = params
 
 				// Verify domain belongs to user
 				const domainLower = normalizeDomain(domain)
-				const info = await isDomainRegistered(domainLower);
+				const info = await isDomainRegistered(domainLower)
 
 				if (!info.registered || info.type !== 'wisp') {
 					set.status = 404
-					throw new Error('Domain not found');
+					throw new Error('Domain not found')
 				}
 
 				if (info.did !== auth.did) {
 					set.status = 403
-					throw new Error('Unauthorized: You do not own this domain');
+					throw new Error('Unauthorized: You do not own this domain')
 				}
 
 				// Delete from database
-				await deleteWispDomain(domainLower);
+				await deleteWispDomain(domainLower)
 
 				// Delete from PDS
-				const agent = new Agent((url, init) => auth.session.fetchHandler(url, init));
-				const handle = extractWispHandle(domainLower);
+				const agent = new Agent((url, init) => auth.session.fetchHandler(url, init))
+				const handle = extractWispHandle(domainLower)
 				if (!handle) {
 					set.status = 400
-					throw new Error('Invalid wisp domain');
+					throw new Error('Invalid wisp domain')
 				}
 				try {
 					await agent.com.atproto.repo.deleteRecord({
 						repo: auth.did,
-						collection: "place.wisp.domain",
+						collection: 'place.wisp.domain',
 						rkey: handle,
-					});
+					})
 				} catch (err) {
 					// Record might not exist in PDS, continue anyway
-					logger.warn('[Domain] Could not delete wisp domain from PDS', err as any);
+					logger.warn('[Domain] Could not delete wisp domain from PDS', err as any)
 				}
 
-				return { success: true };
+				return { success: true }
 			} catch (err) {
-				logger.error('[Domain] Wisp domain delete error', err);
-				throw new Error(`Failed to delete domain: ${err instanceof Error ? err.message : 'Unknown error'}`);
+				logger.error('[Domain] Wisp domain delete error', err)
+				throw new Error(`Failed to delete domain: ${err instanceof Error ? err.message : 'Unknown error'}`)
 			}
 		})
 		/**
@@ -405,27 +396,27 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		 */
 		.post('/custom/:id/map-site', async ({ params, body, auth, set }) => {
 			try {
-				const { id } = params;
-				const { siteRkey } = body as { siteRkey: string | null };
+				const { id } = params
+				const { siteRkey } = body as { siteRkey: string | null }
 
 				// Verify ownership before updating
-				const domainInfo = await getCustomDomainById(id);
+				const domainInfo = await getCustomDomainById(id)
 				if (!domainInfo) {
 					set.status = 404
-					throw new Error('Domain not found');
+					throw new Error('Domain not found')
 				}
 
 				if (domainInfo.did !== auth.did) {
 					set.status = 403
-					throw new Error('Unauthorized: You do not own this domain');
+					throw new Error('Unauthorized: You do not own this domain')
 				}
 
 				// Update custom domain to point to this site
-				await updateCustomDomainRkey(id, siteRkey);
+				await updateCustomDomainRkey(id, siteRkey)
 
-				return { success: true };
+				return { success: true }
 			} catch (err) {
-				logger.error('[Domain] Custom domain map error', err);
-				throw new Error(`Failed to map site: ${err instanceof Error ? err.message : 'Unknown error'}`);
+				logger.error('[Domain] Custom domain map error', err)
+				throw new Error(`Failed to map site: ${err instanceof Error ? err.message : 'Unknown error'}`)
 			}
-		});
+		})

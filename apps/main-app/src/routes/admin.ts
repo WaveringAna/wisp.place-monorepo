@@ -1,8 +1,9 @@
 // Admin API routes
+
+import { errorTracker, logCollector, metricsCollector } from '@wispplace/observability'
 import { Elysia, t } from 'elysia'
 import { adminAuth, requireAdmin } from '../lib/admin-auth'
-import { logCollector, errorTracker, metricsCollector } from '@wispplace/observability'
-import { db, getAllSupporters, addSupporter, removeSupporter } from '../lib/db'
+import { addSupporter, db, getAllSupporters, removeSupporter } from '../lib/db'
 import { SlingshotHandleResolver } from '../lib/slingshot-handle-resolver'
 
 export const adminRoutes = (cookieSecret: string) =>
@@ -10,8 +11,8 @@ export const adminRoutes = (cookieSecret: string) =>
 		prefix: '/api/admin',
 		cookie: {
 			secrets: cookieSecret,
-			sign: ['admin_session']
-		}
+			sign: ['admin_session'],
+		},
 	})
 		// Login
 		/**
@@ -38,7 +39,7 @@ export const adminRoutes = (cookieSecret: string) =>
 					httpOnly: true,
 					secure: process.env.NODE_ENV === 'production',
 					sameSite: 'lax',
-					maxAge: 24 * 60 * 60 // 24 hours
+					maxAge: 24 * 60 * 60, // 24 hours
 				})
 
 				return { success: true }
@@ -46,15 +47,18 @@ export const adminRoutes = (cookieSecret: string) =>
 			{
 				body: t.Object({
 					username: t.String(),
-					password: t.String()
+					password: t.String(),
 				}),
-				cookie: t.Cookie({
-					admin_session: t.Optional(t.String())
-				}, {
-					secrets: cookieSecret,
-					sign: ['admin_session']
-				})
-			}
+				cookie: t.Cookie(
+					{
+						admin_session: t.Optional(t.String()),
+					},
+					{
+						secrets: cookieSecret,
+						sign: ['admin_session'],
+					},
+				),
+			},
 		)
 
 		// Logout
@@ -62,21 +66,28 @@ export const adminRoutes = (cookieSecret: string) =>
 		 * POST /api/admin/logout
 		 * Success: { success: true } and clears admin_session cookie.
 		 */
-		.post('/logout', ({ cookie }) => {
-			const sessionId = cookie.admin_session?.value
-			if (sessionId && typeof sessionId === 'string') {
-				adminAuth.deleteSession(sessionId)
-			}
-			cookie.admin_session.remove()
-			return { success: true }
-		}, {
-			cookie: t.Cookie({
-				admin_session: t.Optional(t.String())
-			}, {
-				secrets: cookieSecret,
-				sign: ['admin_session']
-			})
-		})
+		.post(
+			'/logout',
+			({ cookie }) => {
+				const sessionId = cookie.admin_session?.value
+				if (sessionId && typeof sessionId === 'string') {
+					adminAuth.deleteSession(sessionId)
+				}
+				cookie.admin_session.remove()
+				return { success: true }
+			},
+			{
+				cookie: t.Cookie(
+					{
+						admin_session: t.Optional(t.String()),
+					},
+					{
+						secrets: cookieSecret,
+						sign: ['admin_session'],
+					},
+				),
+			},
+		)
 
 		// Check auth status
 		/**
@@ -84,29 +95,36 @@ export const adminRoutes = (cookieSecret: string) =>
 		 * Authenticated: { authenticated: true, username }
 		 * Not authenticated: { authenticated: false }
 		 */
-		.get('/status', ({ cookie }) => {
-			const sessionId = cookie.admin_session?.value
-			if (!sessionId || typeof sessionId !== 'string') {
-				return { authenticated: false }
-			}
+		.get(
+			'/status',
+			({ cookie }) => {
+				const sessionId = cookie.admin_session?.value
+				if (!sessionId || typeof sessionId !== 'string') {
+					return { authenticated: false }
+				}
 
-			const session = adminAuth.verifySession(sessionId)
-			if (!session) {
-				return { authenticated: false }
-			}
+				const session = adminAuth.verifySession(sessionId)
+				if (!session) {
+					return { authenticated: false }
+				}
 
-			return {
-				authenticated: true,
-				username: session.username
-			}
-		}, {
-			cookie: t.Cookie({
-				admin_session: t.Optional(t.String())
-			}, {
-				secrets: cookieSecret,
-				sign: ['admin_session']
-			})
-		})
+				return {
+					authenticated: true,
+					username: session.username,
+				}
+			},
+			{
+				cookie: t.Cookie(
+					{
+						admin_session: t.Optional(t.String()),
+					},
+					{
+						secrets: cookieSecret,
+						sign: ['admin_session'],
+					},
+				),
+			},
+		)
 
 		// Get logs (protected)
 		/**
@@ -114,55 +132,63 @@ export const adminRoutes = (cookieSecret: string) =>
 		 * Success: { logs }
 		 * Unauthorized (401): { error: 'Unauthorized' }
 		 */
-		.get('/logs', async ({ query, cookie, set }) => {
-			const check = requireAdmin({ cookie, set })
-			if (check) return check
+		.get(
+			'/logs',
+			async ({ query, cookie, set }) => {
+				const check = requireAdmin({ cookie, set })
+				if (check) return check
 
-			const filter: any = {}
+				const filter: any = {}
 
-			if (query.level) filter.level = query.level
-			if (query.service) filter.service = query.service
-			if (query.search) filter.search = query.search
-			if (query.eventType) filter.eventType = query.eventType
-			if (query.limit) filter.limit = parseInt(query.limit as string)
+				if (query.level) filter.level = query.level
+				if (query.service) filter.service = query.service
+				if (query.search) filter.search = query.search
+				if (query.eventType) filter.eventType = query.eventType
+				if (query.limit) filter.limit = parseInt(query.limit as string, 10)
 
-			// Get logs from main app
-			const mainLogs = logCollector.getLogs(filter)
+				// Get logs from main app
+				const mainLogs = logCollector.getLogs(filter)
 
-			// Get logs from hosting service
-			let hostingLogs: any[] = []
-			try {
-				const hostingServiceUrl = process.env.HOSTING_SERVICE_URL || `http://localhost:${process.env.HOSTING_PORT || '3001'}`
-				const params = new URLSearchParams()
-				if (query.level) params.append('level', query.level as string)
-				if (query.service) params.append('service', query.service as string)
-				if (query.search) params.append('search', query.search as string)
-				if (query.eventType) params.append('eventType', query.eventType as string)
-				params.append('limit', String(filter.limit || 100))
+				// Get logs from hosting service
+				let hostingLogs: any[] = []
+				try {
+					const hostingServiceUrl =
+						process.env.HOSTING_SERVICE_URL || `http://localhost:${process.env.HOSTING_PORT || '3001'}`
+					const params = new URLSearchParams()
+					if (query.level) params.append('level', query.level as string)
+					if (query.service) params.append('service', query.service as string)
+					if (query.search) params.append('search', query.search as string)
+					if (query.eventType) params.append('eventType', query.eventType as string)
+					params.append('limit', String(filter.limit || 100))
 
-				const response = await fetch(`${hostingServiceUrl}/__internal__/observability/logs?${params}`)
-				if (response.ok) {
-					const data = await response.json()
-					hostingLogs = data.logs
+					const response = await fetch(`${hostingServiceUrl}/__internal__/observability/logs?${params}`)
+					if (response.ok) {
+						const data = await response.json()
+						hostingLogs = data.logs
+					}
+				} catch (_err) {
+					// Hosting service might not be running
 				}
-			} catch (err) {
-				// Hosting service might not be running
-			}
 
-			// Merge and sort by timestamp
-			const allLogs = [...mainLogs, ...hostingLogs].sort((a, b) =>
-				new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-			)
+				// Merge and sort by timestamp
+				const allLogs = [...mainLogs, ...hostingLogs].sort(
+					(a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+				)
 
-			return { logs: allLogs.slice(0, filter.limit || 100) }
-		}, {
-			cookie: t.Cookie({
-				admin_session: t.Optional(t.String())
-			}, {
-				secrets: cookieSecret,
-				sign: ['admin_session']
-			})
-		})
+				return { logs: allLogs.slice(0, filter.limit || 100) }
+			},
+			{
+				cookie: t.Cookie(
+					{
+						admin_session: t.Optional(t.String()),
+					},
+					{
+						secrets: cookieSecret,
+						sign: ['admin_session'],
+					},
+				),
+			},
+		)
 
 		// Get errors (protected)
 		/**
@@ -170,49 +196,57 @@ export const adminRoutes = (cookieSecret: string) =>
 		 * Success: { errors }
 		 * Unauthorized (401): { error: 'Unauthorized' }
 		 */
-		.get('/errors', async ({ query, cookie, set }) => {
-			const check = requireAdmin({ cookie, set })
-			if (check) return check
+		.get(
+			'/errors',
+			async ({ query, cookie, set }) => {
+				const check = requireAdmin({ cookie, set })
+				if (check) return check
 
-			const filter: any = {}
+				const filter: any = {}
 
-			if (query.service) filter.service = query.service
-			if (query.limit) filter.limit = parseInt(query.limit as string)
+				if (query.service) filter.service = query.service
+				if (query.limit) filter.limit = parseInt(query.limit as string, 10)
 
-			// Get errors from main app
-			const mainErrors = errorTracker.getErrors(filter)
+				// Get errors from main app
+				const mainErrors = errorTracker.getErrors(filter)
 
-			// Get errors from hosting service
-			let hostingErrors: any[] = []
-			try {
-				const hostingServiceUrl = process.env.HOSTING_SERVICE_URL || `http://localhost:${process.env.HOSTING_PORT || '3001'}`
-				const params = new URLSearchParams()
-				if (query.service) params.append('service', query.service as string)
-				params.append('limit', String(filter.limit || 100))
+				// Get errors from hosting service
+				let hostingErrors: any[] = []
+				try {
+					const hostingServiceUrl =
+						process.env.HOSTING_SERVICE_URL || `http://localhost:${process.env.HOSTING_PORT || '3001'}`
+					const params = new URLSearchParams()
+					if (query.service) params.append('service', query.service as string)
+					params.append('limit', String(filter.limit || 100))
 
-				const response = await fetch(`${hostingServiceUrl}/__internal__/observability/errors?${params}`)
-				if (response.ok) {
-					const data = await response.json()
-					hostingErrors = data.errors
+					const response = await fetch(`${hostingServiceUrl}/__internal__/observability/errors?${params}`)
+					if (response.ok) {
+						const data = await response.json()
+						hostingErrors = data.errors
+					}
+				} catch (_err) {
+					// Hosting service might not be running
 				}
-			} catch (err) {
-				// Hosting service might not be running
-			}
 
-			// Merge and sort by last seen
-			const allErrors = [...mainErrors, ...hostingErrors].sort((a, b) =>
-				new Date(b.lastSeen).getTime() - new Date(a.lastSeen).getTime()
-			)
+				// Merge and sort by last seen
+				const allErrors = [...mainErrors, ...hostingErrors].sort(
+					(a, b) => new Date(b.lastSeen).getTime() - new Date(a.lastSeen).getTime(),
+				)
 
-			return { errors: allErrors.slice(0, filter.limit || 100) }
-		}, {
-			cookie: t.Cookie({
-				admin_session: t.Optional(t.String())
-			}, {
-				secrets: cookieSecret,
-				sign: ['admin_session']
-			})
-		})
+				return { errors: allErrors.slice(0, filter.limit || 100) }
+			},
+			{
+				cookie: t.Cookie(
+					{
+						admin_session: t.Optional(t.String()),
+					},
+					{
+						secrets: cookieSecret,
+						sign: ['admin_session'],
+					},
+				),
+			},
+		)
 
 		// Get metrics (protected)
 		/**
@@ -220,53 +254,61 @@ export const adminRoutes = (cookieSecret: string) =>
 		 * Success: { overall, mainApp, hostingService, timeWindow }
 		 * Unauthorized (401): { error: 'Unauthorized' }
 		 */
-		.get('/metrics', async ({ query, cookie, set }) => {
-			const check = requireAdmin({ cookie, set })
-			if (check) return check
+		.get(
+			'/metrics',
+			async ({ query, cookie, set }) => {
+				const check = requireAdmin({ cookie, set })
+				if (check) return check
 
-			const timeWindow = query.timeWindow
-				? parseInt(query.timeWindow as string)
-				: 3600000 // 1 hour default
+				const timeWindow = query.timeWindow ? parseInt(query.timeWindow as string, 10) : 3600000 // 1 hour default
 
-			const mainAppStats = metricsCollector.getStats('main-app', timeWindow)
-			const overallStats = metricsCollector.getStats(undefined, timeWindow)
+				const mainAppStats = metricsCollector.getStats('main-app', timeWindow)
+				const overallStats = metricsCollector.getStats(undefined, timeWindow)
 
-			// Get hosting service stats from its own endpoint
-			let hostingServiceStats = {
-				totalRequests: 0,
-				avgDuration: 0,
-				p50Duration: 0,
-				p95Duration: 0,
-				p99Duration: 0,
-				errorRate: 0,
-				requestsPerMinute: 0
-			}
-
-			try {
-				const hostingServiceUrl = process.env.HOSTING_SERVICE_URL || `http://localhost:${process.env.HOSTING_PORT || '3001'}`
-				const response = await fetch(`${hostingServiceUrl}/__internal__/observability/metrics?timeWindow=${timeWindow}`)
-				if (response.ok) {
-					const data = await response.json()
-					hostingServiceStats = data.stats
+				// Get hosting service stats from its own endpoint
+				let hostingServiceStats = {
+					totalRequests: 0,
+					avgDuration: 0,
+					p50Duration: 0,
+					p95Duration: 0,
+					p99Duration: 0,
+					errorRate: 0,
+					requestsPerMinute: 0,
 				}
-			} catch (err) {
-				// Hosting service might not be running
-			}
 
-			return {
-				overall: overallStats,
-				mainApp: mainAppStats,
-				hostingService: hostingServiceStats,
-				timeWindow
-			}
-		}, {
-			cookie: t.Cookie({
-				admin_session: t.Optional(t.String())
-			}, {
-				secrets: cookieSecret,
-				sign: ['admin_session']
-			})
-		})
+				try {
+					const hostingServiceUrl =
+						process.env.HOSTING_SERVICE_URL || `http://localhost:${process.env.HOSTING_PORT || '3001'}`
+					const response = await fetch(
+						`${hostingServiceUrl}/__internal__/observability/metrics?timeWindow=${timeWindow}`,
+					)
+					if (response.ok) {
+						const data = await response.json()
+						hostingServiceStats = data.stats
+					}
+				} catch (_err) {
+					// Hosting service might not be running
+				}
+
+				return {
+					overall: overallStats,
+					mainApp: mainAppStats,
+					hostingService: hostingServiceStats,
+					timeWindow,
+				}
+			},
+			{
+				cookie: t.Cookie(
+					{
+						admin_session: t.Optional(t.String()),
+					},
+					{
+						secrets: cookieSecret,
+						sign: ['admin_session'],
+					},
+				),
+			},
+		)
 
 		// Get database stats (protected)
 		/**
@@ -274,20 +316,22 @@ export const adminRoutes = (cookieSecret: string) =>
 		 * Success: { stats, recentSites, recentDomains, siteCacheStats }
 		 * Failure (500): { error, message }
 		 */
-		.get('/database', async ({ cookie, set }) => {
-			const check = requireAdmin({ cookie, set })
-			if (check) return check
+		.get(
+			'/database',
+			async ({ cookie, set }) => {
+				const check = requireAdmin({ cookie, set })
+				if (check) return check
 
-			try {
-				// Get total counts
-				const allSitesResult = await db`SELECT COUNT(*) as count FROM sites`
-				const wispSubdomainsResult = await db`SELECT COUNT(*) as count FROM domains WHERE domain LIKE '%.wisp.place'`
-				const customDomainsResult = await db`SELECT COUNT(*) as count FROM custom_domains WHERE verified = true`
-				const siteCacheResult = await db`SELECT COUNT(*) as count FROM site_cache`
-				const siteSettingsCacheResult = await db`SELECT COUNT(*) as count FROM site_settings_cache`
+				try {
+					// Get total counts
+					const allSitesResult = await db`SELECT COUNT(*) as count FROM sites`
+					const wispSubdomainsResult = await db`SELECT COUNT(*) as count FROM domains WHERE domain LIKE '%.wisp.place'`
+					const customDomainsResult = await db`SELECT COUNT(*) as count FROM custom_domains WHERE verified = true`
+					const siteCacheResult = await db`SELECT COUNT(*) as count FROM site_cache`
+					const siteSettingsCacheResult = await db`SELECT COUNT(*) as count FROM site_settings_cache`
 
-				// Get recent sites (including those without domains)
-				const recentSites = await db`
+					// Get recent sites (including those without domains)
+					const recentSites = await db`
 					SELECT
 						s.did,
 						s.rkey,
@@ -302,35 +346,41 @@ export const adminRoutes = (cookieSecret: string) =>
 					LIMIT 10
 				`
 
-				// Get recent domains
-				const recentDomains = await db`SELECT domain, did, rkey, verified, created_at FROM custom_domains ORDER BY created_at DESC LIMIT 10`
+					// Get recent domains
+					const recentDomains =
+						await db`SELECT domain, did, rkey, verified, created_at FROM custom_domains ORDER BY created_at DESC LIMIT 10`
 
-				return {
-					stats: {
-						totalSites: allSitesResult[0].count,
-						totalWispSubdomains: wispSubdomainsResult[0].count,
-						totalCustomDomains: customDomainsResult[0].count,
-						totalSiteCache: siteCacheResult[0].count,
-						totalSiteSettingsCache: siteSettingsCacheResult[0].count
+					return {
+						stats: {
+							totalSites: allSitesResult[0].count,
+							totalWispSubdomains: wispSubdomainsResult[0].count,
+							totalCustomDomains: customDomainsResult[0].count,
+							totalSiteCache: siteCacheResult[0].count,
+							totalSiteSettingsCache: siteSettingsCacheResult[0].count,
+						},
+						recentSites: recentSites,
+						recentDomains: recentDomains,
+					}
+				} catch (error) {
+					set.status = 500
+					return {
+						error: 'Failed to fetch database stats',
+						message: error instanceof Error ? error.message : String(error),
+					}
+				}
+			},
+			{
+				cookie: t.Cookie(
+					{
+						admin_session: t.Optional(t.String()),
 					},
-					recentSites: recentSites,
-					recentDomains: recentDomains
-				}
-			} catch (error) {
-				set.status = 500
-				return {
-					error: 'Failed to fetch database stats',
-					message: error instanceof Error ? error.message : String(error)
-				}
-			}
-		}, {
-			cookie: t.Cookie({
-				admin_session: t.Optional(t.String())
-			}, {
-				secrets: cookieSecret,
-				sign: ['admin_session']
-			})
-		})
+					{
+						secrets: cookieSecret,
+						sign: ['admin_session'],
+					},
+				),
+			},
+		)
 
 		// Get cache stats (protected)
 		/**
@@ -338,39 +388,47 @@ export const adminRoutes = (cookieSecret: string) =>
 		 * Success: hosting service cache stats payload.
 		 * Failure (503|500): { error, message }
 		 */
-		.get('/cache', async ({ cookie, set }) => {
-			const check = requireAdmin({ cookie, set })
-			if (check) return check
+		.get(
+			'/cache',
+			async ({ cookie, set }) => {
+				const check = requireAdmin({ cookie, set })
+				if (check) return check
 
-			try {
-				const hostingServiceUrl = process.env.HOSTING_SERVICE_URL || `http://localhost:${process.env.HOSTING_PORT || '3001'}`
-				const response = await fetch(`${hostingServiceUrl}/__internal__/observability/cache`)
-				
-				if (response.ok) {
-					const data = await response.json()
-					return data
-				} else {
-					set.status = 503
+				try {
+					const hostingServiceUrl =
+						process.env.HOSTING_SERVICE_URL || `http://localhost:${process.env.HOSTING_PORT || '3001'}`
+					const response = await fetch(`${hostingServiceUrl}/__internal__/observability/cache`)
+
+					if (response.ok) {
+						const data = await response.json()
+						return data
+					} else {
+						set.status = 503
+						return {
+							error: 'Failed to fetch cache stats from hosting service',
+							message: 'Hosting service unavailable',
+						}
+					}
+				} catch (error) {
+					set.status = 500
 					return {
-						error: 'Failed to fetch cache stats from hosting service',
-						message: 'Hosting service unavailable'
+						error: 'Failed to fetch cache stats',
+						message: error instanceof Error ? error.message : String(error),
 					}
 				}
-			} catch (error) {
-				set.status = 500
-				return {
-					error: 'Failed to fetch cache stats',
-					message: error instanceof Error ? error.message : String(error)
-				}
-			}
-		}, {
-			cookie: t.Cookie({
-				admin_session: t.Optional(t.String())
-			}, {
-				secrets: cookieSecret,
-				sign: ['admin_session']
-			})
-		})
+			},
+			{
+				cookie: t.Cookie(
+					{
+						admin_session: t.Optional(t.String()),
+					},
+					{
+						secrets: cookieSecret,
+						sign: ['admin_session'],
+					},
+				),
+			},
+		)
 
 		// Get sites listing (protected)
 		/**
@@ -378,15 +436,17 @@ export const adminRoutes = (cookieSecret: string) =>
 		 * Success: { sites, customDomains }
 		 * Failure (500): { error, message }
 		 */
-		.get('/sites', async ({ query, cookie, set }) => {
-			const check = requireAdmin({ cookie, set })
-			if (check) return check
+		.get(
+			'/sites',
+			async ({ query, cookie, set }) => {
+				const check = requireAdmin({ cookie, set })
+				if (check) return check
 
-			const limit = query.limit ? parseInt(query.limit as string) : 50
-			const offset = query.offset ? parseInt(query.offset as string) : 0
+				const limit = query.limit ? parseInt(query.limit as string, 10) : 50
+				const offset = query.offset ? parseInt(query.offset as string, 10) : 0
 
-			try {
-				const sites = await db`
+				try {
+					const sites = await db`
 					SELECT
 						s.did,
 						s.rkey,
@@ -401,7 +461,7 @@ export const adminRoutes = (cookieSecret: string) =>
 					LIMIT ${limit} OFFSET ${offset}
 				`
 
-				const customDomains = await db`
+					const customDomains = await db`
 					SELECT
 						domain,
 						did,
@@ -413,25 +473,30 @@ export const adminRoutes = (cookieSecret: string) =>
 					LIMIT ${limit} OFFSET ${offset}
 				`
 
-				return {
-					sites: sites,
-					customDomains: customDomains
+					return {
+						sites: sites,
+						customDomains: customDomains,
+					}
+				} catch (error) {
+					set.status = 500
+					return {
+						error: 'Failed to fetch sites',
+						message: error instanceof Error ? error.message : String(error),
+					}
 				}
-			} catch (error) {
-				set.status = 500
-				return {
-					error: 'Failed to fetch sites',
-					message: error instanceof Error ? error.message : String(error)
-				}
-			}
-		}, {
-			cookie: t.Cookie({
-				admin_session: t.Optional(t.String())
-			}, {
-				secrets: cookieSecret,
-				sign: ['admin_session']
-			})
-		})
+			},
+			{
+				cookie: t.Cookie(
+					{
+						admin_session: t.Optional(t.String()),
+					},
+					{
+						secrets: cookieSecret,
+						sign: ['admin_session'],
+					},
+				),
+			},
+		)
 
 		// Get firehose worker status (protected)
 		/**
@@ -439,39 +504,47 @@ export const adminRoutes = (cookieSecret: string) =>
 		 * Success: firehose health data from firehose-service
 		 * Failure (503|500): { error, message }
 		 */
-		.get('/firehose', async ({ cookie, set }) => {
-			const check = requireAdmin({ cookie, set })
-			if (check) return check
+		.get(
+			'/firehose',
+			async ({ cookie, set }) => {
+				const check = requireAdmin({ cookie, set })
+				if (check) return check
 
-			try {
-				const firehoseServiceUrl = process.env.FIREHOSE_SERVICE_URL || `http://localhost:${process.env.FIREHOSE_PORT || '3002'}`
-				const response = await fetch(`${firehoseServiceUrl}/health`)
+				try {
+					const firehoseServiceUrl =
+						process.env.FIREHOSE_SERVICE_URL || `http://localhost:${process.env.FIREHOSE_PORT || '3002'}`
+					const response = await fetch(`${firehoseServiceUrl}/health`)
 
-				if (response.ok) {
-					const data = await response.json()
-					return data
-				} else {
-					set.status = 503
+					if (response.ok) {
+						const data = await response.json()
+						return data
+					} else {
+						set.status = 503
+						return {
+							error: 'Failed to fetch firehose status',
+							message: 'Firehose service unavailable',
+						}
+					}
+				} catch (error) {
+					set.status = 500
 					return {
 						error: 'Failed to fetch firehose status',
-						message: 'Firehose service unavailable'
+						message: error instanceof Error ? error.message : String(error),
 					}
 				}
-			} catch (error) {
-				set.status = 500
-				return {
-					error: 'Failed to fetch firehose status',
-					message: error instanceof Error ? error.message : String(error)
-				}
-			}
-		}, {
-			cookie: t.Cookie({
-				admin_session: t.Optional(t.String())
-			}, {
-				secrets: cookieSecret,
-				sign: ['admin_session']
-			})
-		})
+			},
+			{
+				cookie: t.Cookie(
+					{
+						admin_session: t.Optional(t.String()),
+					},
+					{
+						secrets: cookieSecret,
+						sign: ['admin_session'],
+					},
+				),
+			},
+		)
 
 		// Get system health (protected)
 		/**
@@ -479,30 +552,37 @@ export const adminRoutes = (cookieSecret: string) =>
 		 * Success: { uptime, memory, timestamp }
 		 * Unauthorized (401): { error: 'Unauthorized' }
 		 */
-		.get('/health', ({ cookie, set }) => {
-			const check = requireAdmin({ cookie, set })
-			if (check) return check
+		.get(
+			'/health',
+			({ cookie, set }) => {
+				const check = requireAdmin({ cookie, set })
+				if (check) return check
 
-			const uptime = process.uptime()
-			const memory = process.memoryUsage()
+				const uptime = process.uptime()
+				const memory = process.memoryUsage()
 
-			return {
-				uptime: Math.floor(uptime),
-				memory: {
-					heapUsed: Math.round(memory.heapUsed / 1024 / 1024), // MB
-					heapTotal: Math.round(memory.heapTotal / 1024 / 1024), // MB
-					rss: Math.round(memory.rss / 1024 / 1024) // MB
-				},
-				timestamp: new Date().toISOString()
-			}
-		}, {
-			cookie: t.Cookie({
-				admin_session: t.Optional(t.String())
-			}, {
-				secrets: cookieSecret,
-				sign: ['admin_session']
-			})
-		})
+				return {
+					uptime: Math.floor(uptime),
+					memory: {
+						heapUsed: Math.round(memory.heapUsed / 1024 / 1024), // MB
+						heapTotal: Math.round(memory.heapTotal / 1024 / 1024), // MB
+						rss: Math.round(memory.rss / 1024 / 1024), // MB
+					},
+					timestamp: new Date().toISOString(),
+				}
+			},
+			{
+				cookie: t.Cookie(
+					{
+						admin_session: t.Optional(t.String()),
+					},
+					{
+						secrets: cookieSecret,
+						sign: ['admin_session'],
+					},
+				),
+			},
+		)
 
 		// Get all supporters (protected)
 		/**
@@ -510,20 +590,27 @@ export const adminRoutes = (cookieSecret: string) =>
 		 * Success: { supporters }
 		 * Unauthorized (401): { error: 'Unauthorized' }
 		 */
-		.get('/supporters', async ({ cookie, set }) => {
-			const check = requireAdmin({ cookie, set })
-			if (check) return check
+		.get(
+			'/supporters',
+			async ({ cookie, set }) => {
+				const check = requireAdmin({ cookie, set })
+				if (check) return check
 
-			const supporters = await getAllSupporters()
-			return { supporters }
-		}, {
-			cookie: t.Cookie({
-				admin_session: t.Optional(t.String())
-			}, {
-				secrets: cookieSecret,
-				sign: ['admin_session']
-			})
-		})
+				const supporters = await getAllSupporters()
+				return { supporters }
+			},
+			{
+				cookie: t.Cookie(
+					{
+						admin_session: t.Optional(t.String()),
+					},
+					{
+						secrets: cookieSecret,
+						sign: ['admin_session'],
+					},
+				),
+			},
+		)
 
 		// Add supporter (protected)
 		/**
@@ -532,47 +619,54 @@ export const adminRoutes = (cookieSecret: string) =>
 		 * Success: { success: true, did }
 		 * Failure (400): { error, message }
 		 */
-		.post('/supporters', async ({ body, cookie, set }) => {
-			const check = requireAdmin({ cookie, set })
-			if (check) return check
+		.post(
+			'/supporters',
+			async ({ body, cookie, set }) => {
+				const check = requireAdmin({ cookie, set })
+				if (check) return check
 
-			const { identifier } = body
-			let did = identifier.trim()
+				const { identifier } = body
+				let did = identifier.trim()
 
-			// If it's not a DID, treat it as a handle and resolve it
-			if (!did.startsWith('did:')) {
-				const handleResolver = new SlingshotHandleResolver()
-				const resolvedDid = await handleResolver.resolve(did)
+				// If it's not a DID, treat it as a handle and resolve it
+				if (!did.startsWith('did:')) {
+					const handleResolver = new SlingshotHandleResolver()
+					const resolvedDid = await handleResolver.resolve(did)
 
-				if (!resolvedDid) {
-					set.status = 400
-					return {
-						error: 'Invalid handle',
-						message: `Could not resolve handle: ${did}`
+					if (!resolvedDid) {
+						set.status = 400
+						return {
+							error: 'Invalid handle',
+							message: `Could not resolve handle: ${did}`,
+						}
 					}
+
+					did = resolvedDid
 				}
 
-				did = resolvedDid
-			}
+				// Add to supporters table
+				await addSupporter(did)
 
-			// Add to supporters table
-			await addSupporter(did)
-
-			return {
-				success: true,
-				did
-			}
-		}, {
-			body: t.Object({
-				identifier: t.String()
-			}),
-			cookie: t.Cookie({
-				admin_session: t.Optional(t.String())
-			}, {
-				secrets: cookieSecret,
-				sign: ['admin_session']
-			})
-		})
+				return {
+					success: true,
+					did,
+				}
+			},
+			{
+				body: t.Object({
+					identifier: t.String(),
+				}),
+				cookie: t.Cookie(
+					{
+						admin_session: t.Optional(t.String()),
+					},
+					{
+						secrets: cookieSecret,
+						sign: ['admin_session'],
+					},
+				),
+			},
+		)
 
 		// Remove supporter (protected)
 		/**
@@ -580,19 +674,26 @@ export const adminRoutes = (cookieSecret: string) =>
 		 * Success: { success: true }
 		 * Unauthorized (401): { error: 'Unauthorized' }
 		 */
-		.delete('/supporters/:did', async ({ params, cookie, set }) => {
-			const check = requireAdmin({ cookie, set })
-			if (check) return check
+		.delete(
+			'/supporters/:did',
+			async ({ params, cookie, set }) => {
+				const check = requireAdmin({ cookie, set })
+				if (check) return check
 
-			const { did } = params
-			await removeSupporter(did)
+				const { did } = params
+				await removeSupporter(did)
 
-			return { success: true }
-		}, {
-			cookie: t.Cookie({
-				admin_session: t.Optional(t.String())
-			}, {
-				secrets: cookieSecret,
-				sign: ['admin_session']
-			})
-		})
+				return { success: true }
+			},
+			{
+				cookie: t.Cookie(
+					{
+						admin_session: t.Optional(t.String()),
+					},
+					{
+						secrets: cookieSecret,
+						sign: ['admin_session'],
+					},
+				),
+			},
+		)

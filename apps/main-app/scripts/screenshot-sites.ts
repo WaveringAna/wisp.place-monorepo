@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+
 /**
  * Screenshot Sites Script
  *
@@ -6,10 +7,10 @@
  * Usage: bun run scripts/screenshot-sites.ts
  */
 
+import { mkdir } from 'node:fs/promises'
+import { join } from 'node:path'
 import { chromium } from 'playwright'
 import { db } from '../src/lib/db'
-import { mkdir } from 'fs/promises'
-import { join } from 'path'
 
 const SCREENSHOTS_DIR = join(process.cwd(), 'screenshots')
 const VIEWPORT_WIDTH = 1920
@@ -78,7 +79,7 @@ function sanitizeFilename(str: string): string {
 async function screenshotSite(
 	page: any,
 	site: Site,
-	retries: number = MAX_RETRIES
+	retries: number = MAX_RETRIES,
 ): Promise<{ success: boolean; error?: string }> {
 	const url = await getSiteUrl(site)
 	// Use the URL as filename (remove https:// and sanitize)
@@ -91,7 +92,7 @@ async function screenshotSite(
 			// Navigate to the site
 			await page.goto(url, {
 				waitUntil: 'networkidle',
-				timeout: TIMEOUT
+				timeout: TIMEOUT,
 			})
 
 			// Wait a bit for any dynamic content
@@ -101,11 +102,10 @@ async function screenshotSite(
 			await page.screenshot({
 				path: filepath,
 				fullPage: false, // Just viewport, not full scrollable page
-				type: 'png'
+				type: 'png',
 			})
 
 			return { success: true }
-
 		} catch (error) {
 			const errorMsg = error instanceof Error ? error.message : String(error)
 
@@ -143,22 +143,23 @@ async function main() {
 	// Launch browser
 	console.log('🌐 Launching browser...\n')
 	const browser = await chromium.launch({
-		headless: true
+		headless: true,
 	})
 
 	const context = await browser.newContext({
 		viewport: {
 			width: VIEWPORT_WIDTH,
-			height: VIEWPORT_HEIGHT
+			height: VIEWPORT_HEIGHT,
 		},
-		userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 WispScreenshotBot/1.0'
+		userAgent:
+			'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 WispScreenshotBot/1.0',
 	})
 
 	// Track results
 	const results = {
 		success: 0,
 		failed: 0,
-		errors: [] as { site: string; error: string }[]
+		errors: [] as { site: string; error: string }[],
 	}
 
 	// Process sites in parallel batches
@@ -182,7 +183,7 @@ async function main() {
 				await page.close()
 
 				return { site, result }
-			})
+			}),
 		)
 
 		// Aggregate results
@@ -193,12 +194,12 @@ async function main() {
 				results.failed++
 				results.errors.push({
 					site: `${site.did}/${site.rkey}`,
-					error: result.error || 'Unknown error'
+					error: result.error || 'Unknown error',
 				})
 			}
 		}
 
-		console.log(`  Batch complete: ${batchResults.filter(r => r.result.success).length}/${batch.length} successful\n`)
+		console.log(`  Batch complete: ${batchResults.filter((r) => r.result.success).length}/${batch.length} successful\n`)
 	}
 
 	// Cleanup

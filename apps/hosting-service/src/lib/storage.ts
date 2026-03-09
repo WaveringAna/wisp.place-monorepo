@@ -11,154 +11,154 @@
  */
 
 import {
-	TieredStorage,
-	MemoryStorageTier,
 	DiskStorageTier,
+	MemoryStorageTier,
 	S3StorageTier,
-	type StorageTier,
 	type StorageMetadata,
-} from '@wispplace/tiered-storage';
+	type StorageTier,
+	TieredStorage,
+} from '@wispplace/tiered-storage'
 
-const CACHE_DIR = process.env.CACHE_DIR || './cache/sites';
-const HOT_CACHE_SIZE = parseInt(process.env.HOT_CACHE_SIZE || '104857600', 10); // 100MB default
-const HOT_CACHE_COUNT = parseInt(process.env.HOT_CACHE_COUNT || '500', 10);
-const WARM_CACHE_SIZE = parseInt(process.env.WARM_CACHE_SIZE || '10737418240', 10); // 10GB default
-const WARM_EVICTION_POLICY = (process.env.WARM_EVICTION_POLICY || 'lru') as 'lru' | 'fifo' | 'size';
+const CACHE_DIR = process.env.CACHE_DIR || './cache/sites'
+const HOT_CACHE_SIZE = parseInt(process.env.HOT_CACHE_SIZE || '104857600', 10) // 100MB default
+const HOT_CACHE_COUNT = parseInt(process.env.HOT_CACHE_COUNT || '500', 10)
+const WARM_CACHE_SIZE = parseInt(process.env.WARM_CACHE_SIZE || '10737418240', 10) // 10GB default
+const WARM_EVICTION_POLICY = (process.env.WARM_EVICTION_POLICY || 'lru') as 'lru' | 'fifo' | 'size'
 
 // S3/Cold tier configuration (optional)
-const S3_BUCKET = process.env.S3_BUCKET || '';
-const S3_REGION = process.env.S3_REGION || 'us-east-1';
-const S3_ENDPOINT = process.env.S3_ENDPOINT;
-const S3_FORCE_PATH_STYLE = process.env.S3_FORCE_PATH_STYLE !== 'false';
-const AWS_ACCESS_KEY_ID = process.env.AWS_ACCESS_KEY_ID;
-const AWS_SECRET_ACCESS_KEY = process.env.AWS_SECRET_ACCESS_KEY;
-const S3_PREFIX = process.env.S3_PREFIX || 'sites/';
+const S3_BUCKET = process.env.S3_BUCKET || ''
+const S3_REGION = process.env.S3_REGION || 'us-east-1'
+const S3_ENDPOINT = process.env.S3_ENDPOINT
+const S3_FORCE_PATH_STYLE = process.env.S3_FORCE_PATH_STYLE !== 'false'
+const AWS_ACCESS_KEY_ID = process.env.AWS_ACCESS_KEY_ID
+const AWS_SECRET_ACCESS_KEY = process.env.AWS_SECRET_ACCESS_KEY
+const S3_PREFIX = process.env.S3_PREFIX || 'sites/'
 
 // Identity serializers for raw binary data (no JSON transformation)
 // Files are stored as-is without any encoding/decoding
 const identitySerialize = async (data: unknown): Promise<Uint8Array> => {
-	if (data instanceof Uint8Array) return data;
-	if (data instanceof ArrayBuffer) return new Uint8Array(data);
-	if (Buffer.isBuffer(data)) return new Uint8Array(data);
+	if (data instanceof Uint8Array) return data
+	if (data instanceof ArrayBuffer) return new Uint8Array(data)
+	if (Buffer.isBuffer(data)) return new Uint8Array(data)
 	// For other types, fall back to JSON (shouldn't happen with file storage)
-	return new TextEncoder().encode(JSON.stringify(data));
-};
+	return new TextEncoder().encode(JSON.stringify(data))
+}
 
 const identityDeserialize = async (data: Uint8Array): Promise<unknown> => {
 	// Return as-is for binary file storage
-	return data;
-};
+	return data
+}
 
 /**
  * Read-only wrapper for S3 tier.
  * Allows reads from S3 but skips all writes (hosting-service is read-only).
  */
 class ReadOnlyS3Tier implements StorageTier {
-	private static hasLoggedWriteSkip = false;
+	private static hasLoggedWriteSkip = false
 
 	constructor(private tier: StorageTier) {}
 
 	// Read operations - pass through to underlying tier, catch errors as cache misses
 	async get(key: string) {
 		try {
-			return await this.tier.get(key);
+			return await this.tier.get(key)
 		} catch (err) {
-			this.logReadError('get', key, err);
-			return null;
+			this.logReadError('get', key, err)
+			return null
 		}
 	}
 
 	async getWithMetadata(key: string) {
 		try {
-			return await this.tier.getWithMetadata?.(key) ?? null;
+			return (await this.tier.getWithMetadata?.(key)) ?? null
 		} catch (err) {
-			this.logReadError('getWithMetadata', key, err);
-			return null;
+			this.logReadError('getWithMetadata', key, err)
+			return null
 		}
 	}
 
 	async getStream(key: string) {
 		try {
-			return await this.tier.getStream?.(key) ?? null;
+			return (await this.tier.getStream?.(key)) ?? null
 		} catch (err) {
-			this.logReadError('getStream', key, err);
-			return null;
+			this.logReadError('getStream', key, err)
+			return null
 		}
 	}
 
 	async exists(key: string) {
 		try {
-			return await this.tier.exists(key);
+			return await this.tier.exists(key)
 		} catch (err) {
-			this.logReadError('exists', key, err);
-			return false;
+			this.logReadError('exists', key, err)
+			return false
 		}
 	}
 
 	async getMetadata(key: string) {
 		try {
-			return await this.tier.getMetadata(key);
+			return await this.tier.getMetadata(key)
 		} catch (err) {
-			this.logReadError('getMetadata', key, err);
-			return null;
+			this.logReadError('getMetadata', key, err)
+			return null
 		}
 	}
 
 	async *listKeys(prefix?: string) {
 		try {
-			yield* this.tier.listKeys(prefix);
+			yield* this.tier.listKeys(prefix)
 		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
-			console.warn(`[Storage] S3 listKeys error for prefix ${prefix}: ${msg}`);
+			const msg = err instanceof Error ? err.message : String(err)
+			console.warn(`[Storage] S3 listKeys error for prefix ${prefix}: ${msg}`)
 			// Yield nothing on error - don't break invalidation
 		}
 	}
 
 	async getStats() {
-		return this.tier.getStats();
+		return this.tier.getStats()
 	}
 
 	// Write operations - no-op in read-only mode
 	async set(key: string, _data: Uint8Array, _metadata: StorageMetadata) {
-		this.logWriteSkip('set', key);
+		this.logWriteSkip('set', key)
 	}
 
 	async setStream(key: string, _stream: NodeJS.ReadableStream, _metadata: StorageMetadata) {
-		this.logWriteSkip('setStream', key);
+		this.logWriteSkip('setStream', key)
 	}
 
 	async setMetadata(key: string, _metadata: StorageMetadata) {
-		this.logWriteSkip('setMetadata', key);
+		this.logWriteSkip('setMetadata', key)
 	}
 
 	async delete(key: string) {
-		this.logWriteSkip('delete', key);
+		this.logWriteSkip('delete', key)
 	}
 
 	async deleteMany(keys: string[]) {
-		this.logWriteSkip('deleteMany', `${keys.length} keys`);
+		this.logWriteSkip('deleteMany', `${keys.length} keys`)
 	}
 
 	async clear() {
-		this.logWriteSkip('clear', 'all keys');
+		this.logWriteSkip('clear', 'all keys')
 	}
 
 	private logReadError(operation: string, key: string, err: unknown) {
-		const msg = err instanceof Error ? err.message : String(err);
-		console.warn(`[Storage] S3 read error (${operation}) for ${key}: ${msg}`);
+		const msg = err instanceof Error ? err.message : String(err)
+		console.warn(`[Storage] S3 read error (${operation}) for ${key}: ${msg}`)
 	}
 
-	private logWriteSkip(operation: string, key: string) {
+	private logWriteSkip(operation: string, _key: string) {
 		// Only log once to avoid spam
 		if (!ReadOnlyS3Tier.hasLoggedWriteSkip) {
-			console.log(`[Storage] Read-only mode: skipping S3 writes (operation: ${operation})`);
-			ReadOnlyS3Tier.hasLoggedWriteSkip = true;
+			console.log(`[Storage] Read-only mode: skipping S3 writes (operation: ${operation})`)
+			ReadOnlyS3Tier.hasLoggedWriteSkip = true
 		}
 	}
 }
 
 // Hot tier TTL (seconds) - safety net so stale entries expire even if invalidation fails
-const HOT_CACHE_TTL = parseInt(process.env.HOT_CACHE_TTL || '60', 10); // 60s default
+const HOT_CACHE_TTL = parseInt(process.env.HOT_CACHE_TTL || '60', 10) // 60s default
 
 /**
  * Wrapper around MemoryStorageTier that enforces a short per-entry TTL.
@@ -169,96 +169,96 @@ const HOT_CACHE_TTL = parseInt(process.env.HOT_CACHE_TTL || '60', 10); // 60s de
  * we want stale hot entries to expire quickly and re-fetch from warm/cold.
  */
 class TTLMemoryTier implements StorageTier {
-	public readonly inner: MemoryStorageTier;
-	private ttlMs: number;
-	private insertedAt = new Map<string, number>();
+	public readonly inner: MemoryStorageTier
+	private ttlMs: number
+	private insertedAt = new Map<string, number>()
 
 	constructor(config: { maxSizeBytes: number; maxItems?: number }, ttlSeconds: number) {
-		this.inner = new MemoryStorageTier(config);
-		this.ttlMs = ttlSeconds * 1000;
+		this.inner = new MemoryStorageTier(config)
+		this.ttlMs = ttlSeconds * 1000
 	}
 
 	private isStale(key: string): boolean {
-		const ts = this.insertedAt.get(key);
-		if (!ts) return false;
-		return Date.now() - ts > this.ttlMs;
+		const ts = this.insertedAt.get(key)
+		if (!ts) return false
+		return Date.now() - ts > this.ttlMs
 	}
 
 	private async evictIfStale(key: string): Promise<boolean> {
 		if (this.isStale(key)) {
-			await this.inner.delete(key);
-			this.insertedAt.delete(key);
-			return true;
+			await this.inner.delete(key)
+			this.insertedAt.delete(key)
+			return true
 		}
-		return false;
+		return false
 	}
 
 	async get(key: string) {
-		if (await this.evictIfStale(key)) return null;
-		return this.inner.get(key);
+		if (await this.evictIfStale(key)) return null
+		return this.inner.get(key)
 	}
 
 	async getWithMetadata(key: string) {
-		if (await this.evictIfStale(key)) return null;
-		return this.inner.getWithMetadata(key);
+		if (await this.evictIfStale(key)) return null
+		return this.inner.getWithMetadata(key)
 	}
 
 	async getStream(key: string) {
-		if (await this.evictIfStale(key)) return null;
-		return this.inner.getStream(key);
+		if (await this.evictIfStale(key)) return null
+		return this.inner.getStream(key)
 	}
 
 	async set(key: string, data: Uint8Array, metadata: StorageMetadata) {
-		this.insertedAt.set(key, Date.now());
-		return this.inner.set(key, data, metadata);
+		this.insertedAt.set(key, Date.now())
+		return this.inner.set(key, data, metadata)
 	}
 
 	async setStream(key: string, stream: NodeJS.ReadableStream, metadata: StorageMetadata) {
-		this.insertedAt.set(key, Date.now());
-		return this.inner.setStream(key, stream, metadata);
+		this.insertedAt.set(key, Date.now())
+		return this.inner.setStream(key, stream, metadata)
 	}
 
 	async delete(key: string) {
-		this.insertedAt.delete(key);
-		return this.inner.delete(key);
+		this.insertedAt.delete(key)
+		return this.inner.delete(key)
 	}
 
 	async deleteMany(keys: string[]) {
-		for (const key of keys) this.insertedAt.delete(key);
-		return this.inner.deleteMany(keys);
+		for (const key of keys) this.insertedAt.delete(key)
+		return this.inner.deleteMany(keys)
 	}
 
 	async exists(key: string) {
-		if (await this.evictIfStale(key)) return false;
-		return this.inner.exists(key);
+		if (await this.evictIfStale(key)) return false
+		return this.inner.exists(key)
 	}
 
 	async *listKeys(prefix?: string) {
-		yield* this.inner.listKeys(prefix);
+		yield* this.inner.listKeys(prefix)
 	}
 
 	async getMetadata(key: string) {
-		if (await this.evictIfStale(key)) return null;
-		return this.inner.getMetadata(key);
+		if (await this.evictIfStale(key)) return null
+		return this.inner.getMetadata(key)
 	}
 
 	async setMetadata(key: string, metadata: StorageMetadata) {
-		return this.inner.setMetadata(key, metadata);
+		return this.inner.setMetadata(key, metadata)
 	}
 
 	async getStats() {
-		return this.inner.getStats();
+		return this.inner.getStats()
 	}
 
 	async clear() {
-		this.insertedAt.clear();
-		return this.inner.clear();
+		this.insertedAt.clear()
+		return this.inner.clear()
 	}
 }
 
 // Exported for direct access during cache invalidation
-export let hotTier: TTLMemoryTier;
-export let warmTier: StorageTier | undefined;
+export let hotTier: TTLMemoryTier
+export let warmTier: StorageTier | undefined
 
 /**
  * Initialize tiered storage
@@ -266,14 +266,14 @@ export let warmTier: StorageTier | undefined;
  */
 function initializeStorage(): TieredStorage<Uint8Array> {
 	// Determine cold tier: S3 if configured, otherwise disk acts as cold
-	let coldTier: StorageTier;
+	let coldTier: StorageTier
 
 	const diskTier = new DiskStorageTier({
 		directory: CACHE_DIR,
 		maxSizeBytes: WARM_CACHE_SIZE,
 		evictionPolicy: WARM_EVICTION_POLICY,
 		encodeColons: false, // Preserve colons for readable DID paths on Unix/macOS
-	});
+	})
 
 	if (S3_BUCKET) {
 		// Full three-tier setup with S3 as cold storage
@@ -287,27 +287,24 @@ function initializeStorage(): TieredStorage<Uint8Array> {
 					? { accessKeyId: AWS_ACCESS_KEY_ID, secretAccessKey: AWS_SECRET_ACCESS_KEY }
 					: undefined,
 			prefix: S3_PREFIX,
-		});
+		})
 
 		// Hosting service is read-only: always wrap S3 tier to make it read-only
-		coldTier = new ReadOnlyS3Tier(s3Tier);
-		warmTier = diskTier;
+		coldTier = new ReadOnlyS3Tier(s3Tier)
+		warmTier = diskTier
 
-		console.log('[Storage] Read-only mode: S3 as cold tier (no writes), disk as warm tier');
+		console.log('[Storage] Read-only mode: S3 as cold tier (no writes), disk as warm tier')
 	} else {
 		// Disk-only mode: disk tier acts as source of truth (cold)
-		coldTier = diskTier;
-		warmTier = undefined;
-		console.log('[Storage] S3 not configured - using disk-only mode (disk as cold tier)');
+		coldTier = diskTier
+		warmTier = undefined
+		console.log('[Storage] S3 not configured - using disk-only mode (disk as cold tier)')
 	}
 
 	// Hot tier with short TTL - entries expire quickly so stale data doesn't persist
-	hotTier = new TTLMemoryTier(
-		{ maxSizeBytes: HOT_CACHE_SIZE, maxItems: HOT_CACHE_COUNT },
-		HOT_CACHE_TTL,
-	);
+	hotTier = new TTLMemoryTier({ maxSizeBytes: HOT_CACHE_SIZE, maxItems: HOT_CACHE_COUNT }, HOT_CACHE_TTL)
 
-	console.log(`[Storage] Hot tier TTL: ${HOT_CACHE_TTL}s`);
+	console.log(`[Storage] Hot tier TTL: ${HOT_CACHE_TTL}s`)
 
 	const storage = new TieredStorage<Uint8Array>({
 		tiers: {
@@ -376,13 +373,13 @@ function initializeStorage(): TieredStorage<Uint8Array> {
 			serialize: identitySerialize,
 			deserialize: identityDeserialize,
 		},
-	});
+	})
 
-	return storage;
+	return storage
 }
 
 // Export singleton instance
-export const storage = initializeStorage();
+export const storage = initializeStorage()
 
 /**
  * Get storage configuration summary for logging
@@ -398,5 +395,5 @@ export function getStorageConfig() {
 		s3Region: S3_REGION,
 		s3Endpoint: S3_ENDPOINT || '(default AWS S3)',
 		s3Prefix: S3_PREFIX,
-	};
+	}
 }

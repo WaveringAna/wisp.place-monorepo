@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto'
 
 /**
  * Calculate SHA256 checksum of data.
@@ -18,9 +18,9 @@ import { createHash, timingSafeEqual } from 'node:crypto';
  * ```
  */
 export function calculateChecksum(data: Uint8Array): string {
-	const hash = createHash('sha256');
-	hash.update(data);
-	return hash.digest('hex');
+	const hash = createHash('sha256')
+	hash.update(data)
+	return hash.digest('hex')
 }
 
 /**
@@ -42,16 +42,13 @@ export function calculateChecksum(data: Uint8Array): string {
  * ```
  */
 export function verifyChecksum(data: Uint8Array, expectedChecksum: string): boolean {
-	const actualChecksum = calculateChecksum(data);
+	const actualChecksum = calculateChecksum(data)
 
 	// Use constant-time comparison to prevent timing attacks
 	try {
-		return timingSafeEqual(
-			Buffer.from(actualChecksum, 'hex'),
-			Buffer.from(expectedChecksum, 'hex'),
-		);
+		return timingSafeEqual(Buffer.from(actualChecksum, 'hex'), Buffer.from(expectedChecksum, 'hex'))
 	} catch {
 		// If checksums have different lengths, timingSafeEqual throws
-		return false;
+		return false
 	}
 }

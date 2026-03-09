@@ -37,10 +37,10 @@
 export function encodeKey(key: string, encodeColons = false): string {
 	let result = key
 		.replace(/%/g, '%25') // Must be first!
-		.replace(/\\/g, '%5C');
+		.replace(/\\/g, '%5C')
 
 	if (encodeColons) {
-		result = result.replace(/:/g, '%3A');
+		result = result.replace(/:/g, '%3A')
 	}
 
 	return result
@@ -50,7 +50,7 @@ export function encodeKey(key: string, encodeColons = false): string {
 		.replace(/</g, '%3C')
 		.replace(/>/g, '%3E')
 		.replace(/\|/g, '%7C')
-		.replace(/\0/g, '%00');
+		.replace(/\0/g, '%00')
 }
 
 /**
@@ -82,11 +82,11 @@ export function decodeKey(encoded: string, decodeColons = false): string {
 		.replace(/%3C/g, '<')
 		.replace(/%3E/g, '>')
 		.replace(/%7C/g, '|')
-		.replace(/%00/g, '\0');
+		.replace(/%00/g, '\0')
 
 	if (decodeColons) {
-		result = result.replace(/%3A/g, ':');
+		result = result.replace(/%3A/g, ':')
 	}
 
-	return result.replace(/%25/g, '%'); // Must be last!
+	return result.replace(/%25/g, '%') // Must be last!
 }

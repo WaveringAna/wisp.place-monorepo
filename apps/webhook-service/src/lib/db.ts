@@ -1,22 +1,24 @@
-import { SQL } from 'bun';
-import { createLogger } from '@wispplace/observability';
-import type { Main as WhRecord } from '@wispplace/lexicons/types/place/wisp/v2/wh';
+import type { Main as WhRecord } from '@wispplace/lexicons/types/place/wisp/v2/wh'
+import { createLogger } from '@wispplace/observability'
+import { SQL } from 'bun'
 
 /** A webhook entry as returned from the DB, with ownership info split out from the KV key. */
 export interface WebhookEntry {
-  ownerDid: string;
-  rkey: string;
-  record: WhRecord;
+	ownerDid: string
+	rkey: string
+	record: WhRecord
 }
 
-const logger = createLogger('webhook-service:db');
+const logger = createLogger('webhook-service:db')
 
 export const db = new SQL(
-  process.env.DATABASE_URL ||
-    (process.env.NODE_ENV === 'production'
-      ? (() => { throw new Error('DATABASE_URL is required in production'); })()
-      : 'postgres://postgres:postgres@localhost:5432/wisp')
-);
+	process.env.DATABASE_URL ||
+		(process.env.NODE_ENV === 'production'
+			? (() => {
+					throw new Error('DATABASE_URL is required in production')
+				})()
+			: 'postgres://postgres:postgres@localhost:5432/wisp'),
+)
 
 // Create tables on startup
 await db`
@@ -30,7 +32,7 @@ await db`
     updated_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW()),
     PRIMARY KEY (did, rkey)
   )
-`;
+`
 
 await db`
   CREATE TABLE IF NOT EXISTS webhook_records (
@@ -38,7 +40,7 @@ await db`
     v          JSONB NOT NULL,
     updated_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW())
   )
-`;
+`
 
 await db`
   CREATE TABLE IF NOT EXISTS webhook_event_logs (
@@ -54,12 +56,12 @@ await db`
     status           TEXT NOT NULL,
     delivered_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )
-`;
+`
 
 await db`
   CREATE INDEX IF NOT EXISTS webhook_event_logs_owner_did_idx
   ON webhook_event_logs (owner_did, delivered_at DESC)
-`;
+`
 
 /**
  * Find all webhook records whose scope AT-URI targets the given DID.
@@ -67,21 +69,21 @@ await db`
  * Used as the primary lookup when a firehose event arrives from a DID.
  */
 export async function findWebhooksForDid(scopeDid: string): Promise<WebhookEntry[]> {
-  const exact = `at://${scopeDid}`;
-  const prefix = `at://${scopeDid}/`;
-  const rows = await db<Array<{ k: string; v: WhRecord }>>`
+	const exact = `at://${scopeDid}`
+	const prefix = `at://${scopeDid}/`
+	const rows = await db<Array<{ k: string; v: WhRecord }>>`
     SELECT k, v FROM webhook_records
     WHERE v->'scope'->>'aturi' = ${exact}
        OR starts_with(v->'scope'->>'aturi', ${prefix})
-  `;
-  return rows.map(row => {
-    const slash = row.k.indexOf('/');
-    return {
-      ownerDid: row.k.slice(0, slash),
-      rkey: row.k.slice(slash + 1),
-      record: row.v,
-    };
-  });
+  `
+	return rows.map((row) => {
+		const slash = row.k.indexOf('/')
+		return {
+			ownerDid: row.k.slice(0, slash),
+			rkey: row.k.slice(slash + 1),
+			record: row.v,
+		}
+	})
 }
 
 /**
@@ -90,29 +92,29 @@ export async function findWebhooksForDid(scopeDid: string): Promise<WebhookEntry
  * references the webhook's scoped DID/collection.
  */
 export async function findBacklinkWebhooks(): Promise<WebhookEntry[]> {
-  const rows = await db<Array<{ k: string; v: WhRecord }>>`
+	const rows = await db<Array<{ k: string; v: WhRecord }>>`
     SELECT k, v FROM webhook_records
     WHERE (v->'scope'->>'backlinks')::boolean = true
-  `;
-  return rows.map(row => {
-    const slash = row.k.indexOf('/');
-    return {
-      ownerDid: row.k.slice(0, slash),
-      rkey: row.k.slice(slash + 1),
-      record: row.v,
-    };
-  });
+  `
+	return rows.map((row) => {
+		const slash = row.k.indexOf('/')
+		return {
+			ownerDid: row.k.slice(0, slash),
+			rkey: row.k.slice(slash + 1),
+			record: row.v,
+		}
+	})
 }
 
 /** Load all webhook records. Used for diagnostics/admin views. */
 export async function loadAllWebhooks(): Promise<Array<{ did: string; rkey: string; record: WhRecord }>> {
-  const rows = await db<Array<{ k: string; v: WhRecord }>>`
+	const rows = await db<Array<{ k: string; v: WhRecord }>>`
     SELECT k, v FROM webhook_records
-  `;
-  return rows.map(row => {
-    const [did, rkey] = row.k.split('/') as [string, string];
-    return { did, rkey, record: row.v };
-  });
+  `
+	return rows.map((row) => {
+		const [did, rkey] = row.k.split('/') as [string, string]
+		return { did, rkey, record: row.v }
+	})
 }
 
 /**
@@ -121,9 +123,9 @@ export async function loadAllWebhooks(): Promise<Array<{ did: string; rkey: stri
  * Key is `did/rkey`.
  */
 export async function upsertWebhookRecord(did: string, rkey: string, record: WhRecord): Promise<void> {
-  const k = `${did}/${rkey}`;
-  try {
-    await db`
+	const k = `${did}/${rkey}`
+	try {
+		await db`
       INSERT INTO webhooks (did, rkey, url, scope_aturi, enabled, created_at, updated_at)
       VALUES (${did}, ${rkey}, ${record.url}, ${record.scope.aturi}, ${record.enabled ?? true},
               EXTRACT(EPOCH FROM NOW()), EXTRACT(EPOCH FROM NOW()))
@@ -132,58 +134,58 @@ export async function upsertWebhookRecord(did: string, rkey: string, record: WhR
         scope_aturi = EXCLUDED.scope_aturi,
         enabled    = EXCLUDED.enabled,
         updated_at = EXTRACT(EPOCH FROM NOW())
-    `;
-    await db`
+    `
+		await db`
       INSERT INTO webhook_records (k, v, updated_at)
       VALUES (${k}, ${record}, EXTRACT(EPOCH FROM NOW()))
       ON CONFLICT (k) DO UPDATE SET
         v          = EXCLUDED.v,
         updated_at = EXTRACT(EPOCH FROM NOW())
-    `;
-  } catch (err) {
-    logger.error(`[DB] upsertWebhookRecord error for ${k}`, err);
-    throw err;
-  }
+    `
+	} catch (err) {
+		logger.error(`[DB] upsertWebhookRecord error for ${k}`, err)
+		throw err
+	}
 }
 
 /** Remove a webhook record from both tables. Called when a place.wisp.v2.wh delete event arrives. */
 export async function deleteWebhookRecord(did: string, rkey: string): Promise<void> {
-  const k = `${did}/${rkey}`;
-  try {
-    await db`DELETE FROM webhooks WHERE did = ${did} AND rkey = ${rkey}`;
-    await db`DELETE FROM webhook_records WHERE k = ${k}`;
-  } catch (err) {
-    logger.error(`[DB] deleteWebhookRecord error for ${k}`, err);
-    throw err;
-  }
+	const k = `${did}/${rkey}`
+	try {
+		await db`DELETE FROM webhooks WHERE did = ${did} AND rkey = ${rkey}`
+		await db`DELETE FROM webhook_records WHERE k = ${k}`
+	} catch (err) {
+		logger.error(`[DB] deleteWebhookRecord error for ${k}`, err)
+		throw err
+	}
 }
 
 export interface EventLogEntry {
-  ownerDid: string;
-  rkey: string;
-  url: string;
-  eventKind: string;
-  eventDid: string;
-  eventCollection: string;
-  eventRkey: string;
-  cid?: string;
-  status: 'ok' | 'failed';
-  deliveredAt: string;
+	ownerDid: string
+	rkey: string
+	url: string
+	eventKind: string
+	eventDid: string
+	eventCollection: string
+	eventRkey: string
+	cid?: string
+	status: 'ok' | 'failed'
+	deliveredAt: string
 }
 
 /** Insert a webhook delivery event into the persistent log. Keeps the last 500 rows per owner. */
 export async function insertEventLog(entry: EventLogEntry): Promise<void> {
-  try {
-    await db`
+	try {
+		await db`
       INSERT INTO webhook_event_logs
         (owner_did, rkey, url, event_kind, event_did, event_collection, event_rkey, cid, status, delivered_at)
       VALUES
         (${entry.ownerDid}, ${entry.rkey}, ${entry.url}, ${entry.eventKind},
          ${entry.eventDid}, ${entry.eventCollection}, ${entry.eventRkey},
          ${entry.cid ?? null}, ${entry.status}, ${entry.deliveredAt}::timestamptz)
-    `;
-    // Prune to last 500 per owner
-    await db`
+    `
+		// Prune to last 500 per owner
+		await db`
       DELETE FROM webhook_event_logs
       WHERE owner_did = ${entry.ownerDid}
         AND id NOT IN (
@@ -192,41 +194,49 @@ export async function insertEventLog(entry: EventLogEntry): Promise<void> {
           ORDER BY delivered_at DESC
           LIMIT 500
         )
-    `;
-  } catch (err) {
-    logger.error('[DB] insertEventLog error', err);
-  }
+    `
+	} catch (err) {
+		logger.error('[DB] insertEventLog error', err)
+	}
 }
 
 /** Return up to `limit` most-recent delivery events for an owner DID. */
 export async function listEventLogs(ownerDid: string, limit = 100): Promise<EventLogEntry[]> {
-  const rows = await db<Array<{
-    rkey: string; url: string; event_kind: string; event_did: string;
-    event_collection: string; event_rkey: string; cid: string | null;
-    status: string; delivered_at: string;
-  }>>`
+	const rows = await db<
+		Array<{
+			rkey: string
+			url: string
+			event_kind: string
+			event_did: string
+			event_collection: string
+			event_rkey: string
+			cid: string | null
+			status: string
+			delivered_at: string
+		}>
+	>`
     SELECT rkey, url, event_kind, event_did, event_collection, event_rkey, cid, status, delivered_at
     FROM webhook_event_logs
     WHERE owner_did = ${ownerDid}
     ORDER BY delivered_at DESC
     LIMIT ${limit}
-  `;
-  return rows.map(r => ({
-    ownerDid,
-    rkey: r.rkey,
-    url: r.url,
-    eventKind: r.event_kind,
-    eventDid: r.event_did,
-    eventCollection: r.event_collection,
-    eventRkey: r.event_rkey,
-    cid: r.cid ?? undefined,
-    status: r.status as 'ok' | 'failed',
-    deliveredAt: r.delivered_at,
-  }));
+  `
+	return rows.map((r) => ({
+		ownerDid,
+		rkey: r.rkey,
+		url: r.url,
+		eventKind: r.event_kind,
+		eventDid: r.event_did,
+		eventCollection: r.event_collection,
+		eventRkey: r.event_rkey,
+		cid: r.cid ?? undefined,
+		status: r.status as 'ok' | 'failed',
+		deliveredAt: r.delivered_at,
+	}))
 }
 
 /** Close all database connections gracefully. */
 export async function closeDatabase(): Promise<void> {
-  await db.close();
-  logger.info('[DB] Database connections closed');
+	await db.close()
+	logger.info('[DB] Database connections closed')
 }

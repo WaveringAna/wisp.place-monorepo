@@ -1,5 +1,5 @@
-import { describe, test, expect } from 'bun:test'
-import { rewriteHtmlPaths, isHtmlContent } from './html-rewriter'
+import { describe, expect, test } from 'bun:test'
+import { isHtmlContent, rewriteHtmlPaths } from './html-rewriter'
 
 describe('rewriteHtmlPaths', () => {
 	const basePath = '/identifier/site/'
@@ -41,74 +41,38 @@ describe('rewriteHtmlPaths', () => {
 	describe('relative paths from nested documents', () => {
 		test('rewrites relative path from nested document', () => {
 			const html = '<img src="./photo.jpg">'
-			const result = rewriteHtmlPaths(
-				html,
-				basePath,
-				'folder1/folder2/index.html'
-			)
-			expect(result).toBe(
-				'<img src="/identifier/site/folder1/folder2/photo.jpg">'
-			)
+			const result = rewriteHtmlPaths(html, basePath, 'folder1/folder2/index.html')
+			expect(result).toBe('<img src="/identifier/site/folder1/folder2/photo.jpg">')
 		})
 
 		test('rewrites plain filename from nested document', () => {
 			const html = '<script src="app.js"></script>'
-			const result = rewriteHtmlPaths(
-				html,
-				basePath,
-				'folder1/folder2/index.html'
-			)
-			expect(result).toBe(
-				'<script src="/identifier/site/folder1/folder2/app.js"></script>'
-			)
+			const result = rewriteHtmlPaths(html, basePath, 'folder1/folder2/index.html')
+			expect(result).toBe('<script src="/identifier/site/folder1/folder2/app.js"></script>')
 		})
 
 		test('rewrites ../ to go up one level', () => {
 			const html = '<img src="../image.png">'
-			const result = rewriteHtmlPaths(
-				html,
-				basePath,
-				'folder1/folder2/folder3/index.html'
-			)
-			expect(result).toBe(
-				'<img src="/identifier/site/folder1/folder2/image.png">'
-			)
+			const result = rewriteHtmlPaths(html, basePath, 'folder1/folder2/folder3/index.html')
+			expect(result).toBe('<img src="/identifier/site/folder1/folder2/image.png">')
 		})
 
 		test('rewrites multiple ../ to go up multiple levels', () => {
 			const html = '<link href="../../css/style.css">'
-			const result = rewriteHtmlPaths(
-				html,
-				basePath,
-				'folder1/folder2/folder3/index.html'
-			)
-			expect(result).toBe(
-				'<link href="/identifier/site/folder1/css/style.css">'
-			)
+			const result = rewriteHtmlPaths(html, basePath, 'folder1/folder2/folder3/index.html')
+			expect(result).toBe('<link href="/identifier/site/folder1/css/style.css">')
 		})
 
 		test('rewrites ../ with additional path segments', () => {
 			const html = '<img src="../assets/logo.png">'
-			const result = rewriteHtmlPaths(
-				html,
-				basePath,
-				'pages/about/index.html'
-			)
-			expect(result).toBe(
-				'<img src="/identifier/site/pages/assets/logo.png">'
-			)
+			const result = rewriteHtmlPaths(html, basePath, 'pages/about/index.html')
+			expect(result).toBe('<img src="/identifier/site/pages/assets/logo.png">')
 		})
 
 		test('handles complex nested relative paths', () => {
 			const html = '<script src="../../lib/vendor/jquery.js"></script>'
-			const result = rewriteHtmlPaths(
-				html,
-				basePath,
-				'pages/blog/post/index.html'
-			)
-			expect(result).toBe(
-				'<script src="/identifier/site/pages/lib/vendor/jquery.js"></script>'
-			)
+			const result = rewriteHtmlPaths(html, basePath, 'pages/blog/post/index.html')
+			expect(result).toBe('<script src="/identifier/site/pages/lib/vendor/jquery.js"></script>')
 		})
 
 		test('handles ../ going past root (stays at root)', () => {
@@ -128,26 +92,19 @@ describe('rewriteHtmlPaths', () => {
 		test('does not rewrite https URLs', () => {
 			const html = '<link href="https://cdn.example.com/style.css">'
 			const result = rewriteHtmlPaths(html, basePath, 'index.html')
-			expect(result).toBe(
-				'<link href="https://cdn.example.com/style.css">'
-			)
+			expect(result).toBe('<link href="https://cdn.example.com/style.css">')
 		})
 
 		test('does not rewrite protocol-relative URLs', () => {
 			const html = '<script src="//cdn.example.com/script.js"></script>'
 			const result = rewriteHtmlPaths(html, basePath, 'index.html')
-			expect(result).toBe(
-				'<script src="//cdn.example.com/script.js"></script>'
-			)
+			expect(result).toBe('<script src="//cdn.example.com/script.js"></script>')
 		})
 
 		test('does not rewrite data URIs', () => {
-			const html =
-				'<img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAUA">'
+			const html = '<img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAUA">'
 			const result = rewriteHtmlPaths(html, basePath, 'index.html')
-			expect(result).toBe(
-				'<img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAUA">'
-			)
+			expect(result).toBe('<img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAUA">')
 		})
 
 		test('does not rewrite mailto links', () => {
@@ -185,53 +142,37 @@ describe('rewriteHtmlPaths', () => {
 		test('rewrites data attribute', () => {
 			const html = '<object data="/document.pdf"></object>'
 			const result = rewriteHtmlPaths(html, basePath, 'index.html')
-			expect(result).toBe(
-				'<object data="/identifier/site/document.pdf"></object>'
-			)
+			expect(result).toBe('<object data="/identifier/site/document.pdf"></object>')
 		})
 
 		test('rewrites poster attribute', () => {
 			const html = '<video poster="/thumbnail.jpg"></video>'
 			const result = rewriteHtmlPaths(html, basePath, 'index.html')
-			expect(result).toBe(
-				'<video poster="/identifier/site/thumbnail.jpg"></video>'
-			)
+			expect(result).toBe('<video poster="/identifier/site/thumbnail.jpg"></video>')
 		})
 
 		test('rewrites srcset attribute with single URL', () => {
 			const html = '<img srcset="/image.png 1x">'
 			const result = rewriteHtmlPaths(html, basePath, 'index.html')
-			expect(result).toBe(
-				'<img srcset="/identifier/site/image.png 1x">'
-			)
+			expect(result).toBe('<img srcset="/identifier/site/image.png 1x">')
 		})
 
 		test('rewrites srcset attribute with multiple URLs', () => {
 			const html = '<img srcset="/image-1x.png 1x, /image-2x.png 2x">'
 			const result = rewriteHtmlPaths(html, basePath, 'index.html')
-			expect(result).toBe(
-				'<img srcset="/identifier/site/image-1x.png 1x, /identifier/site/image-2x.png 2x">'
-			)
+			expect(result).toBe('<img srcset="/identifier/site/image-1x.png 1x, /identifier/site/image-2x.png 2x">')
 		})
 
 		test('rewrites srcset with width descriptors', () => {
 			const html = '<img srcset="/small.jpg 320w, /large.jpg 1024w">'
 			const result = rewriteHtmlPaths(html, basePath, 'index.html')
-			expect(result).toBe(
-				'<img srcset="/identifier/site/small.jpg 320w, /identifier/site/large.jpg 1024w">'
-			)
+			expect(result).toBe('<img srcset="/identifier/site/small.jpg 320w, /identifier/site/large.jpg 1024w">')
 		})
 
 		test('rewrites srcset with relative paths from nested document', () => {
 			const html = '<img srcset="../img1.png 1x, ../img2.png 2x">'
-			const result = rewriteHtmlPaths(
-				html,
-				basePath,
-				'folder1/folder2/index.html'
-			)
-			expect(result).toBe(
-				'<img srcset="/identifier/site/folder1/img1.png 1x, /identifier/site/folder1/img2.png 2x">'
-			)
+			const result = rewriteHtmlPaths(html, basePath, 'folder1/folder2/index.html')
+			expect(result).toBe('<img srcset="/identifier/site/folder1/img1.png 1x, /identifier/site/folder1/img2.png 2x">')
 		})
 	})
 
@@ -251,9 +192,7 @@ describe('rewriteHtmlPaths', () => {
 		test('handles mixed quotes in same document', () => {
 			const html = '<img src="/img1.png"><link href=\'/style.css\'>'
 			const result = rewriteHtmlPaths(html, basePath, 'index.html')
-			expect(result).toBe(
-				'<img src="/identifier/site/img1.png"><link href=\'/identifier/site/style.css\'>'
-			)
+			expect(result).toBe('<img src="/identifier/site/img1.png"><link href=\'/identifier/site/style.css\'>')
 		})
 	})
 
@@ -290,18 +229,10 @@ describe('rewriteHtmlPaths', () => {
         <img src="../parent/image.png">
         <img src="https://external.com/image.png">
       `
-			const result = rewriteHtmlPaths(
-				html,
-				basePath,
-				'folder1/folder2/page.html'
-			)
+			const result = rewriteHtmlPaths(html, basePath, 'folder1/folder2/page.html')
 			expect(result).toContain('src="/identifier/site/abs/image.png"')
-			expect(result).toContain(
-				'src="/identifier/site/folder1/folder2/rel/image.png"'
-			)
-			expect(result).toContain(
-				'src="/identifier/site/folder1/parent/image.png"'
-			)
+			expect(result).toContain('src="/identifier/site/folder1/folder2/rel/image.png"')
+			expect(result).toContain('src="/identifier/site/folder1/parent/image.png"')
 			expect(result).toContain('src="https://external.com/image.png"')
 		})
 	})
@@ -321,11 +252,7 @@ describe('rewriteHtmlPaths', () => {
 
 		test('handles basePath with trailing slash', () => {
 			const html = '<img src="/image.png">'
-			const result = rewriteHtmlPaths(
-				html,
-				'/identifier/site/',
-				'index.html'
-			)
+			const result = rewriteHtmlPaths(html, '/identifier/site/', 'index.html')
 			expect(result).toBe('<img src="/identifier/site/image.png">')
 		})
 
@@ -344,17 +271,13 @@ describe('rewriteHtmlPaths', () => {
 		test('preserves hash fragments in URLs', () => {
 			const html = '<a href="/page.html#section">Link</a>'
 			const result = rewriteHtmlPaths(html, basePath, 'index.html')
-			expect(result).toBe(
-				'<a href="/identifier/site/page.html#section">Link</a>'
-			)
+			expect(result).toBe('<a href="/identifier/site/page.html#section">Link</a>')
 		})
 
 		test('handles paths with special characters', () => {
 			const html = '<img src="/folder-name/file_name.png">'
 			const result = rewriteHtmlPaths(html, basePath, 'index.html')
-			expect(result).toBe(
-				'<img src="/identifier/site/folder-name/file_name.png">'
-			)
+			expect(result).toBe('<img src="/identifier/site/folder-name/file_name.png">')
 		})
 	})
 
@@ -364,14 +287,8 @@ describe('rewriteHtmlPaths', () => {
 			// Image at: /folder1/folder2/img.png
 			// Reference: src="../img.png"
 			const html = '<img src="../img.png">'
-			const result = rewriteHtmlPaths(
-				html,
-				basePath,
-				'folder1/folder2/folder3/index.html'
-			)
-			expect(result).toBe(
-				'<img src="/identifier/site/folder1/folder2/img.png">'
-			)
+			const result = rewriteHtmlPaths(html, basePath, 'folder1/folder2/folder3/index.html')
+			expect(result).toBe('<img src="/identifier/site/folder1/folder2/img.png">')
 		})
 
 		test('handles deeply nested static site structure', () => {
@@ -392,11 +309,7 @@ describe('rewriteHtmlPaths', () => {
 </body>
 </html>
       `
-			const result = rewriteHtmlPaths(
-				html,
-				basePath,
-				'blog/posts/my-post.html'
-			)
+			const result = rewriteHtmlPaths(html, basePath, 'blog/posts/my-post.html')
 
 			// Assets two levels up
 			expect(result).toContain('href="/identifier/site/css/style.css"')
@@ -405,9 +318,7 @@ describe('rewriteHtmlPaths', () => {
 			expect(result).toContain('src="/identifier/site/images/logo.png"')
 
 			// Same directory
-			expect(result).toContain(
-				'src="/identifier/site/blog/posts/post-image.jpg"'
-			)
+			expect(result).toContain('src="/identifier/site/blog/posts/post-image.jpg"')
 
 			// One level up
 			expect(result).toContain('href="/identifier/site/blog/index.html"')
@@ -421,9 +332,7 @@ describe('rewriteHtmlPaths', () => {
 describe('isHtmlContent', () => {
 	test('identifies HTML by content type', () => {
 		expect(isHtmlContent('file.txt', 'text/html')).toBe(true)
-		expect(isHtmlContent('file.txt', 'text/html; charset=utf-8')).toBe(
-			true
-		)
+		expect(isHtmlContent('file.txt', 'text/html; charset=utf-8')).toBe(true)
 	})
 
 	test('identifies HTML by .html extension', () => {

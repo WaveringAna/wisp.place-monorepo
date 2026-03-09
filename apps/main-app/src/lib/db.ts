@@ -1,16 +1,17 @@
-import { SQL } from "bun";
-import { isValidHandle, toDomain } from "./domain-utils";
-import { runDatabaseMigrations } from "./migrations";
+import { SQL } from 'bun'
+import { isValidHandle, toDomain } from './domain-utils'
+import { runDatabaseMigrations } from './migrations'
 
-export { isValidHandle, toDomain } from "./domain-utils";
+export { isValidHandle, toDomain } from './domain-utils'
 
 export const db = new SQL(
-    process.env.NODE_ENV === 'production'
-        ? process.env.DATABASE_URL || (() => {
-            throw new Error('DATABASE_URL environment variable is required in production');
-          })()
-        : process.env.DATABASE_URL || "postgres://postgres:postgres@localhost:5432/wisp"
-);
+	process.env.NODE_ENV === 'production'
+		? process.env.DATABASE_URL ||
+				(() => {
+					throw new Error('DATABASE_URL environment variable is required in production')
+				})()
+		: process.env.DATABASE_URL || 'postgres://postgres:postgres@localhost:5432/wisp',
+)
 
 await db`
     CREATE TABLE IF NOT EXISTS oauth_states (
@@ -18,7 +19,7 @@ await db`
         data TEXT NOT NULL,
         created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())
     )
-`;
+`
 
 await db`
     CREATE TABLE IF NOT EXISTS oauth_sessions (
@@ -27,7 +28,7 @@ await db`
         updated_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()),
         expires_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW()) + 2592000
     )
-`;
+`
 
 await db`
     CREATE TABLE IF NOT EXISTS oauth_keys (
@@ -35,7 +36,7 @@ await db`
         jwk TEXT NOT NULL,
         created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())
     )
-`;
+`
 
 // Cookie secrets table for signed cookies
 await db`
@@ -44,7 +45,7 @@ await db`
         secret TEXT NOT NULL,
         created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())
     )
-`;
+`
 
 // Service identity keys for did.json verificationMethod
 await db`
@@ -55,7 +56,7 @@ await db`
         created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()),
         updated_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())
     )
-`;
+`
 
 // Domains table maps subdomain -> DID (now supports up to 3 domains per user)
 await db`
@@ -65,7 +66,7 @@ await db`
         rkey TEXT,
         created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())
     )
-`;
+`
 
 // Custom domains table for BYOD (bring your own domain)
 await db`
@@ -78,7 +79,7 @@ await db`
         last_verified_at BIGINT,
         created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())
     )
-`;
+`
 
 // Sites table - cache of place.wisp.fs records from PDS
 await db`
@@ -90,7 +91,7 @@ await db`
         updated_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()),
         PRIMARY KEY (did, rkey)
     )
-`;
+`
 
 // Site cache table - stores CIDs for cached sites (used by firehose/hosting services)
 await db`
@@ -103,7 +104,7 @@ await db`
         updated_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()),
         PRIMARY KEY (did, rkey)
     )
-`;
+`
 
 // Site settings cache table - cached place.wisp.settings records
 await db`
@@ -121,7 +122,7 @@ await db`
         updated_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()),
         PRIMARY KEY (did, rkey)
     )
-`;
+`
 
 // Supporter table - list of supporter DIDs
 await db`
@@ -129,166 +130,166 @@ await db`
         did TEXT PRIMARY KEY,
         created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())
     )
-`;
+`
 
-await runDatabaseMigrations(db);
+await runDatabaseMigrations(db)
 
 export const getDomainByDid = async (did: string): Promise<string | null> => {
-    const rows = await db`SELECT domain FROM domains WHERE did = ${did} ORDER BY created_at ASC LIMIT 1`;
-    return rows[0]?.domain ?? null;
-};
+	const rows = await db`SELECT domain FROM domains WHERE did = ${did} ORDER BY created_at ASC LIMIT 1`
+	return rows[0]?.domain ?? null
+}
 
 export const getWispDomainInfo = async (did: string) => {
-    const rows = await db`SELECT domain, rkey FROM domains WHERE did = ${did} ORDER BY created_at ASC LIMIT 1`;
-    return rows[0] ?? null;
-};
+	const rows = await db`SELECT domain, rkey FROM domains WHERE did = ${did} ORDER BY created_at ASC LIMIT 1`
+	return rows[0] ?? null
+}
 
 export const getAllWispDomains = async (did: string): Promise<Array<{ domain: string; rkey: string | null }>> => {
-    const rows = await db`SELECT domain, rkey FROM domains WHERE did = ${did} ORDER BY created_at ASC`;
-    return rows;
-};
+	const rows = await db`SELECT domain, rkey FROM domains WHERE did = ${did} ORDER BY created_at ASC`
+	return rows
+}
 
 export const countWispDomains = async (did: string): Promise<number> => {
-    const rows = await db`SELECT COUNT(*) as count FROM domains WHERE did = ${did}`;
-    return Number(rows[0]?.count ?? 0);
-};
+	const rows = await db`SELECT COUNT(*) as count FROM domains WHERE did = ${did}`
+	return Number(rows[0]?.count ?? 0)
+}
 
 export const getDidByDomain = async (domain: string): Promise<string | null> => {
-    const rows = await db`SELECT did FROM domains WHERE domain = ${domain.toLowerCase()}`;
-    return rows[0]?.did ?? null;
-};
+	const rows = await db`SELECT did FROM domains WHERE domain = ${domain.toLowerCase()}`
+	return rows[0]?.did ?? null
+}
 
 export const isDomainAvailable = async (handle: string): Promise<boolean> => {
-    const h = handle.trim().toLowerCase();
-    if (!isValidHandle(h)) return false;
-    const domain = toDomain(h);
-    const rows = await db`SELECT 1 FROM domains WHERE domain = ${domain} LIMIT 1`;
-    return rows.length === 0;
-};
+	const h = handle.trim().toLowerCase()
+	if (!isValidHandle(h)) return false
+	const domain = toDomain(h)
+	const rows = await db`SELECT 1 FROM domains WHERE domain = ${domain} LIMIT 1`
+	return rows.length === 0
+}
 
 export const isDomainRegistered = async (domain: string) => {
-    const domainLower = domain.toLowerCase().trim();
+	const domainLower = domain.toLowerCase().trim()
 
-    // Check wisp.place subdomains
-    const wispDomain = await db`
+	// Check wisp.place subdomains
+	const wispDomain = await db`
         SELECT did, domain, rkey FROM domains WHERE domain = ${domainLower}
-    `;
+    `
 
-    if (wispDomain.length > 0) {
-        return {
-            registered: true,
-            type: 'wisp' as const,
-            domain: wispDomain[0].domain,
-            did: wispDomain[0].did,
-            rkey: wispDomain[0].rkey
-        };
-    }
+	if (wispDomain.length > 0) {
+		return {
+			registered: true,
+			type: 'wisp' as const,
+			domain: wispDomain[0].domain,
+			did: wispDomain[0].did,
+			rkey: wispDomain[0].rkey,
+		}
+	}
 
-    // Check custom domains
-    const customDomain = await db`
+	// Check custom domains
+	const customDomain = await db`
         SELECT id, domain, did, rkey, verified FROM custom_domains WHERE domain = ${domainLower}
-    `;
+    `
 
-    if (customDomain.length > 0) {
-        return {
-            registered: true,
-            type: 'custom' as const,
-            domain: customDomain[0].domain,
-            did: customDomain[0].did,
-            rkey: customDomain[0].rkey,
-            verified: customDomain[0].verified
-        };
-    }
+	if (customDomain.length > 0) {
+		return {
+			registered: true,
+			type: 'custom' as const,
+			domain: customDomain[0].domain,
+			did: customDomain[0].did,
+			rkey: customDomain[0].rkey,
+			verified: customDomain[0].verified,
+		}
+	}
 
-    return { registered: false };
-};
+	return { registered: false }
+}
 
 export const claimDomain = async (did: string, handle: string): Promise<string> => {
-    const h = handle.trim().toLowerCase();
-    if (!isValidHandle(h)) throw new Error('invalid_handle');
+	const h = handle.trim().toLowerCase()
+	if (!isValidHandle(h)) throw new Error('invalid_handle')
 
-    // Check if user already has 3 domains (unless they're a supporter)
-    const supporter = await isSupporter(did);
-    if (!supporter) {
-        const existingCount = await countWispDomains(did);
-        if (existingCount >= 3) {
-            throw new Error('domain_limit_reached');
-        }
-    }
+	// Check if user already has 3 domains (unless they're a supporter)
+	const supporter = await isSupporter(did)
+	if (!supporter) {
+		const existingCount = await countWispDomains(did)
+		if (existingCount >= 3) {
+			throw new Error('domain_limit_reached')
+		}
+	}
 
-    const domain = toDomain(h);
-    try {
-        await db`
+	const domain = toDomain(h)
+	try {
+		await db`
             INSERT INTO domains (domain, did)
             VALUES (${domain}, ${did})
-        `;
-    } catch (err) {
-        // Unique constraint violations -> already taken
-        throw new Error('conflict');
-    }
-    return domain;
-};
+        `
+	} catch (_err) {
+		// Unique constraint violations -> already taken
+		throw new Error('conflict')
+	}
+	return domain
+}
 
 export const updateDomain = async (did: string, handle: string): Promise<string> => {
-    const h = handle.trim().toLowerCase();
-    if (!isValidHandle(h)) throw new Error('invalid_handle');
-    const domain = toDomain(h);
-    try {
-        const rows = await db`
+	const h = handle.trim().toLowerCase()
+	if (!isValidHandle(h)) throw new Error('invalid_handle')
+	const domain = toDomain(h)
+	try {
+		const rows = await db`
             UPDATE domains SET domain = ${domain}
             WHERE did = ${did}
             RETURNING domain
-        `;
-        if (rows.length > 0) return rows[0].domain as string;
-        // No existing row, behave like claim
-        return await claimDomain(did, handle);
-    } catch (err) {
-        // Unique constraint violations -> already taken by someone else
-        throw new Error('conflict');
-    }
-};
+        `
+		if (rows.length > 0) return rows[0].domain as string
+		// No existing row, behave like claim
+		return await claimDomain(did, handle)
+	} catch (_err) {
+		// Unique constraint violations -> already taken by someone else
+		throw new Error('conflict')
+	}
+}
 
 export const updateWispDomainSite = async (domain: string, siteRkey: string | null): Promise<void> => {
-    await db`
+	await db`
         UPDATE domains
         SET rkey = ${siteRkey}
         WHERE domain = ${domain}
-    `;
-};
+    `
+}
 
 export const getWispDomainSite = async (did: string): Promise<string | null> => {
-    const rows = await db`SELECT rkey FROM domains WHERE did = ${did} ORDER BY created_at ASC LIMIT 1`;
-    return rows[0]?.rkey ?? null;
-};
+	const rows = await db`SELECT rkey FROM domains WHERE did = ${did} ORDER BY created_at ASC LIMIT 1`
+	return rows[0]?.rkey ?? null
+}
 
 export const deleteWispDomain = async (domain: string): Promise<void> => {
-    await db`DELETE FROM domains WHERE domain = ${domain}`;
-};
+	await db`DELETE FROM domains WHERE domain = ${domain}`
+}
 
 export const getCustomDomainsByDid = async (did: string) => {
-    const rows = await db`SELECT * FROM custom_domains WHERE did = ${did} ORDER BY created_at DESC`;
-    return rows;
-};
+	const rows = await db`SELECT * FROM custom_domains WHERE did = ${did} ORDER BY created_at DESC`
+	return rows
+}
 
 export const getCustomDomainInfo = async (domain: string) => {
-    const rows = await db`SELECT * FROM custom_domains WHERE domain = ${domain.toLowerCase()}`;
-    return rows[0] ?? null;
-};
+	const rows = await db`SELECT * FROM custom_domains WHERE domain = ${domain.toLowerCase()}`
+	return rows[0] ?? null
+}
 
 export const getCustomDomainByHash = async (hash: string) => {
-    const rows = await db`SELECT * FROM custom_domains WHERE id = ${hash}`;
-    return rows[0] ?? null;
-};
+	const rows = await db`SELECT * FROM custom_domains WHERE id = ${hash}`
+	return rows[0] ?? null
+}
 
 export const getCustomDomainById = async (id: string) => {
-    const rows = await db`SELECT * FROM custom_domains WHERE id = ${id}`;
-    return rows[0] ?? null;
-};
+	const rows = await db`SELECT * FROM custom_domains WHERE id = ${id}`
+	return rows[0] ?? null
+}
 
 export const claimCustomDomain = async (did: string, domain: string, hash: string, rkey: string | null = null) => {
-    const domainLower = domain.toLowerCase();
-    try {
-        const result = await db`
+	const domainLower = domain.toLowerCase()
+	try {
+		const result = await db`
             INSERT INTO custom_domains (id, domain, did, rkey, verified, created_at)
             VALUES (${hash}, ${domainLower}, ${did}, ${rkey}, false, EXTRACT(EPOCH FROM NOW()))
             ON CONFLICT (domain) DO UPDATE SET
@@ -299,55 +300,55 @@ export const claimCustomDomain = async (did: string, domain: string, hash: strin
                 created_at = EXCLUDED.created_at
             WHERE custom_domains.verified = false
             RETURNING *
-        `;
-        
-        if (result.length === 0) {
-            console.log('Failed to claim custom domain - already verified by another user');
-            throw new Error('conflict');
-        }
-        
-        return { success: true, hash };
-    } catch (err) {
-        console.error('Failed to claim custom domain', err);
-        throw new Error('conflict');
-    }
-};
+        `
+
+		if (result.length === 0) {
+			console.log('Failed to claim custom domain - already verified by another user')
+			throw new Error('conflict')
+		}
+
+		return { success: true, hash }
+	} catch (err) {
+		console.error('Failed to claim custom domain', err)
+		throw new Error('conflict')
+	}
+}
 
 export const updateCustomDomainRkey = async (id: string, rkey: string | null) => {
-    const rows = await db`
+	const rows = await db`
         UPDATE custom_domains
         SET rkey = ${rkey}
         WHERE id = ${id}
         RETURNING *
-    `;
-    return rows[0] ?? null;
-};
+    `
+	return rows[0] ?? null
+}
 
 export const updateCustomDomainVerification = async (id: string, verified: boolean) => {
-    const rows = await db`
+	const rows = await db`
         UPDATE custom_domains
         SET verified = ${verified}, last_verified_at = EXTRACT(EPOCH FROM NOW())
         WHERE id = ${id}
         RETURNING *
-    `;
-    return rows[0] ?? null;
-};
+    `
+	return rows[0] ?? null
+}
 
 export const deleteCustomDomain = async (id: string) => {
-    await db`DELETE FROM custom_domains WHERE id = ${id}`;
-};
+	await db`DELETE FROM custom_domains WHERE id = ${id}`
+}
 
 export const getSitesByDid = async (did: string) => {
-    const rows = await db`SELECT * FROM sites WHERE did = ${did} ORDER BY created_at DESC`;
-    return rows;
-};
+	const rows = await db`SELECT * FROM sites WHERE did = ${did} ORDER BY created_at DESC`
+	return rows
+}
 
 export const upsertSite = async (did: string, rkey: string, displayName?: string) => {
-    try {
-        // Only set display_name if provided (not undefined/null/empty)
-        const cleanDisplayName = displayName && displayName.trim() ? displayName.trim() : null;
+	try {
+		// Only set display_name if provided (not undefined/null/empty)
+		const cleanDisplayName = displayName?.trim() ? displayName.trim() : null
 
-        await db`
+		await db`
             INSERT INTO sites (did, rkey, display_name, created_at, updated_at)
             VALUES (${did}, ${rkey}, ${cleanDisplayName}, EXTRACT(EPOCH FROM NOW()), EXTRACT(EPOCH FROM NOW()))
             ON CONFLICT (did, rkey)
@@ -357,27 +358,32 @@ export const upsertSite = async (did: string, rkey: string, displayName?: string
                     ELSE sites.display_name
                 END,
                 updated_at = EXTRACT(EPOCH FROM NOW())
-        `;
-        return { success: true };
-    } catch (err) {
-        console.error('Failed to upsert site', err);
-        return { success: false, error: err };
-    }
-};
+        `
+		return { success: true }
+	} catch (err) {
+		console.error('Failed to upsert site', err)
+		return { success: false, error: err }
+	}
+}
 
 export const deleteSite = async (did: string, rkey: string) => {
-    try {
-        await db`DELETE FROM sites WHERE did = ${did} AND rkey = ${rkey}`;
-        return { success: true };
-    } catch (err) {
-        console.error('Failed to delete site', err);
-        return { success: false, error: err };
-    }
-};
+	try {
+		await db`DELETE FROM sites WHERE did = ${did} AND rkey = ${rkey}`
+		return { success: true }
+	} catch (err) {
+		console.error('Failed to delete site', err)
+		return { success: false, error: err }
+	}
+}
 
-export const upsertSiteCache = async (did: string, rkey: string, recordCid: string, fileCids: Record<string, string> = {}) => {
-    try {
-        await db`
+export const upsertSiteCache = async (
+	did: string,
+	rkey: string,
+	recordCid: string,
+	fileCids: Record<string, string> = {},
+) => {
+	try {
+		await db`
             INSERT INTO site_cache (did, rkey, record_cid, file_cids, cached_at, updated_at)
             VALUES (${did}, ${rkey}, ${recordCid}, ${JSON.stringify(fileCids)}, EXTRACT(EPOCH FROM NOW()), EXTRACT(EPOCH FROM NOW()))
             ON CONFLICT (did, rkey)
@@ -385,118 +391,118 @@ export const upsertSiteCache = async (did: string, rkey: string, recordCid: stri
                 record_cid = EXCLUDED.record_cid,
                 file_cids = EXCLUDED.file_cids,
                 updated_at = EXTRACT(EPOCH FROM NOW())
-        `;
-        return { success: true };
-    } catch (err) {
-        console.error('Failed to upsert site cache', err);
-        return { success: false, error: err };
-    }
-};
+        `
+		return { success: true }
+	} catch (err) {
+		console.error('Failed to upsert site cache', err)
+		return { success: false, error: err }
+	}
+}
 
 // Get all domains (wisp + custom) mapped to a specific site
 export const getDomainsBySite = async (did: string, rkey: string) => {
-    const domains: Array<{
-        type: 'wisp' | 'custom';
-        domain: string;
-        verified?: boolean;
-        id?: string;
-    }> = [];
+	const domains: Array<{
+		type: 'wisp' | 'custom'
+		domain: string
+		verified?: boolean
+		id?: string
+	}> = []
 
-    // Check wisp domain
-    const wispDomain = await db`
+	// Check wisp domain
+	const wispDomain = await db`
         SELECT domain, rkey FROM domains
         WHERE did = ${did} AND rkey = ${rkey}
-    `;
-    if (wispDomain.length > 0) {
-        domains.push({
-            type: 'wisp',
-            domain: wispDomain[0].domain,
-        });
-    }
+    `
+	if (wispDomain.length > 0) {
+		domains.push({
+			type: 'wisp',
+			domain: wispDomain[0].domain,
+		})
+	}
 
-    // Check custom domains
-    const customDomains = await db`
+	// Check custom domains
+	const customDomains = await db`
         SELECT id, domain, verified FROM custom_domains
         WHERE did = ${did} AND rkey = ${rkey}
         ORDER BY created_at DESC
-    `;
-    for (const cd of customDomains) {
-        domains.push({
-            type: 'custom',
-            domain: cd.domain,
-            verified: cd.verified,
-            id: cd.id,
-        });
-    }
+    `
+	for (const cd of customDomains) {
+		domains.push({
+			type: 'custom',
+			domain: cd.domain,
+			verified: cd.verified,
+			id: cd.id,
+		})
+	}
 
-    return domains;
-};
+	return domains
+}
 
 // Get count of domains mapped to a specific site
 export const getDomainCountBySite = async (did: string, rkey: string) => {
-    const wispCount = await db`
+	const wispCount = await db`
         SELECT COUNT(*) as count FROM domains
         WHERE did = ${did} AND rkey = ${rkey}
-    `;
+    `
 
-    const customCount = await db`
+	const customCount = await db`
         SELECT COUNT(*) as count FROM custom_domains
         WHERE did = ${did} AND rkey = ${rkey}
-    `;
+    `
 
-    return {
-        wisp: Number(wispCount[0]?.count || 0),
-        custom: Number(customCount[0]?.count || 0),
-        total: Number(wispCount[0]?.count || 0) + Number(customCount[0]?.count || 0),
-    };
-};
+	return {
+		wisp: Number(wispCount[0]?.count || 0),
+		custom: Number(customCount[0]?.count || 0),
+		total: Number(wispCount[0]?.count || 0) + Number(customCount[0]?.count || 0),
+	}
+}
 
 // Cookie secret management - ensure we have a secret for signing cookies
 export const getCookieSecret = async (): Promise<string> => {
-    // Check if secret already exists
-    const rows = await db`SELECT secret FROM cookie_secrets WHERE id = 'default' LIMIT 1`;
+	// Check if secret already exists
+	const rows = await db`SELECT secret FROM cookie_secrets WHERE id = 'default' LIMIT 1`
 
-    if (rows.length > 0) {
-        return rows[0].secret as string;
-    }
+	if (rows.length > 0) {
+		return rows[0].secret as string
+	}
 
-    // Generate new secret if none exists
-    const secret = crypto.randomUUID() + crypto.randomUUID(); // 72 character random string
-    await db`
+	// Generate new secret if none exists
+	const secret = crypto.randomUUID() + crypto.randomUUID() // 72 character random string
+	await db`
         INSERT INTO cookie_secrets (id, secret, created_at)
         VALUES ('default', ${secret}, EXTRACT(EPOCH FROM NOW()))
-    `;
+    `
 
-    console.log('[CookieSecret] Generated new cookie signing secret');
-    return secret;
-};
+	console.log('[CookieSecret] Generated new cookie signing secret')
+	return secret
+}
 
 export const getServiceIdentityKeypair = async (): Promise<{
-    publicKeyMultibase: string;
-    privateKeyMultibase: string | null;
+	publicKeyMultibase: string
+	privateKeyMultibase: string | null
 } | null> => {
-    const rows = await db`
+	const rows = await db`
         SELECT public_key_multibase, private_key_multibase
         FROM service_identity_keys
         WHERE id = 'default'
         LIMIT 1
-    `;
+    `
 
-    if (rows.length === 0) {
-        return null;
-    }
+	if (rows.length === 0) {
+		return null
+	}
 
-    return {
-        publicKeyMultibase: rows[0].public_key_multibase as string,
-        privateKeyMultibase: (rows[0].private_key_multibase as string | undefined) ?? null,
-    };
-};
+	return {
+		publicKeyMultibase: rows[0].public_key_multibase as string,
+		privateKeyMultibase: (rows[0].private_key_multibase as string | undefined) ?? null,
+	}
+}
 
 export const setServiceIdentityKeypair = async (
-    publicKeyMultibase: string,
-    privateKeyMultibase: string | null
+	publicKeyMultibase: string,
+	privateKeyMultibase: string | null,
 ): Promise<void> => {
-    await db`
+	await db`
         INSERT INTO service_identity_keys (id, public_key_multibase, private_key_multibase, created_at, updated_at)
         VALUES ('default', ${publicKeyMultibase}, ${privateKeyMultibase}, EXTRACT(EPOCH FROM NOW()), EXTRACT(EPOCH FROM NOW()))
         ON CONFLICT (id)
@@ -504,41 +510,41 @@ export const setServiceIdentityKeypair = async (
             public_key_multibase = EXCLUDED.public_key_multibase,
             private_key_multibase = EXCLUDED.private_key_multibase,
             updated_at = EXTRACT(EPOCH FROM NOW())
-    `;
-};
+    `
+}
 
 // Supporter management functions
 export const isSupporter = async (did: string): Promise<boolean> => {
-    const rows = await db`SELECT 1 FROM supporter WHERE did = ${did} LIMIT 1`;
-    return rows.length > 0;
-};
+	const rows = await db`SELECT 1 FROM supporter WHERE did = ${did} LIMIT 1`
+	return rows.length > 0
+}
 
 export const addSupporter = async (did: string): Promise<void> => {
-    await db`
+	await db`
         INSERT INTO supporter (did)
         VALUES (${did})
         ON CONFLICT (did) DO NOTHING
-    `;
-};
+    `
+}
 
 export const removeSupporter = async (did: string): Promise<void> => {
-    await db`DELETE FROM supporter WHERE did = ${did}`;
-};
+	await db`DELETE FROM supporter WHERE did = ${did}`
+}
 
 export const getAllSupporters = async () => {
-    const rows = await db`SELECT * FROM supporter ORDER BY created_at ASC`;
-    return rows;
-};
+	const rows = await db`SELECT * FROM supporter ORDER BY created_at ASC`
+	return rows
+}
 
 /**
  * Close database connection
  * Call this during graceful shutdown
  */
 export const closeDatabase = async (): Promise<void> => {
-    try {
-        await db.end();
-        console.log('[DB] Database connection closed');
-    } catch (err) {
-        console.error('[DB] Error closing database connection:', err);
-    }
-};
+	try {
+		await db.end()
+		console.log('[DB] Database connection closed')
+	} catch (err) {
+		console.error('[DB] Error closing database connection:', err)
+	}
+}

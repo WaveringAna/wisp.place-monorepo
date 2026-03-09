@@ -105,13 +105,7 @@ function extractEventType(message: string): string | undefined {
 // ============================================================================
 
 export const logCollector = {
-	log(
-		level: LogEntry['level'],
-		message: string,
-		service: string,
-		context?: Record<string, any>,
-		traceId?: string
-	) {
+	log(level: LogEntry['level'], message: string, service: string, context?: Record<string, any>, traceId?: string) {
 		const entry: LogEntry = {
 			id: generateId('log', logCounter++),
 			timestamp: new Date(),
@@ -120,7 +114,7 @@ export const logCollector = {
 			service,
 			context,
 			traceId,
-			eventType: extractEventType(message)
+			eventType: extractEventType(message),
 		}
 
 		logs.unshift(entry)
@@ -147,13 +141,7 @@ export const logCollector = {
 		this.log('warn', message, service, context, traceId)
 	},
 
-	error(
-		message: string,
-		service: string,
-		error?: any,
-		context?: Record<string, any>,
-		traceId?: string
-	) {
+	error(message: string, service: string, error?: any, context?: Record<string, any>, traceId?: string) {
 		const ctx = { ...context }
 		if (error instanceof Error) {
 			ctx.error = error.message
@@ -177,22 +165,23 @@ export const logCollector = {
 		let filtered = [...logs]
 
 		if (filter?.level) {
-			filtered = filtered.filter(log => log.level === filter.level)
+			filtered = filtered.filter((log) => log.level === filter.level)
 		}
 
 		if (filter?.service) {
-			filtered = filtered.filter(log => log.service === filter.service)
+			filtered = filtered.filter((log) => log.service === filter.service)
 		}
 
 		if (filter?.eventType) {
-			filtered = filtered.filter(log => log.eventType === filter.eventType)
+			filtered = filtered.filter((log) => log.eventType === filter.eventType)
 		}
 
 		if (filter?.search) {
 			const search = filter.search.toLowerCase()
-			filtered = filtered.filter(log =>
-				log.message.toLowerCase().includes(search) ||
-				(log.context ? JSON.stringify(log.context).toLowerCase().includes(search) : false)
+			filtered = filtered.filter(
+				(log) =>
+					log.message.toLowerCase().includes(search) ||
+					(log.context ? JSON.stringify(log.context).toLowerCase().includes(search) : false),
 			)
 		}
 
@@ -202,7 +191,7 @@ export const logCollector = {
 
 	clear() {
 		logs.length = 0
-	}
+	},
 }
 
 // ============================================================================
@@ -228,7 +217,7 @@ export const errorTracker = {
 				service,
 				context,
 				count: 1,
-				lastSeen: new Date()
+				lastSeen: new Date(),
 			}
 
 			if (error instanceof Error) {
@@ -254,7 +243,7 @@ export const errorTracker = {
 		let filtered = Array.from(errors.values())
 
 		if (filter?.service) {
-			filtered = filtered.filter(err => err.service === filter.service)
+			filtered = filtered.filter((err) => err.service === filter.service)
 		}
 
 		// Sort by last seen (most recent first)
@@ -266,7 +255,7 @@ export const errorTracker = {
 
 	clear() {
 		errors.clear()
-	}
+	},
 }
 
 // ============================================================================
@@ -274,20 +263,14 @@ export const errorTracker = {
 // ============================================================================
 
 export const metricsCollector = {
-	recordRequest(
-		path: string,
-		method: string,
-		statusCode: number,
-		duration: number,
-		service: string
-	) {
+	recordRequest(path: string, method: string, statusCode: number, duration: number, service: string) {
 		const entry: MetricEntry = {
 			timestamp: new Date(),
 			path,
 			method,
 			statusCode,
 			duration,
-			service
+			service,
 		}
 
 		metrics.unshift(entry)
@@ -305,12 +288,12 @@ export const metricsCollector = {
 		let filtered = [...metrics]
 
 		if (filter?.service) {
-			filtered = filtered.filter(m => m.service === filter.service)
+			filtered = filtered.filter((m) => m.service === filter.service)
 		}
 
 		if (filter?.timeWindow) {
 			const cutoff = Date.now() - filter.timeWindow
-			filtered = filtered.filter(m => m.timestamp.getTime() > cutoff)
+			filtered = filtered.filter((m) => m.timestamp.getTime() > cutoff)
 		}
 
 		return filtered
@@ -327,13 +310,13 @@ export const metricsCollector = {
 				p95Duration: 0,
 				p99Duration: 0,
 				errorRate: 0,
-				requestsPerMinute: 0
+				requestsPerMinute: 0,
 			}
 		}
 
-		const durations = filtered.map(m => m.duration).sort((a, b) => a - b)
+		const durations = filtered.map((m) => m.duration).sort((a, b) => a - b)
 		const totalDuration = durations.reduce((sum, d) => sum + d, 0)
-		const errors = filtered.filter(m => m.statusCode >= 400).length
+		const errors = filtered.filter((m) => m.statusCode >= 400).length
 
 		const p50 = durations[Math.floor(durations.length * 0.5)]
 		const p95 = durations[Math.floor(durations.length * 0.95)]
@@ -348,13 +331,13 @@ export const metricsCollector = {
 			p95Duration: Math.round(p95 ?? 0),
 			p99Duration: Math.round(p99 ?? 0),
 			errorRate: (errors / filtered.length) * 100,
-			requestsPerMinute: Math.round(filtered.length / timeWindowMinutes)
+			requestsPerMinute: Math.round(filtered.length / timeWindowMinutes),
 		}
 	},
 
 	clear() {
 		metrics.length = 0
-	}
+	},
 }
 
 // ============================================================================
@@ -366,13 +349,10 @@ export const metricsCollector = {
  */
 export function createLogger(service: string) {
 	return {
-		info: (message: string, context?: Record<string, any>) =>
-			logCollector.info(message, service, context),
-		warn: (message: string, context?: Record<string, any>) =>
-			logCollector.warn(message, service, context),
+		info: (message: string, context?: Record<string, any>) => logCollector.info(message, service, context),
+		warn: (message: string, context?: Record<string, any>) => logCollector.warn(message, service, context),
 		error: (message: string, error?: any, context?: Record<string, any>) =>
 			logCollector.error(message, service, error, context),
-		debug: (message: string, context?: Record<string, any>) =>
-			logCollector.debug(message, service, context)
+		debug: (message: string, context?: Record<string, any>) => logCollector.debug(message, service, context),
 	}
 }

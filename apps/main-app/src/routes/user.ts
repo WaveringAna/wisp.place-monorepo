@@ -1,10 +1,17 @@
-import { Elysia, t } from 'elysia'
-import { requireAuth } from '../lib/wisp-auth'
-import { NodeOAuthClient } from '@atproto/oauth-client-node'
-import { getSitesByDid, getDomainByDid, getCustomDomainsByDid, getWispDomainInfo, getDomainsBySite, getAllWispDomains, isSupporter } from '../lib/db'
-import { syncSitesFromPDS } from '../lib/sync-sites'
-import { createLogger } from '@wispplace/observability'
+import type { NodeOAuthClient } from '@atproto/oauth-client-node'
 import { getHandleForDid } from '@wispplace/atproto-utils'
+import { createLogger } from '@wispplace/observability'
+import { Elysia } from 'elysia'
+import {
+	getAllWispDomains,
+	getCustomDomainsByDid,
+	getDomainByDid,
+	getDomainsBySite,
+	getSitesByDid,
+	isSupporter,
+} from '../lib/db'
+import { syncSitesFromPDS } from '../lib/sync-sites'
+import { requireAuth } from '../lib/wisp-auth'
 
 const logger = createLogger('main-app')
 
@@ -13,8 +20,8 @@ export const userRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		prefix: '/api/user',
 		cookie: {
 			secrets: cookieSecret,
-			sign: ['did']
-		}
+			sign: ['did'],
+		},
 	})
 		.derive(async ({ cookie }) => {
 			const auth = await requireAuth(client, cookie)
@@ -37,7 +44,7 @@ export const userRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 					hasSites: sites.length > 0,
 					hasDomain: !!domain,
 					domain: domain || null,
-					sitesCount: sites.length
+					sitesCount: sites.length,
 				}
 			} catch (err) {
 				logger.error('[User] Status error', err)
@@ -67,7 +74,7 @@ export const userRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				const response = {
 					did: auth.did,
 					handle,
-					isSupporter: supporter
+					isSupporter: supporter,
 				}
 				logger.debug('[User] Returning info', response)
 				return response
@@ -102,11 +109,11 @@ export const userRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				const customDomains = await getCustomDomainsByDid(auth.did)
 
 				return {
-					wispDomains: wispDomains.map(d => ({
+					wispDomains: wispDomains.map((d) => ({
 						domain: d.domain,
-						rkey: d.rkey || null
+						rkey: d.rkey || null,
 					})),
-					customDomains
+					customDomains,
 				}
 			} catch (err) {
 				logger.error('[User] Domains error', err)
@@ -125,7 +132,7 @@ export const userRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				return {
 					success: true,
 					synced: result.synced,
-					errors: result.errors
+					errors: result.errors,
 				}
 			} catch (err) {
 				logger.error('[User] Sync error', err)
@@ -143,7 +150,7 @@ export const userRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 
 				return {
 					rkey,
-					domains
+					domains,
 				}
 			} catch (err) {
 				logger.error('[User] Site domains error', err)

@@ -1,13 +1,7 @@
-import {
-	Card,
-	CardContent,
-	CardDescription,
-	CardHeader,
-	CardTitle
-} from '@public/components/ui/card'
+import { Card, CardContent, CardHeader } from '@public/components/ui/card'
 
 // Shimmer animation for skeleton loading
-const Shimmer = () => (
+const _Shimmer = () => (
 	<div className="animate-pulse">
 		<div className="h-4 bg-muted rounded w-3/4 mb-2"></div>
 		<div className="h-4 bg-muted rounded w-1/2"></div>

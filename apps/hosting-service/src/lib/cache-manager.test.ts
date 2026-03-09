@@ -1,12 +1,12 @@
-import { describe, test, expect } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import { CacheManager } from './cache-manager'
 
 type TestNS = 'ttl' | 'lru' | 'sized' | 'combo'
 
 function createTestCache() {
 	return new CacheManager<TestNS>({
-		ttl:   { ttl: 100, maxEntries: 100 },
-		lru:   { maxEntries: 3 },
+		ttl: { ttl: 100, maxEntries: 100 },
+		lru: { maxEntries: 3 },
 		sized: { maxEntries: 100, maxSize: 300, estimateSize: (v) => (v as string).length },
 		combo: { ttl: 100, maxEntries: 3, maxSize: 500, estimateSize: (v) => (v as string).length },
 	})
@@ -129,7 +129,10 @@ describe('CacheManager', () => {
 		test('calls fetcher on cache miss', async () => {
 			const c = createTestCache()
 			let called = 0
-			const val = await c.getOrFetch('lru', 'k', () => { called++; return 'fetched' })
+			const val = await c.getOrFetch('lru', 'k', () => {
+				called++
+				return 'fetched'
+			})
 			expect(val).toBe('fetched')
 			expect(called).toBe(1)
 		})
@@ -138,7 +141,10 @@ describe('CacheManager', () => {
 			const c = createTestCache()
 			c.set('lru', 'k', 'cached')
 			let called = 0
-			const val = await c.getOrFetch('lru', 'k', () => { called++; return 'fetched' })
+			const val = await c.getOrFetch('lru', 'k', () => {
+				called++
+				return 'fetched'
+			})
 			expect(val).toBe('cached')
 			expect(called).toBe(0)
 		})

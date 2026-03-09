@@ -1,31 +1,31 @@
-import { createLogger } from '@wispplace/observability';
-import { config } from './config';
-import { startFirehose, stopFirehose, getFirehoseHealth } from './lib/firehose';
-import { closeDatabase, db } from './lib/db';
-import { closeRedisPublisher } from './lib/redis';
+import { createLogger } from '@wispplace/observability'
+import { config } from './config'
+import { closeDatabase, db } from './lib/db'
+import { getFirehoseHealth, startFirehose, stopFirehose } from './lib/firehose'
+import { closeRedisPublisher } from './lib/redis'
 
-const logger = createLogger('webhook-service');
-
-Bun.serve({
-  port: 3004,
-  routes: {
-    '/': {
-      POST: async (req) => {
-        const body = await req.json();
-        console.log('[webhook-receiver]', JSON.stringify(body, null, 2));
-        return new Response('ok');
-      },
-    },
-  },
-  fetch: () => new Response('Not Found', { status: 404 }),
-});
+const logger = createLogger('webhook-service')
 
 Bun.serve({
-  port: 3005,
-  routes: {
-    '/': async () => {
-      const rows = await db`SELECT k, v, updated_at FROM webhook_records ORDER BY updated_at DESC`;
-      const html = `<!DOCTYPE html>
+	port: 3004,
+	routes: {
+		'/': {
+			POST: async (req) => {
+				const body = await req.json()
+				console.log('[webhook-receiver]', JSON.stringify(body, null, 2))
+				return new Response('ok')
+			},
+		},
+	},
+	fetch: () => new Response('Not Found', { status: 404 }),
+})
+
+Bun.serve({
+	port: 3005,
+	routes: {
+		'/': async () => {
+			const rows = await db`SELECT k, v, updated_at FROM webhook_records ORDER BY updated_at DESC`
+			const html = `<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><title>webhook_records</title>
 <style>
@@ -43,12 +43,13 @@ Bun.serve({
   <tr><th>k</th><th>v</th><th>updated_at</th></tr>
   ${rows.map((r: any) => `<tr><td>${r.k}</td><td><pre>${JSON.stringify(r.v, null, 2)}</pre></td><td>${new Date(Number(r.updated_at) * 1000).toISOString()}</td></tr>`).join('')}
 </table>
-</body></html>`;
-      return new Response(html, { headers: { 'Content-Type': 'text/html' } });
-    },
-    '/webhooks': async () => {
-      const rows = await db`SELECT did, rkey, url, scope_aturi, enabled, created_at, updated_at FROM webhooks ORDER BY updated_at DESC`;
-      const html = `<!DOCTYPE html>
+</body></html>`
+			return new Response(html, { headers: { 'Content-Type': 'text/html' } })
+		},
+		'/webhooks': async () => {
+			const rows =
+				await db`SELECT did, rkey, url, scope_aturi, enabled, created_at, updated_at FROM webhooks ORDER BY updated_at DESC`
+			const html = `<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><title>webhooks</title>
 <style>
@@ -65,52 +66,51 @@ Bun.serve({
   <tr><th>did</th><th>rkey</th><th>url</th><th>scope_aturi</th><th>enabled</th><th>updated_at</th></tr>
   ${rows.map((r: any) => `<tr><td>${r.did}</td><td>${r.rkey}</td><td>${r.url}</td><td>${r.scope_aturi}</td><td>${r.enabled}</td><td>${new Date(Number(r.updated_at) * 1000).toISOString()}</td></tr>`).join('')}
 </table>
-</body></html>`;
-      return new Response(html, { headers: { 'Content-Type': 'text/html' } });
-    },
-
-  },
-  fetch: () => new Response('Not Found', { status: 404 }),
-});
+</body></html>`
+			return new Response(html, { headers: { 'Content-Type': 'text/html' } })
+		},
+	},
+	fetch: () => new Response('Not Found', { status: 404 }),
+})
 
 Bun.serve({
-  port: config.healthPort,
-  routes: {
-    '/health': () => {
-      const firehose = getFirehoseHealth();
-      return Response.json({
-        status: firehose.healthy ? 'healthy' : 'degraded',
-        firehose,
-      });
-    },
-  },
-  fetch: () => new Response('Not Found', { status: 404 }),
-});
+	port: config.healthPort,
+	routes: {
+		'/health': () => {
+			const firehose = getFirehoseHealth()
+			return Response.json({
+				status: firehose.healthy ? 'healthy' : 'degraded',
+				firehose,
+			})
+		},
+	},
+	fetch: () => new Response('Not Found', { status: 404 }),
+})
 
-let isShuttingDown = false;
+let isShuttingDown = false
 
 async function shutdown(signal: string) {
-  if (isShuttingDown) return;
-  isShuttingDown = true;
-  logger.info(`Received ${signal}, shutting down...`);
-  stopFirehose();
-  closeRedisPublisher();
-  await closeDatabase();
-  process.exit(0);
+	if (isShuttingDown) return
+	isShuttingDown = true
+	logger.info(`Received ${signal}, shutting down...`)
+	stopFirehose()
+	closeRedisPublisher()
+	await closeDatabase()
+	process.exit(0)
 }
 
-process.on('SIGINT', () => shutdown('SIGINT'));
-process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'))
+process.on('SIGTERM', () => shutdown('SIGTERM'))
 
 async function main() {
-  logger.info('Starting webhook-service');
-  logger.info(`Firehose: ${config.firehoseService}`);
-  logger.info(`Health endpoint: http://localhost:${config.healthPort}/health`);
+	logger.info('Starting webhook-service')
+	logger.info(`Firehose: ${config.firehoseService}`)
+	logger.info(`Health endpoint: http://localhost:${config.healthPort}/health`)
 
-  startFirehose();
+	startFirehose()
 }
 
 main().catch((err) => {
-  logger.error('Fatal error', err);
-  process.exit(1);
-});
+	logger.error('Fatal error', err)
+	process.exit(1)
+})

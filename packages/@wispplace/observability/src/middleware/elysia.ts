@@ -1,5 +1,5 @@
 import type { Context } from 'elysia'
-import { metricsCollector, logCollector } from '../core'
+import { logCollector, metricsCollector } from '../core'
 
 /**
  * Elysia middleware for observability
@@ -18,7 +18,7 @@ export function observabilityMiddleware(service: string) {
 	return {
 		beforeHandle: ({ request }: Context) => {
 			// Store start time on request object
-			(request as any).__startTime = Date.now()
+			;(request as any).__startTime = Date.now()
 		},
 		afterHandle: ({ request, set }: Context) => {
 			const startTime = (request as any).__startTime || Date.now()
@@ -26,13 +26,7 @@ export function observabilityMiddleware(service: string) {
 			const url = new URL(request.url)
 			const statusCode = normalizeStatus(set.status, 200)
 
-			metricsCollector.recordRequest(
-				url.pathname,
-				request.method,
-				statusCode,
-				duration,
-				service
-			)
+			metricsCollector.recordRequest(url.pathname, request.method, statusCode, duration, service)
 		},
 		onError: (context: any) => {
 			const { request, error, set } = context as Context & { error: Error }
@@ -41,24 +35,13 @@ export function observabilityMiddleware(service: string) {
 			const url = new URL(request.url)
 			const statusCode = normalizeStatus(set.status, 500)
 
-			metricsCollector.recordRequest(
-				url.pathname,
-				request.method,
-				statusCode,
-				duration,
-				service
-			)
+			metricsCollector.recordRequest(url.pathname, request.method, statusCode, duration, service)
 
 			// Don't log 404 errors or expected auth failures
 			const isAuthError = error?.message === 'Authentication required'
 			if (statusCode !== 404 && !isAuthError) {
-				logCollector.error(
-					`Request failed: ${request.method} ${url.pathname}`,
-					service,
-					error,
-					{ statusCode }
-				)
+				logCollector.error(`Request failed: ${request.method} ${url.pathname}`, service, error, { statusCode })
 			}
-		}
+		},
 	}
 }

@@ -78,7 +78,7 @@ export function CodeBlock({ code, language = 'bash', className = '' }: CodeBlock
 		if (isThemeLoaded && codeRef.current && window.Prism) {
 			window.Prism.highlightElement(codeRef.current)
 		}
-	}, [isThemeLoaded, code])
+	}, [isThemeLoaded])
 
 	if (!isThemeLoaded) {
 		return (
@@ -90,15 +90,17 @@ export function CodeBlock({ code, language = 'bash', className = '' }: CodeBlock
 
 	// Map language to Prism language class
 	const languageMap = {
-		'bash': 'language-bash',
-		'yaml': 'language-yaml'
+		bash: 'language-bash',
+		yaml: 'language-yaml',
 	}
 
 	const prismLanguage = languageMap[language] || 'language-bash'
 
 	return (
 		<pre className={`p-4 rounded-lg overflow-x-auto ${className}`}>
-			<code ref={codeRef} className={prismLanguage}>{code.trim()}</code>
+			<code ref={codeRef} className={prismLanguage}>
+				{code.trim()}
+			</code>
 		</pre>
 	)
 }

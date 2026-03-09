@@ -1,8 +1,7 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import clsx from 'clsx'
 import type { PropsWithChildren } from 'react'
 import { useEffect } from 'react'
-
-import { QueryClientProvider, QueryClient } from '@tanstack/react-query'
-import clsx from 'clsx'
 
 import '@public/styles/global.css'
 
@@ -38,14 +37,7 @@ export default function Layout({ children, className }: LayoutProps) {
 
 	return (
 		<QueryClientProvider client={client}>
-			<div
-				className={clsx(
-					'flex flex-col items-center w-full min-h-screen',
-					className
-				)}
-			>
-				{children}
-			</div>
+			<div className={clsx('flex flex-col items-center w-full min-h-screen', className)}>{children}</div>
 		</QueryClientProvider>
 	)
 }

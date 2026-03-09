@@ -10,37 +10,37 @@
  */
 export interface StorageMetadata {
 	/** Original key used to store the data (human-readable) */
-	key: string;
+	key: string
 
 	/** Size of the data in bytes (uncompressed size) */
-	size: number;
+	size: number
 
 	/** Timestamp when the data was first created */
-	createdAt: Date;
+	createdAt: Date
 
 	/** Timestamp when the data was last accessed */
-	lastAccessed: Date;
+	lastAccessed: Date
 
 	/** Number of times this data has been accessed */
-	accessCount: number;
+	accessCount: number
 
 	/** Optional expiration timestamp. Data expires when current time > ttl */
-	ttl?: Date;
+	ttl?: Date
 
 	/** Whether the data is compressed (e.g., with gzip) */
-	compressed: boolean;
+	compressed: boolean
 
 	/** SHA256 checksum of the data for integrity verification */
-	checksum: string;
+	checksum: string
 
 	/** Optional MIME type (e.g., 'text/html', 'application/json') */
-	mimeType?: string;
+	mimeType?: string
 
 	/** Optional encoding (e.g., 'gzip', 'base64') */
-	encoding?: string;
+	encoding?: string
 
 	/** User-defined metadata fields */
-	customMetadata?: Record<string, string>;
+	customMetadata?: Record<string, string>
 }
 
 /**
@@ -51,19 +51,19 @@ export interface StorageMetadata {
  */
 export interface TierStats {
 	/** Total bytes stored in this tier */
-	bytes: number;
+	bytes: number
 
 	/** Total number of items stored in this tier */
-	items: number;
+	items: number
 
 	/** Number of cache hits (only tracked if tier implements hit tracking) */
-	hits?: number;
+	hits?: number
 
 	/** Number of cache misses (only tracked if tier implements miss tracking) */
-	misses?: number;
+	misses?: number
 
 	/** Number of evictions due to size/count limits (only tracked if tier implements eviction) */
-	evictions?: number;
+	evictions?: number
 }
 
 /**
@@ -74,22 +74,22 @@ export interface TierStats {
  */
 export interface AllTierStats {
 	/** Statistics for hot tier (if configured) */
-	hot?: TierStats;
+	hot?: TierStats
 
 	/** Statistics for warm tier (if configured) */
-	warm?: TierStats;
+	warm?: TierStats
 
 	/** Statistics for cold tier (always present) */
-	cold: TierStats;
+	cold: TierStats
 
 	/** Total hits across all tiers */
-	totalHits: number;
+	totalHits: number
 
 	/** Total misses across all tiers */
-	totalMisses: number;
+	totalMisses: number
 
 	/** Hit rate as a percentage (0-1) */
-	hitRate: number;
+	hitRate: number
 }
 
 /**
@@ -119,9 +119,9 @@ export interface AllTierStats {
  */
 export interface TierGetResult {
 	/** The retrieved data */
-	data: Uint8Array;
+	data: Uint8Array
 	/** Metadata associated with the data */
-	metadata: StorageMetadata;
+	metadata: StorageMetadata
 }
 
 /**
@@ -129,9 +129,9 @@ export interface TierGetResult {
  */
 export interface TierStreamResult {
 	/** Readable stream of the data */
-	stream: NodeJS.ReadableStream;
+	stream: NodeJS.ReadableStream
 	/** Metadata associated with the data */
-	metadata: StorageMetadata;
+	metadata: StorageMetadata
 }
 
 /**
@@ -142,11 +142,11 @@ export interface TierStreamResult {
  */
 export interface StreamResult {
 	/** Readable stream of the data */
-	stream: NodeJS.ReadableStream;
+	stream: NodeJS.ReadableStream
 	/** Metadata associated with the data */
-	metadata: StorageMetadata;
+	metadata: StorageMetadata
 	/** Which tier the data was served from */
-	source: 'hot' | 'warm' | 'cold';
+	source: 'hot' | 'warm' | 'cold'
 }
 
 /**
@@ -162,7 +162,7 @@ export interface StreamSetOptions extends SetOptions {
 	 * - Metadata creation before streaming starts
 	 * - Capacity checks and eviction in tiers with size limits
 	 */
-	size: number;
+	size: number
 
 	/**
 	 * Pre-computed checksum of the data.
@@ -172,12 +172,12 @@ export interface StreamSetOptions extends SetOptions {
 	 * Providing it upfront is useful when the checksum is already known
 	 * (e.g., from a previous upload or external source).
 	 */
-	checksum?: string;
+	checksum?: string
 
 	/**
 	 * MIME type of the content.
 	 */
-	mimeType?: string;
+	mimeType?: string
 }
 
 export interface StorageTier {
@@ -187,7 +187,7 @@ export interface StorageTier {
 	 * @param key - The key to retrieve
 	 * @returns The data as a Uint8Array, or null if not found
 	 */
-	get(key: string): Promise<Uint8Array | null>;
+	get(key: string): Promise<Uint8Array | null>
 
 	/**
 	 * Retrieve data and metadata together in a single operation.
@@ -199,7 +199,7 @@ export interface StorageTier {
 	 * This is more efficient than calling get() and getMetadata() separately,
 	 * especially for disk and network-based tiers.
 	 */
-	getWithMetadata?(key: string): Promise<TierGetResult | null>;
+	getWithMetadata?(key: string): Promise<TierGetResult | null>
 
 	/**
 	 * Retrieve data as a readable stream with metadata.
@@ -211,7 +211,7 @@ export interface StorageTier {
 	 * Use this for large files to avoid loading entire content into memory.
 	 * The stream must be consumed or destroyed by the caller.
 	 */
-	getStream?(key: string): Promise<TierStreamResult | null>;
+	getStream?(key: string): Promise<TierStreamResult | null>
 
 	/**
 	 * Store data from a readable stream.
@@ -224,11 +224,7 @@ export interface StorageTier {
 	 * Use this for large files to avoid loading entire content into memory.
 	 * The stream will be fully consumed by this operation.
 	 */
-	setStream?(
-		key: string,
-		stream: NodeJS.ReadableStream,
-		metadata: StorageMetadata,
-	): Promise<void>;
+	setStream?(key: string, stream: NodeJS.ReadableStream, metadata: StorageMetadata): Promise<void>
 
 	/**
 	 * Store data with associated metadata.
@@ -240,7 +236,7 @@ export interface StorageTier {
 	 * @remarks
 	 * If the key already exists, it should be overwritten.
 	 */
-	set(key: string, data: Uint8Array, metadata: StorageMetadata): Promise<void>;
+	set(key: string, data: Uint8Array, metadata: StorageMetadata): Promise<void>
 
 	/**
 	 * Delete data for a key.
@@ -250,7 +246,7 @@ export interface StorageTier {
 	 * @remarks
 	 * Should not throw if the key doesn't exist.
 	 */
-	delete(key: string): Promise<void>;
+	delete(key: string): Promise<void>
 
 	/**
 	 * Check if a key exists in this tier.
@@ -258,7 +254,7 @@ export interface StorageTier {
 	 * @param key - The key to check
 	 * @returns true if the key exists, false otherwise
 	 */
-	exists(key: string): Promise<boolean>;
+	exists(key: string): Promise<boolean>
 
 	/**
 	 * List all keys in this tier, optionally filtered by prefix.
@@ -277,7 +273,7 @@ export interface StorageTier {
 	 * }
 	 * ```
 	 */
-	listKeys(prefix?: string): AsyncIterableIterator<string>;
+	listKeys(prefix?: string): AsyncIterableIterator<string>
 
 	/**
 	 * Delete multiple keys in a single operation.
@@ -288,7 +284,7 @@ export interface StorageTier {
 	 * This is more efficient than calling delete() in a loop.
 	 * Implementations should batch deletions where possible.
 	 */
-	deleteMany(keys: string[]): Promise<void>;
+	deleteMany(keys: string[]): Promise<void>
 
 	/**
 	 * Retrieve metadata for a key without fetching the data.
@@ -299,7 +295,7 @@ export interface StorageTier {
 	 * @remarks
 	 * This is useful for checking TTL, access counts, etc. without loading large data.
 	 */
-	getMetadata(key: string): Promise<StorageMetadata | null>;
+	getMetadata(key: string): Promise<StorageMetadata | null>
 
 	/**
 	 * Update metadata for a key without modifying the data.
@@ -310,14 +306,14 @@ export interface StorageTier {
 	 * @remarks
 	 * Useful for updating TTL (via touch()) or access counts.
 	 */
-	setMetadata(key: string, metadata: StorageMetadata): Promise<void>;
+	setMetadata(key: string, metadata: StorageMetadata): Promise<void>
 
 	/**
 	 * Get statistics about this tier.
 	 *
 	 * @returns Statistics including size, item count, hits, misses, etc.
 	 */
-	getStats(): Promise<TierStats>;
+	getStats(): Promise<TierStats>
 
 	/**
 	 * Clear all data from this tier.
@@ -325,7 +321,7 @@ export interface StorageTier {
 	 * @remarks
 	 * Use with caution! This will delete all data in the tier.
 	 */
-	clear(): Promise<void>;
+	clear(): Promise<void>
 }
 
 /**
@@ -356,7 +352,7 @@ export interface PlacementRule {
 	 * - `**` matches any characters including `/`
 	 * - Exact matches work too: `index.html`
 	 */
-	pattern: string;
+	pattern: string
 
 	/**
 	 * Which tiers to write to for matching keys.
@@ -367,7 +363,7 @@ export interface PlacementRule {
 	 * Use `['warm', 'cold']` for large files.
 	 * Use `['cold']` for archival only.
 	 */
-	tiers: ('hot' | 'warm' | 'cold')[];
+	tiers: ('hot' | 'warm' | 'cold')[]
 }
 
 /**
@@ -387,17 +383,17 @@ export interface TieredStorageConfig {
 	/** Storage tier configuration */
 	tiers: {
 		/** Optional hot tier - fastest, smallest capacity (e.g., in-memory, Redis) */
-		hot?: StorageTier;
+		hot?: StorageTier
 
 		/** Optional warm tier - medium speed, medium capacity (e.g., disk, SQLite, Postgres) */
-		warm?: StorageTier;
+		warm?: StorageTier
 
 		/** Required cold tier - slowest, largest capacity (e.g., S3, R2, object storage) */
-		cold: StorageTier;
-	};
+		cold: StorageTier
+	}
 
 	/** Rules for automatic tier placement based on key patterns. First match wins. */
-	placementRules?: PlacementRule[];
+	placementRules?: PlacementRule[]
 
 	/**
 	 * Whether to automatically compress data before storing.
@@ -408,7 +404,7 @@ export interface TieredStorageConfig {
 	 * Uses gzip compression. Compression is transparent - data is automatically
 	 * decompressed on retrieval. The `compressed` flag in metadata indicates compression state.
 	 */
-	compression?: boolean;
+	compression?: boolean
 
 	/**
 	 * Default TTL (time-to-live) in milliseconds.
@@ -417,7 +413,7 @@ export interface TieredStorageConfig {
 	 * Data will expire after this duration. Can be overridden per-key via SetOptions.
 	 * If not set, data never expires.
 	 */
-	defaultTTL?: number;
+	defaultTTL?: number
 
 	/**
 	 * Strategy for promoting data to upper tiers on cache miss.
@@ -431,7 +427,7 @@ export interface TieredStorageConfig {
 	 * Eager promotion increases hot tier hit rate but adds write overhead.
 	 * Lazy promotion reduces writes but may serve from lower tiers more often.
 	 */
-	promotionStrategy?: 'eager' | 'lazy';
+	promotionStrategy?: 'eager' | 'lazy'
 
 	/**
 	 * Custom serialization/deserialization functions.
@@ -444,11 +440,11 @@ export interface TieredStorageConfig {
 	 */
 	serialization?: {
 		/** Convert data to Uint8Array for storage */
-		serialize: (data: unknown) => Promise<Uint8Array>;
+		serialize: (data: unknown) => Promise<Uint8Array>
 
 		/** Convert Uint8Array back to original data */
-		deserialize: (data: Uint8Array) => Promise<unknown>;
-	};
+		deserialize: (data: Uint8Array) => Promise<unknown>
+	}
 }
 
 /**
@@ -465,7 +461,7 @@ export interface SetOptions {
 	 * Overrides the default TTL from TieredStorageConfig.
 	 * Data will expire after this duration from the current time.
 	 */
-	ttl?: number;
+	ttl?: number
 
 	/**
 	 * Custom metadata to attach to this key.
@@ -474,7 +470,7 @@ export interface SetOptions {
 	 * Merged with system-generated metadata (size, checksum, timestamps).
 	 * Useful for storing application-specific information like content-type, encoding, etc.
 	 */
-	metadata?: Record<string, string>;
+	metadata?: Record<string, string>
 
 	/**
 	 * Skip writing to specific tiers.
@@ -496,7 +492,7 @@ export interface SetOptions {
 	 * await storage.set('index.html', htmlData); // No skipping
 	 * ```
 	 */
-	skipTiers?: ('hot' | 'warm')[];
+	skipTiers?: ('hot' | 'warm')[]
 
 	/**
 	 * Write only to specific tiers.
@@ -515,7 +511,7 @@ export interface SetOptions {
 	 * await storage.set('large-file.mp4', videoData, { onlyTiers: ['warm', 'cold'] });
 	 * ```
 	 */
-	onlyTiers?: ('hot' | 'warm' | 'cold')[];
+	onlyTiers?: ('hot' | 'warm' | 'cold')[]
 }
 
 /**
@@ -528,13 +524,13 @@ export interface SetOptions {
  */
 export interface StorageResult<T> {
 	/** The retrieved data */
-	data: T;
+	data: T
 
 	/** Metadata associated with the data */
-	metadata: StorageMetadata;
+	metadata: StorageMetadata
 
 	/** Which tier the data was served from */
-	source: 'hot' | 'warm' | 'cold';
+	source: 'hot' | 'warm' | 'cold'
 }
 
 /**
@@ -545,13 +541,13 @@ export interface StorageResult<T> {
  */
 export interface SetResult {
 	/** The key that was set */
-	key: string;
+	key: string
 
 	/** Metadata that was stored with the data */
-	metadata: StorageMetadata;
+	metadata: StorageMetadata
 
 	/** Which tiers received the data */
-	tiersWritten: ('hot' | 'warm' | 'cold')[];
+	tiersWritten: ('hot' | 'warm' | 'cold')[]
 }
 
 /**
@@ -563,17 +559,17 @@ export interface SetResult {
  */
 export interface StorageSnapshot {
 	/** Snapshot format version (for compatibility) */
-	version: number;
+	version: number
 
 	/** When this snapshot was created */
-	exportedAt: Date;
+	exportedAt: Date
 
 	/** All keys present in cold tier (source of truth) */
-	keys: string[];
+	keys: string[]
 
 	/** Metadata for each key */
-	metadata: Record<string, StorageMetadata>;
+	metadata: Record<string, StorageMetadata>
 
 	/** Statistics at time of export */
-	stats: AllTierStats;
+	stats: AllTierStats
 }

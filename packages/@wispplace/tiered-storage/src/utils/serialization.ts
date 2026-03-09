@@ -19,8 +19,8 @@
  * ```
  */
 export async function defaultSerialize(data: unknown): Promise<Uint8Array> {
-	const json = JSON.stringify(data);
-	return new TextEncoder().encode(json);
+	const json = JSON.stringify(data)
+	return new TextEncoder().encode(json)
 }
 
 /**
@@ -41,6 +41,6 @@ export async function defaultSerialize(data: unknown): Promise<Uint8Array> {
  * ```
  */
 export async function defaultDeserialize(data: Uint8Array): Promise<unknown> {
-	const json = new TextDecoder().decode(data);
-	return JSON.parse(json);
+	const json = new TextDecoder().decode(data)
+	return JSON.parse(json)
 }

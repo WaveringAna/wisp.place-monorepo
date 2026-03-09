@@ -1,10 +1,10 @@
-import { Elysia, t } from 'elysia'
-import { requireAuth } from '../lib/wisp-auth'
-import { NodeOAuthClient } from '@atproto/oauth-client-node'
 import { Agent } from '@atproto/api'
-import { deleteSite } from '../lib/db'
-import { createLogger } from '@wispplace/observability'
+import type { NodeOAuthClient } from '@atproto/oauth-client-node'
 import { extractSubfsUris } from '@wispplace/atproto-utils'
+import { createLogger } from '@wispplace/observability'
+import { Elysia } from 'elysia'
+import { deleteSite } from '../lib/db'
+import { requireAuth } from '../lib/wisp-auth'
 
 const logger = createLogger('main-app')
 
@@ -13,8 +13,8 @@ export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		prefix: '/api/site',
 		cookie: {
 			secrets: cookieSecret,
-			sign: ['did']
-		}
+			sign: ['did'],
+		},
 	})
 		.derive(async ({ cookie }) => {
 			const auth = await requireAuth(client, cookie)
@@ -32,7 +32,7 @@ export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				set.status = 400
 				return {
 					success: false,
-					error: 'Site rkey is required'
+					error: 'Site rkey is required',
 				}
 			}
 
@@ -41,26 +41,30 @@ export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				const agent = new Agent((url, init) => auth.session.fetchHandler(url, init))
 
 				// First, fetch the site record to find any subfs references
-				let subfsUris: Array<{ uri: string; path: string }> = [];
+				let subfsUris: Array<{ uri: string; path: string }> = []
 				try {
 					const existingRecord = await agent.com.atproto.repo.getRecord({
 						repo: auth.did,
 						collection: 'place.wisp.fs',
-						rkey: rkey
-					});
+						rkey: rkey,
+					})
 
-					if (existingRecord.data.value && typeof existingRecord.data.value === 'object' && 'root' in existingRecord.data.value) {
-						const manifest = existingRecord.data.value as any;
-						subfsUris = extractSubfsUris(manifest.root);
+					if (
+						existingRecord.data.value &&
+						typeof existingRecord.data.value === 'object' &&
+						'root' in existingRecord.data.value
+					) {
+						const manifest = existingRecord.data.value as any
+						subfsUris = extractSubfsUris(manifest.root)
 
 						if (subfsUris.length > 0) {
-							console.log(`Found ${subfsUris.length} subfs records to delete`);
-							logger.info(`[Site] Found ${subfsUris.length} subfs records associated with ${rkey}`);
+							console.log(`Found ${subfsUris.length} subfs records to delete`)
+							logger.info(`[Site] Found ${subfsUris.length} subfs records associated with ${rkey}`)
 						}
 					}
-				} catch (err) {
+				} catch (_err) {
 					// Record might not exist, continue with deletion
-					console.log('Could not fetch site record for subfs cleanup, continuing...');
+					console.log('Could not fetch site record for subfs cleanup, continuing...')
 				}
 
 				// Delete the main record from AT Protocol
@@ -68,7 +72,7 @@ export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 					await agent.com.atproto.repo.deleteRecord({
 						repo: auth.did,
 						collection: 'place.wisp.fs',
-						rkey: rkey
+						rkey: rkey,
 					})
 					logger.info(`[Site] Deleted site ${rkey} from PDS for ${auth.did}`)
 				} catch (err) {
@@ -78,32 +82,32 @@ export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 
 				// Delete associated subfs records
 				if (subfsUris.length > 0) {
-					console.log(`Deleting ${subfsUris.length} associated subfs records...`);
+					console.log(`Deleting ${subfsUris.length} associated subfs records...`)
 
 					await Promise.all(
 						subfsUris.map(async ({ uri }) => {
 							try {
 								// Parse URI: at://did/collection/rkey
-								const parts = uri.replace('at://', '').split('/');
-								const subRkey = parts[2];
+								const parts = uri.replace('at://', '').split('/')
+								const subRkey = parts[2]
 
 								await agent.com.atproto.repo.deleteRecord({
 									repo: auth.did,
 									collection: 'place.wisp.subfs',
-									rkey: subRkey
-								});
+									rkey: subRkey,
+								})
 
-								console.log(`  🗑️  Deleted subfs: ${uri}`);
-								logger.info(`[Site] Deleted subfs record: ${uri}`);
+								console.log(`  🗑️  Deleted subfs: ${uri}`)
+								logger.info(`[Site] Deleted subfs record: ${uri}`)
 							} catch (err: any) {
 								// Log but don't fail if subfs deletion fails
-								console.warn(`Failed to delete subfs ${uri}:`, err?.message);
-								logger.warn(`[Site] Failed to delete subfs ${uri}`, err);
+								console.warn(`Failed to delete subfs ${uri}:`, err?.message)
+								logger.warn(`[Site] Failed to delete subfs ${uri}`, err)
 							}
-						})
-					);
+						}),
+					)
 
-					logger.info(`[Site] Deleted ${subfsUris.length} subfs records for ${rkey}`);
+					logger.info(`[Site] Deleted ${subfsUris.length} subfs records for ${rkey}`)
 				}
 
 				// Delete from database
@@ -116,14 +120,14 @@ export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 
 				return {
 					success: true,
-					message: 'Site deleted successfully'
+					message: 'Site deleted successfully',
 				}
 			} catch (err) {
 				logger.error('[Site] Delete error', err)
 				set.status = 500
 				return {
 					success: false,
-					error: err instanceof Error ? err.message : 'Failed to delete site'
+					error: err instanceof Error ? err.message : 'Failed to delete site',
 				}
 			}
 		})
@@ -139,7 +143,7 @@ export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				set.status = 400
 				return {
 					success: false,
-					error: 'Site rkey is required'
+					error: 'Site rkey is required',
 				}
 			}
 
@@ -152,7 +156,7 @@ export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 					const record = await agent.com.atproto.repo.getRecord({
 						repo: auth.did,
 						collection: 'place.wisp.settings',
-						rkey: rkey
+						rkey: rkey,
 					})
 
 					if (record.data.value) {
@@ -164,7 +168,7 @@ export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 						return {
 							indexFiles: ['index.html'],
 							cleanUrls: false,
-							directoryListing: false
+							directoryListing: false,
 						}
 					}
 					throw err
@@ -174,14 +178,14 @@ export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				return {
 					indexFiles: ['index.html'],
 					cleanUrls: false,
-					directoryListing: false
+					directoryListing: false,
 				}
 			} catch (err) {
 				logger.error('[Site] Get settings error', err)
 				set.status = 500
 				return {
 					success: false,
-					error: err instanceof Error ? err.message : 'Failed to fetch settings'
+					error: err instanceof Error ? err.message : 'Failed to fetch settings',
 				}
 			}
 		})
@@ -197,7 +201,7 @@ export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				set.status = 400
 				return {
 					success: false,
-					error: 'Site rkey is required'
+					error: 'Site rkey is required',
 				}
 			}
 
@@ -205,17 +209,13 @@ export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 			const settings = body as any
 
 			// Ensure mutual exclusivity of routing modes
-			const modes = [
-				settings.spaMode,
-				settings.directoryListing,
-				settings.custom404
-			].filter(Boolean)
+			const modes = [settings.spaMode, settings.directoryListing, settings.custom404].filter(Boolean)
 
 			if (modes.length > 1) {
 				set.status = 400
 				return {
 					success: false,
-					error: 'Only one of spaMode, directoryListing, or custom404 can be enabled'
+					error: 'Only one of spaMode, directoryListing, or custom404 can be enabled',
 				}
 			}
 
@@ -230,8 +230,8 @@ export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 					rkey: rkey,
 					record: {
 						$type: 'place.wisp.settings',
-						...settings
-					}
+						...settings,
+					},
 				})
 
 				logger.info(`[Site] Saved settings for ${rkey} (${auth.did})`)
@@ -239,14 +239,14 @@ export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				return {
 					success: true,
 					uri: record.data.uri,
-					cid: record.data.cid
+					cid: record.data.cid,
 				}
 			} catch (err) {
 				logger.error('[Site] Save settings error', err)
 				set.status = 500
 				return {
 					success: false,
-					error: err instanceof Error ? err.message : 'Failed to save settings'
+					error: err instanceof Error ? err.message : 'Failed to save settings',
 				}
 			}
 		})

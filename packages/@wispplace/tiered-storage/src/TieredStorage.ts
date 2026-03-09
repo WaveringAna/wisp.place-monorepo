@@ -1,26 +1,21 @@
+import { createHash } from 'node:crypto'
+import { PassThrough, type Readable } from 'node:stream'
 import type {
-	TieredStorageConfig,
+	AllTierStats,
 	SetOptions,
-	StorageResult,
 	SetResult,
 	StorageMetadata,
-	StorageTier,
-	AllTierStats,
+	StorageResult,
 	StorageSnapshot,
+	StorageTier,
 	StreamResult,
 	StreamSetOptions,
-} from './types/index';
-import {
-	compress,
-	decompress,
-	createCompressStream,
-	createDecompressStream,
-} from './utils/compression.js';
-import { defaultSerialize, defaultDeserialize } from './utils/serialization.js';
-import { calculateChecksum } from './utils/checksum.js';
-import { matchGlob } from './utils/glob.js';
-import { PassThrough, type Readable } from 'node:stream';
-import { createHash } from 'node:crypto';
+	TieredStorageConfig,
+} from './types/index'
+import { calculateChecksum } from './utils/checksum.js'
+import { compress, createCompressStream, createDecompressStream, decompress } from './utils/compression.js'
+import { matchGlob } from './utils/glob.js'
+import { defaultDeserialize, defaultSerialize } from './utils/serialization.js'
 
 /**
  * Main orchestrator for tiered storage system.
@@ -60,16 +55,16 @@ import { createHash } from 'node:crypto';
  * ```
  */
 export class TieredStorage<T = unknown> {
-	private serialize: (data: unknown) => Promise<Uint8Array>;
-	private deserialize: (data: Uint8Array) => Promise<unknown>;
+	private serialize: (data: unknown) => Promise<Uint8Array>
+	private deserialize: (data: Uint8Array) => Promise<unknown>
 
 	constructor(private config: TieredStorageConfig) {
 		if (!config.tiers.cold) {
-			throw new Error('Cold tier is required');
+			throw new Error('Cold tier is required')
 		}
 
-		this.serialize = config.serialization?.serialize ?? defaultSerialize;
-		this.deserialize = config.serialization?.deserialize ?? defaultDeserialize;
+		this.serialize = config.serialization?.serialize ?? defaultSerialize
+		this.deserialize = config.serialization?.deserialize ?? defaultDeserialize
 	}
 
 	/**
@@ -85,8 +80,8 @@ export class TieredStorage<T = unknown> {
 	 * Returns null if key doesn't exist or has expired (TTL).
 	 */
 	async get(key: string): Promise<T | null> {
-		const result = await this.getWithMetadata(key);
-		return result ? result.data : null;
+		const result = await this.getWithMetadata(key)
+		return result ? result.data : null
 	}
 
 	/**
@@ -104,75 +99,75 @@ export class TieredStorage<T = unknown> {
 	async getWithMetadata(key: string): Promise<StorageResult<T> | null> {
 		// 1. Check hot tier first
 		if (this.config.tiers.hot) {
-			const result = await this.getFromTier(this.config.tiers.hot, key);
+			const result = await this.getFromTier(this.config.tiers.hot, key)
 			if (result) {
 				if (this.isExpired(result.metadata)) {
-					await this.delete(key);
-					return null;
+					await this.delete(key)
+					return null
 				}
 				// Fire-and-forget access stats update (non-critical)
-				void this.updateAccessStats(key, 'hot');
+				void this.updateAccessStats(key, 'hot')
 				return {
 					data: (await this.deserializeData(result.data)) as T,
 					metadata: result.metadata,
 					source: 'hot',
-				};
+				}
 			}
 		}
 
 		// 2. Check warm tier
 		if (this.config.tiers.warm) {
-			const result = await this.getFromTier(this.config.tiers.warm, key);
+			const result = await this.getFromTier(this.config.tiers.warm, key)
 			if (result) {
 				if (this.isExpired(result.metadata)) {
-					await this.delete(key);
-					return null;
+					await this.delete(key)
+					return null
 				}
 				// Eager promotion to hot tier (awaited - guaranteed to complete)
 				if (this.config.tiers.hot && this.config.promotionStrategy === 'eager') {
-					await this.config.tiers.hot.set(key, result.data, result.metadata);
+					await this.config.tiers.hot.set(key, result.data, result.metadata)
 				}
 				// Fire-and-forget access stats update (non-critical)
-				void this.updateAccessStats(key, 'warm');
+				void this.updateAccessStats(key, 'warm')
 				return {
 					data: (await this.deserializeData(result.data)) as T,
 					metadata: result.metadata,
 					source: 'warm',
-				};
+				}
 			}
 		}
 
 		// 3. Check cold tier (source of truth)
-		const result = await this.getFromTier(this.config.tiers.cold, key);
+		const result = await this.getFromTier(this.config.tiers.cold, key)
 		if (result) {
 			if (this.isExpired(result.metadata)) {
-				await this.delete(key);
-				return null;
+				await this.delete(key)
+				return null
 			}
 
 			// Promote to warm and hot (if configured)
 			// Eager promotion is awaited to guarantee completion
 			if (this.config.promotionStrategy === 'eager') {
-				const promotions: Promise<void>[] = [];
+				const promotions: Promise<void>[] = []
 				if (this.config.tiers.warm) {
-					promotions.push(this.config.tiers.warm.set(key, result.data, result.metadata));
+					promotions.push(this.config.tiers.warm.set(key, result.data, result.metadata))
 				}
 				if (this.config.tiers.hot) {
-					promotions.push(this.config.tiers.hot.set(key, result.data, result.metadata));
+					promotions.push(this.config.tiers.hot.set(key, result.data, result.metadata))
 				}
-				await Promise.all(promotions);
+				await Promise.all(promotions)
 			}
 
 			// Fire-and-forget access stats update (non-critical)
-			void this.updateAccessStats(key, 'cold');
+			void this.updateAccessStats(key, 'cold')
 			return {
 				data: (await this.deserializeData(result.data)) as T,
 				metadata: result.metadata,
 				source: 'cold',
-			};
+			}
 		}
 
-		return null;
+		return null
 	}
 
 	/**
@@ -188,19 +183,19 @@ export class TieredStorage<T = unknown> {
 	): Promise<{ data: Uint8Array; metadata: StorageMetadata } | null> {
 		// Use optimized combined method if available
 		if (tier.getWithMetadata) {
-			return tier.getWithMetadata(key);
+			return tier.getWithMetadata(key)
 		}
 
 		// Fallback: separate calls
-		const data = await tier.get(key);
+		const data = await tier.get(key)
 		if (!data) {
-			return null;
+			return null
 		}
-		const metadata = await tier.getMetadata(key);
+		const metadata = await tier.getMetadata(key)
 		if (!metadata) {
-			return null;
+			return null
 		}
-		return { data, metadata };
+		return { data, metadata }
 	}
 
 	/**
@@ -231,49 +226,49 @@ export class TieredStorage<T = unknown> {
 	async getStream(key: string): Promise<StreamResult | null> {
 		// 1. Check hot tier first
 		if (this.config.tiers.hot?.getStream) {
-			const result = await this.config.tiers.hot.getStream(key);
+			const result = await this.config.tiers.hot.getStream(key)
 			if (result) {
 				if (this.isExpired(result.metadata)) {
-					(result.stream as Readable).destroy?.();
-					await this.delete(key);
-					return null;
+					;(result.stream as Readable).destroy?.()
+					await this.delete(key)
+					return null
 				}
-				void this.updateAccessStats(key, 'hot');
-				return this.wrapStreamWithDecompression(result, 'hot');
+				void this.updateAccessStats(key, 'hot')
+				return this.wrapStreamWithDecompression(result, 'hot')
 			}
 		}
 
 		// 2. Check warm tier
 		if (this.config.tiers.warm?.getStream) {
-			const result = await this.config.tiers.warm.getStream(key);
+			const result = await this.config.tiers.warm.getStream(key)
 			if (result) {
 				if (this.isExpired(result.metadata)) {
-					(result.stream as Readable).destroy?.();
-					await this.delete(key);
-					return null;
+					;(result.stream as Readable).destroy?.()
+					await this.delete(key)
+					return null
 				}
 				// NOTE: No promotion for streaming (would require buffering)
-				void this.updateAccessStats(key, 'warm');
-				return this.wrapStreamWithDecompression(result, 'warm');
+				void this.updateAccessStats(key, 'warm')
+				return this.wrapStreamWithDecompression(result, 'warm')
 			}
 		}
 
 		// 3. Check cold tier (source of truth)
 		if (this.config.tiers.cold.getStream) {
-			const result = await this.config.tiers.cold.getStream(key);
+			const result = await this.config.tiers.cold.getStream(key)
 			if (result) {
 				if (this.isExpired(result.metadata)) {
-					(result.stream as Readable).destroy?.();
-					await this.delete(key);
-					return null;
+					;(result.stream as Readable).destroy?.()
+					await this.delete(key)
+					return null
 				}
 				// NOTE: No promotion for streaming (would require buffering)
-				void this.updateAccessStats(key, 'cold');
-				return this.wrapStreamWithDecompression(result, 'cold');
+				void this.updateAccessStats(key, 'cold')
+				return this.wrapStreamWithDecompression(result, 'cold')
 			}
 		}
 
-		return null;
+		return null
 	}
 
 	/**
@@ -285,11 +280,11 @@ export class TieredStorage<T = unknown> {
 	): StreamResult {
 		if (result.metadata.compressed) {
 			// Pipe through decompression stream
-			const decompressStream = createDecompressStream();
-			(result.stream as Readable).pipe(decompressStream);
-			return { stream: decompressStream, metadata: result.metadata, source };
+			const decompressStream = createDecompressStream()
+			;(result.stream as Readable).pipe(decompressStream)
+			return { stream: decompressStream, metadata: result.metadata, source }
 		}
-		return { ...result, source };
+		return { ...result, source }
 	}
 
 	/**
@@ -329,16 +324,12 @@ export class TieredStorage<T = unknown> {
 	 * });
 	 * ```
 	 */
-	async setStream(
-		key: string,
-		stream: NodeJS.ReadableStream,
-		options: StreamSetOptions,
-	): Promise<SetResult> {
-		const shouldCompress = this.config.compression ?? false;
+	async setStream(key: string, stream: NodeJS.ReadableStream, options: StreamSetOptions): Promise<SetResult> {
+		const shouldCompress = this.config.compression ?? false
 
 		// Create metadata
-		const now = new Date();
-		const ttl = options.ttl ?? this.config.defaultTTL;
+		const now = new Date()
+		const ttl = options.ttl ?? this.config.defaultTTL
 
 		const metadata: StorageMetadata = {
 			key,
@@ -349,135 +340,135 @@ export class TieredStorage<T = unknown> {
 			compressed: shouldCompress,
 			checksum: options.checksum ?? '', // Will be computed if not provided
 			...(options.mimeType && { mimeType: options.mimeType }),
-		};
+		}
 
 		if (ttl) {
-			metadata.ttl = new Date(now.getTime() + ttl);
+			metadata.ttl = new Date(now.getTime() + ttl)
 		}
 
 		if (options.metadata) {
-			metadata.customMetadata = options.metadata;
+			metadata.customMetadata = options.metadata
 		}
 
 		// Determine which tiers to write to
 		// Default: skip hot tier for streaming (typically memory-based, defeats purpose)
-		const tierOptions: { skipTiers?: ('hot' | 'warm')[]; onlyTiers?: ('hot' | 'warm' | 'cold')[] } = {};
+		const tierOptions: { skipTiers?: ('hot' | 'warm')[]; onlyTiers?: ('hot' | 'warm' | 'cold')[] } = {}
 		if (options.onlyTiers) {
-			tierOptions.onlyTiers = options.onlyTiers;
+			tierOptions.onlyTiers = options.onlyTiers
 		} else if (options.skipTiers) {
-			tierOptions.skipTiers = options.skipTiers;
+			tierOptions.skipTiers = options.skipTiers
 		} else {
-			tierOptions.skipTiers = ['hot']; // Default for streaming
+			tierOptions.skipTiers = ['hot'] // Default for streaming
 		}
-		const allowedTiers = this.getTiersForKey(key, tierOptions);
+		const allowedTiers = this.getTiersForKey(key, tierOptions)
 
 		// Collect tiers that support streaming
-		const streamingTiers: Array<{ name: 'hot' | 'warm' | 'cold'; tier: StorageTier }> = [];
+		const streamingTiers: Array<{ name: 'hot' | 'warm' | 'cold'; tier: StorageTier }> = []
 
 		if (this.config.tiers.hot?.setStream && allowedTiers.includes('hot')) {
-			streamingTiers.push({ name: 'hot', tier: this.config.tiers.hot });
+			streamingTiers.push({ name: 'hot', tier: this.config.tiers.hot })
 		}
 
 		if (this.config.tiers.warm?.setStream && allowedTiers.includes('warm')) {
-			streamingTiers.push({ name: 'warm', tier: this.config.tiers.warm });
+			streamingTiers.push({ name: 'warm', tier: this.config.tiers.warm })
 		}
 
 		if (this.config.tiers.cold.setStream && allowedTiers.includes('cold')) {
-			streamingTiers.push({ name: 'cold', tier: this.config.tiers.cold });
+			streamingTiers.push({ name: 'cold', tier: this.config.tiers.cold })
 		}
 
-		const tiersWritten: ('hot' | 'warm' | 'cold')[] = [];
+		const tiersWritten: ('hot' | 'warm' | 'cold')[] = []
 
 		if (streamingTiers.length === 0) {
-			throw new Error('No tiers support streaming. Use set() for buffered writes.');
+			throw new Error('No tiers support streaming. Use set() for buffered writes.')
 		}
 
 		// We always need to compute checksum on uncompressed data if not provided
-		const needsChecksum = !options.checksum;
+		const needsChecksum = !options.checksum
 
 		// Create pass-through streams for each tier
-		const passThroughs = streamingTiers.map(() => new PassThrough());
-		const hashStream = needsChecksum ? createHash('sha256') : null;
+		const passThroughs = streamingTiers.map(() => new PassThrough())
+		const hashStream = needsChecksum ? createHash('sha256') : null
 
 		// Set up the stream pipeline:
 		// source -> (hash) -> (compress) -> tee to all tier streams
-		const sourceStream = stream as Readable;
+		const sourceStream = stream as Readable
 
 		// If compression is enabled, we need to:
 		// 1. Compute hash on original data
 		// 2. Then compress
 		// 3. Then tee to all tiers
 		if (shouldCompress) {
-			const compressStream = createCompressStream();
+			const compressStream = createCompressStream()
 
 			// Hash the original uncompressed data
 			sourceStream.on('data', (chunk: Buffer) => {
 				if (hashStream) {
-					hashStream.update(chunk);
+					hashStream.update(chunk)
 				}
-			});
+			})
 
 			// Pipe source through compression
-			sourceStream.pipe(compressStream);
+			sourceStream.pipe(compressStream)
 
 			// Tee compressed output to all tier streams
 			compressStream.on('data', (chunk: Buffer) => {
 				for (const pt of passThroughs) {
-					pt.write(chunk);
+					pt.write(chunk)
 				}
-			});
+			})
 
 			compressStream.on('end', () => {
 				for (const pt of passThroughs) {
-					pt.end();
+					pt.end()
 				}
-			});
+			})
 
 			compressStream.on('error', (err) => {
 				for (const pt of passThroughs) {
-					pt.destroy(err);
+					pt.destroy(err)
 				}
-			});
+			})
 		} else {
 			// No compression - hash and tee directly
 			sourceStream.on('data', (chunk: Buffer) => {
 				for (const pt of passThroughs) {
-					pt.write(chunk);
+					pt.write(chunk)
 				}
 				if (hashStream) {
-					hashStream.update(chunk);
+					hashStream.update(chunk)
 				}
-			});
+			})
 
 			sourceStream.on('end', () => {
 				for (const pt of passThroughs) {
-					pt.end();
+					pt.end()
 				}
-			});
+			})
 
 			sourceStream.on('error', (err) => {
 				for (const pt of passThroughs) {
-					pt.destroy(err);
+					pt.destroy(err)
 				}
-			});
+			})
 		}
 
 		// Wait for all tier writes
 		const writePromises = streamingTiers.map(async ({ name, tier }, index) => {
-			await tier.setStream!(key, passThroughs[index]!, metadata);
-			tiersWritten.push(name);
-		});
+			await tier.setStream!(key, passThroughs[index]!, metadata)
+			tiersWritten.push(name)
+		})
 
-		await Promise.all(writePromises);
+		await Promise.all(writePromises)
 
 		// Update checksum in metadata if computed
 		if (hashStream) {
-			metadata.checksum = hashStream.digest('hex');
+			metadata.checksum = hashStream.digest('hex')
 			// Update metadata in all tiers with the computed checksum
-			await Promise.all(streamingTiers.map(({ tier }) => tier.setMetadata(key, metadata)));
+			await Promise.all(streamingTiers.map(({ tier }) => tier.setMetadata(key, metadata)))
 		}
 
-		return { key, metadata, tiersWritten };
+		return { key, metadata, tiersWritten }
 	}
 
 	/**
@@ -502,42 +493,42 @@ export class TieredStorage<T = unknown> {
 	 */
 	async set(key: string, data: T, options?: SetOptions): Promise<SetResult> {
 		// 1. Serialize data
-		const serialized = await this.serialize(data);
+		const serialized = await this.serialize(data)
 
 		// 2. Optionally compress
-		const finalData = this.config.compression ? await compress(serialized) : serialized;
+		const finalData = this.config.compression ? await compress(serialized) : serialized
 
 		// 3. Create metadata
-		const metadata = this.createMetadata(key, finalData, options);
+		const metadata = this.createMetadata(key, finalData, options)
 
 		// 4. Determine which tiers to write to
-		const tierOptions: { skipTiers?: ('hot' | 'warm')[]; onlyTiers?: ('hot' | 'warm' | 'cold')[] } = {};
+		const tierOptions: { skipTiers?: ('hot' | 'warm')[]; onlyTiers?: ('hot' | 'warm' | 'cold')[] } = {}
 		if (options?.onlyTiers) {
-			tierOptions.onlyTiers = options.onlyTiers;
+			tierOptions.onlyTiers = options.onlyTiers
 		} else if (options?.skipTiers) {
-			tierOptions.skipTiers = options.skipTiers;
+			tierOptions.skipTiers = options.skipTiers
 		}
-		const allowedTiers = this.getTiersForKey(key, tierOptions);
+		const allowedTiers = this.getTiersForKey(key, tierOptions)
 
 		// 5. Write to tiers
-		const tiersWritten: ('hot' | 'warm' | 'cold')[] = [];
+		const tiersWritten: ('hot' | 'warm' | 'cold')[] = []
 
 		if (this.config.tiers.hot && allowedTiers.includes('hot')) {
-			await this.config.tiers.hot.set(key, finalData, metadata);
-			tiersWritten.push('hot');
+			await this.config.tiers.hot.set(key, finalData, metadata)
+			tiersWritten.push('hot')
 		}
 
 		if (this.config.tiers.warm && allowedTiers.includes('warm')) {
-			await this.config.tiers.warm.set(key, finalData, metadata);
-			tiersWritten.push('warm');
+			await this.config.tiers.warm.set(key, finalData, metadata)
+			tiersWritten.push('warm')
 		}
 
 		if (allowedTiers.includes('cold')) {
-			await this.config.tiers.cold.set(key, finalData, metadata);
-			tiersWritten.push('cold');
+			await this.config.tiers.cold.set(key, finalData, metadata)
+			tiersWritten.push('cold')
 		}
 
-		return { key, metadata, tiersWritten };
+		return { key, metadata, tiersWritten }
 	}
 
 	/**
@@ -556,13 +547,13 @@ export class TieredStorage<T = unknown> {
 	): ('hot' | 'warm' | 'cold')[] {
 		// If explicit onlyTiers provided, use that exactly
 		if (options?.onlyTiers && options.onlyTiers.length > 0) {
-			return options.onlyTiers;
+			return options.onlyTiers
 		}
 
 		// If explicit skipTiers provided, use that
 		if (options?.skipTiers && options.skipTiers.length > 0) {
-			const allTiers: ('hot' | 'warm' | 'cold')[] = ['hot', 'warm', 'cold'];
-			return allTiers.filter((t) => !options.skipTiers!.includes(t as 'hot' | 'warm'));
+			const allTiers: ('hot' | 'warm' | 'cold')[] = ['hot', 'warm', 'cold']
+			return allTiers.filter((t) => !options.skipTiers!.includes(t as 'hot' | 'warm'))
 		}
 
 		// Check placement rules
@@ -571,15 +562,15 @@ export class TieredStorage<T = unknown> {
 				if (matchGlob(rule.pattern, key)) {
 					// Ensure cold is always included
 					if (!rule.tiers.includes('cold')) {
-						return [...rule.tiers, 'cold'];
+						return [...rule.tiers, 'cold']
 					}
-					return rule.tiers;
+					return rule.tiers
 				}
 			}
 		}
 
 		// Default: write to all configured tiers
-		return ['hot', 'warm', 'cold'];
+		return ['hot', 'warm', 'cold']
 	}
 
 	/**
@@ -596,7 +587,7 @@ export class TieredStorage<T = unknown> {
 			this.config.tiers.hot?.delete(key),
 			this.config.tiers.warm?.delete(key),
 			this.config.tiers.cold.delete(key),
-		]);
+		])
 	}
 
 	/**
@@ -612,29 +603,29 @@ export class TieredStorage<T = unknown> {
 	async exists(key: string): Promise<boolean> {
 		// Check hot first (fastest)
 		if (this.config.tiers.hot && (await this.config.tiers.hot.exists(key))) {
-			const metadata = await this.config.tiers.hot.getMetadata(key);
+			const metadata = await this.config.tiers.hot.getMetadata(key)
 			if (metadata && !this.isExpired(metadata)) {
-				return true;
+				return true
 			}
 		}
 
 		// Check warm
 		if (this.config.tiers.warm && (await this.config.tiers.warm.exists(key))) {
-			const metadata = await this.config.tiers.warm.getMetadata(key);
+			const metadata = await this.config.tiers.warm.getMetadata(key)
 			if (metadata && !this.isExpired(metadata)) {
-				return true;
+				return true
 			}
 		}
 
 		// Check cold (source of truth)
 		if (await this.config.tiers.cold.exists(key)) {
-			const metadata = await this.config.tiers.cold.getMetadata(key);
+			const metadata = await this.config.tiers.cold.getMetadata(key)
 			if (metadata && !this.isExpired(metadata)) {
-				return true;
+				return true
 			}
 		}
 
-		return false;
+		return false
 	}
 
 	/**
@@ -649,23 +640,19 @@ export class TieredStorage<T = unknown> {
 	 * Does nothing if no TTL is configured.
 	 */
 	async touch(key: string, ttlMs?: number): Promise<void> {
-		const ttl = ttlMs ?? this.config.defaultTTL;
-		if (!ttl) return;
+		const ttl = ttlMs ?? this.config.defaultTTL
+		if (!ttl) return
 
-		const newTTL = new Date(Date.now() + ttl);
+		const newTTL = new Date(Date.now() + ttl)
 
-		for (const tier of [
-			this.config.tiers.hot,
-			this.config.tiers.warm,
-			this.config.tiers.cold,
-		]) {
-			if (!tier) continue;
+		for (const tier of [this.config.tiers.hot, this.config.tiers.warm, this.config.tiers.cold]) {
+			if (!tier) continue
 
-			const metadata = await tier.getMetadata(key);
+			const metadata = await tier.getMetadata(key)
 			if (metadata) {
-				metadata.ttl = newTTL;
-				metadata.lastAccessed = new Date();
-				await tier.setMetadata(key, metadata);
+				metadata.ttl = newTTL
+				metadata.lastAccessed = new Date()
+				await tier.setMetadata(key, metadata)
 			}
 		}
 	}
@@ -685,35 +672,35 @@ export class TieredStorage<T = unknown> {
 	 * Deletes from all tiers in parallel for efficiency.
 	 */
 	async invalidate(prefix: string): Promise<number> {
-		const keysToDelete = new Set<string>();
+		const keysToDelete = new Set<string>()
 
 		// Collect all keys matching prefix from all tiers
 		if (this.config.tiers.hot) {
 			for await (const key of this.config.tiers.hot.listKeys(prefix)) {
-				keysToDelete.add(key);
+				keysToDelete.add(key)
 			}
 		}
 
 		if (this.config.tiers.warm) {
 			for await (const key of this.config.tiers.warm.listKeys(prefix)) {
-				keysToDelete.add(key);
+				keysToDelete.add(key)
 			}
 		}
 
 		for await (const key of this.config.tiers.cold.listKeys(prefix)) {
-			keysToDelete.add(key);
+			keysToDelete.add(key)
 		}
 
 		// Delete from all tiers in parallel
-		const keys = Array.from(keysToDelete);
+		const keys = Array.from(keysToDelete)
 
 		await Promise.all([
 			this.config.tiers.hot?.deleteMany(keys),
 			this.config.tiers.warm?.deleteMany(keys),
 			this.config.tiers.cold.deleteMany(keys),
-		]);
+		])
 
-		return keys.length;
+		return keys.length
 	}
 
 	/**
@@ -736,7 +723,7 @@ export class TieredStorage<T = unknown> {
 	async *listKeys(prefix?: string): AsyncIterableIterator<string> {
 		// List from cold tier (source of truth)
 		for await (const key of this.config.tiers.cold.listKeys(prefix)) {
-			yield key;
+			yield key
 		}
 	}
 
@@ -754,11 +741,11 @@ export class TieredStorage<T = unknown> {
 			this.config.tiers.hot?.getStats(),
 			this.config.tiers.warm?.getStats(),
 			this.config.tiers.cold.getStats(),
-		]);
+		])
 
-		const totalHits = (hot?.hits ?? 0) + (warm?.hits ?? 0) + (cold?.hits ?? 0);
-		const totalMisses = (hot?.misses ?? 0) + (warm?.misses ?? 0) + (cold?.misses ?? 0);
-		const hitRate = totalHits + totalMisses > 0 ? totalHits / (totalHits + totalMisses) : 0;
+		const totalHits = (hot?.hits ?? 0) + (warm?.hits ?? 0) + (cold?.hits ?? 0)
+		const totalMisses = (hot?.misses ?? 0) + (warm?.misses ?? 0) + (cold?.misses ?? 0)
+		const hitRate = totalHits + totalMisses > 0 ? totalHits / (totalHits + totalMisses) : 0
 
 		return {
 			...(hot && { hot }),
@@ -767,7 +754,7 @@ export class TieredStorage<T = unknown> {
 			totalHits,
 			totalMisses,
 			hitRate,
-		};
+		}
 	}
 
 	/**
@@ -778,11 +765,7 @@ export class TieredStorage<T = unknown> {
 	 * Cannot be undone.
 	 */
 	async clear(): Promise<void> {
-		await Promise.all([
-			this.config.tiers.hot?.clear(),
-			this.config.tiers.warm?.clear(),
-			this.config.tiers.cold.clear(),
-		]);
+		await Promise.all([this.config.tiers.hot?.clear(), this.config.tiers.warm?.clear(), this.config.tiers.cold.clear()])
 	}
 
 	/**
@@ -799,14 +782,14 @@ export class TieredStorage<T = unknown> {
 	async clearTier(tier: 'hot' | 'warm' | 'cold'): Promise<void> {
 		switch (tier) {
 			case 'hot':
-				await this.config.tiers.hot?.clear();
-				break;
+				await this.config.tiers.hot?.clear()
+				break
 			case 'warm':
-				await this.config.tiers.warm?.clear();
-				break;
+				await this.config.tiers.warm?.clear()
+				break
 			case 'cold':
-				await this.config.tiers.cold.clear();
-				break;
+				await this.config.tiers.cold.clear()
+				break
 		}
 	}
 
@@ -823,19 +806,19 @@ export class TieredStorage<T = unknown> {
 	 * - Auditing and compliance
 	 */
 	async export(): Promise<StorageSnapshot> {
-		const keys: string[] = [];
-		const metadata: Record<string, StorageMetadata> = {};
+		const keys: string[] = []
+		const metadata: Record<string, StorageMetadata> = {}
 
 		// Export from cold tier (source of truth)
 		for await (const key of this.config.tiers.cold.listKeys()) {
-			keys.push(key);
-			const meta = await this.config.tiers.cold.getMetadata(key);
+			keys.push(key)
+			const meta = await this.config.tiers.cold.getMetadata(key)
 			if (meta) {
-				metadata[key] = meta;
+				metadata[key] = meta
 			}
 		}
 
-		const stats = await this.getStats();
+		const stats = await this.getStats()
 
 		return {
 			version: 1,
@@ -843,7 +826,7 @@ export class TieredStorage<T = unknown> {
 			keys,
 			metadata,
 			stats,
-		};
+		}
 	}
 
 	/**
@@ -857,23 +840,23 @@ export class TieredStorage<T = unknown> {
 	 */
 	async import(snapshot: StorageSnapshot): Promise<void> {
 		if (snapshot.version !== 1) {
-			throw new Error(`Unsupported snapshot version: ${snapshot.version}`);
+			throw new Error(`Unsupported snapshot version: ${snapshot.version}`)
 		}
 
 		// Import metadata into all configured tiers
 		for (const key of snapshot.keys) {
-			const metadata = snapshot.metadata[key];
-			if (!metadata) continue;
+			const metadata = snapshot.metadata[key]
+			if (!metadata) continue
 
 			if (this.config.tiers.hot) {
-				await this.config.tiers.hot.setMetadata(key, metadata);
+				await this.config.tiers.hot.setMetadata(key, metadata)
 			}
 
 			if (this.config.tiers.warm) {
-				await this.config.tiers.warm.setMetadata(key, metadata);
+				await this.config.tiers.warm.setMetadata(key, metadata)
 			}
 
-			await this.config.tiers.cold.setMetadata(key, metadata);
+			await this.config.tiers.cold.setMetadata(key, metadata)
 		}
 	}
 
@@ -890,39 +873,39 @@ export class TieredStorage<T = unknown> {
 	 */
 	async bootstrapHot(limit?: number): Promise<number> {
 		if (!this.config.tiers.hot || !this.config.tiers.warm) {
-			return 0;
+			return 0
 		}
 
-		let loaded = 0;
-		const keyMetadata: Array<[string, StorageMetadata]> = [];
+		let loaded = 0
+		const keyMetadata: Array<[string, StorageMetadata]> = []
 
 		// Load metadata for all keys
 		for await (const key of this.config.tiers.warm.listKeys()) {
-			const metadata = await this.config.tiers.warm.getMetadata(key);
+			const metadata = await this.config.tiers.warm.getMetadata(key)
 			if (metadata) {
-				keyMetadata.push([key, metadata]);
+				keyMetadata.push([key, metadata])
 			}
 		}
 
 		// Sort by access count * recency (simple scoring)
 		keyMetadata.sort((a, b) => {
-			const scoreA = a[1].accessCount * a[1].lastAccessed.getTime();
-			const scoreB = b[1].accessCount * b[1].lastAccessed.getTime();
-			return scoreB - scoreA;
-		});
+			const scoreA = a[1].accessCount * a[1].lastAccessed.getTime()
+			const scoreB = b[1].accessCount * b[1].lastAccessed.getTime()
+			return scoreB - scoreA
+		})
 
 		// Load top N keys into hot tier
-		const keysToLoad = limit ? keyMetadata.slice(0, limit) : keyMetadata;
+		const keysToLoad = limit ? keyMetadata.slice(0, limit) : keyMetadata
 
 		for (const [key, metadata] of keysToLoad) {
-			const data = await this.config.tiers.warm.get(key);
+			const data = await this.config.tiers.warm.get(key)
 			if (data) {
-				await this.config.tiers.hot.set(key, data, metadata);
-				loaded++;
+				await this.config.tiers.hot.set(key, data, metadata)
+				loaded++
 			}
 		}
 
-		return loaded;
+		return loaded
 	}
 
 	/**
@@ -940,40 +923,40 @@ export class TieredStorage<T = unknown> {
 	 */
 	async bootstrapWarm(options?: { limit?: number; sinceDate?: Date }): Promise<number> {
 		if (!this.config.tiers.warm) {
-			return 0;
+			return 0
 		}
 
-		let loaded = 0;
+		let loaded = 0
 
 		for await (const key of this.config.tiers.cold.listKeys()) {
-			const metadata = await this.config.tiers.cold.getMetadata(key);
-			if (!metadata) continue;
+			const metadata = await this.config.tiers.cold.getMetadata(key)
+			if (!metadata) continue
 
 			// Skip if too old
 			if (options?.sinceDate && metadata.lastAccessed < options.sinceDate) {
-				continue;
+				continue
 			}
 
-			const data = await this.config.tiers.cold.get(key);
+			const data = await this.config.tiers.cold.get(key)
 			if (data) {
-				await this.config.tiers.warm.set(key, data, metadata);
-				loaded++;
+				await this.config.tiers.warm.set(key, data, metadata)
+				loaded++
 
 				if (options?.limit && loaded >= options.limit) {
-					break;
+					break
 				}
 			}
 		}
 
-		return loaded;
+		return loaded
 	}
 
 	/**
 	 * Check if data has expired based on TTL.
 	 */
 	private isExpired(metadata: StorageMetadata): boolean {
-		if (!metadata.ttl) return false;
-		return Date.now() > metadata.ttl.getTime();
+		if (!metadata.ttl) return false
+		return Date.now() > metadata.ttl.getTime()
 	}
 
 	/**
@@ -981,19 +964,15 @@ export class TieredStorage<T = unknown> {
 	 */
 	private async updateAccessStats(key: string, tier: 'hot' | 'warm' | 'cold'): Promise<void> {
 		const tierObj =
-			tier === 'hot'
-				? this.config.tiers.hot
-				: tier === 'warm'
-					? this.config.tiers.warm
-					: this.config.tiers.cold;
+			tier === 'hot' ? this.config.tiers.hot : tier === 'warm' ? this.config.tiers.warm : this.config.tiers.cold
 
-		if (!tierObj) return;
+		if (!tierObj) return
 
-		const metadata = await tierObj.getMetadata(key);
+		const metadata = await tierObj.getMetadata(key)
 		if (metadata) {
-			metadata.lastAccessed = new Date();
-			metadata.accessCount++;
-			await tierObj.setMetadata(key, metadata);
+			metadata.lastAccessed = new Date()
+			metadata.accessCount++
+			await tierObj.setMetadata(key, metadata)
 		}
 	}
 
@@ -1001,8 +980,8 @@ export class TieredStorage<T = unknown> {
 	 * Create metadata for new data.
 	 */
 	private createMetadata(key: string, data: Uint8Array, options?: SetOptions): StorageMetadata {
-		const now = new Date();
-		const ttl = options?.ttl ?? this.config.defaultTTL;
+		const now = new Date()
+		const ttl = options?.ttl ?? this.config.defaultTTL
 
 		const metadata: StorageMetadata = {
 			key,
@@ -1012,17 +991,17 @@ export class TieredStorage<T = unknown> {
 			accessCount: 0,
 			compressed: this.config.compression ?? false,
 			checksum: calculateChecksum(data),
-		};
+		}
 
 		if (ttl) {
-			metadata.ttl = new Date(now.getTime() + ttl);
+			metadata.ttl = new Date(now.getTime() + ttl)
 		}
 
 		if (options?.metadata) {
-			metadata.customMetadata = options.metadata;
+			metadata.customMetadata = options.metadata
 		}
 
-		return metadata;
+		return metadata
 	}
 
 	/**
@@ -1030,11 +1009,8 @@ export class TieredStorage<T = unknown> {
 	 */
 	private async deserializeData(data: Uint8Array): Promise<unknown> {
 		// Decompress if needed (check for gzip magic bytes)
-		const finalData =
-			this.config.compression && data[0] === 0x1f && data[1] === 0x8b
-				? await decompress(data)
-				: data;
+		const finalData = this.config.compression && data[0] === 0x1f && data[1] === 0x8b ? await decompress(data) : data
 
-		return this.deserialize(finalData);
+		return this.deserialize(finalData)
 	}
 }

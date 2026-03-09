@@ -35,6 +35,6 @@ export function useUserInfo() {
 		userInfo,
 		loading,
 		isAuthenticated,
-		fetchUserInfo
+		fetchUserInfo,
 	}
 }

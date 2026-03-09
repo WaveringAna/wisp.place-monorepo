@@ -10,7 +10,7 @@ import { upsertSite } from './db'
  */
 export async function syncSitesFromPDS(
 	did: string,
-	session: OAuthSession
+	session: OAuthSession,
 ): Promise<{ synced: number; errors: string[] }> {
 	console.log(`[Sync] Starting site sync for ${did}`)
 
@@ -24,7 +24,7 @@ export async function syncSitesFromPDS(
 		const records = await agent.com.atproto.repo.listRecords({
 			repo: did,
 			collection: 'place.wisp.fs',
-			limit: 100 // Adjust if users might have more sites
+			limit: 100, // Adjust if users might have more sites
 		})
 
 		console.log(`[Sync] Found ${records.data.records.length} records`)
@@ -51,9 +51,7 @@ export async function syncSitesFromPDS(
 
 				// Check for required fields
 				if (siteValue.$type !== 'place.wisp.fs') {
-					errors.push(
-						`Invalid $type for ${rkey}: ${siteValue.$type}`
-					)
+					errors.push(`Invalid $type for ${rkey}: ${siteValue.$type}`)
 					continue
 				}
 
@@ -66,9 +64,7 @@ export async function syncSitesFromPDS(
 				const displayName = siteValue.site
 				await upsertSite(did, rkey, displayName)
 
-				console.log(
-					`[Sync] ✓ Synced site: ${displayName} (${rkey})`
-				)
+				console.log(`[Sync] ✓ Synced site: ${displayName} (${rkey})`)
 				synced++
 			} catch (err) {
 				const errorMsg = `Error processing record: ${err instanceof Error ? err.message : 'Unknown error'}`
@@ -77,9 +73,7 @@ export async function syncSitesFromPDS(
 			}
 		}
 
-		console.log(
-			`[Sync] Complete: ${synced} synced, ${errors.length} errors`
-		)
+		console.log(`[Sync] Complete: ${synced} synced, ${errors.length} errors`)
 		return { synced, errors }
 	} catch (err) {
 		const errorMsg = `Failed to fetch records from PDS: ${err instanceof Error ? err.message : 'Unknown error'}`

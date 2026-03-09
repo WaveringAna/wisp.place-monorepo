@@ -1,4 +1,4 @@
-import { promises as dns } from 'dns'
+import { promises as dns } from 'node:dns'
 
 /**
  * Result of a domain verification process
@@ -21,10 +21,7 @@ export interface VerificationResult {
  * Verify domain ownership via TXT record at _wisp.{domain}
  * Expected format: did:plc:xxx or did:web:xxx
  */
-export const verifyDomainOwnership = async (
-	domain: string,
-	expectedDid: string
-): Promise<VerificationResult> => {
+export const verifyDomainOwnership = async (domain: string, expectedDid: string): Promise<VerificationResult> => {
 	try {
 		const txtDomain = `_wisp.${domain}`
 
@@ -52,7 +49,7 @@ export const verifyDomainOwnership = async (
 		return {
 			verified: false,
 			error: `TXT record at ${txtDomain} does not match expected DID. Expected: ${expectedDid}`,
-			found: { txt: foundTxtValues }
+			found: { txt: foundTxtValues },
 		}
 	} catch (err: any) {
 		console.log(`[DNS Verify] ✗ TXT lookup error:`, err.message)
@@ -60,13 +57,13 @@ export const verifyDomainOwnership = async (
 			return {
 				verified: false,
 				error: `No TXT record found at _wisp.${domain}`,
-				found: { txt: [] }
+				found: { txt: [] },
 			}
 		}
 		return {
 			verified: false,
 			error: `DNS lookup failed: ${err.message}`,
-			found: { txt: [] }
+			found: { txt: [] },
 		}
 	}
 }
@@ -75,10 +72,7 @@ export const verifyDomainOwnership = async (
  * Verify CNAME record points to the expected hash target
  * For custom domains, we expect: domain CNAME -> {hash}.dns.wisp.place
  */
-export const verifyCNAME = async (
-	domain: string,
-	expectedHash: string
-): Promise<VerificationResult> => {
+export const verifyCNAME = async (domain: string, expectedHash: string): Promise<VerificationResult> => {
 	try {
 		console.log(`[DNS Verify] Checking CNAME record for ${domain}`)
 		const expectedTarget = `${expectedHash}.dns.wisp.place`
@@ -88,10 +82,7 @@ export const verifyCNAME = async (
 		const cname = await dns.resolveCname(domain)
 
 		// Log what we found
-		const foundCname =
-			cname.length > 0
-				? cname[0]?.toLowerCase().replace(/\.$/, '')
-				: null
+		const foundCname = cname.length > 0 ? cname[0]?.toLowerCase().replace(/\.$/, '') : null
 		console.log(`[DNS Verify] Found CNAME:`, foundCname || 'none')
 
 		if (cname.length === 0 || !foundCname) {
@@ -99,7 +90,7 @@ export const verifyCNAME = async (
 			return {
 				verified: false,
 				error: `No CNAME record found for ${domain}`,
-				found: { cname: '' }
+				found: { cname: '' },
 			}
 		}
 
@@ -115,7 +106,7 @@ export const verifyCNAME = async (
 		return {
 			verified: false,
 			error: `CNAME for ${domain} points to ${actualTarget}, expected ${expectedTarget}`,
-			found: { cname: actualTarget }
+			found: { cname: actualTarget },
 		}
 	} catch (err: any) {
 		console.log(`[DNS Verify] ✗ CNAME lookup error:`, err.message)
@@ -123,13 +114,13 @@ export const verifyCNAME = async (
 			return {
 				verified: false,
 				error: `No CNAME record found for ${domain}`,
-				found: { cname: '' }
+				found: { cname: '' },
 			}
 		}
 		return {
 			verified: false,
 			error: `DNS lookup failed: ${err.message}`,
-			found: { cname: '' }
+			found: { cname: '' },
 		}
 	}
 }
@@ -144,7 +135,7 @@ export const verifyCNAME = async (
 export const verifyCustomDomain = async (
 	domain: string,
 	expectedDid: string,
-	expectedHash: string
+	expectedHash: string,
 ): Promise<VerificationResult> => {
 	// TXT record is authoritative - it proves ownership
 	const txtResult = await verifyDomainOwnership(domain, expectedDid)
@@ -166,7 +157,7 @@ export const verifyCustomDomain = async (
 		verified: true,
 		found: {
 			txt: txtResult.found?.txt,
-			cname: cnameResult.found?.cname
-		}
+			cname: cnameResult.found?.cname,
+		},
 	}
 }

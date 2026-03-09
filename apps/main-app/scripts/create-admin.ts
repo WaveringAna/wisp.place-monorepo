@@ -1,6 +1,7 @@
 // Quick script to create admin user with randomly generated password
+
+import { randomBytes } from 'node:crypto'
 import { adminAuth } from '../src/lib/admin-auth'
-import { randomBytes } from 'crypto'
 
 // Generate a secure random password
 function generatePassword(length: number = 20): string {

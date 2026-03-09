@@ -1,15 +1,8 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
-import { Button } from '@public/components/ui/button'
 import { Badge } from '@public/components/ui/badge'
+import { Button } from '@public/components/ui/button'
 import { SkeletonShimmer } from '@public/components/ui/skeleton'
-import {
-	Globe,
-	ExternalLink,
-	ChevronRight,
-	ChevronDown,
-	Settings as SettingsIcon,
-	Trash2
-} from 'lucide-react'
+import { ChevronDown, ChevronRight, ExternalLink, Globe, Settings as SettingsIcon, Trash2 } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { SiteWithDomains } from '../hooks/useSiteData'
 import type { UserInfo } from '../hooks/useUserInfo'
 
@@ -39,13 +32,7 @@ const Kbd = ({ children }: { children: React.ReactNode }) => (
 	<kbd className="px-2 py-1 bg-muted/50 rounded border border-border/50">{children}</kbd>
 )
 
-export function SitesTab({
-	sites,
-	sitesLoading,
-	userInfo,
-	onConfigureSite,
-	onDeleteSite
-}: SitesTabProps) {
+export function SitesTab({ sites, sitesLoading, userInfo, onConfigureSite, onDeleteSite }: SitesTabProps) {
 	// State: only one site can be expanded at a time (null = none expanded)
 	const [expandedSiteKey, setExpandedSiteKey] = useState<string | null>(null)
 	const [focusedIndex, setFocusedIndex] = useState(0)
@@ -56,27 +43,33 @@ export function SitesTab({
 	const scrollContainerRef = useRef<HTMLDivElement>(null)
 
 	// URL helpers
-	const getSiteUrl = useCallback((site: SiteWithDomains) => {
-		const sortedDomains = getSortedDomains(site)
-		if (sortedDomains.length > 0) {
-			return `https://${sortedDomains[0].domain}`
-		}
-		if (!userInfo) return '#'
-		return `https://sites.wisp.place/${userInfo.handle}/${site.rkey}`
-	}, [userInfo])
+	const getSiteUrl = useCallback(
+		(site: SiteWithDomains) => {
+			const sortedDomains = getSortedDomains(site)
+			if (sortedDomains.length > 0) {
+				return `https://${sortedDomains[0].domain}`
+			}
+			if (!userInfo) return '#'
+			return `https://sites.wisp.place/${userInfo.handle}/${site.rkey}`
+		},
+		[userInfo],
+	)
 
-	const getSiteDomainName = useCallback((site: SiteWithDomains) => {
-		const sortedDomains = getSortedDomains(site)
-		if (sortedDomains.length > 0) {
-			return sortedDomains[0].domain
-		}
-		if (!userInfo) return `sites.wisp.place/.../${site.rkey}`
-		return `sites.wisp.place/${userInfo.handle}/${site.rkey}`
-	}, [userInfo])
+	const getSiteDomainName = useCallback(
+		(site: SiteWithDomains) => {
+			const sortedDomains = getSortedDomains(site)
+			if (sortedDomains.length > 0) {
+				return sortedDomains[0].domain
+			}
+			if (!userInfo) return `sites.wisp.place/.../${site.rkey}`
+			return `sites.wisp.place/${userInfo.handle}/${site.rkey}`
+		},
+		[userInfo],
+	)
 
 	// Toggle expand - auto-closes other sites
 	const toggleExpanded = useCallback((siteKey: string) => {
-		setExpandedSiteKey(prev => prev === siteKey ? null : siteKey)
+		setExpandedSiteKey((prev) => (prev === siteKey ? null : siteKey))
 	}, [])
 
 	// Auto-focus container when sites load
@@ -115,9 +108,7 @@ export function SitesTab({
 			const elementRect = element.getBoundingClientRect()
 			const containerRect = container.getBoundingClientRect()
 
-			const isOutOfView =
-				elementRect.bottom > containerRect.bottom - 50 ||
-				elementRect.top < containerRect.top + 50
+			const isOutOfView = elementRect.bottom > containerRect.bottom - 50 || elementRect.top < containerRect.top + 50
 
 			if (isOutOfView) {
 				element.scrollIntoView({ behavior: 'smooth', block: 'center' })
@@ -142,11 +133,11 @@ export function SitesTab({
 			switch (e.key) {
 				case 'ArrowUp':
 					e.preventDefault()
-					setFocusedIndex(prev => Math.max(0, prev - 1))
+					setFocusedIndex((prev) => Math.max(0, prev - 1))
 					break
 				case 'ArrowDown':
 					e.preventDefault()
-					setFocusedIndex(prev => Math.min(sites.length - 1, prev + 1))
+					setFocusedIndex((prev) => Math.min(sites.length - 1, prev + 1))
 					break
 				case 'Enter':
 				case ' ':
@@ -186,8 +177,8 @@ export function SitesTab({
 					<SkeletonShimmer className="h-4 w-64" />
 				</div>
 				<div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-2">
-					{Array.from({ length: 5 }).map((_, i) => (
-						<div key={i} className="p-4 border border-border/30">
+					{['a', 'b', 'c', 'd', 'e'].map((id) => (
+						<div key={id} className="p-4 border border-border/30">
 							<SkeletonShimmer className="h-5 w-full" />
 						</div>
 					))}
@@ -211,16 +202,19 @@ export function SitesTab({
 	}
 
 	return (
+		// biome-ignore lint/a11y/noStaticElementInteractions: keyboard nav focus container
 		<div
 			ref={containerRef}
-			tabIndex={0}
 			className="h-full flex flex-col border border-border/30 bg-card/50 font-mono outline-none"
+			tabIndex={-1}
 			onClick={() => containerRef.current?.focus()}
+			onKeyDown={() => {}}
 		>
 			{/* Keyboard hints */}
 			<div className="flex items-center gap-4 text-xs text-muted-foreground p-4 pb-3 border-b border-border/30 flex-shrink-0">
 				<div className="flex items-center gap-2">
-					<Kbd>↑</Kbd><Kbd>↓</Kbd>
+					<Kbd>↑</Kbd>
+					<Kbd>↓</Kbd>
 					<span>navigate</span>
 				</div>
 				<span>•</span>
@@ -231,15 +225,18 @@ export function SitesTab({
 				<span>•</span>
 				<span>When expanded:</span>
 				<div className="flex items-center gap-2">
-					<Kbd>o</Kbd><span>open</span>
+					<Kbd>o</Kbd>
+					<span>open</span>
 				</div>
 				<span>•</span>
 				<div className="flex items-center gap-2">
-					<Kbd>c</Kbd><span>configure</span>
+					<Kbd>c</Kbd>
+					<span>configure</span>
 				</div>
 				<span>•</span>
 				<div className="flex items-center gap-2">
-					<Kbd>d</Kbd><span className="text-red-400">delete</span>
+					<Kbd>d</Kbd>
+					<span className="text-red-400">delete</span>
 				</div>
 			</div>
 
@@ -255,13 +252,16 @@ export function SitesTab({
 					return (
 						<div
 							key={siteKey}
-							ref={el => { siteRefs.current[index] = el }}
+							ref={(el) => {
+								siteRefs.current[index] = el
+							}}
 							className={`border transition-colors ${
 								isFocused ? 'border-accent bg-accent/10' : 'border-border/30 bg-card hover:bg-muted/10'
 							}`}
 						>
 							{/* Site header */}
 							<button
+								type="button"
 								onClick={() => toggleExpanded(siteKey)}
 								className="w-full flex items-center gap-3 p-4 text-left"
 							>
@@ -272,9 +272,7 @@ export function SitesTab({
 								)}
 								<span className="font-semibold flex-1">{siteName}</span>
 								<div className="flex items-center gap-2">
-									<span className="text-xs text-muted-foreground">
-										{getSiteDomainName(site)}
-									</span>
+									<span className="text-xs text-muted-foreground">{getSiteDomainName(site)}</span>
 									{site.domains && site.domains.length > 1 && (
 										<Badge variant="outline" className="text-[10px]">
 											+{site.domains.length - 1}
@@ -296,8 +294,8 @@ export function SitesTab({
 										</p>
 										{sortedDomains.length > 0 ? (
 											<div className="space-y-2">
-												{sortedDomains.map((domain, idx) => (
-													<div key={`${domain.domain}-${idx}`} className="flex items-center gap-2">
+												{sortedDomains.map((domain) => (
+													<div key={domain.domain} className="flex items-center gap-2">
 														<a
 															href={`https://${domain.domain}`}
 															target="_blank"
@@ -307,17 +305,11 @@ export function SitesTab({
 															<Globe className="w-3 h-3" />
 															{domain.domain}
 														</a>
-														<Badge
-															variant={domain.type === 'wisp' ? 'secondary' : 'outline'}
-															className="text-[10px]"
-														>
+														<Badge variant={domain.type === 'wisp' ? 'secondary' : 'outline'} className="text-[10px]">
 															{domain.type}
 														</Badge>
 														{domain.type === 'custom' && domain.verified !== undefined && (
-															<Badge
-																variant={domain.verified ? 'default' : 'secondary'}
-																className="text-[10px]"
-															>
+															<Badge variant={domain.verified ? 'default' : 'secondary'} className="text-[10px]">
 																{domain.verified ? '✓ verified' : '⏳ pending'}
 															</Badge>
 														)}
@@ -339,9 +331,7 @@ export function SitesTab({
 
 									{/* Actions */}
 									<div>
-										<p className="text-xs text-muted-foreground uppercase tracking-wider mb-3">
-											ACTIONS:
-										</p>
+										<p className="text-xs text-muted-foreground uppercase tracking-wider mb-3">ACTIONS:</p>
 										<div className="flex flex-wrap gap-3">
 											<Button
 												variant="outline"

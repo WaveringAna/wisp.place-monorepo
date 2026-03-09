@@ -24,7 +24,7 @@ export function verifyRequestOrigin(origin: string, allowedHosts: string[]): boo
 		const originUrl = new URL(origin)
 		const originHost = originUrl.host
 
-		return allowedHosts.some(host => originHost === host)
+		return allowedHosts.some((host) => originHost === host)
 	} catch {
 		// Invalid URL
 		return false
@@ -47,34 +47,33 @@ export function verifyRequestOrigin(origin: string, allowedHosts: string[]): boo
  * ```
  */
 export const csrfProtection = () => {
-	return new Elysia({ name: 'csrf-protection' })
-		.onBeforeHandle(({ request, set }) => {
-			const method = request.method.toUpperCase()
+	return new Elysia({ name: 'csrf-protection' }).onBeforeHandle(({ request, set }) => {
+		const method = request.method.toUpperCase()
 
-			// Only protect state-changing methods
-			if (['GET', 'HEAD', 'OPTIONS'].includes(method)) {
-				return
+		// Only protect state-changing methods
+		if (['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+			return
+		}
+
+		// Get headers
+		const originHeader = request.headers.get('Origin')
+		// Use X-Forwarded-Host if behind a proxy, otherwise use Host
+		const hostHeader = request.headers.get('X-Forwarded-Host') || request.headers.get('Host')
+
+		// Validate origin matches host
+		if (!originHeader || !hostHeader || !verifyRequestOrigin(originHeader, [hostHeader])) {
+			logger.warn('[CSRF] Request blocked', {
+				method,
+				origin: originHeader,
+				host: hostHeader,
+				path: new URL(request.url).pathname,
+			})
+
+			set.status = 403
+			return {
+				error: 'CSRF validation failed',
+				message: 'Request origin does not match host',
 			}
-
-			// Get headers
-			const originHeader = request.headers.get('Origin')
-			// Use X-Forwarded-Host if behind a proxy, otherwise use Host
-			const hostHeader = request.headers.get('X-Forwarded-Host') || request.headers.get('Host')
-
-			// Validate origin matches host
-			if (!originHeader || !hostHeader || !verifyRequestOrigin(originHeader, [hostHeader])) {
-				logger.warn('[CSRF] Request blocked', {
-					method,
-					origin: originHeader,
-					host: hostHeader,
-					path: new URL(request.url).pathname
-				})
-
-				set.status = 403
-				return {
-					error: 'CSRF validation failed',
-					message: 'Request origin does not match host'
-				}
-			}
-		})
+		}
+	})
 }

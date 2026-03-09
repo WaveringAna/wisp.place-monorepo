@@ -1,51 +1,48 @@
-import { useState, useEffect } from 'react'
-import { createRoot } from 'react-dom/client'
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { Badge } from '@public/components/ui/badge'
 import { Button } from '@public/components/ui/button'
-import {
-	Tabs,
-	TabsContent,
-	TabsList,
-	TabsTrigger
-} from '@public/components/ui/tabs'
+import { Checkbox } from '@public/components/ui/checkbox'
 import {
 	Dialog,
 	DialogContent,
 	DialogDescription,
+	DialogFooter,
 	DialogHeader,
 	DialogTitle,
-	DialogFooter
 } from '@public/components/ui/dialog'
-import { Checkbox } from '@public/components/ui/checkbox'
-import { Label } from '@public/components/ui/label'
-import { Badge } from '@public/components/ui/badge'
-import { SkeletonShimmer } from '@public/components/ui/skeleton'
 import { Input } from '@public/components/ui/input'
+import { Label } from '@public/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@public/components/ui/radio-group'
-import {
-	Loader2,
-	Trash2,
-	LogOut
-} from 'lucide-react'
+import { SkeletonShimmer } from '@public/components/ui/skeleton'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@public/components/ui/tabs'
 import Layout from '@public/layouts'
-import { useUserInfo } from './hooks/useUserInfo'
-import { useSiteData, type SiteWithDomains } from './hooks/useSiteData'
+import { Loader2, LogOut, Trash2 } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { createRoot } from 'react-dom/client'
+import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { useDomainData } from './hooks/useDomainData'
+import { type SiteWithDomains, useSiteData } from './hooks/useSiteData'
+import { useUserInfo } from './hooks/useUserInfo'
 import { useWebhookData } from './hooks/useWebhookData'
-import { SitesTab } from './tabs/SitesTab'
-import { DomainsTab } from './tabs/DomainsTab'
-import { UploadTab } from './tabs/UploadTab'
 import { CLITab } from './tabs/CLITab'
+import { DomainsTab } from './tabs/DomainsTab'
+import { SitesTab } from './tabs/SitesTab'
+import { UploadTab } from './tabs/UploadTab'
 import { WebhooksTab } from './tabs/WebhooksTab'
 
 function Dashboard() {
 	// Use custom hooks
 	const { userInfo, loading, isAuthenticated, fetchUserInfo } = useUserInfo()
-	const { sites, sitesLoading, isSyncing, fetchSites, syncSites, deleteSite } = useSiteData()
+	const { sites, sitesLoading, fetchSites, deleteSite } = useSiteData()
 	const {
-		webhooks, webhooksLoading, fetchWebhooks,
-		eventLogs, eventLogsLoading, fetchEventLogs,
-		isCreating, createWebhook, deleteWebhook,
+		webhooks,
+		webhooksLoading,
+		fetchWebhooks,
+		eventLogs,
+		eventLogsLoading,
+		fetchEventLogs,
+		isCreating,
+		createWebhook,
+		deleteWebhook,
 	} = useWebhookData()
 
 	const {
@@ -61,7 +58,7 @@ function Dashboard() {
 		deleteWispDomain,
 		mapCustomDomain,
 		claimWispDomain,
-		checkWispAvailability
+		checkWispAvailability,
 	} = useDomainData()
 
 	// Site configuration modal state (shared across components)
@@ -85,7 +82,8 @@ function Dashboard() {
 	// Tab state
 	const [activeTab, setActiveTab] = useState('sites')
 
-	// Fetch initial data on mount
+	// Fetch initial data on mount — empty deps intentional, run once
+	// biome-ignore lint/correctness/useExhaustiveDependencies: initial mount fetch
 	useEffect(() => {
 		fetchUserInfo()
 		fetchSites()
@@ -142,7 +140,7 @@ function Dashboard() {
 		const mappedDomains = new Set<string>()
 
 		if (site.domains) {
-			site.domains.forEach(domainInfo => {
+			site.domains.forEach((domainInfo) => {
 				if (domainInfo.type === 'wisp') {
 					// For wisp domains, use the domain itself as the identifier
 					mappedDomains.add(`wisp:${domainInfo.domain}`)
@@ -157,7 +155,7 @@ function Dashboard() {
 		// Fetch and populate settings for this site
 		try {
 			const response = await fetch(`/api/site/${site.rkey}/settings`, {
-				credentials: 'include'
+				credentials: 'include',
 			})
 			if (response.ok) {
 				const settings = await response.json()
@@ -217,13 +215,11 @@ function Dashboard() {
 		setIsSavingConfig(true)
 		try {
 			// Handle wisp domain mappings
-			const selectedWispDomainIds = Array.from(selectedDomains).filter(id => id.startsWith('wisp:'))
-			const selectedWispDomains = selectedWispDomainIds.map(id => id.replace('wisp:', ''))
+			const selectedWispDomainIds = Array.from(selectedDomains).filter((id) => id.startsWith('wisp:'))
+			const selectedWispDomains = selectedWispDomainIds.map((id) => id.replace('wisp:', ''))
 
 			// Get currently mapped wisp domains
-			const currentlyMappedWispDomains = wispDomains.filter(
-				d => d.rkey === configuringSite.rkey
-			)
+			const currentlyMappedWispDomains = wispDomains.filter((d) => d.rkey === configuringSite.rkey)
 
 			// Unmap wisp domains that are no longer selected
 			for (const domain of currentlyMappedWispDomains) {
@@ -234,17 +230,15 @@ function Dashboard() {
 
 			// Map newly selected wisp domains
 			for (const domainName of selectedWispDomains) {
-				const isAlreadyMapped = currentlyMappedWispDomains.some(d => d.domain === domainName)
+				const isAlreadyMapped = currentlyMappedWispDomains.some((d) => d.domain === domainName)
 				if (!isAlreadyMapped) {
 					await mapWispDomain(domainName, configuringSite.rkey)
 				}
 			}
 
 			// Handle custom domain mappings
-			const selectedCustomDomainIds = Array.from(selectedDomains).filter(id => !id.startsWith('wisp:'))
-			const currentlyMappedCustomDomains = customDomains.filter(
-				d => d.rkey === configuringSite.rkey
-			)
+			const selectedCustomDomainIds = Array.from(selectedDomains).filter((id) => !id.startsWith('wisp:'))
+			const currentlyMappedCustomDomains = customDomains.filter((d) => d.rkey === configuringSite.rkey)
 
 			// Unmap domains that are no longer selected
 			for (const domain of currentlyMappedCustomDomains) {
@@ -255,7 +249,7 @@ function Dashboard() {
 
 			// Map newly selected domains
 			for (const domainId of selectedCustomDomainIds) {
-				const isAlreadyMapped = currentlyMappedCustomDomains.some(d => d.id === domainId)
+				const isAlreadyMapped = currentlyMappedCustomDomains.some((d) => d.id === domainId)
 				if (!isAlreadyMapped) {
 					await mapCustomDomain(domainId, configuringSite.rkey)
 				}
@@ -264,7 +258,7 @@ function Dashboard() {
 			// Save site settings
 			const settings: any = {
 				cleanUrls,
-				indexFiles: indexFiles.filter(f => f.trim() !== '')
+				indexFiles: indexFiles.filter((f) => f.trim() !== ''),
 			}
 
 			// Set routing mode based on selection
@@ -281,18 +275,18 @@ function Dashboard() {
 				settings.headers = [
 					{
 						name: 'Access-Control-Allow-Origin',
-						value: corsOrigin
-					}
+						value: corsOrigin,
+					},
 				]
 			}
 
 			const settingsResponse = await fetch(`/api/site/${configuringSite.rkey}/settings`, {
 				method: 'POST',
 				headers: {
-					'Content-Type': 'application/json'
+					'Content-Type': 'application/json',
 				},
 				credentials: 'include',
-				body: JSON.stringify(settings)
+				body: JSON.stringify(settings),
 			})
 
 			if (!settingsResponse.ok) {
@@ -306,9 +300,7 @@ function Dashboard() {
 			setConfiguringSite(null)
 		} catch (err) {
 			console.error('Save config error:', err)
-			alert(
-				`Failed to save configuration: ${err instanceof Error ? err.message : 'Unknown error'}`
-			)
+			alert(`Failed to save configuration: ${err instanceof Error ? err.message : 'Unknown error'}`)
 		} finally {
 			setIsSavingConfig(false)
 		}
@@ -341,17 +333,17 @@ function Dashboard() {
 		try {
 			const response = await fetch('/api/auth/logout', {
 				method: 'POST',
-				credentials: 'include'
+				credentials: 'include',
 			})
 			const result = await response.json()
 			if (result.success) {
 				// Redirect to home page after successful logout
 				window.location.href = '/'
 			} else {
-				alert('Logout failed: ' + (result.error || 'Unknown error'))
+				alert(`Logout failed: ${result.error || 'Unknown error'}`)
 			}
 		} catch (err) {
-			alert('Logout failed: ' + (err instanceof Error ? err.message : 'Unknown error'))
+			alert(`Logout failed: ${err instanceof Error ? err.message : 'Unknown error'}`)
 		}
 	}
 
@@ -381,16 +373,16 @@ function Dashboard() {
 					{/* Tabs Skeleton */}
 					<div className="space-y-6 w-full">
 						<div className="grid w-full grid-cols-5 border-b border-border/50">
-							{[...Array(5)].map((_, i) => (
-								<SkeletonShimmer key={i} className="h-10 w-full" />
+							{['a', 'b', 'c', 'd', 'e'].map((id) => (
+								<SkeletonShimmer key={id} className="h-10 w-full" />
 							))}
 						</div>
 
 						{/* Content Skeleton */}
 						<div className="space-y-2">
 							<SkeletonShimmer className="h-6 w-full mb-4" />
-							{[...Array(3)].map((_, i) => (
-								<div key={i} className="border border-border/30 p-4">
+							{['a', 'b', 'c'].map((id) => (
+								<div key={id} className="border border-border/30 p-4">
 									<SkeletonShimmer className="h-5 w-full" />
 								</div>
 							))}
@@ -408,27 +400,18 @@ function Dashboard() {
 				<div className="max-w-6xl w-full mx-auto px-6 py-6 flex items-start justify-between">
 					<div className="space-y-2">
 						<h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
-						<p className="text-sm text-muted-foreground">
-							Manage your sites and domains
-						</p>
+						<p className="text-sm text-muted-foreground">Manage your sites and domains</p>
 					</div>
 					<div className="flex items-center gap-3">
 						<div className="flex items-center gap-2">
-							<span className="text-sm text-muted-foreground">
-								{userInfo?.handle || 'Loading...'}
-							</span>
+							<span className="text-sm text-muted-foreground">{userInfo?.handle || 'Loading...'}</span>
 							{userInfo?.isSupporter && (
 								<Badge variant="default" className="text-xs">
 									Supporter
 								</Badge>
 							)}
 						</div>
-						<Button
-							variant="ghost"
-							size="sm"
-							onClick={handleLogout}
-							className="h-8 px-2"
-						>
+						<Button variant="ghost" size="sm" onClick={handleLogout} className="h-8 px-2">
 							<LogOut className="w-4 h-4" />
 						</Button>
 					</div>
@@ -517,11 +500,7 @@ function Dashboard() {
 
 						{/* Upload Tab */}
 						<TabsContent value="upload" className="flex-1 m-0 mt-4 overflow-hidden data-[state=inactive]:hidden">
-							<UploadTab
-								sites={sites}
-								sitesLoading={sitesLoading}
-								onUploadComplete={handleUploadComplete}
-							/>
+							<UploadTab sites={sites} sitesLoading={sitesLoading} onUploadComplete={handleUploadComplete} />
 						</TabsContent>
 
 						{/* Webhooks Tab */}
@@ -532,8 +511,8 @@ function Dashboard() {
 								eventLogs={eventLogs}
 								eventLogsLoading={eventLogsLoading}
 								isCreating={isCreating}
-							userDid={userInfo?.did}
-							onCreateWebhook={createWebhook}
+								userDid={userInfo?.did}
+								onCreateWebhook={createWebhook}
 								onDeleteWebhook={deleteWebhook}
 								onRefreshEvents={fetchEventLogs}
 							/>
@@ -565,34 +544,22 @@ function Dashboard() {
 							</span>
 							<span>
 								Contact:{' '}
-								<a
-									href="mailto:contact@wisp.place"
-									className="text-accent hover:text-accent/80 transition-colors"
-								>
+								<a href="mailto:contact@wisp.place" className="text-accent hover:text-accent/80 transition-colors">
 									contact@wisp.place
 								</a>
 							</span>
 							<span>
 								Legal:{' '}
-								<a
-									href="mailto:legal@wisp.place"
-									className="text-accent hover:text-accent/80 transition-colors"
-								>
+								<a href="mailto:legal@wisp.place" className="text-accent hover:text-accent/80 transition-colors">
 									legal@wisp.place
 								</a>
 							</span>
 						</div>
 						<div className="flex items-center gap-4">
-							<a
-								href="/acceptable-use"
-								className="text-accent hover:text-accent/80 transition-colors"
-							>
+							<a href="/acceptable-use" className="text-accent hover:text-accent/80 transition-colors">
 								Acceptable Use Policy
 							</a>
-							<a
-								href="/privacy"
-								className="text-accent hover:text-accent/80 transition-colors"
-							>
+							<a href="/privacy" className="text-accent hover:text-accent/80 transition-colors">
 								Privacy Policy
 							</a>
 						</div>
@@ -601,31 +568,33 @@ function Dashboard() {
 			</footer>
 
 			{/* Site Configuration Modal */}
-			<Dialog
-				open={configuringSite !== null}
-				onOpenChange={(open) => !open && setConfiguringSite(null)}
-			>
+			<Dialog open={configuringSite !== null} onOpenChange={(open) => !open && setConfiguringSite(null)}>
 				<DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
 					<DialogHeader>
 						<DialogTitle>Configure Site</DialogTitle>
-						<DialogDescription>
-							Configure domains and settings for this site.
-						</DialogDescription>
+						<DialogDescription>Configure domains and settings for this site.</DialogDescription>
 					</DialogHeader>
 					{configuringSite && (
 						<div className="space-y-4 py-4">
 							<div className="p-3 bg-muted/30 rounded-lg">
 								<p className="text-sm font-medium mb-1">Site:</p>
-								<p className="font-mono text-sm">
-									{configuringSite.display_name ||
-										configuringSite.rkey}
-								</p>
+								<p className="font-mono text-sm">{configuringSite.display_name || configuringSite.rkey}</p>
 							</div>
 
 							<Tabs defaultValue="domains" className="w-full">
 								<TabsList className="grid w-full grid-cols-2 bg-card border-b border-border/50 rounded-none h-auto p-0 flex-shrink-0">
-									<TabsTrigger value="domains" className="text-muted-foreground hover:text-foreground hover:bg-muted/50 data-[state=active]:bg-transparent data-[state=active]:text-foreground">Domains</TabsTrigger>
-									<TabsTrigger value="settings" className="text-muted-foreground hover:text-foreground hover:bg-muted/50 data-[state=active]:bg-transparent data-[state=active]:text-foreground">Settings</TabsTrigger>
+									<TabsTrigger
+										value="domains"
+										className="text-muted-foreground hover:text-foreground hover:bg-muted/50 data-[state=active]:bg-transparent data-[state=active]:text-foreground"
+									>
+										Domains
+									</TabsTrigger>
+									<TabsTrigger
+										value="settings"
+										className="text-muted-foreground hover:text-foreground hover:bg-muted/50 data-[state=active]:bg-transparent data-[state=active]:text-foreground"
+									>
+										Settings
+									</TabsTrigger>
 								</TabsList>
 
 								{/* Domains Tab */}
@@ -635,7 +604,10 @@ function Dashboard() {
 									{wispDomains.map((wispDomain) => {
 										const domainId = `wisp:${wispDomain.domain}`
 										return (
-											<div key={domainId} className="flex items-center space-x-3 p-3 border rounded-lg hover:bg-muted/30">
+											<div
+												key={domainId}
+												className="flex items-center space-x-3 p-3 border rounded-lg hover:bg-muted/30"
+											>
 												<Checkbox
 													id={domainId}
 													checked={selectedDomains.has(domainId)}
@@ -649,14 +621,9 @@ function Dashboard() {
 														setSelectedDomains(newSelected)
 													}}
 												/>
-												<Label
-													htmlFor={domainId}
-													className="flex-1 cursor-pointer"
-												>
+												<Label htmlFor={domainId} className="flex-1 cursor-pointer">
 													<div className="flex items-center justify-between">
-														<span className="font-mono text-sm">
-															{wispDomain.domain}
-														</span>
+														<span className="font-mono text-sm">{wispDomain.domain}</span>
 														<Badge variant="secondary" className="text-xs ml-2">
 															Wisp
 														</Badge>
@@ -686,18 +653,10 @@ function Dashboard() {
 														setSelectedDomains(newSelected)
 													}}
 												/>
-												<Label
-													htmlFor={domain.id}
-													className="flex-1 cursor-pointer"
-												>
+												<Label htmlFor={domain.id} className="flex-1 cursor-pointer">
 													<div className="flex items-center justify-between">
-														<span className="font-mono text-sm">
-															{domain.domain}
-														</span>
-														<Badge
-															variant="outline"
-															className="text-xs ml-2"
-														>
+														<span className="font-mono text-sm">{domain.domain}</span>
+														<Badge variant="outline" className="text-xs ml-2">
 															Custom
 														</Badge>
 													</div>
@@ -705,7 +664,7 @@ function Dashboard() {
 											</div>
 										))}
 
-									{customDomains.filter(d => d.verified).length === 0 && wispDomains.length === 0 && (
+									{customDomains.filter((d) => d.verified).length === 0 && wispDomains.length === 0 && (
 										<p className="text-sm text-muted-foreground py-4 text-center">
 											No domains available. Add a custom domain or claim a wisp.place subdomain.
 										</p>
@@ -747,7 +706,9 @@ function Dashboard() {
 											</div>
 											{routingMode === 'spa' && (
 												<div className="ml-7 space-y-2">
-													<Label htmlFor="spa-file" className="text-sm">SPA File</Label>
+													<Label htmlFor="spa-file" className="text-sm">
+														SPA File
+													</Label>
 													<Input
 														id="spa-file"
 														value={spaFile}
@@ -776,7 +737,9 @@ function Dashboard() {
 											</div>
 											{routingMode === 'custom404' && (
 												<div className="ml-7 space-y-2">
-													<Label htmlFor="404-file" className="text-sm">404 File</Label>
+													<Label htmlFor="404-file" className="text-sm">
+														404 File
+													</Label>
 													<Input
 														id="404-file"
 														value={custom404File}
@@ -792,14 +755,12 @@ function Dashboard() {
 									<div className="space-y-3">
 										<Label className={`text-sm font-medium ${routingMode === 'spa' ? 'text-muted-foreground' : ''}`}>
 											Index Files
-											{routingMode === 'spa' && (
-												<span className="ml-2 text-xs">(disabled in SPA mode)</span>
-											)}
+											{routingMode === 'spa' && <span className="ml-2 text-xs">(disabled in SPA mode)</span>}
 										</Label>
 										<p className="text-xs text-muted-foreground">Files to try when serving a directory (in order)</p>
 										<div className="space-y-2">
 											{indexFiles.map((file, idx) => (
-												<div key={idx} className="flex items-center gap-2">
+												<div key={file || idx} className="flex items-center gap-2">
 													<Input
 														value={file}
 														onChange={(e) => {
@@ -882,15 +843,15 @@ function Dashboard() {
 											<Label htmlFor="cors-enabled" className="flex-1 cursor-pointer">
 												<div>
 													<p className="font-medium">Enable CORS</p>
-													<p className="text-xs text-muted-foreground">
-														Allow cross-origin requests
-													</p>
+													<p className="text-xs text-muted-foreground">Allow cross-origin requests</p>
 												</div>
 											</Label>
 										</div>
 										{corsEnabled && (
 											<div className="ml-7 space-y-2">
-												<Label htmlFor="cors-origin" className="text-sm">Allowed Origin</Label>
+												<Label htmlFor="cors-origin" className="text-sm">
+													Allowed Origin
+												</Label>
 												<Input
 													id="cors-origin"
 													value={corsOrigin}
@@ -955,15 +916,13 @@ function Dashboard() {
 			</Dialog>
 
 			{/* Delete Site Confirmation Modal */}
-			<Dialog
-				open={deleteConfirmSite !== null}
-				onOpenChange={(open) => !open && setDeleteConfirmSite(null)}
-			>
+			<Dialog open={deleteConfirmSite !== null} onOpenChange={(open) => !open && setDeleteConfirmSite(null)}>
 				<DialogContent className="sm:max-w-md">
 					<DialogHeader>
 						<DialogTitle>Delete Site</DialogTitle>
 						<DialogDescription>
-							Are you sure you want to delete "{deleteConfirmSite?.display_name || deleteConfirmSite?.rkey}"? This action cannot be undone.
+							Are you sure you want to delete "{deleteConfirmSite?.display_name || deleteConfirmSite?.rkey}"? This
+							action cannot be undone.
 						</DialogDescription>
 					</DialogHeader>
 					<DialogFooter className="flex flex-col sm:flex-row gap-2 sm:justify-end">
@@ -1026,5 +985,5 @@ const root = createRoot(document.getElementById('elysia')!)
 root.render(
 	<Layout className="gap-6">
 		<App />
-	</Layout>
+	</Layout>,
 )

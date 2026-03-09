@@ -3,7 +3,7 @@
  */
 
 export function generate404Page(): string {
-  return `<!DOCTYPE html>
+	return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
@@ -95,17 +95,17 @@ export function generate404Page(): string {
     Hosted on <a href="https://wisp.place" target="_blank" rel="noopener">wisp.place</a> - Made by <a href="https://bsky.app/profile/nekomimi.pet" target="_blank" rel="noopener">@nekomimi.pet</a>
   </footer>
 </body>
-</html>`;
+</html>`
 }
 
 export function generateDirectoryListing(path: string, entries: Array<{ name: string; isDirectory: boolean }>): string {
-  const sortedEntries = [...entries].sort((a, b) => {
-    if (a.isDirectory && !b.isDirectory) return -1;
-    if (!a.isDirectory && b.isDirectory) return 1;
-    return a.name.localeCompare(b.name);
-  });
+	const sortedEntries = [...entries].sort((a, b) => {
+		if (a.isDirectory && !b.isDirectory) return -1
+		if (!a.isDirectory && b.isDirectory) return 1
+		return a.name.localeCompare(b.name)
+	})
 
-  return `<!DOCTYPE html>
+	return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
@@ -225,19 +225,22 @@ export function generateDirectoryListing(path: string, entries: Array<{ name: st
   <h1>Index of /${path}</h1>
   <ul>
     ${path ? '<li><a href="../" class="parent">../</a></li>' : ''}
-    ${sortedEntries.map(e =>
-      `<li><a href="${e.name}${e.isDirectory ? '/' : ''}" class="${e.isDirectory ? 'folder' : 'file'}">${e.name}${e.isDirectory ? '/' : ''}</a></li>`
-    ).join('\n    ')}
+    ${sortedEntries
+			.map(
+				(e) =>
+					`<li><a href="${e.name}${e.isDirectory ? '/' : ''}" class="${e.isDirectory ? 'folder' : 'file'}">${e.name}${e.isDirectory ? '/' : ''}</a></li>`,
+			)
+			.join('\n    ')}
   </ul>
   <footer>
     Hosted on <a href="https://wisp.place" target="_blank" rel="noopener">wisp.place</a> - Made by <a href="https://bsky.app/profile/nekomimi.pet" target="_blank" rel="noopener">@nekomimi.pet</a>
   </footer>
 </body>
-</html>`;
+</html>`
 }
 
 export function generateSiteUpdatingPage(): string {
-  return `<!DOCTYPE html>
+	return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
@@ -310,16 +313,16 @@ export function generateSiteUpdatingPage(): string {
     <div class="spinner"></div>
   </div>
 </body>
-</html>`;
+</html>`
 }
 
 export function siteUpdatingResponse(): Response {
-  return new Response(generateSiteUpdatingPage(), {
-    status: 503,
-    headers: {
-      'Content-Type': 'text/html; charset=utf-8',
-      'Cache-Control': 'no-store, no-cache, must-revalidate',
-      'Retry-After': '3',
-    },
-  });
+	return new Response(generateSiteUpdatingPage(), {
+		status: 503,
+		headers: {
+			'Content-Type': 'text/html; charset=utf-8',
+			'Cache-Control': 'no-store, no-cache, must-revalidate',
+			'Retry-After': '3',
+		},
+	})
 }

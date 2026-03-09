@@ -8,10 +8,10 @@ export * from './core'
 
 // Export Grafana integration
 export {
+	type GrafanaConfig,
+	grafanaConfig,
 	initializeGrafanaExporters,
 	shutdownGrafanaExporters,
-	grafanaConfig,
-	type GrafanaConfig
 } from './exporters'
 
 // Note: Middleware should be imported from specific subpaths:

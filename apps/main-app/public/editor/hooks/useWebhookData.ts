@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 
 export interface WebhookRecord {
 	rkey: string
@@ -30,67 +30,33 @@ export function useWebhookData() {
 	const [eventLogsLoading, setEventLogsLoading] = useState(false)
 	const [isCreating, setIsCreating] = useState(false)
 
-	const fetchWebhooks = async () => {
+	const fetchWebhooks = useCallback(async () => {
 		setWebhooksLoading(true)
 		try {
 			const res = await fetch('/api/webhook', { credentials: 'include' })
 			if (!res.ok) throw new Error('Failed to fetch webhooks')
 			const data = await res.json()
 			if (data.success && data.records) {
-				setWebhooks(data.records.map((r: any) => ({
-					rkey: r.uri.split('/').pop(),
-					scopeAturi: r.value?.scope?.aturi ?? '',
-					url: r.value?.url ?? '',
-					backlinks: r.value?.scope?.backlinks ?? false,
-					events: r.value?.events ?? [],
-					enabled: r.value?.enabled ?? true,
-					createdAt: r.value?.createdAt ?? '',
-				})))
+				setWebhooks(
+					data.records.map((r: any) => ({
+						rkey: r.uri.split('/').pop(),
+						scopeAturi: r.value?.scope?.aturi ?? '',
+						url: r.value?.url ?? '',
+						backlinks: r.value?.scope?.backlinks ?? false,
+						events: r.value?.events ?? [],
+						enabled: r.value?.enabled ?? true,
+						createdAt: r.value?.createdAt ?? '',
+					})),
+				)
 			}
 		} catch (err) {
 			console.error('Failed to fetch webhooks:', err)
 		} finally {
 			setWebhooksLoading(false)
 		}
-	}
+	}, [])
 
-	const createWebhook = async (data: {
-		scopeAturi: string
-		url: string
-		backlinks: boolean
-		events: string[]
-		secret: string
-		enabled: boolean
-	}) => {
-		setIsCreating(true)
-		try {
-			const res = await fetch('/api/webhook', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				credentials: 'include',
-				body: JSON.stringify(data),
-			})
-			const result = await res.json()
-			if (!res.ok || !result.success) throw new Error(result.error || 'Failed to create webhook')
-			await fetchWebhooks()
-			return result
-		} finally {
-			setIsCreating(false)
-		}
-	}
-
-	const deleteWebhook = async (rkey: string) => {
-		const res = await fetch(`/api/webhook/${rkey}`, {
-			method: 'DELETE',
-			credentials: 'include',
-		})
-		const result = await res.json()
-		if (!res.ok || !result.success) throw new Error(result.error || 'Failed to delete webhook')
-		setWebhooks(prev => prev.filter(w => w.rkey !== rkey))
-	}
-
-	/** Fetch the last 100 webhook delivery events for this user from Redis. */
-	const fetchEventLogs = async () => {
+	const fetchEventLogs = useCallback(async () => {
 		setEventLogsLoading(true)
 		try {
 			const res = await fetch('/api/webhook/events', { credentials: 'include' })
@@ -102,11 +68,55 @@ export function useWebhookData() {
 		} finally {
 			setEventLogsLoading(false)
 		}
-	}
+	}, [])
+
+	const createWebhook = useCallback(
+		async (data: {
+			scopeAturi: string
+			url: string
+			backlinks: boolean
+			events: string[]
+			secret: string
+			enabled: boolean
+		}) => {
+			setIsCreating(true)
+			try {
+				const res = await fetch('/api/webhook', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					credentials: 'include',
+					body: JSON.stringify(data),
+				})
+				const result = await res.json()
+				if (!res.ok || !result.success) throw new Error(result.error || 'Failed to create webhook')
+				await fetchWebhooks()
+				return result
+			} finally {
+				setIsCreating(false)
+			}
+		},
+		[fetchWebhooks],
+	)
+
+	const deleteWebhook = useCallback(async (rkey: string) => {
+		const res = await fetch(`/api/webhook/${rkey}`, {
+			method: 'DELETE',
+			credentials: 'include',
+		})
+		const result = await res.json()
+		if (!res.ok || !result.success) throw new Error(result.error || 'Failed to delete webhook')
+		setWebhooks((prev) => prev.filter((w) => w.rkey !== rkey))
+	}, [])
 
 	return {
-		webhooks, webhooksLoading, fetchWebhooks,
-		eventLogs, eventLogsLoading, fetchEventLogs,
-		isCreating, createWebhook, deleteWebhook,
+		webhooks,
+		webhooksLoading,
+		fetchWebhooks,
+		eventLogs,
+		eventLogsLoading,
+		fetchEventLogs,
+		isCreating,
+		createWebhook,
+		deleteWebhook,
 	}
 }

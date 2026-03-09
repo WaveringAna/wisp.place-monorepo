@@ -3,16 +3,16 @@
  * Integrates with Grafana Loki for logs and Prometheus/OTLP for metrics
  */
 
-import type { LogEntry, ErrorEntry, MetricEntry } from './core'
-import { metrics, type MeterProvider, type Counter, type Histogram } from '@opentelemetry/api'
-import { MeterProvider as SdkMeterProvider, PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics'
+import os from 'node:os'
+import { gzipSync } from 'node:zlib'
+import { type Counter, type Histogram, type MeterProvider, metrics } from '@opentelemetry/api'
 import { OTLPMetricExporter as OTLPMetricExporterHTTP } from '@opentelemetry/exporter-metrics-otlp-http'
 import { OTLPMetricExporter as OTLPMetricExporterProto } from '@opentelemetry/exporter-metrics-otlp-proto'
 import type { CompressionAlgorithm } from '@opentelemetry/otlp-exporter-base'
 import { resourceFromAttributes } from '@opentelemetry/resources'
+import { PeriodicExportingMetricReader, MeterProvider as SdkMeterProvider } from '@opentelemetry/sdk-metrics'
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions'
-import os from 'node:os'
-import { gzipSync } from 'node:zlib'
+import type { ErrorEntry, LogEntry, MetricEntry } from './core'
 
 // ============================================================================
 // Types
@@ -58,7 +58,7 @@ class GrafanaExporterConfig {
 		batchSize: 100,
 		flushIntervalMs: 5000,
 		serviceName: 'wisp-app',
-		serviceVersion: '1.0.0'
+		serviceVersion: '1.0.0',
 	}
 
 	initialize(config: GrafanaConfig) {
@@ -211,13 +211,13 @@ class LokiExporter {
 		// Create streams for logs
 		for (const [key, entries] of logGroups) {
 			const [service, level] = key.split('-')
-			const values: Array<[string, string]> = entries.map(entry => {
+			const values: Array<[string, string]> = entries.map((entry) => {
 				const logLine = JSON.stringify({
 					_msg: entry.message,
 					message: entry.message,
 					context: entry.context,
 					traceId: entry.traceId,
-					eventType: entry.eventType
+					eventType: entry.eventType,
 				})
 
 				// Loki expects nanosecond timestamp as string
@@ -229,9 +229,9 @@ class LokiExporter {
 				stream: {
 					service: service || 'unknown',
 					level: level || 'info',
-					job: this.config.serviceName || 'wisp-app'
+					job: this.config.serviceName || 'wisp-app',
 				},
-				values
+				values,
 			})
 		}
 
@@ -246,13 +246,13 @@ class LokiExporter {
 
 		// Create streams for errors (one per service)
 		for (const [service, entries] of errorGroups) {
-			const errorValues: Array<[string, string]> = entries.map(entry => {
+			const errorValues: Array<[string, string]> = entries.map((entry) => {
 				const logLine = JSON.stringify({
 					_msg: entry.message,
 					message: entry.message,
 					stack: entry.stack,
 					context: entry.context,
-					count: entry.count
+					count: entry.count,
 				})
 
 				const nanoTimestamp = String(entry.timestamp.getTime() * 1000000)
@@ -264,9 +264,9 @@ class LokiExporter {
 					service: service,
 					level: 'error',
 					job: this.config.serviceName || 'wisp-app',
-					type: 'aggregated_error'
+					type: 'aggregated_error',
 				},
-				values: errorValues
+				values: errorValues,
 			})
 		}
 
@@ -278,15 +278,15 @@ class LokiExporter {
 
 		const headers: Record<string, string> = {
 			'Content-Type': 'application/json',
-			'Content-Encoding': 'gzip'
+			'Content-Encoding': 'gzip',
 		}
 
 		// Add authentication
 		if (this.config.lokiAuth?.bearerToken) {
-			headers['Authorization'] = `Bearer ${this.config.lokiAuth.bearerToken}`
+			headers.Authorization = `Bearer ${this.config.lokiAuth.bearerToken}`
 		} else if (this.config.lokiAuth?.username && this.config.lokiAuth?.password) {
 			const auth = Buffer.from(`${this.config.lokiAuth.username}:${this.config.lokiAuth.password}`).toString('base64')
-			headers['Authorization'] = `Basic ${auth}`
+			headers.Authorization = `Basic ${auth}`
 		}
 
 		// Gzip compress the payload
@@ -297,7 +297,7 @@ class LokiExporter {
 		const response = await fetch(`${this.config.lokiUrl}${lokiPath}`, {
 			method: 'POST',
 			headers,
-			body: compressedPayload
+			body: compressedPayload,
 		})
 
 		if (!response.ok) {
@@ -324,9 +324,8 @@ class MetricsExporter {
 		if (!this.config.enabled || !this.config.prometheusUrl) return
 
 		// Get encoding preference (default to protobuf for VictoriaMetrics compatibility)
-		const encoding = this.config.prometheusEncoding ||
-			(process.env.GRAFANA_PROMETHEUS_ENCODING as 'protobuf' | 'json') ||
-			'protobuf'
+		const encoding =
+			this.config.prometheusEncoding || (process.env.GRAFANA_PROMETHEUS_ENCODING as 'protobuf' | 'json') || 'protobuf'
 
 		// Create OTLP exporter with Prometheus endpoint
 		const prometheusPath = process.env.GRAFANA_PROMETHEUS_PATH || '/v1/metrics'
@@ -334,12 +333,11 @@ class MetricsExporter {
 			url: `${this.config.prometheusUrl}${prometheusPath}`,
 			headers: this.getAuthHeaders(),
 			timeoutMillis: 10000,
-			compression: 'gzip' as CompressionAlgorithm
+			compression: 'gzip' as CompressionAlgorithm,
 		}
 
-		const exporter = encoding === 'protobuf'
-			? new OTLPMetricExporterProto(exporterConfig)
-			: new OTLPMetricExporterHTTP(exporterConfig)
+		const exporter =
+			encoding === 'protobuf' ? new OTLPMetricExporterProto(exporterConfig) : new OTLPMetricExporterHTTP(exporterConfig)
 
 		// Create meter provider with periodic exporting
 		const hostname = os.hostname()
@@ -348,14 +346,14 @@ class MetricsExporter {
 			resource: resourceFromAttributes({
 				[ATTR_SERVICE_NAME]: serviceName,
 				[ATTR_SERVICE_VERSION]: this.config.serviceVersion || '1.0.0',
-				'instance': `${serviceName}-${hostname}`
+				instance: `${serviceName}-${hostname}`,
 			}),
 			readers: [
 				new PeriodicExportingMetricReader({
 					exporter,
-					exportIntervalMillis: this.config.flushIntervalMs || 5000
-				})
-			]
+					exportIntervalMillis: this.config.flushIntervalMs || 5000,
+				}),
+			],
 		})
 
 		// Set global meter provider
@@ -366,16 +364,16 @@ class MetricsExporter {
 		const meter = metrics.getMeter(this.config.serviceName || 'wisp-app')
 
 		this.requestCounter = meter.createCounter('http_requests_total', {
-			description: 'Total number of HTTP requests'
+			description: 'Total number of HTTP requests',
 		})
 
 		this.requestDuration = meter.createHistogram('http_request_duration_ms', {
 			description: 'HTTP request duration in milliseconds',
-			unit: 'ms'
+			unit: 'ms',
 		})
 
 		this.errorCounter = meter.createCounter('errors_total', {
-			description: 'Total number of errors'
+			description: 'Total number of errors',
 		})
 	}
 
@@ -383,10 +381,12 @@ class MetricsExporter {
 		const headers: Record<string, string> = {}
 
 		if (this.config.prometheusAuth?.bearerToken) {
-			headers['Authorization'] = `Bearer ${this.config.prometheusAuth.bearerToken}`
+			headers.Authorization = `Bearer ${this.config.prometheusAuth.bearerToken}`
 		} else if (this.config.prometheusAuth?.username && this.config.prometheusAuth?.password) {
-			const auth = Buffer.from(`${this.config.prometheusAuth.username}:${this.config.prometheusAuth.password}`).toString('base64')
-			headers['Authorization'] = `Basic ${auth}`
+			const auth = Buffer.from(
+				`${this.config.prometheusAuth.username}:${this.config.prometheusAuth.password}`,
+			).toString('base64')
+			headers.Authorization = `Basic ${auth}`
 		}
 
 		return headers
@@ -399,7 +399,7 @@ class MetricsExporter {
 			method: entry.method,
 			path: entry.path,
 			status: String(entry.statusCode),
-			service: entry.service
+			service: entry.service,
 		}
 
 		// Record request count
@@ -439,7 +439,7 @@ export function initializeGrafanaExporters(config?: GrafanaConfig) {
 		console.log('[Observability] Initializing Grafana exporters', {
 			lokiEnabled: !!finalConfig.lokiUrl,
 			prometheusEnabled: !!finalConfig.prometheusUrl,
-			serviceName: finalConfig.serviceName
+			serviceName: finalConfig.serviceName,
 		})
 
 		lokiExporter.initialize(finalConfig)
@@ -449,7 +449,7 @@ export function initializeGrafanaExporters(config?: GrafanaConfig) {
 	return {
 		lokiExporter,
 		metricsExporter,
-		config: finalConfig
+		config: finalConfig,
 	}
 }
 

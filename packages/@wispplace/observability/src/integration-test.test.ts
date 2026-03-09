@@ -3,11 +3,11 @@
  * Tests both mock server and live server connections
  */
 
-import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
-import { createLogger, metricsCollector, initializeGrafanaExporters, shutdownGrafanaExporters } from './index'
-import { Hono } from 'hono'
-import { serve } from '@hono/node-server'
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import type { ServerType } from '@hono/node-server'
+import { serve } from '@hono/node-server'
+import { Hono } from 'hono'
+import { createLogger, initializeGrafanaExporters, metricsCollector, shutdownGrafanaExporters } from './index'
 
 // ============================================================================
 // Mock Grafana Server
@@ -37,7 +37,7 @@ class MockGrafanaServer {
 				method: 'POST',
 				path: '/loki/api/v1/push',
 				headers: Object.fromEntries(c.req.raw.headers.entries()),
-				body
+				body,
 			})
 			return c.json({ status: 'success' })
 		})
@@ -49,7 +49,7 @@ class MockGrafanaServer {
 				method: 'POST',
 				path: '/v1/metrics',
 				headers: Object.fromEntries(c.req.raw.headers.entries()),
-				body
+				body,
 			})
 			return c.json({ status: 'success' })
 		})
@@ -61,10 +61,10 @@ class MockGrafanaServer {
 	async start() {
 		this.server = serve({
 			fetch: this.app.fetch,
-			port: this.port
+			port: this.port,
 		})
 		// Wait a bit for server to be ready
-		await new Promise(resolve => setTimeout(resolve, 100))
+		await new Promise((resolve) => setTimeout(resolve, 100))
 	}
 
 	async stop() {
@@ -79,7 +79,7 @@ class MockGrafanaServer {
 	}
 
 	getRequestsByPath(path: string): MockRequest[] {
-		return this.requests.filter(r => r.path === path)
+		return this.requests.filter((r) => r.path === path)
 	}
 
 	async waitForRequests(count: number, timeoutMs: number = 10000): Promise<boolean> {
@@ -88,7 +88,7 @@ class MockGrafanaServer {
 			if (Date.now() - startTime > timeoutMs) {
 				return false
 			}
-			await new Promise(resolve => setTimeout(resolve, 100))
+			await new Promise((resolve) => setTimeout(resolve, 100))
 		}
 		return true
 	}
@@ -116,16 +116,16 @@ describe('Grafana Integration', () => {
 			lokiUrl: mockUrl,
 			lokiAuth: {
 				username: 'testuser',
-				password: 'testpass'
+				password: 'testpass',
 			},
 			prometheusUrl: mockUrl,
 			prometheusAuth: {
 				username: 'testuser',
-				password: 'testpass'
+				password: 'testpass',
 			},
 			serviceName: 'test-service',
 			batchSize: 5,
-			flushIntervalMs: 1000
+			flushIntervalMs: 1000,
 		})
 
 		expect(config.config.enabled).toBe(true)
@@ -143,11 +143,11 @@ describe('Grafana Integration', () => {
 			lokiUrl: mockUrl,
 			lokiAuth: {
 				username: 'testuser',
-				password: 'testpass'
+				password: 'testpass',
 			},
 			serviceName: 'test-logs',
 			batchSize: 2,
-			flushIntervalMs: 500
+			flushIntervalMs: 500,
 		})
 
 		const logger = createLogger('test-logs')
@@ -166,7 +166,7 @@ describe('Grafana Integration', () => {
 		const lastRequest = lokiRequests[lokiRequests.length - 1]!
 
 		// Verify basic auth header
-		expect(lastRequest.headers['authorization']).toMatch(/^Basic /)
+		expect(lastRequest.headers.authorization).toMatch(/^Basic /)
 
 		// Verify Loki batch format
 		expect(lastRequest.body).toHaveProperty('streams')
@@ -189,10 +189,10 @@ describe('Grafana Integration', () => {
 			lokiUrl: undefined, // Explicitly disable Loki
 			prometheusUrl: mockUrl,
 			prometheusAuth: {
-				bearerToken: 'test-token-123'
+				bearerToken: 'test-token-123',
 			},
 			serviceName: 'test-metrics',
-			flushIntervalMs: 1000
+			flushIntervalMs: 1000,
 		})
 
 		// Generate metrics
@@ -201,7 +201,7 @@ describe('Grafana Integration', () => {
 		}
 
 		// Wait for metrics to be exported
-		await new Promise(resolve => setTimeout(resolve, 2000))
+		await new Promise((resolve) => setTimeout(resolve, 2000))
 
 		const prometheusRequests = mockServer.getRequestsByPath('/v1/metrics')
 		expect(prometheusRequests.length).toBeGreaterThan(0)
@@ -209,7 +209,7 @@ describe('Grafana Integration', () => {
 		// Note: Due to singleton exporters, we may see auth from previous test
 		// The key thing is that metrics are being sent
 		const lastRequest = prometheusRequests[prometheusRequests.length - 1]!
-		expect(lastRequest.headers['authorization']).toBeTruthy()
+		expect(lastRequest.headers.authorization).toBeTruthy()
 
 		await shutdownGrafanaExporters()
 	})
@@ -220,11 +220,11 @@ describe('Grafana Integration', () => {
 			lokiUrl: 'http://localhost:9998', // Non-existent server
 			lokiAuth: {
 				username: 'test',
-				password: 'test'
+				password: 'test',
 			},
 			serviceName: 'test-error',
 			batchSize: 1,
-			flushIntervalMs: 500
+			flushIntervalMs: 500,
 		})
 
 		expect(config.config.enabled).toBe(true)
@@ -235,7 +235,7 @@ describe('Grafana Integration', () => {
 		logger.info('This should not crash')
 
 		// Wait for flush attempt
-		await new Promise(resolve => setTimeout(resolve, 1000))
+		await new Promise((resolve) => setTimeout(resolve, 1000))
 
 		// If we got here, error handling worked
 		expect(true).toBe(true)
@@ -251,8 +251,7 @@ describe('Grafana Integration', () => {
 describe('Live Grafana Connection (Optional)', () => {
 	const hasLiveConfig = Boolean(
 		process.env.GRAFANA_LOKI_URL &&
-		(process.env.GRAFANA_LOKI_TOKEN ||
-			(process.env.GRAFANA_LOKI_USERNAME && process.env.GRAFANA_LOKI_PASSWORD))
+			(process.env.GRAFANA_LOKI_TOKEN || (process.env.GRAFANA_LOKI_USERNAME && process.env.GRAFANA_LOKI_PASSWORD)),
 	)
 
 	test.skipIf(!hasLiveConfig)('should connect to live Loki server', async () => {
@@ -260,7 +259,7 @@ describe('Live Grafana Connection (Optional)', () => {
 			serviceName: 'test-live-loki',
 			serviceVersion: '1.0.0-test',
 			batchSize: 5,
-			flushIntervalMs: 2000
+			flushIntervalMs: 2000,
 		})
 
 		expect(config.config.enabled).toBe(true)
@@ -274,7 +273,7 @@ describe('Live Grafana Connection (Optional)', () => {
 		logger.error('Test error (ignore)', new Error('Test error'), { safe: true })
 
 		// Wait for flush
-		await new Promise(resolve => setTimeout(resolve, 3000))
+		await new Promise((resolve) => setTimeout(resolve, 3000))
 
 		// If we got here without errors, connection worked
 		expect(true).toBe(true)
@@ -285,8 +284,8 @@ describe('Live Grafana Connection (Optional)', () => {
 	test.skipIf(!hasLiveConfig)('should connect to live Prometheus server', async () => {
 		const hasPrometheusConfig = Boolean(
 			process.env.GRAFANA_PROMETHEUS_URL &&
-			(process.env.GRAFANA_PROMETHEUS_TOKEN ||
-				(process.env.GRAFANA_PROMETHEUS_USERNAME && process.env.GRAFANA_PROMETHEUS_PASSWORD))
+				(process.env.GRAFANA_PROMETHEUS_TOKEN ||
+					(process.env.GRAFANA_PROMETHEUS_USERNAME && process.env.GRAFANA_PROMETHEUS_PASSWORD)),
 		)
 
 		if (!hasPrometheusConfig) {
@@ -297,7 +296,7 @@ describe('Live Grafana Connection (Optional)', () => {
 		const config = initializeGrafanaExporters({
 			serviceName: 'test-live-prometheus',
 			serviceVersion: '1.0.0-test',
-			flushIntervalMs: 2000
+			flushIntervalMs: 2000,
 		})
 
 		expect(config.config.enabled).toBe(true)
@@ -305,17 +304,11 @@ describe('Live Grafana Connection (Optional)', () => {
 
 		// Generate test metrics
 		for (let i = 0; i < 10; i++) {
-			metricsCollector.recordRequest(
-				'/test/endpoint',
-				'GET',
-				200,
-				50 + Math.random() * 200,
-				'test-live-prometheus'
-			)
+			metricsCollector.recordRequest('/test/endpoint', 'GET', 200, 50 + Math.random() * 200, 'test-live-prometheus')
 		}
 
 		// Wait for export
-		await new Promise(resolve => setTimeout(resolve, 3000))
+		await new Promise((resolve) => setTimeout(resolve, 3000))
 
 		expect(true).toBe(true)
 

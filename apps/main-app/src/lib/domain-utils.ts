@@ -13,7 +13,7 @@ const RESERVED_HANDLES = new Set([
 	'cdn',
 	'pds',
 	'staging',
-	'auth'
+	'auth',
 ])
 
 const RESERVED_CUSTOM_DOMAINS = new Set([
@@ -23,13 +23,10 @@ const RESERVED_CUSTOM_DOMAINS = new Set([
 	'example.net',
 	'test',
 	'invalid',
-	'local'
+	'local',
 ])
 
-const RESERVED_CUSTOM_PATTERNS = [
-	/^(?:10|127|172\.(?:1[6-9]|2[0-9]|3[01])|192\.168)\./,
-	/^(?:\d{1,3}\.){3}\d{1,3}$/
-]
+const RESERVED_CUSTOM_PATTERNS = [/^(?:10|127|172\.(?:1[6-9]|2[0-9]|3[01])|192\.168)\./, /^(?:\d{1,3}\.){3}\d{1,3}$/]
 
 const CUSTOM_DOMAIN_PATTERN = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/
 

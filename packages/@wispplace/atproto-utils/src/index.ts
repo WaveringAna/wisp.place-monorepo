@@ -1,18 +1,16 @@
 // Blob utilities
-export { computeCID, extractBlobMap, extractBlobCid } from './blob';
+export { computeCID, extractBlobCid, extractBlobMap } from './blob'
 
 // Compression utilities
-export { shouldCompressFile, shouldCompressMimeType, compressFile, isTextMimeType } from './compression';
-
-// Subfs utilities
-export { extractSubfsUris } from './subfs';
-
+export { compressFile, isTextMimeType, shouldCompressFile, shouldCompressMimeType } from './compression'
 // Identity utilities
 export {
-  resolveDid,
-  getPdsForDid,
-  getDidDocument,
-  getHandleForDid,
-  didWebToHttps,
-  resolvePdsFromHandle
-} from './identity';
+	didWebToHttps,
+	getDidDocument,
+	getHandleForDid,
+	getPdsForDid,
+	resolveDid,
+	resolvePdsFromHandle,
+} from './identity'
+// Subfs utilities
+export { extractSubfsUris } from './subfs'

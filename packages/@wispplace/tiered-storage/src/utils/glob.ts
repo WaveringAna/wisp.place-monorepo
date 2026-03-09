@@ -10,25 +10,22 @@
 export function matchGlob(pattern: string, key: string): boolean {
 	// Handle exact match
 	if (!pattern.includes('*') && !pattern.includes('{')) {
-		return pattern === key;
+		return pattern === key
 	}
 
 	// Escape regex special chars (except * and {})
-	let regex = pattern.replace(/[.+^$|\\()[\]]/g, '\\$&');
+	let regex = pattern.replace(/[.+^$|\\()[\]]/g, '\\$&')
 
 	// Handle {a,b,c} alternation
-	regex = regex.replace(
-		/\{([^}]+)\}/g,
-		(_match: string, alts: string) => `(${alts.split(',').join('|')})`,
-	);
+	regex = regex.replace(/\{([^}]+)\}/g, (_match: string, alts: string) => `(${alts.split(',').join('|')})`)
 
 	// Use placeholder to avoid double-processing
-	const DOUBLE = '\x00DOUBLE\x00';
-	const SINGLE = '\x00SINGLE\x00';
+	const DOUBLE = '\x00DOUBLE\x00'
+	const SINGLE = '\x00SINGLE\x00'
 
 	// Mark ** and * with placeholders
-	regex = regex.replace(/\*\*/g, DOUBLE);
-	regex = regex.replace(/\*/g, SINGLE);
+	regex = regex.replace(/\*\*/g, DOUBLE)
+	regex = regex.replace(/\*/g, SINGLE)
 
 	// Replace placeholders with regex patterns
 	// ** matches anything (including /)
@@ -37,7 +34,7 @@ export function matchGlob(pattern: string, key: string): boolean {
 		.replace(new RegExp(`${DOUBLE}/`, 'g'), '(?:.*/)?') // **/ -> optional path prefix
 		.replace(new RegExp(`/${DOUBLE}`, 'g'), '(?:/.*)?') // /** -> optional path suffix
 		.replace(new RegExp(DOUBLE, 'g'), '.*') // ** alone -> match anything
-		.replace(new RegExp(SINGLE, 'g'), '[^/]*'); // * -> match non-slash
+		.replace(new RegExp(SINGLE, 'g'), '[^/]*') // * -> match non-slash
 
-	return new RegExp(`^${regex}$`).test(key);
+	return new RegExp(`^${regex}$`).test(key)
 }

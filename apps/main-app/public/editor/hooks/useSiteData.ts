@@ -38,16 +38,16 @@ export function useSiteData() {
 						const domainsData = await domainsResponse.json()
 						return {
 							...site,
-							domains: domainsData.domains || []
+							domains: domainsData.domains || [],
 						}
 					} catch (err) {
 						console.error(`Failed to fetch domains for site ${site.rkey}:`, err)
 						return {
 							...site,
-							domains: []
+							domains: [],
 						}
 					}
-				})
+				}),
 			)
 
 			setSites(sitesWithDomains)
@@ -62,7 +62,7 @@ export function useSiteData() {
 		setIsSyncing(true)
 		try {
 			const response = await fetch('/api/user/sync', {
-				method: 'POST'
+				method: 'POST',
 			})
 			const data = await response.json()
 			if (data.success) {
@@ -81,7 +81,7 @@ export function useSiteData() {
 	const deleteSite = async (rkey: string) => {
 		try {
 			const response = await fetch(`/api/site/${rkey}`, {
-				method: 'DELETE'
+				method: 'DELETE',
 			})
 
 			const data = await response.json()
@@ -94,9 +94,7 @@ export function useSiteData() {
 			}
 		} catch (err) {
 			console.error('Delete site error:', err)
-			alert(
-				`Failed to delete site: ${err instanceof Error ? err.message : 'Unknown error'}`
-			)
+			alert(`Failed to delete site: ${err instanceof Error ? err.message : 'Unknown error'}`)
 			return false
 		}
 	}
@@ -107,6 +105,6 @@ export function useSiteData() {
 		isSyncing,
 		fetchSites,
 		syncSites,
-		deleteSite
+		deleteSite,
 	}
 }

@@ -1,31 +1,28 @@
-import type { Directory } from "@wispplace/lexicons/types/place/wisp/fs";
+import type { Directory } from '@wispplace/lexicons/types/place/wisp/fs'
 
 /**
  * Extract all subfs URIs from a directory tree with their mount paths
  */
-export function extractSubfsUris(
-	directory: Directory,
-	currentPath: string = ''
-): Array<{ uri: string; path: string }> {
-	const uris: Array<{ uri: string; path: string }> = [];
+export function extractSubfsUris(directory: Directory, currentPath: string = ''): Array<{ uri: string; path: string }> {
+	const uris: Array<{ uri: string; path: string }> = []
 
 	for (const entry of directory.entries) {
-		const fullPath = currentPath ? `${currentPath}/${entry.name}` : entry.name;
+		const fullPath = currentPath ? `${currentPath}/${entry.name}` : entry.name
 
 		if ('type' in entry.node) {
 			if (entry.node.type === 'subfs') {
 				// Subfs node with subject URI
-				const subfsNode = entry.node as any;
+				const subfsNode = entry.node as any
 				if (subfsNode.subject) {
-					uris.push({ uri: subfsNode.subject, path: fullPath });
+					uris.push({ uri: subfsNode.subject, path: fullPath })
 				}
 			} else if (entry.node.type === 'directory') {
 				// Recursively search subdirectories
-				const subUris = extractSubfsUris(entry.node as Directory, fullPath);
-				uris.push(...subUris);
+				const subUris = extractSubfsUris(entry.node as Directory, fullPath)
+				uris.push(...subUris)
 			}
 		}
 	}
 
-	return uris;
+	return uris
 }
