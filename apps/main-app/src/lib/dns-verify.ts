@@ -1,51 +1,24 @@
-import * as dgram from 'dgram'
+import * as dgram from 'node:dgram'
 import * as dnsPacket from 'dns-packet'
-import { readFileSync } from 'fs'
-import { join } from 'path'
 
-/**
- * Parse the named.root hints file to extract IPv4 addresses.
- * Source: https://www.internic.net/domain/named.root
- * Format: lines like "A.ROOT-SERVERS.NET.  3600000  A  198.41.0.4"
- */
-function loadRootServers(): string[] {
-	const text = readFileSync(join(import.meta.dir, 'named.root'), 'utf-8')
-	const ips: string[] = []
-	for (const line of text.split('\n')) {
-		const trimmed = line.trim()
-		if (trimmed.startsWith(';') || trimmed === '') continue
-		const match = trimmed.match(/^\S+\s+\d+\s+A\s+(\d+\.\d+\.\d+\.\d+)$/i)
-		if (match) {
-			ips.push(match[1])
-		}
-	}
-	if (ips.length === 0) {
-		throw new Error('Failed to parse any root servers from named.root')
-	}
-	return ips
-}
+// Cloudflare, Google, OpenDNS — queried in parallel for NS discovery
+const PUBLIC_RESOLVERS = ['1.1.1.1', '8.8.8.8', '208.67.222.222']
 
-const ROOT_SERVERS = loadRootServers()
+const QUERY_TIMEOUT_MS = 3000
 
-const QUERY_TIMEOUT_MS = 5000
-const MAX_RECURSION_DEPTH = 10
-
-/**
- * Pick a random element from an array
- */
-function pickRandom<T>(arr: T[]): T {
-	return arr[Math.floor(Math.random() * arr.length)]
-}
+// RD (recursion desired) flag bit
+const RD_FLAG = 0x0100
 
 /**
  * Send a raw DNS query to a specific server and parse the response.
- * Handles both authoritative answers and referral responses.
+ * recursive=true sets RD=1 (for public resolvers); false sets RD=0 (for authoritative NS).
  */
 function queryDNS(
 	name: string,
 	type: dnsPacket.RecordType,
 	server: string,
-	port = 53
+	port = 53,
+	recursive = false,
 ): Promise<dnsPacket.Packet> {
 	return new Promise((resolve, reject) => {
 		const socket = dgram.createSocket('udp4')
@@ -57,8 +30,8 @@ function queryDNS(
 		const query = dnsPacket.encode({
 			type: 'query',
 			id: Math.floor(Math.random() * 65535),
-			flags: 0, // No recursion desired — we handle it ourselves
-			questions: [{ type, name, class: 'IN' }]
+			flags: recursive ? RD_FLAG : 0,
+			questions: [{ type, name, class: 'IN' }],
 		})
 
 		socket.on('message', (msg) => {
@@ -83,7 +56,6 @@ function queryDNS(
 
 /**
  * Extract IPv4 glue records from the additional section of a DNS response.
- * These are A records for nameservers mentioned in the authority section.
  */
 function extractGlueRecords(response: dnsPacket.Packet): Map<string, string[]> {
 	const glue = new Map<string, string[]>()
@@ -98,166 +70,94 @@ function extractGlueRecords(response: dnsPacket.Packet): Map<string, string[]> {
 	return glue
 }
 
-/**
- * Extract NS hostnames from the authority section of a referral response.
- */
-function extractNSFromAuthority(response: dnsPacket.Packet): string[] {
-	const nsNames: string[] = []
-	for (const record of response.authorities ?? []) {
-		if (record.type === 'NS' && 'data' in record && typeof record.data === 'string') {
-			nsNames.push(record.data.toLowerCase().replace(/\.$/, ''))
-		}
-	}
-	return nsNames
-}
-
-/**
- * Extract NS hostnames from the answer section.
- */
 function extractNSFromAnswer(response: dnsPacket.Packet): string[] {
-	const nsNames: string[] = []
-	for (const record of response.answers ?? []) {
-		if (record.type === 'NS' && 'data' in record && typeof record.data === 'string') {
-			nsNames.push(record.data.toLowerCase().replace(/\.$/, ''))
-		}
-	}
-	return nsNames
+	return (response.answers ?? [])
+		.filter((r) => r.type === 'NS' && 'data' in r && typeof r.data === 'string')
+		.map((r) => (r as any).data.toLowerCase().replace(/\.$/, ''))
 }
 
 /**
- * Resolve a nameserver hostname to an IP address.
- * Uses the system resolver as a fallback for resolving NS hostnames to IPs
- * when glue records are not available.
+ * Discover authoritative nameserver IPs for a given name.
+ *
+ * Walks up the label hierarchy (e.g. _wisp.example.com → example.com) querying
+ * all three public resolvers in parallel (RD=1) until NS records appear in the
+ * answer section. NS records only exist at zone apexes, so subdomains and
+ * underscore labels are skipped automatically.
  */
-async function resolveNStoIP(nsName: string): Promise<string | null> {
-	try {
-		// Do a recursive resolve from root for the NS hostname itself
-		const response = await recursiveResolve(nsName, 'A', ROOT_SERVERS, 0)
-		for (const record of response.answers ?? []) {
-			if (record.type === 'A' && 'data' in record && typeof record.data === 'string') {
-				return record.data
-			}
-		}
-	} catch {
-		// Fallback: use system resolver
+async function getAuthoritativeServers(name: string): Promise<string[]> {
+	const labels = name.split('.')
+
+	for (let i = 0; i <= labels.length - 2; i++) {
+		const candidate = labels.slice(i).join('.')
+
+		let response: dnsPacket.Packet
 		try {
-			const { Resolver } = await import('dns')
-			const resolver = new Resolver()
-			const ips = await new Promise<string[]>((resolve, reject) => {
-				resolver.resolve4(nsName, (err, addresses) => {
-					if (err) reject(err)
-					else resolve(addresses)
-				})
-			})
-			if (ips.length > 0) return ips[0]
+			response = await Promise.any(PUBLIC_RESOLVERS.map((r) => queryDNS(candidate, 'NS', r, 53, true)))
 		} catch {
-			// Both methods failed
+			continue
 		}
+
+		const nsNames = extractNSFromAnswer(response)
+		if (nsNames.length === 0) continue
+
+		const glue = extractGlueRecords(response)
+		const ips: string[] = []
+
+		for (const ns of nsNames) {
+			const glueIps = glue.get(ns)
+			if (glueIps) ips.push(...glueIps)
+		}
+
+		if (ips.length > 0) return ips
+
+		// No glue — resolve NS hostnames via public resolvers in parallel
+		await Promise.allSettled(
+			nsNames.slice(0, 3).map(async (ns) => {
+				try {
+					const aResp = await Promise.any(PUBLIC_RESOLVERS.map((r) => queryDNS(ns, 'A', r, 53, true)))
+					for (const record of aResp.answers ?? []) {
+						if (record.type === 'A' && 'data' in record && typeof record.data === 'string') {
+							ips.push(record.data)
+						}
+					}
+				} catch {}
+			}),
+		)
+
+		if (ips.length > 0) return ips
 	}
-	return null
+
+	throw new Error(`No NS records found for ${name}`)
 }
 
 /**
- * Get usable IP addresses for nameservers from a referral response.
- * First tries glue records, then resolves NS hostnames.
- */
-async function getServerIPsFromReferral(response: dnsPacket.Packet): Promise<string[]> {
-	const nsNames = extractNSFromAuthority(response)
-	if (nsNames.length === 0) return []
-
-	const glue = extractGlueRecords(response)
-	const ips: string[] = []
-
-	// First, collect all IPs from glue records
-	for (const ns of nsNames) {
-		const glueIps = glue.get(ns)
-		if (glueIps) {
-			ips.push(...glueIps)
-		}
-	}
-
-	// If we have glue IPs, use them
-	if (ips.length > 0) return ips
-
-	// Otherwise, resolve NS hostnames (this is rare but happens with out-of-bailiwick NS)
-	for (const ns of nsNames) {
-		const ip = await resolveNStoIP(ns)
-		if (ip) {
-			ips.push(ip)
-			// One is enough to continue
-			if (ips.length >= 2) break
-		}
-	}
-
-	return ips
-}
-
-/**
- * Recursively resolve a DNS query starting from the given servers.
- * Follows referrals (NS delegations) down the DNS tree until we get
- * an authoritative answer or hit max depth.
- */
-async function recursiveResolve(
-	name: string,
-	type: dnsPacket.RecordType,
-	servers: string[],
-	depth: number
-): Promise<dnsPacket.Packet> {
-	if (depth >= MAX_RECURSION_DEPTH) {
-		throw new Error(`Max recursion depth reached resolving ${type} ${name}`)
-	}
-
-	const server = pickRandom(servers)
-	const response = await queryDNS(name, type, server)
-
-	// Check if we got an authoritative answer
-	const hasAnswers = (response.answers?.length ?? 0) > 0
-	if (hasAnswers) {
-		return response
-	}
-
-	// Check for NXDOMAIN or NODATA (authoritative negative response)
-	const rcode = response.rcode
-	if (rcode === 'NXDOMAIN' || rcode === 'NOTFOUND') {
-		return response // No such domain
-	}
-
-	// Check if this is a referral (has authority NS records)
-	const nsNames = extractNSFromAuthority(response)
-	if (nsNames.length === 0) {
-		// No answers and no referrals — return what we have
-		return response
-	}
-
-	// Follow the referral
-	const nextServers = await getServerIPsFromReferral(response)
-	if (nextServers.length === 0) {
-		throw new Error(`Could not resolve any NS IPs for referral while resolving ${type} ${name}`)
-	}
-
-	return recursiveResolve(name, type, nextServers, depth + 1)
-}
-
-/**
- * Resolve a DNS query from root nameservers to authoritative answer.
+ * Query a DNS record directly from the domain's authoritative nameservers.
+ * NS discovery uses public resolvers (cached, fast); the actual record query
+ * goes direct to the NS with RD=0 for an authoritative answer.
  */
 async function authoritativeResolve(name: string, type: dnsPacket.RecordType): Promise<dnsPacket.Packet> {
-	console.log(`[DNS Recursive] Resolving ${type} ${name} from root`)
-	return recursiveResolve(name, type, ROOT_SERVERS, 0)
+	console.log(`[DNS] Resolving ${type} ${name} via authoritative NS`)
+	const servers = await getAuthoritativeServers(name)
+
+	let lastError: Error | null = null
+	for (const server of servers.toSorted(() => Math.random() - 0.5)) {
+		try {
+			return await queryDNS(name, type, server)
+		} catch (err) {
+			lastError = err as Error
+		}
+	}
+	throw lastError ?? new Error(`All nameservers failed for ${type} ${name}`)
 }
 
-/**
- * Query TXT records from authoritative nameservers, resolved from root.
- */
 async function authoritativeResolveTxt(domain: string): Promise<string[][]> {
 	const response = await authoritativeResolve(domain, 'TXT')
-
 	const records: string[][] = []
 	for (const answer of response.answers ?? []) {
 		if (answer.type === 'TXT' && 'data' in answer) {
 			const data = answer.data as Buffer | Buffer[] | string | string[]
 			if (Array.isArray(data)) {
-				records.push(data.map(d => Buffer.isBuffer(d) ? d.toString('utf-8') : String(d)))
+				records.push(data.map((d) => (Buffer.isBuffer(d) ? d.toString('utf-8') : String(d))))
 			} else if (Buffer.isBuffer(data)) {
 				records.push([data.toString('utf-8')])
 			} else {
@@ -265,24 +165,14 @@ async function authoritativeResolveTxt(domain: string): Promise<string[][]> {
 			}
 		}
 	}
-
 	return records
 }
 
-/**
- * Query CNAME records from authoritative nameservers, resolved from root.
- */
 async function authoritativeResolveCname(domain: string): Promise<string[]> {
 	const response = await authoritativeResolve(domain, 'CNAME')
-
-	const records: string[] = []
-	for (const answer of response.answers ?? []) {
-		if (answer.type === 'CNAME' && 'data' in answer && typeof answer.data === 'string') {
-			records.push(answer.data.toLowerCase().replace(/\.$/, ''))
-		}
-	}
-
-	return records
+	return (response.answers ?? [])
+		.filter((r) => r.type === 'CNAME' && 'data' in r && typeof r.data === 'string')
+		.map((r) => (r as any).data.toLowerCase().replace(/\.$/, ''))
 }
 
 /**
@@ -293,6 +183,8 @@ export interface VerificationResult {
 	verified: boolean
 	/** Error message if verification failed */
 	error?: string
+	/** Warning message (e.g. duplicate records detected) */
+	warning?: string
 	/** DNS records found during verification */
 	found?: {
 		/** TXT records found (used for domain verification) */
@@ -303,29 +195,27 @@ export interface VerificationResult {
 }
 
 /**
- * Verify domain ownership via TXT record at _wisp.{domain}
- * Expected format: did:plc:xxx or did:web:xxx
- *
- * Resolves from root nameservers to get authoritative answers.
+ * Verify domain ownership via TXT record at _wisp.{domain}.
+ * Expected value: the user's DID (did:plc:xxx or did:web:xxx).
  */
 export const verifyDomainOwnership = async (domain: string, expectedDid: string): Promise<VerificationResult> => {
 	try {
 		const txtDomain = `_wisp.${domain}`
-
-		console.log(`[DNS Verify] Checking TXT record for ${txtDomain} (recursive from root)`)
-		console.log(`[DNS Verify] Expected DID: ${expectedDid}`)
+		console.log(`[DNS Verify] Checking TXT ${txtDomain}, expected: ${expectedDid}`)
 
 		const records = await authoritativeResolveTxt(txtDomain)
-
-		const foundTxtValues = records.map((record) => record.join(''))
+		const foundTxtValues = records.map((r) => r.join(''))
 		console.log(`[DNS Verify] Found TXT records:`, foundTxtValues)
 
-		for (const record of records) {
-			const txtValue = record.join('')
-			if (txtValue === expectedDid) {
-				console.log(`[DNS Verify] ✓ TXT record matches!`)
-				return { verified: true, found: { txt: foundTxtValues } }
-			}
+		if (foundTxtValues.find((v) => v === expectedDid)) {
+			console.log(`[DNS Verify] ✓ TXT record matches`)
+			const extras = foundTxtValues.filter((v) => v !== expectedDid)
+			const warning =
+				extras.length > 0
+					? `Multiple TXT records found at ${txtDomain}. Remove the extra record(s) to avoid issues: ${extras.join(', ')}`
+					: undefined
+			if (warning) console.log(`[DNS Verify] ⚠️  ${warning}`)
+			return { verified: true, warning, found: { txt: foundTxtValues } }
 		}
 
 		console.log(`[DNS Verify] ✗ TXT record does not match`)
@@ -336,13 +226,6 @@ export const verifyDomainOwnership = async (domain: string, expectedDid: string)
 		}
 	} catch (err: any) {
 		console.log(`[DNS Verify] ✗ TXT lookup error:`, err.message)
-		if (err.code === 'ENOTFOUND' || err.code === 'ENODATA') {
-			return {
-				verified: false,
-				error: `No TXT record found at _wisp.${domain}`,
-				found: { txt: [] },
-			}
-		}
 		return {
 			verified: false,
 			error: `DNS lookup failed: ${err.message}`,
@@ -352,53 +235,34 @@ export const verifyDomainOwnership = async (domain: string, expectedDid: string)
 }
 
 /**
- * Verify CNAME record points to the expected hash target
- * For custom domains, we expect: domain CNAME -> {hash}.dns.wisp.place
- *
- * Resolves from root nameservers to get authoritative answers.
+ * Verify CNAME record points to {hash}.dns.wisp.place.
  */
 export const verifyCNAME = async (domain: string, expectedHash: string): Promise<VerificationResult> => {
 	try {
-		console.log(`[DNS Verify] Checking CNAME record for ${domain} (recursive from root)`)
 		const expectedTarget = `${expectedHash}.dns.wisp.place`
-		console.log(`[DNS Verify] Expected CNAME: ${expectedTarget}`)
+		console.log(`[DNS Verify] Checking CNAME ${domain}, expected: ${expectedTarget}`)
 
-		const cname = await authoritativeResolveCname(domain)
+		const cnames = await authoritativeResolveCname(domain)
+		const foundCname = cnames[0] ?? null
+		console.log(`[DNS Verify] Found CNAME:`, foundCname ?? 'none')
 
-		const foundCname = cname.length > 0 ? cname[0]?.toLowerCase().replace(/\.$/, '') : null
-		console.log(`[DNS Verify] Found CNAME:`, foundCname || 'none')
-
-		if (cname.length === 0 || !foundCname) {
-			console.log(`[DNS Verify] ✗ No CNAME record found`)
-			return {
-				verified: false,
-				error: `No CNAME record found for ${domain}`,
-				found: { cname: '' },
-			}
+		if (!foundCname) {
+			return { verified: false, error: `No CNAME record found for ${domain}`, found: { cname: '' } }
 		}
 
-		const actualTarget = foundCname
-
-		if (actualTarget === expectedTarget.toLowerCase()) {
-			console.log(`[DNS Verify] ✓ CNAME record matches!`)
-			return { verified: true, found: { cname: actualTarget } }
+		if (foundCname === expectedTarget.toLowerCase()) {
+			console.log(`[DNS Verify] ✓ CNAME record matches`)
+			return { verified: true, found: { cname: foundCname } }
 		}
 
 		console.log(`[DNS Verify] ✗ CNAME record does not match`)
 		return {
 			verified: false,
-			error: `CNAME for ${domain} points to ${actualTarget}, expected ${expectedTarget}`,
-			found: { cname: actualTarget },
+			error: `CNAME for ${domain} points to ${foundCname}, expected ${expectedTarget}`,
+			found: { cname: foundCname },
 		}
 	} catch (err: any) {
 		console.log(`[DNS Verify] ✗ CNAME lookup error:`, err.message)
-		if (err.code === 'ENOTFOUND' || err.code === 'ENODATA') {
-			return {
-				verified: false,
-				error: `No CNAME record found for ${domain}`,
-				found: { cname: '' },
-			}
-		}
 		return {
 			verified: false,
 			error: `DNS lookup failed: ${err.message}`,
@@ -408,37 +272,27 @@ export const verifyCNAME = async (domain: string, expectedHash: string): Promise
 }
 
 /**
- * Verify custom domain using TXT record as authoritative proof
- * CNAME check is optional/advisory - TXT record is sufficient for verification
- *
- * This approach works with CNAME flattening (e.g., Cloudflare) where the CNAME
- * is resolved to A/AAAA records and won't be visible in DNS queries.
- *
- * All queries are resolved recursively from root nameservers for authoritative answers.
+ * Verify a custom domain by checking both TXT ownership proof and CNAME routing.
+ * TXT is authoritative — CNAME is advisory (may be flattened by providers like Cloudflare).
  */
 export const verifyCustomDomain = async (
 	domain: string,
 	expectedDid: string,
 	expectedHash: string,
 ): Promise<VerificationResult> => {
-	// TXT record is authoritative - it proves ownership
 	const txtResult = await verifyDomainOwnership(domain, expectedDid)
 	if (!txtResult.verified) {
 		return txtResult
 	}
 
-	// CNAME check is advisory only - we still check it for logging/debugging
-	// but don't fail verification if it's missing (could be flattened)
 	const cnameResult = await verifyCNAME(domain, expectedHash)
-
-	// Log CNAME status for debugging, but don't fail on it
 	if (!cnameResult.verified) {
 		console.log(`[DNS Verify] ⚠️  CNAME verification failed (may be flattened):`, cnameResult.error)
 	}
 
-	// TXT verification is sufficient
 	return {
 		verified: true,
+		warning: txtResult.warning,
 		found: {
 			txt: txtResult.found?.txt,
 			cname: cnameResult.found?.cname,
