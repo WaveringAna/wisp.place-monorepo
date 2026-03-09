@@ -1090,7 +1090,6 @@ export const schemaDict = {
         properties: {
           aturi: {
             type: 'string',
-            format: 'at-uri',
           },
           backlinks: {
             type: 'boolean',

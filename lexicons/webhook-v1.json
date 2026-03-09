@@ -63,8 +63,7 @@
             ],
             "properties": {
                 "aturi": {
-                    "type": "string",
-                    "format": "at-uri"
+                    "type": "string"
                 },
                 "backlinks": {
                     "type": "boolean",

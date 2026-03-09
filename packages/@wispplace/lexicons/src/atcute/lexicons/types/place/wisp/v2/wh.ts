@@ -6,7 +6,7 @@ const _atUriSchema = /*#__PURE__*/ v.object({
   $type: /*#__PURE__*/ v.optional(
     /*#__PURE__*/ v.literal("place.wisp.v2.wh#atUri"),
   ),
-  aturi: /*#__PURE__*/ v.resourceUriString(),
+  aturi: /*#__PURE__*/ v.string(),
   /**
    * If true, also watch for records in any repo that reference this DID and collection.
    */
