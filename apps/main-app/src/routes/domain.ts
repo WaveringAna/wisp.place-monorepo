@@ -269,6 +269,7 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 					success: true,
 					verified: result.verified,
 					error: result.error,
+					warning: result.warning,
 					found: result.found,
 				}
 			} catch (err) {

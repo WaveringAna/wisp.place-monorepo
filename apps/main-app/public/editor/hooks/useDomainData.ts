@@ -60,7 +60,7 @@ export function useDomainData() {
 		}
 	}
 
-	const verifyDomain = async (id: string) => {
+	const verifyDomain = async (id: string): Promise<{ warning?: string }> => {
 		setVerificationStatus({ ...verificationStatus, [id]: 'verifying' })
 
 		try {
@@ -74,16 +74,19 @@ export function useDomainData() {
 			if (data.success && data.verified) {
 				setVerificationStatus({ ...verificationStatus, [id]: 'success' })
 				await fetchDomains()
+				return { warning: data.warning }
 			} else {
 				setVerificationStatus({ ...verificationStatus, [id]: 'error' })
 				if (data.error) {
 					alert(`Verification failed: ${data.error}`)
 				}
+				return {}
 			}
 		} catch (err) {
 			console.error('Verify domain error:', err)
 			setVerificationStatus({ ...verificationStatus, [id]: 'error' })
 			alert(`Verification failed: ${err instanceof Error ? err.message : 'Unknown error'}`)
+			return {}
 		}
 	}
 

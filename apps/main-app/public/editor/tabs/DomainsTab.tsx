@@ -31,7 +31,7 @@ interface DomainsTabProps {
 	verificationStatus: { [id: string]: 'idle' | 'verifying' | 'success' | 'error' }
 	userInfo: UserInfo | null
 	onAddCustomDomain: (domain: string) => Promise<{ success: boolean; id?: string }>
-	onVerifyDomain: (id: string) => Promise<void>
+	onVerifyDomain: (id: string) => Promise<{ warning?: string }>
 	onDeleteCustomDomain: (id: string) => Promise<boolean>
 	onDeleteWispDomain: (domain: string) => Promise<boolean>
 	onClaimWispDomain: (handle: string) => Promise<{ success: boolean; error?: string }>
@@ -62,6 +62,9 @@ export function DomainsTab({
 		available: boolean | null
 		checking: boolean
 	}>({ available: null, checking: false })
+
+	// Verification warning state
+	const [verificationWarning, setVerificationWarning] = useState<{ id: string; message: string } | null>(null)
 
 	// Custom domain modal state
 	const [addDomainModalOpen, setAddDomainModalOpen] = useState(false)
@@ -152,7 +155,11 @@ export function DomainsTab({
 						const cd = domain as CustomDomain
 						if (!cd.verified && verificationStatus[cd.id] !== 'verifying') {
 							e.preventDefault()
-							onVerifyDomain(cd.id)
+							onVerifyDomain(cd.id).then((result) => {
+								if (result.warning) {
+									setVerificationWarning({ id: cd.id, message: result.warning })
+								}
+							})
 						}
 					}
 					break
@@ -470,6 +477,12 @@ export function DomainsTab({
 												{domain.rkey && domain.rkey !== 'self' && (
 													<p className="text-xs text-muted-foreground mt-1 ml-5">→ {domain.rkey}</p>
 												)}
+												{verificationWarning?.id === domain.id && (
+													<div className="flex items-start gap-1.5 mt-2 ml-5 text-xs text-yellow-600 dark:text-yellow-400">
+														<AlertCircle className="w-3 h-3 shrink-0 mt-0.5" />
+														<span>{verificationWarning.message}</span>
+													</div>
+												)}
 											</div>
 											<div className="flex items-center gap-1 flex-shrink-0 ml-2">
 												<Button
@@ -485,7 +498,12 @@ export function DomainsTab({
 														variant="outline"
 														size="sm"
 														className="h-7 text-xs px-2"
-														onClick={() => onVerifyDomain(domain.id)}
+														onClick={async () => {
+															const result = await onVerifyDomain(domain.id)
+															if (result.warning) {
+																setVerificationWarning({ id: domain.id, message: result.warning })
+															}
+														}}
 														disabled={isVerifying}
 													>
 														{isVerifying ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Verify'}
