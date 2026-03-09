@@ -22,6 +22,10 @@
       "types": "./src/types/place/wisp/subfs.ts",
       "default": "./src/types/place/wisp/subfs.ts"
     },
+    "./types/place/wisp/v2/wh": {
+      "types": "./src/types/place/wisp/v2/wh.ts",
+      "default": "./src/types/place/wisp/v2/wh.ts"
+    },
     "./types/place/wisp/v2/domains": {
       "types": "./src/types/place/wisp/v2/domains.ts",
       "default": "./src/types/place/wisp/v2/domains.ts"

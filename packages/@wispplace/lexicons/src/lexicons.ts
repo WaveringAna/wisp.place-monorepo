@@ -1035,29 +1035,23 @@ export const schemaDict = {
       main: {
         type: 'record',
         description:
-          'Webhook configuration for AT Protocol record events. Fires an HTTP POST to a URL before or after a matching record event is processed.',
+          'Webhook configuration for AT Protocol record events. Fires an HTTP POST to a URL when a matching record event is observed on the firehose.',
         key: 'any',
         record: {
           type: 'object',
-          required: ['scope', 'url', 'phase', 'events', 'createdAt'],
+          required: ['scope', 'url', 'createdAt'],
           properties: {
             scope: {
-              type: 'union',
-              refs: ['lex:place.wisp.v2.wh#atUri', 'lex:place.wisp.v2.wh#nsid'],
+              type: 'ref',
+              ref: 'lex:place.wisp.v2.wh#atUri',
               description:
-                'What to watch. An AT-URI scopes to a specific DID, collection, or record. An NSID watches that collection globally across all DIDs.',
+                'What to watch. An AT-URI scopes to a specific DID, collection, or record.',
             },
             url: {
               type: 'string',
               format: 'uri',
               maxLength: 2048,
               description: 'HTTPS endpoint to POST the webhook payload to.',
-            },
-            phase: {
-              type: 'string',
-              enum: ['pre', 'post'],
-              description:
-                "Whether the webhook should fire before ('pre') or after ('post') the record event is processed.",
             },
             events: {
               type: 'array',
@@ -1066,18 +1060,19 @@ export const schemaDict = {
                 enum: ['create', 'update', 'delete'],
               },
               description:
-                "Which record events to trigger on. 'create' fires when a new record is created. 'update' fires when an existing record is updated. 'delete' fires when a record is deleted.",
+                'Which record events to trigger on. Defaults to all events if omitted.',
               maxLength: 3,
             },
             secret: {
               type: 'string',
+              maxLength: 256,
               description:
                 "Optional secret used to sign the webhook payload with HMAC-SHA256. The signature is included in the 'X-Webhook-Signature' header of the webhook request.",
             },
             enabled: {
               type: 'boolean',
               description:
-                'Whether the webhook is active. Default to true if omitted.',
+                'Whether the webhook is active. Defaults to true if omitted.',
             },
             createdAt: {
               type: 'string',
@@ -1097,17 +1092,10 @@ export const schemaDict = {
             type: 'string',
             format: 'at-uri',
           },
-        },
-      },
-      nsid: {
-        type: 'object',
-        description:
-          'Watch all records of this collection type globally across any DID.',
-        required: ['nsid'],
-        properties: {
-          nsid: {
-            type: 'string',
-            format: 'nsid',
+          backlinks: {
+            type: 'boolean',
+            description:
+              'If true, also watch for records in any repo that reference this DID and collection.',
           },
         },
       },

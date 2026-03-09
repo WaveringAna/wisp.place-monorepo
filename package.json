@@ -7,6 +7,7 @@
     "apps/main-app",
     "apps/hosting-service",
     "apps/firehose-service",
+    "apps/webhook-service",
     "cli"
   ],
   "dependencies": {
