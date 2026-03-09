@@ -532,7 +532,8 @@ function Dashboard() {
 								eventLogs={eventLogs}
 								eventLogsLoading={eventLogsLoading}
 								isCreating={isCreating}
-								onCreateWebhook={createWebhook}
+							userDid={userInfo?.did}
+							onCreateWebhook={createWebhook}
 								onDeleteWebhook={deleteWebhook}
 								onRefreshEvents={fetchEventLogs}
 							/>
