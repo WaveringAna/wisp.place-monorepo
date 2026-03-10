@@ -4,7 +4,7 @@ import { IdResolver } from '@atproto/identity'
 import { Firehose } from '@atproto/sync'
 import { serve as honoNodeServe } from '@hono/node-server'
 import { getPdsForDid, resolveDid } from '@wispplace/atproto-utils'
-import { BunFirehose, isBun } from '@wispplace/bun-firehose'
+import { BunFirehose, type BunFirehoseOptions, isBun } from '@wispplace/bun-firehose'
 import { matchRedirectRule, parseQueryString, parseRedirectsFile, type RedirectRule } from '@wispplace/fs-utils'
 import type { Record as SettingsRecord } from '@wispplace/lexicons/types/place/wisp/settings'
 import { generate404Page, generateDirectoryListing } from '@wispplace/page-generators'
@@ -266,7 +266,6 @@ export async function serve(identifier: string, options: ServeOptions): Promise<
 	let serverHandle: { close: () => void }
 
 	if (isBun) {
-		// @ts-expect-error - Bun global
 		const bunServer = Bun.serve({
 			port,
 			fetch: app.fetch,
@@ -317,8 +316,9 @@ export async function serve(identifier: string, options: ServeOptions): Promise<
 
 	if (isBun) {
 		// Use BunFirehose for Bun
+		const bunIdResolver = idResolver as unknown as BunFirehoseOptions['idResolver']
 		const bunFirehose = new BunFirehose({
-			idResolver,
+			idResolver: bunIdResolver,
 			service: pdsEndpoint,
 			filterCollections: ['place.wisp.fs', 'place.wisp.settings'],
 			handleEvent: firehoseHandleEvent,

@@ -58,6 +58,10 @@
       "types": "./src/types/place/wisp/v2/site/delete.ts",
       "default": "./src/types/place/wisp/v2/site/delete.ts"
     },
+    "./types/place/wisp/v2/site/getDomains": {
+      "types": "./src/types/place/wisp/v2/site/getDomains.ts",
+      "default": "./src/types/place/wisp/v2/site/getDomains.ts"
+    },
     "./types/place/wisp/v2/site/getList": {
       "types": "./src/types/place/wisp/v2/site/getList.ts",
       "default": "./src/types/place/wisp/v2/site/getList.ts"

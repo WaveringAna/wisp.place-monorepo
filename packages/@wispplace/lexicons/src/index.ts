@@ -17,6 +17,7 @@ import * as PlaceWispV2DomainDelete from './types/place/wisp/v2/domain/delete.js
 import * as PlaceWispV2DomainGetList from './types/place/wisp/v2/domain/getList.js'
 import * as PlaceWispV2DomainGetStatus from './types/place/wisp/v2/domain/getStatus.js'
 import * as PlaceWispV2SiteDelete from './types/place/wisp/v2/site/delete.js'
+import * as PlaceWispV2SiteGetDomains from './types/place/wisp/v2/site/getDomains.js'
 import * as PlaceWispV2SiteGetList from './types/place/wisp/v2/site/getList.js'
 
 export function createServer(options?: XrpcOptions): Server {
@@ -161,6 +162,18 @@ export class PlaceWispV2SiteNS {
     >,
   ) {
     const nsid = 'place.wisp.v2.site.delete' // @ts-ignore
+    return this._server.xrpc.method(nsid, cfg)
+  }
+
+  getDomains<A extends Auth = void>(
+    cfg: MethodConfigOrHandler<
+      A,
+      PlaceWispV2SiteGetDomains.QueryParams,
+      PlaceWispV2SiteGetDomains.HandlerInput,
+      PlaceWispV2SiteGetDomains.HandlerOutput
+    >,
+  ) {
+    const nsid = 'place.wisp.v2.site.getDomains' // @ts-ignore
     return this._server.xrpc.method(nsid, cfg)
   }
 

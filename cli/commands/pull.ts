@@ -15,13 +15,23 @@ export interface PullOptions {
 	path: string
 }
 
-async function fetchRecord(pdsEndpoint: string, did: string, collection: string, rkey: string): Promise<any> {
+interface GetRecordResponse<T> {
+	value: T
+	cid?: string
+}
+
+async function fetchRecord<T>(
+	pdsEndpoint: string,
+	did: string,
+	collection: string,
+	rkey: string,
+): Promise<GetRecordResponse<T>> {
 	const url = `${pdsEndpoint}/xrpc/com.atproto.repo.getRecord?repo=${encodeURIComponent(did)}&collection=${encodeURIComponent(collection)}&rkey=${encodeURIComponent(rkey)}`
 	const res = await fetch(url)
 	if (!res.ok) {
 		throw new Error(`Failed to fetch record: ${res.status}`)
 	}
-	return res.json()
+	return (await res.json()) as GetRecordResponse<T>
 }
 
 function extractSubfsUris(directory: Directory, currentPath: string = ''): Array<{ uri: string; path: string }> {
@@ -253,16 +263,16 @@ export async function pull(identifier: string, options: PullOptions): Promise<vo
 
 	// 3. Fetch site record
 	const recordSpinner = createSpinner('Fetching site record...').start()
-	let recordData: unknown
+	let recordData: GetRecordResponse<FsRecord>
 
 	try {
-		recordData = await fetchRecord(pdsEndpoint, did, 'place.wisp.fs', site)
+		recordData = await fetchRecord<FsRecord>(pdsEndpoint, did, 'place.wisp.fs', site)
 	} catch {
 		recordSpinner.fail('Site not found')
 		throw new Error(`Site not found: ${site}`)
 	}
 
-	const record = recordData.value as FsRecord
+	const record = recordData.value
 	const recordCid = recordData.cid || ''
 	recordSpinner.succeed('Fetched site record')
 
