@@ -11,6 +11,7 @@ import {
 	PlaceWispV2DomainGetList,
 	PlaceWispV2DomainGetStatus,
 	PlaceWispV2SiteDelete,
+	PlaceWispV2SiteGetDomains,
 	PlaceWispV2SiteGetList,
 } from '@wispplace/lexicons/atcute'
 import { createLogger } from '@wispplace/observability'
@@ -64,6 +65,8 @@ const NSID_ALIASES: Record<string, string> = {
 	'place.wisp.v2.domain.get-status': 'place.wisp.v2.domain.getStatus',
 	'place.wisp.v2.site.delete-site': 'place.wisp.v2.site.delete',
 	'place.wisp.v2.site.deletesite': 'place.wisp.v2.site.delete',
+	'place.wisp.v2.site.get-domains': 'place.wisp.v2.site.getDomains',
+	'place.wisp.v2.site.getdomains': 'place.wisp.v2.site.getDomains',
 	'place.wisp.v2.site.get-list': 'place.wisp.v2.site.getList',
 	'place.wisp.v2.site.getlist': 'place.wisp.v2.site.getList',
 }
@@ -72,6 +75,7 @@ const XRPC_NSIDS = {
 	addSite: 'place.wisp.v2.domain.addSite',
 	getStatus: 'place.wisp.v2.domain.getStatus',
 	getList: 'place.wisp.v2.domain.getList',
+	siteGetDomains: 'place.wisp.v2.site.getDomains',
 	siteGetList: 'place.wisp.v2.site.getList',
 	claimSubdomain: 'place.wisp.v2.domain.claimSubdomain',
 	claim: 'place.wisp.v2.domain.claim',
@@ -100,6 +104,28 @@ const toIsoFromEpoch = (epoch: unknown): string | undefined => {
 	}
 
 	return date.toISOString()
+}
+
+const mapSiteDomains = (
+	mappedDomains: Array<{
+		type: 'wisp' | 'custom'
+		domain: string
+		verified?: boolean
+	}>,
+) => {
+	return mappedDomains
+		.map((entry) => ({
+			domain: entry.domain,
+			kind: entry.type,
+			status:
+				entry.type === 'wisp'
+					? ('verified' as const)
+					: entry.verified
+						? ('verified' as const)
+						: ('pendingVerification' as const),
+			verified: entry.type === 'wisp' ? true : Boolean(entry.verified),
+		}))
+		.sort((a, b) => a.domain.localeCompare(b.domain))
 }
 
 type DidString = `did:${string}:${string}`
@@ -646,6 +672,18 @@ export const xrpcRoutes = () => {
 
 	addQueryWithAliases(
 		router,
+		withNsid(PlaceWispV2SiteGetDomains.mainSchema as any, XRPC_NSIDS.siteGetDomains),
+		['place.wisp.v2.site.getdomains', 'place.wisp.v2.site.get-domains'],
+		{
+			async handler({ params }) {
+				const domains = mapSiteDomains(await getDomainsBySite(params.did, params.rkey))
+				return json({ domains })
+			},
+		},
+	)
+
+	addQueryWithAliases(
+		router,
 		withNsid(PlaceWispV2SiteGetList.mainSchema as any, XRPC_NSIDS.siteGetList),
 		['place.wisp.v2.site.getlist', 'place.wisp.v2.site.get-list'],
 		{
@@ -663,26 +701,7 @@ export const xrpcRoutes = () => {
 							created_at?: number | string | null
 							updated_at?: number | string | null
 						}) => {
-							const mappedDomains = await getDomainsBySite(did, site.rkey)
-							const domains = (
-								mappedDomains as Array<{
-									type: 'wisp' | 'custom'
-									domain: string
-									verified?: boolean
-								}>
-							)
-								.map((entry) => ({
-									domain: entry.domain,
-									kind: entry.type,
-									status:
-										entry.type === 'wisp'
-											? ('verified' as const)
-											: entry.verified
-												? ('verified' as const)
-												: ('pendingVerification' as const),
-									verified: entry.type === 'wisp' ? true : Boolean(entry.verified),
-								}))
-								.sort((a, b) => a.domain.localeCompare(b.domain))
+							const domains = mapSiteDomains(await getDomainsBySite(did, site.rkey))
 
 							return {
 								siteRkey: site.rkey,
@@ -785,6 +804,7 @@ export const xrpcRoutes = () => {
 	const schemaNsids = {
 		addSite: (PlaceWispV2DomainAddSite.mainSchema as any).nsid,
 		getStatus: (PlaceWispV2DomainGetStatus.mainSchema as any).nsid,
+		siteGetDomains: (PlaceWispV2SiteGetDomains.mainSchema as any).nsid,
 		getList: (PlaceWispV2DomainGetList.mainSchema as any).nsid,
 		siteGetList: (PlaceWispV2SiteGetList.mainSchema as any).nsid,
 		claimSubdomain: (PlaceWispV2DomainClaimSubdomain.mainSchema as any).nsid,

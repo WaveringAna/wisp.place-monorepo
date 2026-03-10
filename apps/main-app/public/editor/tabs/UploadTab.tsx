@@ -37,7 +37,7 @@ export function UploadTab({ sites, sitesLoading, onUploadComplete }: UploadTabPr
 	const [isDragging, setIsDragging] = useState(false)
 
 	// Ref for the drop zone
-	const dropZoneRef = useRef<HTMLDivElement>(null)
+	const dropZoneRef = useRef<HTMLButtonElement>(null)
 
 	// Keep SSE connection alive across tab switches
 	const eventSourceRef = useRef<EventSource | null>(null)
@@ -106,7 +106,7 @@ export function UploadTab({ sites, sitesLoading, onUploadComplete }: UploadTabPr
 	}
 
 	// Handle dropped items (files or directories)
-	const handleDrop = async (e: React.DragEvent<HTMLDivElement>) => {
+	const handleDrop = async (e: React.DragEvent<HTMLButtonElement>) => {
 		e.preventDefault()
 		e.stopPropagation()
 		setIsDragging(false)
@@ -144,7 +144,7 @@ export function UploadTab({ sites, sitesLoading, onUploadComplete }: UploadTabPr
 		}
 	}
 
-	const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+	const handleDragOver = (e: React.DragEvent<HTMLButtonElement>) => {
 		e.preventDefault()
 		e.stopPropagation()
 		if (!isUploading) {
@@ -152,7 +152,7 @@ export function UploadTab({ sites, sitesLoading, onUploadComplete }: UploadTabPr
 		}
 	}
 
-	const handleDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
+	const handleDragEnter = (e: React.DragEvent<HTMLButtonElement>) => {
 		e.preventDefault()
 		e.stopPropagation()
 		if (!isUploading) {
@@ -160,13 +160,21 @@ export function UploadTab({ sites, sitesLoading, onUploadComplete }: UploadTabPr
 		}
 	}
 
-	const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+	const handleDragLeave = (e: React.DragEvent<HTMLButtonElement>) => {
 		e.preventDefault()
 		e.stopPropagation()
 		// Only set isDragging to false if we're leaving the drop zone entirely
 		if (dropZoneRef.current && !dropZoneRef.current.contains(e.relatedTarget as Node)) {
 			setIsDragging(false)
 		}
+	}
+
+	const handleDropZoneKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>) => {
+		if (isUploading) return
+		if (e.key !== 'Enter' && e.key !== ' ') return
+
+		e.preventDefault()
+		document.getElementById('file-upload')?.click()
 	}
 
 	const setupSSE = (jobId: string) => {
@@ -491,7 +499,6 @@ export function UploadTab({ sites, sitesLoading, onUploadComplete }: UploadTabPr
 				{/* Drop zone */}
 				<button
 					type="button"
-					ref={dropZoneRef as React.RefObject<HTMLButtonElement>}
 					className={`w-full text-left border-2 border-dashed p-4 flex items-center gap-3 transition-colors ${
 						isDragging
 							? 'border-accent bg-accent/10 cursor-copy'
@@ -499,10 +506,13 @@ export function UploadTab({ sites, sitesLoading, onUploadComplete }: UploadTabPr
 								? 'opacity-50 cursor-not-allowed border-border/30'
 								: 'border-border/30 hover:border-accent cursor-pointer'
 					}`}
+					ref={dropZoneRef}
+					disabled={isUploading}
 					onDrop={handleDrop}
 					onDragOver={handleDragOver}
 					onDragEnter={handleDragEnter}
 					onDragLeave={handleDragLeave}
+					onKeyDown={handleDropZoneKeyDown}
 					onClick={() => !isUploading && document.getElementById('file-upload')?.click()}
 				>
 					<Upload

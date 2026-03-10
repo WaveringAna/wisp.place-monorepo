@@ -1,0 +1,62 @@
+{
+  "lexicon": 1,
+  "id": "place.wisp.v2.site.getDomains",
+  "defs": {
+    "main": {
+      "type": "query",
+      "description": "List domains currently mapped to a specific site.",
+      "parameters": {
+        "type": "params",
+        "required": ["did", "rkey"],
+        "properties": {
+          "did": {
+            "type": "string",
+            "format": "did"
+          },
+          "rkey": {
+            "type": "string",
+            "format": "record-key"
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["domains"],
+          "properties": {
+            "domains": {
+              "type": "array",
+              "items": {
+                "type": "ref",
+                "ref": "#siteDomain"
+              }
+            }
+          }
+        }
+      }
+    },
+    "siteDomain": {
+      "type": "object",
+      "required": ["domain", "kind", "status", "verified"],
+      "properties": {
+        "domain": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 253
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["wisp", "custom"]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pendingVerification", "verified"]
+        },
+        "verified": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

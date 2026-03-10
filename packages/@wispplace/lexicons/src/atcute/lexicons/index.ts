@@ -9,5 +9,6 @@ export * as PlaceWispV2DomainGetList from "./types/place/wisp/v2/domain/getList.
 export * as PlaceWispV2DomainGetStatus from "./types/place/wisp/v2/domain/getStatus.js";
 export * as PlaceWispV2Domains from "./types/place/wisp/v2/domains.js";
 export * as PlaceWispV2SiteDelete from "./types/place/wisp/v2/site/delete.js";
+export * as PlaceWispV2SiteGetDomains from "./types/place/wisp/v2/site/getDomains.js";
 export * as PlaceWispV2SiteGetList from "./types/place/wisp/v2/site/getList.js";
 export * as PlaceWispV2Wh from "./types/place/wisp/v2/wh.js";

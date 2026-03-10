@@ -72,8 +72,10 @@ function extractGlueRecords(response: dnsPacket.Packet): Map<string, string[]> {
 
 function extractNSFromAnswer(response: dnsPacket.Packet): string[] {
 	return (response.answers ?? [])
-		.filter((r) => r.type === 'NS' && 'data' in r && typeof r.data === 'string')
-		.map((r) => (r as any).data.toLowerCase().replace(/\.$/, ''))
+		.filter((record): record is dnsPacket.Answer & { type: 'NS'; data: string } => {
+			return record.type === 'NS' && typeof record.data === 'string'
+		})
+		.map((record) => record.data.toLowerCase().replace(/\.$/, ''))
 }
 
 /**
@@ -138,9 +140,10 @@ async function getAuthoritativeServers(name: string): Promise<string[]> {
 async function authoritativeResolve(name: string, type: dnsPacket.RecordType): Promise<dnsPacket.Packet> {
 	console.log(`[DNS] Resolving ${type} ${name} via authoritative NS`)
 	const servers = await getAuthoritativeServers(name)
+	const shuffledServers = [...servers].sort(() => Math.random() - 0.5)
 
 	let lastError: Error | null = null
-	for (const server of servers.toSorted(() => Math.random() - 0.5)) {
+	for (const server of shuffledServers) {
 		try {
 			return await queryDNS(name, type, server)
 		} catch (err) {
@@ -171,8 +174,10 @@ async function authoritativeResolveTxt(domain: string): Promise<string[][]> {
 async function authoritativeResolveCname(domain: string): Promise<string[]> {
 	const response = await authoritativeResolve(domain, 'CNAME')
 	return (response.answers ?? [])
-		.filter((r) => r.type === 'CNAME' && 'data' in r && typeof r.data === 'string')
-		.map((r) => (r as any).data.toLowerCase().replace(/\.$/, ''))
+		.filter((record): record is dnsPacket.Answer & { type: 'CNAME'; data: string } => {
+			return record.type === 'CNAME' && typeof record.data === 'string'
+		})
+		.map((record) => record.data.toLowerCase().replace(/\.$/, ''))
 }
 
 /**

@@ -833,6 +833,68 @@ export const schemaDict = {
       },
     },
   },
+  PlaceWispV2SiteGetDomains: {
+    lexicon: 1,
+    id: 'place.wisp.v2.site.getDomains',
+    defs: {
+      main: {
+        type: 'query',
+        description: 'List domains currently mapped to a specific site.',
+        parameters: {
+          type: 'params',
+          required: ['did', 'rkey'],
+          properties: {
+            did: {
+              type: 'string',
+              format: 'did',
+            },
+            rkey: {
+              type: 'string',
+              format: 'record-key',
+            },
+          },
+        },
+        output: {
+          encoding: 'application/json',
+          schema: {
+            type: 'object',
+            required: ['domains'],
+            properties: {
+              domains: {
+                type: 'array',
+                items: {
+                  type: 'ref',
+                  ref: 'lex:place.wisp.v2.site.getDomains#siteDomain',
+                },
+              },
+            },
+          },
+        },
+      },
+      siteDomain: {
+        type: 'object',
+        required: ['domain', 'kind', 'status', 'verified'],
+        properties: {
+          domain: {
+            type: 'string',
+            minLength: 3,
+            maxLength: 253,
+          },
+          kind: {
+            type: 'string',
+            enum: ['wisp', 'custom'],
+          },
+          status: {
+            type: 'string',
+            enum: ['pendingVerification', 'verified'],
+          },
+          verified: {
+            type: 'boolean',
+          },
+        },
+      },
+    },
+  },
   PlaceWispV2SiteGetList: {
     lexicon: 1,
     id: 'place.wisp.v2.site.getList',
@@ -1143,6 +1205,7 @@ export const ids = {
   PlaceWispFs: 'place.wisp.fs',
   PlaceWispSettings: 'place.wisp.settings',
   PlaceWispV2SiteDelete: 'place.wisp.v2.site.delete',
+  PlaceWispV2SiteGetDomains: 'place.wisp.v2.site.getDomains',
   PlaceWispV2SiteGetList: 'place.wisp.v2.site.getList',
   PlaceWispSubfs: 'place.wisp.subfs',
   PlaceWispV2Wh: 'place.wisp.v2.wh',

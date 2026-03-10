@@ -307,7 +307,6 @@ export async function authenticateOAuth(
 
 		// Start server based on runtime
 		if (isBun) {
-			// @ts-expect-error - Bun global
 			const bunServer = Bun.serve({
 				port: LOOPBACK_PORT,
 				hostname: LOOPBACK_HOST,
