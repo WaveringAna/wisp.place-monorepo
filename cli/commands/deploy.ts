@@ -513,9 +513,8 @@ export async function deploy(agent: Agent, did: string, options: DeployOptions):
 	// Check individual file sizes
 	for (const file of files) {
 		if (file.size > MAX_FILE_SIZE) {
-			throw new Error(
-				`File ${file.relativePath} exceeds max size (${formatBytes(file.size)} > ${formatBytes(MAX_FILE_SIZE)})`,
-			)
+			console.log(pc.yellow(`\nWarning: ${file.relativePath} exceeds max size (${formatBytes(file.size)} > ${formatBytes(MAX_FILE_SIZE)})`))
+			console.log(pc.yellow('This file may not be cached by the hosting service.\n'))
 		}
 	}
 
