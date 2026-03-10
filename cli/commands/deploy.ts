@@ -71,13 +71,22 @@ function createIgnoreMatcher(siteDir: string): Ignore {
 	return ig
 }
 
+function toUnixPath(p: string): string {
+	// A backslash is a path separator on Windows
+	if (process.platform === "win32") {
+		return p.replace(/\\/g, "/")
+	}
+	// on Unix systems, you're typically allowed to have backslashes in file names
+	return p
+}
+
 function collectFiles(dir: string, ig: Ignore, baseDir: string): FileInfo[] {
 	const files: FileInfo[] = []
 
 	const entries = readdirSync(dir, { withFileTypes: true })
 	for (const entry of entries) {
 		const fullPath = join(dir, entry.name)
-		const relativePath = relative(baseDir, fullPath)
+		const relativePath = toUnixPath(relative(baseDir, fullPath))
 
 		// The ignore package needs trailing '/' for directory-pattern matching
 		const isDir = entry.isDirectory()
