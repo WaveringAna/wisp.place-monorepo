@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { Agent, CredentialSession } from '@atproto/api'
 import {
 	NodeOAuthClient,
@@ -38,7 +38,7 @@ interface StoredData {
 }
 
 function ensureDir(filePath: string) {
-	const dir = dirname(filePath)
+	const dir = dirname(resolve(filePath))
 	if (!existsSync(dir)) {
 		mkdirSync(dir, { recursive: true })
 	}
