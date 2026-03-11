@@ -16,11 +16,10 @@ export async function claimCustomDomain(
 	siteRkey: string | undefined,
 	options: DomainCommandOptions,
 ): Promise<void> {
-	const nsid = 'place.wisp.v2.domain.claim'
-	const { agent, serviceDid } = await authenticateForXrpc(identifier, nsid, options)
+	const { agent, serviceDid } = await authenticateForXrpc(identifier, options)
 
 	const spinner = createSpinner(`Claiming ${domain}...`).start()
-	const data = await callWispXrpc<DomainClaimOutput>(agent, nsid, {
+	const data = await callWispXrpc<DomainClaimOutput>(agent, 'place.wisp.v2.domain.claim', {
 		serviceDid,
 		data: siteRkey ? { domain, siteRkey } : { domain },
 	})
@@ -49,11 +48,10 @@ export async function claimWispSubdomain(
 	siteRkey: string | undefined,
 	options: DomainCommandOptions,
 ): Promise<void> {
-	const nsid = 'place.wisp.v2.domain.claimSubdomain'
-	const { agent, serviceDid } = await authenticateForXrpc(identifier, nsid, options)
+	const { agent, serviceDid } = await authenticateForXrpc(identifier, options)
 
 	const spinner = createSpinner(`Claiming subdomain ${subdomain}...`).start()
-	const data = await callWispXrpc<DomainClaimSubdomainOutput>(agent, nsid, {
+	const data = await callWispXrpc<DomainClaimSubdomainOutput>(agent, 'place.wisp.v2.domain.claimSubdomain', {
 		serviceDid,
 		data: siteRkey ? { handle: subdomain, siteRkey } : { handle: subdomain },
 	})
@@ -75,11 +73,10 @@ export async function getDomainStatus(
 	domain: string,
 	options: DomainCommandOptions,
 ): Promise<void> {
-	const nsid = 'place.wisp.v2.domain.getStatus'
-	const { agent, serviceDid } = await authenticateForXrpc(identifier, nsid, options)
+	const { agent, serviceDid } = await authenticateForXrpc(identifier, options)
 
 	const spinner = createSpinner(`Fetching status for ${domain}...`).start()
-	const data = await callWispXrpc<DomainGetStatusOutput>(agent, nsid, {
+	const data = await callWispXrpc<DomainGetStatusOutput>(agent, 'place.wisp.v2.domain.getStatus', {
 		serviceDid,
 		params: { domain },
 	})
@@ -114,11 +111,10 @@ export async function mapDomainToSite(
 	siteRkey: string,
 	options: DomainCommandOptions,
 ): Promise<void> {
-	const nsid = 'place.wisp.v2.domain.addSite'
-	const { agent, serviceDid } = await authenticateForXrpc(identifier, nsid, options)
+	const { agent, serviceDid } = await authenticateForXrpc(identifier, options)
 
 	const spinner = createSpinner(`Mapping ${domain} -> ${siteRkey}...`).start()
-	const data = await callWispXrpc<DomainAddSiteOutput>(agent, nsid, {
+	const data = await callWispXrpc<DomainAddSiteOutput>(agent, 'place.wisp.v2.domain.addSite', {
 		serviceDid,
 		data: { domain, siteRkey },
 	})
@@ -137,11 +133,10 @@ export async function deleteDomain(
 	domain: string,
 	options: DomainCommandOptions,
 ): Promise<void> {
-	const nsid = 'place.wisp.v2.domain.delete'
-	const { agent, serviceDid } = await authenticateForXrpc(identifier, nsid, options)
+	const { agent, serviceDid } = await authenticateForXrpc(identifier, options)
 
 	const spinner = createSpinner(`Deleting ${domain}...`).start()
-	const data = await callWispXrpc<DomainDeleteOutput>(agent, nsid, {
+	const data = await callWispXrpc<DomainDeleteOutput>(agent, 'place.wisp.v2.domain.delete', {
 		serviceDid,
 		params: { domain },
 	})
@@ -160,11 +155,10 @@ export async function deleteSite(
 	siteRkey: string,
 	options: DomainCommandOptions,
 ): Promise<void> {
-	const nsid = 'place.wisp.v2.site.delete'
-	const { agent, serviceDid } = await authenticateForXrpc(identifier, nsid, options)
+	const { agent, serviceDid } = await authenticateForXrpc(identifier, options)
 
 	const spinner = createSpinner(`Deleting site ${siteRkey}...`).start()
-	const data = await callWispXrpc<SiteDeleteOutput>(agent, nsid, {
+	const data = await callWispXrpc<SiteDeleteOutput>(agent, 'place.wisp.v2.site.delete', {
 		serviceDid,
 		data: { siteRkey },
 	})

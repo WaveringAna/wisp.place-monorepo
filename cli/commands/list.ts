@@ -48,7 +48,7 @@ function renderSiteList(data: SiteListOutput): void {
 }
 
 export async function listDomains(identifier: string | undefined, options: ListCommandOptions): Promise<void> {
-	const { agent, serviceDid } = await authenticateForXrpc(identifier, 'place.wisp.v2.domain.getList', options)
+	const { agent, serviceDid } = await authenticateForXrpc(identifier, options)
 
 	const fetchSpinner = createSpinner('Fetching domains...').start()
 	const data = await callWispXrpc<DomainListOutput>(agent, 'place.wisp.v2.domain.getList', {
@@ -65,7 +65,7 @@ export async function listDomains(identifier: string | undefined, options: ListC
 }
 
 export async function listSites(identifier: string | undefined, options: ListCommandOptions): Promise<void> {
-	const { agent, serviceDid } = await authenticateForXrpc(identifier, 'place.wisp.v2.site.getList', options)
+	const { agent, serviceDid } = await authenticateForXrpc(identifier, options)
 
 	const fetchSpinner = createSpinner('Fetching sites...').start()
 	const data = await callWispXrpc<SiteListOutput>(agent, 'place.wisp.v2.site.getList', {

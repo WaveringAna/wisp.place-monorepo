@@ -1,13 +1,13 @@
 import type { Agent } from '@atproto/api'
 import { cancel, isCancel, text } from '@clack/prompts'
 import type { Command } from 'commander'
-import { authenticate } from './auth.ts'
+import { authenticate, hasDirSession } from './auth.ts'
 import { createSpinner, pc, type SpinnerLike } from './progress.ts'
 import { parseServiceDid } from './wisp-service.ts'
 
 export interface XrpcCommandOptions {
 	password?: string
-	store?: string
+	db?: string
 	service?: string
 	json?: boolean
 }
@@ -27,7 +27,7 @@ export function withExit(handler: (...args: any[]) => Promise<void>): (...args: 
 export function addXrpcAuthOptions<T extends Command>(command: T): T {
 	return command
 		.option('--password <password>', 'App password for headless authentication')
-		.option('--store <path>', 'OAuth session store path')
+		.option('--db <path>', 'OAuth session database path')
 		.option('--service <did:...>', 'Service DID to proxy through')
 		.option('--json', 'Output raw JSON')
 }
@@ -88,20 +88,17 @@ export async function resolveIdentifier(
 
 export async function authenticateForXrpc(
 	identifier: string | undefined,
-	nsid: string | readonly string[],
 	options: XrpcCommandOptions,
 ): Promise<{ agent: Agent; serviceDid: string; did: string }> {
-	const requiredLxms = Array.isArray(nsid) ? [...nsid] : [nsid]
-	const resolvedIdentifier = await resolveIdentifier(identifier)
+	// Skip the handle prompt if the current directory already has a stored session
+	const resolvedIdentifier =
+		identifier ?? ((await hasDirSession(options.db)) ? undefined : await resolveIdentifier(undefined))
 	const serviceDid = parseServiceDid(options.service)
 
 	const spinner = createSpinner('Authenticating...').start()
 	const { agent, did } = await authenticate(resolvedIdentifier, {
 		appPassword: options.password,
-		storePath: options.store,
-		serviceDid,
-		requiredLxms,
-		includeRepoBlobScopes: false,
+		dbPath: options.db,
 		onStatus: bindAuthStatusToSpinner(spinner),
 	})
 	spinner.succeed(`Authenticated as ${did}`)

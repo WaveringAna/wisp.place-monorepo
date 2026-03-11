@@ -14,7 +14,7 @@ import {
 import { listDomains, listSites } from './commands/list.ts'
 import { pull } from './commands/pull.ts'
 import { serve } from './commands/serve.ts'
-import { authenticate, clearSessions } from './lib/auth.ts'
+import { authenticate, authenticateOAuth, clearDirSession, clearSessions, hasDirSession } from './lib/auth.ts'
 import {
 	addXrpcAuthOptions,
 	authenticateForXrpc,
@@ -85,8 +85,7 @@ async function deleteSiteWithSelection(
 	identifier: string | undefined,
 	options: XrpcCommandOptions & { site?: string; yes?: boolean },
 ): Promise<void> {
-	const nsids = ['place.wisp.v2.site.getList', 'place.wisp.v2.site.delete'] as const
-	const { agent, serviceDid } = await authenticateForXrpc(identifier, nsids, options)
+	const { agent, serviceDid } = await authenticateForXrpc(identifier, options)
 
 	let siteRkey = options.site
 	if (!siteRkey) {
@@ -156,7 +155,7 @@ program
 	.option('-c, --concurrency <n>', 'Number of concurrent uploads (backs off to 2 on rate limit)', '3')
 	.option('--force-gzip', 'Force gzip compression for all files regardless of type')
 	.option('--password <password>', 'App password for headless authentication')
-	.option('--store <path>', 'OAuth session store path')
+	.option('--db <path>', 'OAuth session database path')
 	.option('-y, --yes', 'Skip confirmation prompts')
 	.action(
 		withExit(async (handle: string | undefined, options) => {
@@ -164,13 +163,14 @@ program
 			let resolvedPath = options.path
 			let resolvedSite = options.site
 
-			// If any required values are missing, show prompts
-			const needsPrompts = !resolvedHandle || !resolvedPath || !resolvedSite
+			const hasDirSess = !resolvedHandle && !options.password && (await hasDirSession(options.db))
+			const needsHandlePrompt = !resolvedHandle && !hasDirSess
+			const needsPrompts = needsHandlePrompt || !resolvedPath || !resolvedSite
 
 			if (needsPrompts) {
 				intro(pc.cyan('wisp.place deploy'))
 
-				if (!resolvedHandle) {
+				if (needsHandlePrompt) {
 					resolvedHandle = await promptRequiredText('AT Protocol handle', {
 						placeholder: 'alice.bsky.social',
 						cancelMessage: 'Deploy cancelled',
@@ -206,12 +206,12 @@ program
 			}
 
 			const authSpinner = createSpinner('Authenticating...').start()
-			const { agent, did } = await authenticate(resolvedHandle!, {
+			const { agent, did } = await authenticate(resolvedHandle, {
 				appPassword: options.password,
-				storePath: options.store,
+				dbPath: options.db,
 				onStatus: bindAuthStatusToSpinner(authSpinner),
 			})
-			authSpinner.succeed(`Authenticated as ${resolvedHandle} (${did})`)
+			authSpinner.succeed(`Authenticated as ${did}`)
 
 			const result = await deploy(agent, did, {
 				path: resolvedPath,
@@ -223,13 +223,12 @@ program
 				forceGzip: options.forceGzip,
 			})
 
-			const handleUrl = `https://sites.wisp.place/${resolvedHandle}/${resolvedSite}`
-			const didUrl = result.url
-
 			console.log()
 			console.log(pc.dim(`  URI: ${result.uri}`))
-			console.log(pc.cyan(`  URL: ${handleUrl}`))
-			console.log(pc.cyan(`  URL: ${didUrl}`))
+			if (resolvedHandle) {
+				console.log(pc.cyan(`  URL: https://sites.wisp.place/${resolvedHandle}/${resolvedSite}`))
+			}
+			console.log(pc.cyan(`  URL: ${result.url}`))
 
 			if (needsPrompts) {
 				outro(pc.green('Deployed successfully!'))
@@ -527,13 +526,34 @@ addXrpcAuthOptions(
 	}),
 )
 
+// Login command
+program
+	.command('login <handle>')
+	.description('Authenticate and store session for the current directory')
+	.option('--db <path>', 'OAuth session database path')
+	.action(
+		withExit(async (handle: string, options) => {
+			const authSpinner = createSpinner('Authenticating...').start()
+			const { did } = await authenticateOAuth(handle, {
+				dbPath: options.db,
+				onStatus: bindAuthStatusToSpinner(authSpinner),
+			})
+			authSpinner.succeed(`Authenticated as ${did}`)
+		}),
+	)
+
 // Logout command
 program
 	.command('logout')
-	.description('Clear stored OAuth sessions')
-	.option('--store <path>', 'OAuth session store path')
-	.action((options) => {
-		clearSessions(options.store)
+	.description('Clear the stored session for the current directory')
+	.option('--db <path>', 'OAuth session database path')
+	.option('--all', 'Clear all stored sessions across all directories')
+	.action(async (options) => {
+		if (options.all) {
+			await clearSessions(options.db)
+		} else {
+			await clearDirSession(options.db)
+		}
 	})
 
 program.parse()
