@@ -112,19 +112,17 @@ const mapSiteDomains = (
 		domain: string
 		verified?: boolean
 	}>,
-) => {
+): PlaceWispV2SiteGetDomains.SiteDomain[] => {
 	return mappedDomains
-		.map((entry) => ({
-			domain: entry.domain,
-			kind: entry.type,
-			status:
-				entry.type === 'wisp'
-					? ('verified' as const)
-					: entry.verified
-						? ('verified' as const)
-						: ('pendingVerification' as const),
-			verified: entry.type === 'wisp' ? true : Boolean(entry.verified),
-		}))
+		.map((entry) => {
+			const verified = entry.type === 'wisp' || Boolean(entry.verified)
+			return {
+				domain: entry.domain,
+				kind: entry.type,
+				status: verified ? ('verified' as const) : ('pendingVerification' as const),
+				verified,
+			}
+		})
 		.sort((a, b) => a.domain.localeCompare(b.domain))
 }
 
@@ -491,11 +489,7 @@ const deleteSiteForDid = async (did: DidString, input: { siteRkey: string }) => 
 
 	const mappedDomains = await getDomainsBySite(did, siteRkey)
 
-	const unmappedDomains: Array<{
-		domain: string
-		kind: 'wisp' | 'custom'
-		status: 'pendingVerification' | 'verified'
-	}> = []
+	const unmappedDomains: PlaceWispV2SiteDelete.UnmappedDomain[] = []
 
 	for (const mapped of mappedDomains as Array<{
 		type: 'wisp' | 'custom'
@@ -505,11 +499,7 @@ const deleteSiteForDid = async (did: DidString, input: { siteRkey: string }) => 
 	}>) {
 		if (mapped.type === 'wisp') {
 			await updateWispDomainSite(mapped.domain, null)
-			unmappedDomains.push({
-				domain: mapped.domain,
-				kind: 'wisp',
-				status: 'verified',
-			})
+			unmappedDomains.push({ domain: mapped.domain, kind: 'wisp', status: 'verified' })
 			continue
 		}
 
@@ -640,9 +630,9 @@ export const xrpcRoutes = () => {
 
 				const [wispDomains, customDomains] = await Promise.all([getAllWispDomains(did), getCustomDomainsByDid(did)])
 
-				const domains = [
+				const domains: PlaceWispV2DomainGetList.DomainSummary[] = [
 					...wispDomains.map((entry: { domain: string; rkey: string | null }) => ({
-						domain: entry.domain as string,
+						domain: entry.domain,
 						kind: 'wisp' as const,
 						status: 'verified' as const,
 						verified: true,
@@ -654,14 +644,17 @@ export const xrpcRoutes = () => {
 							verified: boolean
 							rkey: string | null
 							last_verified_at?: number | string | null
-						}) => ({
-							domain: entry.domain as string,
-							kind: 'custom' as const,
-							status: entry.verified ? ('verified' as const) : ('pendingVerification' as const),
-							verified: Boolean(entry.verified),
-							siteRkey: entry.rkey ?? undefined,
-							lastCheckedAt: toIsoFromEpoch(entry.last_verified_at),
-						}),
+						}) => {
+							const verified = Boolean(entry.verified)
+							return {
+								domain: entry.domain,
+								kind: 'custom' as const,
+								status: verified ? ('verified' as const) : ('pendingVerification' as const),
+								verified,
+								siteRkey: entry.rkey ?? undefined,
+								lastCheckedAt: toIsoFromEpoch(entry.last_verified_at),
+							}
+						},
 					),
 				].sort((a, b) => a.domain.localeCompare(b.domain))
 
