@@ -158,14 +158,8 @@ async function authoritativeResolveTxt(domain: string): Promise<string[][]> {
 	const records: string[][] = []
 	for (const answer of response.answers ?? []) {
 		if (answer.type === 'TXT' && 'data' in answer) {
-			const data = answer.data as Buffer | Buffer[] | string | string[]
-			if (Array.isArray(data)) {
-				records.push(data.map((d) => (Buffer.isBuffer(d) ? d.toString('utf-8') : String(d))))
-			} else if (Buffer.isBuffer(data)) {
-				records.push([data.toString('utf-8')])
-			} else {
-				records.push([String(data)])
-			}
+			const chunks = Array.isArray(answer.data) ? answer.data : [answer.data]
+			records.push(chunks.map((d) => (Buffer.isBuffer(d) ? d.toString('utf-8') : String(d))))
 		}
 	}
 	return records
@@ -212,7 +206,7 @@ export const verifyDomainOwnership = async (domain: string, expectedDid: string)
 		const foundTxtValues = records.map((r) => r.join(''))
 		console.log(`[DNS Verify] Found TXT records:`, foundTxtValues)
 
-		if (foundTxtValues.find((v) => v === expectedDid)) {
+		if (foundTxtValues.some((v) => v === expectedDid)) {
 			console.log(`[DNS Verify] ✓ TXT record matches`)
 			const extras = foundTxtValues.filter((v) => v !== expectedDid)
 			const warning =
@@ -229,11 +223,12 @@ export const verifyDomainOwnership = async (domain: string, expectedDid: string)
 			error: `TXT record at ${txtDomain} does not match expected DID. Expected: ${expectedDid}`,
 			found: { txt: foundTxtValues },
 		}
-	} catch (err: any) {
-		console.log(`[DNS Verify] ✗ TXT lookup error:`, err.message)
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err)
+		console.log(`[DNS Verify] ✗ TXT lookup error:`, message)
 		return {
 			verified: false,
-			error: `DNS lookup failed: ${err.message}`,
+			error: `DNS lookup failed: ${message}`,
 			found: { txt: [] },
 		}
 	}
@@ -266,11 +261,12 @@ export const verifyCNAME = async (domain: string, expectedHash: string): Promise
 			error: `CNAME for ${domain} points to ${foundCname}, expected ${expectedTarget}`,
 			found: { cname: foundCname },
 		}
-	} catch (err: any) {
-		console.log(`[DNS Verify] ✗ CNAME lookup error:`, err.message)
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err)
+		console.log(`[DNS Verify] ✗ CNAME lookup error:`, message)
 		return {
 			verified: false,
-			error: `DNS lookup failed: ${err.message}`,
+			error: `DNS lookup failed: ${message}`,
 			found: { cname: '' },
 		}
 	}
