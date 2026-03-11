@@ -1,20 +1,7 @@
 {
   "name": "wispctl",
   "version": "1.0.10",
-  "description": "CLI for wisp.place - deploy static sites to the AT Protocol",
-  "type": "module",
   "main": "./dist/index.js",
-  "bin": {
-    "wispctl": "dist/index.js"
-  },
-  "files": [
-    "dist"
-  ],
-  "scripts": {
-    "dev": "bun run index.ts",
-    "build": "bun build ./index.ts --outdir ./dist --target node --sourcemap=linked && sed -i '' '1s|#!/usr/bin/env bun|#!/usr/bin/env node|' ./dist/index.js",
-    "typecheck": "tsc --noEmit"
-  },
   "devDependencies": {
     "@atproto/api": "^0.18.17",
     "@atproto/identity": "^0.4.10",
@@ -31,11 +18,11 @@
     "@types/mime-types": "^3.0.1",
     "@types/node": "^22.0.0",
     "@wispplace/atproto-utils": "workspace:*",
-    "@wispplace/page-generators": "workspace:*",
     "@wispplace/bun-firehose": "workspace:*",
     "@wispplace/constants": "workspace:*",
     "@wispplace/fs-utils": "workspace:*",
     "@wispplace/lexicons": "workspace:*",
+    "@wispplace/page-generators": "workspace:*",
     "commander": "^14.0.2",
     "hono": "^4.7.4",
     "ignore": "^7.0.5",
@@ -44,5 +31,18 @@
     "open": "^11.0.0",
     "picocolors": "^1.1.1",
     "typescript": "^5"
-  }
+  },
+  "bin": {
+    "wispctl": "dist/index.js"
+  },
+  "description": "CLI for wisp.place - deploy static sites to the AT Protocol",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "dev": "bun run index.ts",
+    "build": "bun build ./index.ts --outdir ./dist --target node --sourcemap=linked && sed -i '' '1s|#!/usr/bin/env bun|#!/usr/bin/env node|' ./dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "type": "module"
 }

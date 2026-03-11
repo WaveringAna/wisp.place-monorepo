@@ -1,6 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join } from 'node:path'
+import { cwd } from 'node:process'
 import { Agent, CredentialSession } from '@atproto/api'
 import {
 	NodeOAuthClient,
@@ -15,128 +16,136 @@ import { resolvePdsFromHandle } from '@wispplace/atproto-utils'
 import { isBun } from '@wispplace/bun-firehose'
 import { Hono } from 'hono'
 import open from 'open'
-import { parseServiceDid } from './wisp-service.ts'
 
-const REQUIRED_BASE_SCOPE = 'atproto'
-const REPO_BLOB_SCOPES = [
+// All scopes requested upfront so the client_id is stable across commands
+const OAUTH_SCOPE = [
+	'atproto',
 	'repo:place.wisp.fs',
 	'repo:place.wisp.subfs',
 	'repo:place.wisp.settings',
 	'blob:*/*',
-] as const
+	'rpc:place.wisp.v2.site.getList?aud=*',
+	'rpc:place.wisp.v2.site.delete?aud=*',
+	'rpc:place.wisp.v2.domain.getList?aud=*',
+	'rpc:place.wisp.v2.domain.claim?aud=*',
+	'rpc:place.wisp.v2.domain.claimSubdomain?aud=*',
+	'rpc:place.wisp.v2.domain.getStatus?aud=*',
+	'rpc:place.wisp.v2.domain.addSite?aud=*',
+	'rpc:place.wisp.v2.domain.delete?aud=*',
+].join(' ')
 
-// Default session store path
-const DEFAULT_STORE_PATH = join(homedir(), '.wisp', 'oauth-session.json')
+const DEFAULT_DB_PATH = join(homedir(), '.config', 'wispctl', 'state.sqlite')
 
-// Loopback server config
 const LOOPBACK_PORT = 4000
 const LOOPBACK_HOST = '127.0.0.1'
 
-interface StoredData {
-	states: Record<string, NodeSavedState>
-	sessions: Record<string, NodeSavedSession>
+// Runtime-agnostic KV adapter — all SQL is baked in so return types are known
+
+interface KvRow {
+	value: string
+	expires_at: number | null
 }
 
-function ensureDir(filePath: string) {
-	const dir = dirname(resolve(filePath))
-	if (!existsSync(dir)) {
-		mkdirSync(dir, { recursive: true })
+interface KvAdapter {
+	get(key: string): KvRow | undefined
+	set(key: string, value: string, expiresAt: number | null): void
+	del(key: string): void
+	clear(): void
+}
+
+const SCHEMA = `
+	CREATE TABLE IF NOT EXISTS kv (
+		key        TEXT PRIMARY KEY,
+		value      TEXT NOT NULL,
+		expires_at INTEGER
+	)
+`
+
+async function openKv(dbPath: string): Promise<KvAdapter> {
+	mkdirSync(dirname(dbPath), { recursive: true })
+
+	if (isBun) {
+		const { Database } = await import('bun:sqlite')
+		const db = new Database(dbPath)
+		db.run('PRAGMA journal_mode = WAL')
+		db.run(SCHEMA)
+		const getStmt = db.query<KvRow, [string]>('SELECT value, expires_at FROM kv WHERE key = ?')
+		const setStmt = db.query('INSERT OR REPLACE INTO kv (key, value, expires_at) VALUES (?, ?, ?)')
+		const delStmt = db.query('DELETE FROM kv WHERE key = ?')
+		return {
+			get: (key) => getStmt.get(key) ?? undefined,
+			set: (key, value, expiresAt) => { setStmt.run(key, value, expiresAt) },
+			del: (key) => { delStmt.run(key) },
+			clear: () => db.run('DELETE FROM kv'),
+		}
+	} else {
+		const { DatabaseSync } = await import('node:sqlite')
+		const db = new DatabaseSync(dbPath)
+		db.exec('PRAGMA journal_mode = WAL')
+		db.exec(SCHEMA)
+		const getStmt = db.prepare('SELECT value, expires_at FROM kv WHERE key = ?')
+		const setStmt = db.prepare('INSERT OR REPLACE INTO kv (key, value, expires_at) VALUES (?, ?, ?)')
+		const delStmt = db.prepare('DELETE FROM kv WHERE key = ?')
+		return {
+			get: (key) => getStmt.get(key) as KvRow | undefined,
+			set: (key, value, expiresAt) => { setStmt.run(key, value, expiresAt) },
+			del: (key) => { delStmt.run(key) },
+			clear: () => db.exec('DELETE FROM kv'),
+		}
 	}
 }
 
-function loadStore(storePath: string): StoredData {
-	if (!existsSync(storePath)) {
-		return { states: {}, sessions: {} }
+function kvGet(kv: KvAdapter, key: string): string | undefined {
+	const row = kv.get(key)
+	if (!row) return undefined
+	if (row.expires_at !== null && row.expires_at <= Date.now()) {
+		kv.del(key)
+		return undefined
 	}
-	try {
-		const content = readFileSync(storePath, 'utf-8')
-		return JSON.parse(content)
-	} catch {
-		return { states: {}, sessions: {} }
-	}
+	return row.value
 }
 
-function saveStore(storePath: string, data: StoredData) {
-	ensureDir(storePath)
-	writeFileSync(storePath, JSON.stringify(data, null, 2))
+function kvSet(kv: KvAdapter, key: string, value: string, ttlSeconds?: number): void {
+	const expiresAt = ttlSeconds !== undefined ? Date.now() + ttlSeconds * 1000 : null
+	kv.set(key, value, expiresAt)
 }
 
-function createStateStore(storePath: string): NodeSavedStateStore {
+function createStateStore(kv: KvAdapter): NodeSavedStateStore {
 	return {
 		async set(key: string, state: NodeSavedState) {
-			const data = loadStore(storePath)
-			data.states[key] = state
-			saveStore(storePath, data)
+			kvSet(kv, `oauth_state:${key}`, JSON.stringify(state), 600)
 		},
 		async get(key: string) {
-			const data = loadStore(storePath)
-			return data.states[key]
+			const raw = kvGet(kv, `oauth_state:${key}`)
+			if (!raw) return undefined
+			return JSON.parse(raw) as NodeSavedState
 		},
 		async del(key: string) {
-			const data = loadStore(storePath)
-			delete data.states[key]
-			saveStore(storePath, data)
+			kv.del(`oauth_state:${key}`)
 		},
 	}
 }
 
-function createSessionStore(storePath: string): NodeSavedSessionStore {
+function createSessionStore(kv: KvAdapter): NodeSavedSessionStore {
 	return {
 		async set(sub: string, session: NodeSavedSession) {
-			const data = loadStore(storePath)
-			data.sessions[sub] = session
-			saveStore(storePath, data)
+			kvSet(kv, `oauth_session:${sub}`, JSON.stringify(session), 60 * 60 * 24 * 14)
 		},
 		async get(sub: string) {
-			const data = loadStore(storePath)
-			return data.sessions[sub]
+			const raw = kvGet(kv, `oauth_session:${sub}`)
+			if (!raw) return undefined
+			return JSON.parse(raw) as NodeSavedSession
 		},
 		async del(sub: string) {
-			const data = loadStore(storePath)
-			delete data.sessions[sub]
-			saveStore(storePath, data)
+			kv.del(`oauth_session:${sub}`)
 		},
 	}
 }
 
 export interface AuthOptions {
-	storePath?: string
+	dbPath?: string
 	appPassword?: string
-	serviceDid?: string
-	requiredLxms?: readonly string[]
-	includeRepoBlobScopes?: boolean
 	onStatus?: (message: string) => void
-}
-
-function buildOAuthScope(options: AuthOptions = {}): string {
-	const requestedLxms = options.requiredLxms ?? []
-	const rpcScopes = requestedLxms.map((lxm) => `rpc:${lxm}?aud=*`)
-	if (options.serviceDid) {
-		parseServiceDid(options.serviceDid)
-	}
-
-	const scopes = [REQUIRED_BASE_SCOPE]
-	if (options.includeRepoBlobScopes !== false) {
-		scopes.push(...REPO_BLOB_SCOPES)
-	}
-	scopes.push(...rpcScopes)
-
-	return scopes.join(' ')
-}
-
-function normalizeScopeToken(scope: string): string {
-	try {
-		return decodeURIComponent(scope)
-	} catch {
-		return scope
-	}
-}
-
-function findMissingScopes(grantedScope: string | undefined, requiredScope: string): string[] {
-	const granted = new Set((grantedScope || '').split(/\s+/).filter(Boolean).map(normalizeScopeToken))
-	const required = requiredScope.split(/\s+/).filter(Boolean).map(normalizeScopeToken)
-
-	return required.filter((scope) => !granted.has(scope))
 }
 
 function emitStatus(options: AuthOptions | undefined, message: string) {
@@ -156,20 +165,30 @@ function emitWarning(options: AuthOptions | undefined, message: string) {
 }
 
 /**
+ * Check whether the current directory has a stored session
+ */
+export async function hasDirSession(dbPath?: string): Promise<boolean> {
+	try {
+		const kv = await openKv(dbPath || DEFAULT_DB_PATH)
+		return kvGet(kv, `dir:${cwd()}`) !== undefined
+	} catch {
+		return false
+	}
+}
+
+/**
  * Authenticate with AT Protocol using OAuth loopback flow
  */
 export async function authenticateOAuth(
-	handle: string,
+	handle?: string,
 	options: AuthOptions = {},
 ): Promise<{ agent: Agent; did: string }> {
-	const storePath = options.storePath || DEFAULT_STORE_PATH
-	const oauthScope = buildOAuthScope(options)
+	const kv = await openKv(options.dbPath || DEFAULT_DB_PATH)
 
-	// Build loopback client metadata
 	const redirectUri = `http://${LOOPBACK_HOST}:${LOOPBACK_PORT}/oauth/callback`
 	const clientIdParams = new URLSearchParams()
 	clientIdParams.append('redirect_uri', redirectUri)
-	clientIdParams.append('scope', oauthScope)
+	clientIdParams.append('scope', OAUTH_SCOPE)
 
 	const client = new NodeOAuthClient({
 		clientMetadata: {
@@ -181,48 +200,38 @@ export async function authenticateOAuth(
 			response_types: ['code'],
 			application_type: 'web',
 			token_endpoint_auth_method: 'none',
-			scope: oauthScope,
+			scope: OAUTH_SCOPE,
 			dpop_bound_access_tokens: false,
 		},
-		stateStore: createStateStore(storePath),
-		sessionStore: createSessionStore(storePath),
+		stateStore: createStateStore(kv),
+		sessionStore: createSessionStore(kv),
 		requestLock: requestLocalLock,
 	})
 
-	// Try to restore existing session
-	const data = loadStore(storePath)
-	const existingSessions = Object.keys(data.sessions)
-
-	// Check if we have a session for this handle's DID
-	for (const sub of existingSessions) {
+	// Try to restore the session mapped to the current directory
+	const dirKey = `dir:${cwd()}`
+	const storedDid = kvGet(kv, dirKey)
+	if (storedDid) {
 		try {
-			const session = await client.restore(sub)
+			const session = await client.restore(storedDid)
 			if (session) {
-				// Verify session is still valid
-				const agent = new Agent(session)
-				const profile = await agent.getProfile({ actor: sub })
-
-				// Check if this is the handle we want
-				if (profile.data.handle === handle || sub === handle) {
-					const tokenInfo = await session.getTokenInfo(false)
-					const missingScopes = findMissingScopes(tokenInfo.scope, oauthScope)
-					if (missingScopes.length > 0) {
-						continue
-					}
-
-					emitStatus(options, `Restored session for ${profile.data.handle}`)
-					return { agent, did: sub }
-				}
+				emitStatus(options, `Restored session for ${storedDid}`)
+				return { agent: new Agent(session), did: storedDid }
 			}
 		} catch {
-			// Session invalid, continue
+			// Session invalid or expired — clear mapping and re-auth
+			kv.del(dirKey)
 		}
+	}
+
+	// Need a handle to start a new OAuth flow
+	if (!handle) {
+		throw new Error('No active session for this directory. Run `wispctl login <handle>` first.')
 	}
 
 	// Start new OAuth flow
 	emitStatus(options, `Starting OAuth flow for ${handle}...`)
 
-	// Create loopback server to receive callback
 	const callbackPromise = new Promise<{ params: URLSearchParams }>((resolve, reject) => {
 		const app = new Hono()
 		let serverHandle: { close: () => void } | null = null
@@ -294,18 +303,13 @@ export async function authenticateOAuth(
 				clearTimeout(timeoutHandle)
 			}
 			settled = true
-
-			// Close server after receiving callback
 			setTimeout(() => serverHandle?.close(), 100)
-
 			resolve({ params })
-
 			return c.html(successHtml)
 		})
 
 		app.all('*', (c) => c.text('Not found', 404))
 
-		// Start server based on runtime
 		if (isBun) {
 			const bunServer = Bun.serve({
 				port: LOOPBACK_PORT,
@@ -322,12 +326,9 @@ export async function authenticateOAuth(
 			serverHandle = { close: () => nodeServer.close() }
 		}
 
-		// Timeout after 5 minutes
 		timeoutHandle = setTimeout(
 			() => {
-				if (settled) {
-					return
-				}
+				if (settled) return
 				settled = true
 				serverHandle?.close()
 				reject(new Error('OAuth callback timeout'))
@@ -340,32 +341,30 @@ export async function authenticateOAuth(
 		}
 	})
 
-	// Get authorization URL
-	const authUrl = await client.authorize(handle, {
-		scope: oauthScope,
-	})
+	const authUrl = await client.authorize(handle, { scope: OAUTH_SCOPE })
 
-	// Open browser
 	emitStatus(options, 'Opening browser for authentication...')
 	emitStatus(options, `If browser does not open, visit: ${authUrl}`)
 	await open(authUrl.toString())
 
-	// Wait for callback
 	const { params } = await callbackPromise
-
-	// Handle callback
 	const { session } = await client.callback(params)
+
 	const tokenInfo = await session.getTokenInfo(false)
-	const missingScopes = findMissingScopes(tokenInfo.scope, oauthScope)
+	const grantedScopes = new Set((tokenInfo.scope || '').split(/\s+/).filter(Boolean))
+	const missingScopes = OAUTH_SCOPE.split(' ').filter((s) => !grantedScopes.has(decodeURIComponent(s)))
 	if (missingScopes.length > 0) {
 		emitWarning(
 			options,
-			`OAuth token is missing requested scopes (${missingScopes.length}). First missing scope: ${missingScopes[0]}`,
+			`OAuth token is missing ${missingScopes.length} requested scope(s). First missing: ${missingScopes[0]}`,
 		)
 	}
 
 	const agent = new Agent(session)
 	const did = session.did
+
+	// Map the current directory to this DID for future restores
+	kvSet(kv, dirKey, did)
 
 	emitStatus(options, `Authenticated as ${did}`)
 
@@ -384,7 +383,6 @@ export async function authenticateAppPassword(
 	let serviceUrl = pdsUrl
 
 	if (!serviceUrl) {
-		// Resolve the handle to find the correct PDS
 		emitStatus(options, `Resolving PDS for ${identifier}...`)
 		serviceUrl = await resolvePdsFromHandle(identifier)
 		emitStatus(options, `Found PDS: ${serviceUrl}`)
@@ -404,20 +402,36 @@ export async function authenticateAppPassword(
 /**
  * Authenticate - tries OAuth if no password provided, otherwise uses app password
  */
-export async function authenticate(handle: string, options: AuthOptions = {}): Promise<{ agent: Agent; did: string }> {
+export async function authenticate(handle?: string, options: AuthOptions = {}): Promise<{ agent: Agent; did: string }> {
 	if (options.appPassword) {
+		if (!handle) throw new Error('Handle required with app password authentication')
 		return authenticateAppPassword(handle, options.appPassword, undefined, options)
 	}
 	return authenticateOAuth(handle, options)
 }
 
 /**
- * Clear stored OAuth sessions
+ * Clear the session mapping for the current directory (local logout)
  */
-export function clearSessions(storePath?: string) {
-	const path = storePath || DEFAULT_STORE_PATH
-	if (existsSync(path)) {
-		unlinkSync(path)
-		console.log('Cleared stored OAuth sessions')
+export async function clearDirSession(dbPath?: string) {
+	try {
+		const kv = await openKv(dbPath || DEFAULT_DB_PATH)
+		kv.del(`dir:${cwd()}`)
+		console.log('Cleared session for current directory')
+	} catch {
+		// db doesn't exist yet
+	}
+}
+
+/**
+ * Clear all stored OAuth sessions and directory mappings
+ */
+export async function clearSessions(dbPath?: string) {
+	try {
+		const kv = await openKv(dbPath || DEFAULT_DB_PATH)
+		kv.clear()
+		console.log('Cleared all stored OAuth sessions')
+	} catch {
+		// db doesn't exist yet
 	}
 }
