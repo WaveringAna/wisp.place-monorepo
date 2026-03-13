@@ -74,7 +74,7 @@ async function processMessage(id: string, rawFields: string[]): Promise<void> {
 
 	try {
 		await handleSiteCreateOrUpdate(did, rkey, record.record, record.cid, {
-			skipInvalidation: true,
+			skipInvalidation: false,
 			forceDownload,
 			forceRewriteHtml,
 		})

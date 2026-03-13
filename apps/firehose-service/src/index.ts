@@ -97,7 +97,9 @@ async function backfillSitesTableFromKnownDids(): Promise<void> {
 	let sitesSynced = 0
 	let sitesFailed = 0
 
-	for (const did of dids) {
+	const concurrency = config.backfillConcurrency
+
+	const processDid = async (did: string) => {
 		try {
 			const records = await listSiteRecordsForDid(did)
 			for (const row of records) {
@@ -112,12 +114,22 @@ async function backfillSitesTableFromKnownDids(): Promise<void> {
 				}
 			}
 			didsProcessed++
-			logger.info(`[Backfill:sites] Progress ${didsProcessed + didsFailed}/${dids.length} DIDs`)
 		} catch (err) {
 			logger.error(`[Backfill:sites] Failed to list records for DID ${did}`, err)
 			didsFailed++
 		}
+		logger.info(`[Backfill:sites] Progress ${didsProcessed + didsFailed}/${dids.length} DIDs (${sitesSynced} sites synced, ${sitesFailed} sites failed)`)
 	}
+
+	const inFlight = new Set<Promise<void>>()
+	for (const did of dids) {
+		const task = processDid(did).then(() => { inFlight.delete(task) })
+		inFlight.add(task)
+		if (inFlight.size >= concurrency) {
+			await Promise.race(inFlight)
+		}
+	}
+	await Promise.all(inFlight)
 
 	logger.info(
 		`Phase 2/3 complete: ${didsProcessed} DIDs processed, ${didsFailed} DIDs failed, ${sitesSynced} sites synced, ${sitesFailed} sites failed`,

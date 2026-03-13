@@ -830,8 +830,8 @@ export async function handleSiteCreateOrUpdate(
 		})
 	}
 
-	// Notify hosting-service to invalidate its local caches
-	// (skip for revalidate/backfill since hosting-service already has the files locally)
+	// Notify hosting-service to invalidate its local caches (including negative 404 cache)
+	// (skip for backfill since it runs before the hosting-service serves traffic)
 	if (!options?.skipInvalidation) {
 		await publishCacheInvalidation(did, rkey, 'update')
 	}
