@@ -418,7 +418,7 @@ async function processUploadInBackground(
 		}
 
 		// Use sliding window concurrency for maximum throughput
-		const CONCURRENCY_LIMIT = 20 // Maximum concurrent uploads
+		const CONCURRENCY_LIMIT = parseInt(process.env.UPLOAD_CONCURRENCY || '3', 10)
 		const uploadedBlobs: Array<{
 			result: FileUploadResult
 			filePath: string
