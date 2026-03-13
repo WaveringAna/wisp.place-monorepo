@@ -157,44 +157,53 @@ async function runBackfill(): Promise<void> {
 		logger.info('Sites table empty; falling back to site_cache entries')
 	}
 
-	logger.info(`Found ${sites.length} sites in database`)
+	const concurrency = config.backfillConcurrency
+	logger.info(`Found ${sites.length} sites in database (concurrency: ${concurrency})`)
 
 	let processed = 0
 	let skipped = 0
 	let failed = 0
 
-	for (const site of sites) {
+	const processSite = async (site: { did: string; rkey: string }) => {
 		try {
-			// Fetch current record from PDS
 			const result = await fetchSiteRecord(site.did, site.rkey)
 
 			if (!result) {
 				logger.info(`Site not found on PDS: ${site.did}/${site.rkey}`)
 				skipped++
-				continue
+				return
 			}
 
 			const existingCache = await getSiteCache(site.did, site.rkey)
-			// Check if CID matches (already up to date)
 			if (!forceRewriteHtml && !forceDownload && existingCache && result.cid === existingCache.record_cid) {
 				logger.info(`Site already up to date: ${site.did}/${site.rkey}`)
 				skipped++
-				continue
+				return
 			}
 
-			// Process the site
 			await handleSiteCreateOrUpdate(site.did, site.rkey, result.record, result.cid, {
 				forceRewriteHtml,
 				forceDownload,
 			})
 			processed++
-
-			logger.info(`Progress: ${processed + skipped + failed}/${sites.length}`)
 		} catch (err) {
 			logger.error(`Failed to process ${site.did}/${site.rkey}`, err)
 			failed++
 		}
+
+		logger.info(`Progress: ${processed + skipped + failed}/${sites.length} (${processed} processed, ${skipped} skipped, ${failed} failed)`)
 	}
+
+	// Sliding window: keep `concurrency` tasks in flight at all times
+	const inFlight = new Set<Promise<void>>()
+	for (const site of sites) {
+		const task = processSite(site).then(() => { inFlight.delete(task) })
+		inFlight.add(task)
+		if (inFlight.size >= concurrency) {
+			await Promise.race(inFlight)
+		}
+	}
+	await Promise.all(inFlight)
 
 	const elapsedMs = Date.now() - startTime
 	const elapsedSec = Math.round(elapsedMs / 1000)

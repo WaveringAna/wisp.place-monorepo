@@ -13,6 +13,7 @@ COPY packages ./packages
 COPY apps/hosting-service ./apps/hosting-service
 COPY apps/main-app/package.json ./apps/main-app/package.json
 COPY apps/firehose-service/package.json ./apps/firehose-service/package.json
+COPY apps/webhook-service/package.json ./apps/webhook-service/package.json
 COPY cli/package.json ./cli/package.json
 
 # Install dependencies

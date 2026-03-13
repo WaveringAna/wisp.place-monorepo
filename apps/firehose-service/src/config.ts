@@ -34,4 +34,5 @@ export const config = {
 		process.argv.includes('--db-fill-only') ||
 		process.env.BACKFILL === 'true' ||
 		process.env.DB_FILL_ONLY === 'true',
+	backfillConcurrency: parseInt(process.env.BACKFILL_CONCURRENCY || '5', 10),
 } as const

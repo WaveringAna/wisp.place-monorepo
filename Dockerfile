@@ -12,6 +12,7 @@ COPY packages ./packages
 COPY apps/main-app/package.json ./apps/main-app/package.json
 COPY apps/hosting-service/package.json ./apps/hosting-service/package.json
 COPY apps/firehose-service/package.json ./apps/firehose-service/package.json
+COPY apps/webhook-service/package.json ./apps/webhook-service/package.json
 
 # Install all dependencies (including workspaces)
 RUN bun install --frozen-lockfile
