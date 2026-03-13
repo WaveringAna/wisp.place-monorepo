@@ -38,7 +38,11 @@ export interface BunSubscriptionOptions<T> {
 	validate: (obj: unknown) => T | undefined
 	getParams?: () => Record<string, unknown> | Promise<Record<string, unknown> | undefined> | undefined
 	onReconnectError?: (error: unknown, n: number, initialSetup: boolean) => void
+	onConnect?: () => void
+	onDisconnect?: () => void
 	maxReconnectSeconds?: number
+	/** Force reconnect if no messages received within this many ms (default: 15000 = 15s) */
+	maxSilenceMs?: number
 }
 
 export class BunSubscription<T = unknown> {
@@ -69,7 +73,11 @@ export class BunSubscription<T = unknown> {
 	}
 
 	async *[Symbol.asyncIterator](): AsyncGenerator<T> {
+		const maxSilenceMs = this.opts.maxSilenceMs ?? 15_000
+
 		while (!this.aborted) {
+			let silenceTimer: ReturnType<typeof setTimeout> | null = null
+
 			try {
 				const url = await this.getUrl()
 
@@ -80,18 +88,33 @@ export class BunSubscription<T = unknown> {
 				let wsOpen = false
 				let wsClosed = false
 
+				const resetSilenceTimer = () => {
+					if (silenceTimer) clearTimeout(silenceTimer)
+					silenceTimer = setTimeout(() => {
+						if (!wsClosed && !this.aborted) {
+							console.warn(`[BunSubscription] No messages for ${maxSilenceMs / 1000}s, forcing reconnect`)
+							wsClosed = true
+							this.ws?.close()
+							resolveMessage?.()
+						}
+					}, maxSilenceMs)
+				}
+
 				this.ws = new WebSocket(url)
 				this.ws.binaryType = 'arraybuffer'
 
 				this.ws.addEventListener('open', () => {
 					wsOpen = true
 					this.reconnectAttempts = 0
+					this.opts.onConnect?.()
+					resetSilenceTimer()
 				})
 
 				this.ws.addEventListener('message', (event) => {
 					const data = event.data
 					if (data instanceof ArrayBuffer) {
 						messageQueue.push(new Uint8Array(data))
+						resetSilenceTimer()
 						resolveMessage?.()
 					}
 				})
@@ -102,6 +125,7 @@ export class BunSubscription<T = unknown> {
 
 				this.ws.addEventListener('close', () => {
 					wsClosed = true
+					this.opts.onDisconnect?.()
 					resolveMessage?.()
 				})
 
@@ -159,6 +183,7 @@ export class BunSubscription<T = unknown> {
 				}
 
 				// Clean up
+				if (silenceTimer) clearTimeout(silenceTimer)
 				this.ws?.close()
 				this.ws = null
 
@@ -170,6 +195,7 @@ export class BunSubscription<T = unknown> {
 				this.opts.onReconnectError?.(new Error('Connection closed'), this.reconnectAttempts, false)
 				await new Promise((resolve) => setTimeout(resolve, delay))
 			} catch (err) {
+				if (silenceTimer) clearTimeout(silenceTimer)
 				this.ws?.close()
 				this.ws = null
 

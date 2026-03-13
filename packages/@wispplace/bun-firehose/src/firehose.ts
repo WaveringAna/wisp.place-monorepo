@@ -118,9 +118,13 @@ export interface BunFirehoseOptions {
 	service: string
 	handleEvent: (evt: Event) => Promise<void> | void
 	onError: (err: Error) => void
+	onConnect?: () => void
+	onDisconnect?: () => void
 	filterCollections?: string[]
 	unauthenticatedCommits?: boolean
 	getCursor?: () => number | undefined | Promise<number | undefined>
+	/** Force reconnect if no messages received within this many ms (default: 15000) */
+	maxSilenceMs?: number
 }
 
 export class BunFirehose {
@@ -166,6 +170,9 @@ export class BunFirehose {
 			onReconnectError: (err, n) => {
 				this.opts.onError(new Error(`Reconnect attempt ${n}: ${err}`))
 			},
+			onConnect: this.opts.onConnect,
+			onDisconnect: this.opts.onDisconnect,
+			maxSilenceMs: this.opts.maxSilenceMs,
 		})
 
 		try {

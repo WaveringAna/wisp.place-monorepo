@@ -36,8 +36,8 @@
 
   /* Significantly darker border for visibility */
   --border: oklch(0.65 0.02 30);
-  /* Input backgrounds lighter than cards */
-  --input: oklch(0.97 0.005 35);
+  /* Input backgrounds - distinct from card background */
+  --input: oklch(0.82 0.01 35);
   --ring: #ff5c8a;
 
   --destructive: oklch(0.50 0.20 25);
@@ -91,9 +91,10 @@
   --muted: oklch(0.33 0.015 285);
   --muted-foreground: oklch(0.72 0.01 285);
 
-  /* Subtle borders */
-  --border: oklch(0.38 0.02 285);
-  --input: oklch(0.30 0.015 285);
+  /* Borders with more contrast */
+  --border: oklch(0.42 0.02 285);
+  /* Input borders - more visible against card backgrounds */
+  --input: oklch(0.42 0.02 285);
   --ring: oklch(0.70 0.10 295);
 
   /* Warm destructive color */

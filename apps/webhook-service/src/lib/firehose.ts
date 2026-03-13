@@ -109,7 +109,6 @@ let firehoseHandle: { destroy: () => void } | null = null
 
 export function startFirehose(): void {
 	logger.info(`Starting firehose (runtime: ${isBun ? 'Bun' : 'Node.js'})`)
-	isConnected = true
 
 	if (isBun) {
 		const f = new BunFirehose({
@@ -118,10 +117,19 @@ export function startFirehose(): void {
 			unauthenticatedCommits: true,
 			handleEvent,
 			onError: handleError,
+			onConnect: () => {
+				isConnected = true
+				logger.info('Firehose connected')
+			},
+			onDisconnect: () => {
+				isConnected = false
+				logger.warn('Firehose disconnected, will reconnect')
+			},
 		})
 		f.start()
 		firehoseHandle = { destroy: () => f.destroy() }
 	} else {
+		isConnected = true
 		const f = new Firehose({
 			idResolver,
 			service: config.firehoseService,

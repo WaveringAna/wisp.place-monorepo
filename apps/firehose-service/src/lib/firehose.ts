@@ -159,8 +159,6 @@ export function startFirehose(): void {
 	logger.info(`Service: ${config.firehoseService}`)
 	logger.info(`Max concurrency: ${config.firehoseMaxConcurrency}`)
 
-	isConnected = true
-
 	if (isBun) {
 		// Use BunFirehose for Bun runtime
 		const bunFirehose = new BunFirehose({
@@ -169,11 +167,20 @@ export function startFirehose(): void {
 			filterCollections: ['place.wisp.fs', 'place.wisp.settings'],
 			handleEvent,
 			onError: handleError,
+			onConnect: () => {
+				isConnected = true
+				logger.info('Firehose connected')
+			},
+			onDisconnect: () => {
+				isConnected = false
+				logger.warn('Firehose disconnected, will reconnect')
+			},
 		})
 		bunFirehose.start()
 		firehoseHandle = { destroy: () => bunFirehose.destroy() }
 	} else {
 		// Use @atproto/sync Firehose for Node.js
+		isConnected = true
 		const nodeFirehose = new Firehose({
 			idResolver,
 			service: config.firehoseService,

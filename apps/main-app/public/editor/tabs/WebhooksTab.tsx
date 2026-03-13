@@ -4,13 +4,13 @@ import { Checkbox } from '@public/components/ui/checkbox'
 import { Input } from '@public/components/ui/input'
 import { Label } from '@public/components/ui/label'
 import { SkeletonShimmer } from '@public/components/ui/skeleton'
-import { Loader2, RefreshCw, Trash2 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { CheckCircle2, ChevronDown, ChevronUp, ExternalLink, Loader2, Plus, RefreshCw, Trash2, Webhook } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 import type { WebhookEventLog, WebhookRecord } from '../hooks/useWebhookData'
 
 const APPS = [
 	{ id: 'bluesky', label: 'Bluesky', path: 'app.bsky.*' },
-	{ id: 'tangled', label: 'Tangled', path: 'chat.tangled.*' },
+	{ id: 'tangled', label: 'Tangled', path: 'sh.tangled.*' },
 	{ id: 'leaflet', label: 'Leaflet', path: 'pub.leaflet.*' },
 	{ id: 'wisp', label: 'wisp', path: 'place.wisp.*' },
 	{ id: 'blento', label: 'Blento', path: 'blue.blento.*' },
@@ -56,6 +56,17 @@ function buildScope(
 	return scopePath ? `at://${userDid}/${scopePath}` : `at://${userDid}`
 }
 
+function formatTimeAgo(dateStr: string): string {
+	const diff = Date.now() - new Date(dateStr).getTime()
+	const seconds = Math.floor(diff / 1000)
+	if (seconds < 60) return `${seconds}s ago`
+	const minutes = Math.floor(seconds / 60)
+	if (minutes < 60) return `${minutes}m ago`
+	const hours = Math.floor(minutes / 60)
+	if (hours < 24) return `${hours}h ago`
+	return new Date(dateStr).toLocaleDateString()
+}
+
 export function WebhooksTab({
 	webhooks,
 	webhooksLoading,
@@ -80,11 +91,71 @@ export function WebhooksTab({
 	const [error, setError] = useState<string | null>(null)
 	const [success, setSuccess] = useState<string | null>(null)
 	const [deletingRkey, setDeletingRkey] = useState<string | null>(null)
+	const [showCreateForm, setShowCreateForm] = useState(false)
+	const [focusedWebhook, setFocusedWebhook] = useState(0)
+	const containerRef = useRef<HTMLDivElement>(null)
+	const itemRefs = useRef<(HTMLDivElement | null)[]>([])
 
 	useEffect(() => {
 		const id = setInterval(onRefreshEvents, 60_000)
 		return () => clearInterval(id)
 	}, [onRefreshEvents])
+
+	// Auto-focus container when webhooks are loaded (fires on mount if data ready)
+	useEffect(() => {
+		if (!webhooksLoading && containerRef.current) {
+			const timer = setTimeout(() => containerRef.current?.focus(), 100)
+			return () => clearTimeout(timer)
+		}
+	}, [webhooksLoading])
+
+	// Clamp focused index
+	useEffect(() => {
+		if (webhooks.length > 0 && focusedWebhook >= webhooks.length) {
+			setFocusedWebhook(webhooks.length - 1)
+		}
+	}, [webhooks.length, focusedWebhook])
+
+	// Keyboard navigation
+	useEffect(() => {
+		const handleKeyDown = (e: KeyboardEvent) => {
+			const target = e.target as HTMLElement
+			const isTyping = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA'
+			const hasFocus = containerRef.current?.contains(document.activeElement)
+
+			if (isTyping || !hasFocus || webhooks.length === 0 || showCreateForm) return
+
+			switch (e.key) {
+				case 'ArrowUp':
+					e.preventDefault()
+					setFocusedWebhook((prev) => Math.max(0, prev - 1))
+					break
+				case 'ArrowDown':
+					e.preventDefault()
+					setFocusedWebhook((prev) => Math.min(webhooks.length - 1, prev + 1))
+					break
+				case 'd':
+					e.preventDefault()
+					handleDelete(webhooks[focusedWebhook].rkey)
+					break
+				case 'n':
+					e.preventDefault()
+					setShowCreateForm(true)
+					break
+			}
+		}
+
+		window.addEventListener('keydown', handleKeyDown)
+		return () => window.removeEventListener('keydown', handleKeyDown)
+	}, [webhooks, focusedWebhook, showCreateForm])
+
+	// Scroll focused item into view
+	useEffect(() => {
+		const element = itemRefs.current[focusedWebhook]
+		if (element) {
+			element.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+		}
+	}, [focusedWebhook])
 
 	const selectApp = (id: AppId) => {
 		setSelectedApp(id)
@@ -125,7 +196,7 @@ export function WebhooksTab({
 				secret: '',
 				enabled: true,
 			})
-			setSuccess('Webhook created.')
+			setSuccess('Webhook created successfully')
 			setUrl('')
 			setSelectedApp(null)
 			setScopePath('')
@@ -136,6 +207,10 @@ export function WebhooksTab({
 			setEventCreate(true)
 			setEventUpdate(true)
 			setEventDelete(true)
+			setTimeout(() => {
+				setSuccess(null)
+				setShowCreateForm(false)
+			}, 1500)
 		} catch (err) {
 			setError(err instanceof Error ? err.message : 'Failed to create webhook')
 		}
@@ -152,261 +227,384 @@ export function WebhooksTab({
 		}
 	}
 
+	const Kbd = ({ children }: { children: React.ReactNode }) => (
+		<kbd className="px-2 py-1 bg-muted/50 rounded border border-border/50">{children}</kbd>
+	)
+
 	return (
-		<div className="h-full flex flex-col border border-border/30 bg-card/50 font-mono">
-			{/* Header */}
-			<div className="p-4 pb-3 border-b border-border/30 flex-shrink-0">
-				<p className="text-sm font-semibold">Webhooks</p>
-				<p className="text-xs text-muted-foreground mt-0.5">Receive HTTP callbacks when AT Protocol records change</p>
+		<div
+			ref={containerRef}
+			className="h-full flex flex-col border border-border/30 bg-card/50 font-mono outline-none"
+			tabIndex={-1}
+			onClick={(e) => {
+				const t = e.target as HTMLElement
+				if (!t.closest('input, textarea, button, select, a, label')) {
+					containerRef.current?.focus()
+				}
+			}}
+		>
+			{/* Header with keyboard hints */}
+			<div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground p-4 pb-3 border-b border-border/30 flex-shrink-0">
+				{webhooks.length > 0 && !showCreateForm ? (
+					<>
+						<div className="flex items-center gap-2">
+							<Kbd>↑</Kbd>
+							<Kbd>↓</Kbd>
+							<span>navigate</span>
+						</div>
+						<span>•</span>
+						<div className="flex items-center gap-2">
+							<Kbd>d</Kbd>
+							<span className="text-red-400">delete</span>
+						</div>
+						<span>•</span>
+						<div className="flex items-center gap-2">
+							<Kbd>n</Kbd>
+							<span>new</span>
+						</div>
+					</>
+				) : (
+					<>
+						<Webhook className="w-3.5 h-3.5" />
+						<span>Receive HTTP callbacks for changes to your ATProto collections as well as references</span>
+					</>
+				)}
 			</div>
 
-			<div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-6">
-				{/* Create form */}
-				<form onSubmit={handleCreate} className="space-y-4">
-					<p className="text-xs uppercase tracking-wider text-muted-foreground">Create Webhook</p>
-
-					{/* URL */}
-					<div className="space-y-1">
-						<Label htmlFor="wh-url" className="text-xs text-muted-foreground">
-							URL
-						</Label>
-						<Input
-							id="wh-url"
-							value={url}
-							onChange={(e) => setUrl(e.target.value)}
-							placeholder="https://example.com/webhook"
-							required
-							className="h-8 text-sm"
-						/>
-					</div>
-
-					{/* App picker */}
-					<div className="space-y-2">
-						<Label className="text-xs text-muted-foreground">App</Label>
-						<div className="flex flex-wrap gap-1.5">
-							{APPS.map((app) => (
-								<button
-									key={app.id}
-									type="button"
-									onClick={() => selectApp(app.id)}
-									className={`px-3 py-1 text-xs border transition-colors ${
-										selectedApp === app.id
-											? 'border-accent bg-accent/20 text-foreground'
-											: 'border-border/40 text-muted-foreground hover:border-border hover:text-foreground'
-									}`}
-								>
-									{app.label}
-								</button>
-							))}
-							<button
-								type="button"
-								onClick={() => selectApp('other')}
-								className={`px-3 py-1 text-xs border transition-colors ${
-									selectedApp === 'other'
-										? 'border-accent bg-accent/20 text-foreground'
-										: 'border-border/40 text-muted-foreground hover:border-border hover:text-foreground'
-								}`}
-							>
-								Other
-							</button>
-						</div>
-					</div>
-
-					{/* Scope detail — known app */}
-					{selectedApp && selectedApp !== 'other' && (
-						<div className="space-y-1">
-							<Label htmlFor="wh-path" className="text-xs text-muted-foreground">
-								Collection / glob
-							</Label>
-							<div className="flex items-center gap-0 border border-border/40 focus-within:border-border">
-								<span className="px-2 py-1.5 text-xs text-muted-foreground bg-muted/40 border-r border-border/40 whitespace-nowrap select-none">
-									at://{userDid || 'did'}/
-								</span>
-								<input
-									id="wh-path"
-									value={scopePath}
-									onChange={(e) => setScopePath(e.target.value)}
-									placeholder="app.bsky.*"
-									className="flex-1 px-2 py-1.5 text-xs bg-transparent outline-none font-mono"
-								/>
-							</div>
-						</div>
-					)}
-
-					{/* Scope detail — other */}
-					{selectedApp === 'other' && (
-						<div className="space-y-2">
-							<Label className="text-xs text-muted-foreground">Scope</Label>
-							<div className="space-y-1.5">
-								{(
-									[
-										['all', 'All my records', `at://${userDid || 'did'}`],
-										['collection', 'Specific collection', ''],
-										['rkey', 'Specific record', ''],
-									] as const
-								).map(([mode, label, hint]) => (
-									<label key={mode} className="flex items-start gap-2 cursor-pointer group">
-										<input
-											type="radio"
-											name="other-mode"
-											checked={otherMode === mode}
-											onChange={() => setOtherMode(mode)}
-											className="mt-0.5 accent-accent"
-										/>
-										<div className="flex-1">
-											<span className="text-xs">{label}</span>
-											{hint && <span className="text-xs text-muted-foreground ml-2">{hint}</span>}
-										</div>
-									</label>
-								))}
-							</div>
-							{otherMode === 'collection' && (
-								<Input
-									value={otherCollection}
-									onChange={(e) => setOtherCollection(e.target.value)}
-									placeholder="app.bsky.feed.post"
-									className="h-8 text-xs"
-								/>
-							)}
-							{otherMode === 'rkey' && (
-								<div className="flex gap-2">
-									<Input
-										value={otherCollection}
-										onChange={(e) => setOtherCollection(e.target.value)}
-										placeholder="collection"
-										className="h-8 text-xs flex-1"
-									/>
-									<Input
-										value={otherRkey}
-										onChange={(e) => setOtherRkey(e.target.value)}
-										placeholder="rkey"
-										className="h-8 text-xs flex-1"
-									/>
-								</div>
-							)}
-						</div>
-					)}
-
-					{/* Wildcard hint */}
-					{scopeAturi.includes('*') && (
-						<p className="text-xs text-muted-foreground">
-							<code className="bg-muted px-1">*</code> is a wildcard — matches any collection name at that level.
-						</p>
-					)}
-
-					{/* Backlinks */}
-					{selectedApp && (
-						<div className="flex items-center gap-2">
-							<Checkbox id="wh-backlinks" checked={backlinks} onCheckedChange={(v) => setBacklinks(!!v)} />
-							<Label htmlFor="wh-backlinks" className="cursor-pointer text-xs">
-								Backlinks{' '}
-								<span className="text-muted-foreground">— also fire when other records reference this scope</span>
-							</Label>
-						</div>
-					)}
-
-					{/* Events */}
-					{selectedApp && (
-						<div className="space-y-1.5">
-							<Label className="text-xs text-muted-foreground">Events</Label>
-							<div className="flex gap-4">
-								{(
-									[
-										['create', eventCreate, setEventCreate],
-										['update', eventUpdate, setEventUpdate],
-										['delete', eventDelete, setEventDelete],
-									] as const
-								).map(([name, val, set]) => (
-									<div key={name} className="flex items-center gap-1.5">
-										<Checkbox id={`wh-event-${name}`} checked={val} onCheckedChange={(v) => set(!!v)} />
-										<Label htmlFor={`wh-event-${name}`} className="cursor-pointer text-xs capitalize">
-											{name}
-										</Label>
-									</div>
-								))}
-							</div>
-							<p className="text-xs text-muted-foreground">All checked = no filter</p>
-						</div>
-					)}
-
-					{error && <p className="text-xs text-destructive">{error}</p>}
-					{success && <p className="text-xs text-green-500">{success}</p>}
-
-					{selectedApp && (
-						<Button type="submit" disabled={isCreating || !scopeAturi} size="sm">
-							{isCreating ? (
+			<div className="flex-1 min-h-0 overflow-y-auto">
+				{/* Your Webhooks */}
+				<div className="p-4 space-y-2">
+					<div className="flex items-center justify-between mb-3">
+						<p className="text-xs uppercase tracking-wider text-muted-foreground">Your Webhooks</p>
+						<Button
+							variant="outline"
+							size="sm"
+							className="h-7 text-xs px-3"
+							onClick={() => setShowCreateForm(!showCreateForm)}
+						>
+							{showCreateForm ? (
 								<>
-									<Loader2 className="w-3 h-3 mr-2 animate-spin" />
-									Creating...
+									<ChevronUp className="w-3 h-3 mr-1.5" />
+									Cancel
 								</>
 							) : (
-								'Create Webhook'
+								<>
+									<Plus className="w-3 h-3 mr-1.5" />
+									New Webhook
+								</>
 							)}
 						</Button>
-					)}
-				</form>
+					</div>
 
-				{/* Existing webhooks */}
-				<div className="space-y-2">
-					<p className="text-xs uppercase tracking-wider text-muted-foreground">Your Webhooks</p>
+					{/* Create form (collapsible) */}
+					{showCreateForm && (
+						<div className="border border-dashed border-border/50 p-4 space-y-4 mb-4">
+							<form onSubmit={handleCreate} className="space-y-4">
+								{/* URL */}
+								<div className="space-y-1.5">
+									<Label htmlFor="wh-url" className="text-xs text-muted-foreground">
+										Endpoint URL
+									</Label>
+									<Input
+										id="wh-url"
+										value={url}
+										onChange={(e) => setUrl(e.target.value)}
+										placeholder="https://example.com/webhook"
+										required
+										className="h-8 text-sm font-mono"
+										autoFocus
+									/>
+								</div>
+
+								{/* App picker */}
+								<div className="space-y-2">
+									<Label className="text-xs text-muted-foreground">Scope</Label>
+									<div className="flex flex-wrap gap-1.5">
+										{APPS.map((app) => (
+											<button
+												key={app.id}
+												type="button"
+												onClick={() => selectApp(app.id)}
+												className={`px-3 py-1.5 text-xs border rounded-sm transition-all ${
+													selectedApp === app.id
+														? 'border-accent bg-accent/15 text-foreground shadow-sm'
+														: 'border-border text-muted-foreground hover:border-foreground/40 hover:text-foreground hover:bg-muted/30'
+												}`}
+											>
+												{app.label}
+											</button>
+										))}
+										<button
+											type="button"
+											onClick={() => selectApp('other')}
+											className={`px-3 py-1.5 text-xs border rounded-sm transition-all ${
+												selectedApp === 'other'
+													? 'border-accent bg-accent/15 text-foreground shadow-sm'
+													: 'border-border text-muted-foreground hover:border-foreground/40 hover:text-foreground hover:bg-muted/30'
+											}`}
+										>
+											Other
+										</button>
+									</div>
+								</div>
+
+								{/* Scope detail — known app */}
+								{selectedApp && selectedApp !== 'other' && (
+									<div className="space-y-1.5">
+										<Label htmlFor="wh-path" className="text-xs text-muted-foreground">
+											Collection / glob
+										</Label>
+										<div className="flex items-center gap-0 border border-border rounded-sm focus-within:border-accent transition-colors">
+											<span className="px-2.5 py-1.5 text-xs text-muted-foreground bg-muted/40 border-r border-border whitespace-nowrap select-none">
+												at://{userDid ? `${userDid.slice(0, 12)}...` : 'did'}/
+											</span>
+											<input
+												id="wh-path"
+												value={scopePath}
+												onChange={(e) => setScopePath(e.target.value)}
+												placeholder="app.bsky.*"
+												className="flex-1 px-2.5 py-1.5 text-xs bg-transparent outline-none font-mono"
+											/>
+										</div>
+									</div>
+								)}
+
+								{/* Scope detail — other */}
+								{selectedApp === 'other' && (
+									<div className="space-y-2">
+										<Label className="text-xs text-muted-foreground">Scope Level</Label>
+										<div className="space-y-1.5">
+											{(
+												[
+													['all', 'All my records'],
+													['collection', 'Specific collection'],
+													['rkey', 'Specific record'],
+												] as const
+											).map(([mode, label]) => (
+												<label key={mode} className="flex items-center gap-2 cursor-pointer group">
+													<input
+														type="radio"
+														name="other-mode"
+														checked={otherMode === mode}
+														onChange={() => setOtherMode(mode)}
+														className="accent-accent"
+													/>
+													<span className="text-xs group-hover:text-foreground transition-colors">{label}</span>
+												</label>
+											))}
+										</div>
+										{otherMode === 'collection' && (
+											<Input
+												value={otherCollection}
+												onChange={(e) => setOtherCollection(e.target.value)}
+												placeholder="app.bsky.feed.post"
+												className="h-8 text-xs font-mono"
+											/>
+										)}
+										{otherMode === 'rkey' && (
+											<div className="flex gap-2">
+												<Input
+													value={otherCollection}
+													onChange={(e) => setOtherCollection(e.target.value)}
+													placeholder="collection"
+													className="h-8 text-xs flex-1 font-mono"
+												/>
+												<Input
+													value={otherRkey}
+													onChange={(e) => setOtherRkey(e.target.value)}
+													placeholder="rkey"
+													className="h-8 text-xs flex-1 font-mono"
+												/>
+											</div>
+										)}
+									</div>
+								)}
+
+								{/* Scope preview */}
+								{scopeAturi && (
+									<div className="p-2.5 bg-muted/20 border border-border/20 rounded-sm">
+										<p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Scope Preview</p>
+										<p className="text-xs font-mono break-all">{scopeAturi}</p>
+									</div>
+								)}
+
+								{/* Wildcard hint */}
+								{scopeAturi.includes('*') && (
+									<p className="text-xs text-muted-foreground">
+										<code className="bg-muted/50 px-1.5 py-0.5 rounded-sm border border-border/20">*</code> matches any collection name at that level
+									</p>
+								)}
+
+								{/* Options row */}
+								{selectedApp && (
+									<div className="flex flex-col sm:flex-row sm:items-start gap-4 pt-1">
+										{/* Backlinks */}
+										<div className="flex items-center gap-2">
+											<Checkbox id="wh-backlinks" checked={backlinks} onCheckedChange={(v) => setBacklinks(!!v)} />
+											<Label htmlFor="wh-backlinks" className="cursor-pointer text-xs">
+												Backlinks
+											</Label>
+										</div>
+
+										{/* Events */}
+										<div className="flex items-center gap-3">
+											<span className="text-xs text-muted-foreground">Events:</span>
+											{(
+												[
+													['create', eventCreate, setEventCreate],
+													['update', eventUpdate, setEventUpdate],
+													['delete', eventDelete, setEventDelete],
+												] as const
+											).map(([name, val, set]) => (
+												<div key={name} className="flex items-center gap-1.5">
+													<Checkbox id={`wh-event-${name}`} checked={val} onCheckedChange={(v) => set(!!v)} />
+													<Label htmlFor={`wh-event-${name}`} className="cursor-pointer text-xs capitalize">
+														{name}
+													</Label>
+												</div>
+											))}
+										</div>
+									</div>
+								)}
+
+								{error && (
+									<div className="p-2.5 bg-destructive/10 border border-destructive/20 rounded-sm">
+										<p className="text-xs text-destructive">{error}</p>
+									</div>
+								)}
+								{success && (
+									<div className="p-2.5 bg-green-500/10 border border-green-500/20 rounded-sm flex items-center gap-2">
+										<CheckCircle2 className="w-3 h-3 text-green-500" />
+										<p className="text-xs text-green-500">{success}</p>
+									</div>
+								)}
+
+								{selectedApp && (
+									<Button type="submit" disabled={isCreating || !scopeAturi} size="sm" className="w-full sm:w-auto">
+										{isCreating ? (
+											<>
+												<Loader2 className="w-3 h-3 mr-2 animate-spin" />
+												Creating...
+											</>
+										) : (
+											'Create Webhook'
+										)}
+									</Button>
+								)}
+							</form>
+						</div>
+					)}
+
+					{/* Webhook list */}
 					{webhooksLoading ? (
 						<div className="space-y-2">
 							{['a', 'b'].map((id) => (
-								<SkeletonShimmer key={id} className="h-12 w-full" />
+								<SkeletonShimmer key={id} className="h-16 w-full" />
 							))}
 						</div>
 					) : webhooks.length === 0 ? (
-						<p className="text-xs text-muted-foreground py-1">No webhooks configured.</p>
+						<div className="py-8 text-center space-y-3">
+							<Webhook className="w-6 h-6 text-muted-foreground/50 mx-auto" />
+							<div>
+								<p className="text-sm text-muted-foreground">No webhooks configured</p>
+								<p className="text-xs text-muted-foreground/70 mt-1 max-w-xs mx-auto">
+									Create one to receive HTTP callbacks for changes to your ATProto collections
+								</p>
+							</div>
+							{!showCreateForm && (
+								<Button
+									variant="outline"
+									size="sm"
+									className="text-xs"
+									onClick={() => setShowCreateForm(true)}
+								>
+									<Plus className="w-3 h-3 mr-1.5" />
+									Create your first webhook
+								</Button>
+							)}
+						</div>
 					) : (
 						<div className="space-y-1.5">
-							{webhooks.map((wh) => (
-								<div key={wh.rkey} className="flex items-start justify-between p-3 border border-border/30 gap-4">
-									<div className="space-y-0.5 min-w-0">
-										<p className="text-xs truncate">{wh.url}</p>
-										<p className="text-xs text-muted-foreground truncate">{wh.scopeAturi}</p>
-										<div className="flex gap-1 flex-wrap mt-1">
-											{!wh.enabled && (
-												<Badge variant="secondary" className="text-[10px]">
-													disabled
-												</Badge>
-											)}
-											{wh.backlinks && (
-												<Badge variant="outline" className="text-[10px]">
-													backlinks
-												</Badge>
-											)}
-											{wh.events.length > 0 &&
-												wh.events.map((e) => (
-													<Badge key={e} variant="outline" className="text-[10px]">
-														{e}
-													</Badge>
-												))}
-										</div>
-									</div>
-									<Button
-										variant="ghost"
-										size="sm"
-										onClick={() => handleDelete(wh.rkey)}
-										disabled={deletingRkey === wh.rkey}
-										className="flex-shrink-0 h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+							{webhooks.map((wh, idx) => {
+								const isFocused = idx === focusedWebhook
+								// Extract the collection/path from the AT-URI for display
+								const scopeParts = wh.scopeAturi.replace('at://', '').split('/')
+								const scopeDisplay = scopeParts.slice(1).join('/') || 'all records'
+
+								return (
+									<div
+										key={wh.rkey}
+										ref={(el) => {
+											itemRefs.current[idx] = el
+										}}
+										className={`flex items-start justify-between p-3 border transition-colors ${
+											isFocused ? 'border-accent bg-accent/10' : 'border-border/30 hover:bg-muted/10'
+										}`}
 									>
-										{deletingRkey === wh.rkey ? (
-											<Loader2 className="w-3 h-3 animate-spin" />
-										) : (
-											<Trash2 className="w-3 h-3" />
-										)}
-									</Button>
-								</div>
-							))}
+										<div className="space-y-1.5 min-w-0 flex-1">
+											<div className="flex items-center gap-2">
+												<div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${wh.enabled ? 'bg-green-500' : 'bg-muted-foreground/30'}`} />
+												<p className="text-xs font-medium truncate">{wh.url}</p>
+												<a
+													href={wh.url}
+													target="_blank"
+													rel="noopener noreferrer"
+													className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0"
+													onClick={(e) => e.stopPropagation()}
+												>
+													<ExternalLink className="w-2.5 h-2.5" />
+												</a>
+											</div>
+											<p className="text-xs text-muted-foreground truncate ml-3.5 font-mono">{scopeDisplay}</p>
+											<div className="flex gap-1 flex-wrap ml-3.5">
+												{!wh.enabled && (
+													<Badge variant="secondary" className="text-[10px]">
+														disabled
+													</Badge>
+												)}
+												{wh.backlinks && (
+													<Badge variant="outline" className="text-[10px]">
+														backlinks
+													</Badge>
+												)}
+												{wh.events.length > 0
+													? wh.events.map((e) => (
+															<Badge key={e} variant="outline" className="text-[10px]">
+																{e}
+															</Badge>
+														))
+													: (
+														<Badge variant="outline" className="text-[10px]">
+															all events
+														</Badge>
+													)}
+											</div>
+										</div>
+										<Button
+											variant="ghost"
+											size="sm"
+											onClick={() => handleDelete(wh.rkey)}
+											disabled={deletingRkey === wh.rkey}
+											className="flex-shrink-0 h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+										>
+											{deletingRkey === wh.rkey ? (
+												<Loader2 className="w-3 h-3 animate-spin" />
+											) : (
+												<Trash2 className="w-3 h-3" />
+											)}
+										</Button>
+									</div>
+								)
+							})}
 						</div>
 					)}
 				</div>
 
-				{/* Event logs */}
-				<div className="space-y-2">
-					<div className="flex items-center justify-between">
+				{/* Event Logs */}
+				<div className="p-4 border-t border-border/30 space-y-2">
+					<div className="flex items-center justify-between mb-3">
 						<p className="text-xs uppercase tracking-wider text-muted-foreground">
-							Event Logs <span className="font-normal normal-case">(60s refresh)</span>
+							Recent Deliveries
 						</p>
 						<Button
 							variant="outline"
@@ -423,45 +621,43 @@ export function WebhooksTab({
 					{eventLogsLoading ? (
 						<div className="space-y-1.5">
 							{['a', 'b', 'c'].map((id) => (
-								<SkeletonShimmer key={id} className="h-7 w-full" />
+								<SkeletonShimmer key={id} className="h-10 w-full" />
 							))}
 						</div>
 					) : eventLogs.length === 0 ? (
-						<p className="text-xs text-muted-foreground py-1">No events yet.</p>
+						<p className="text-xs text-muted-foreground py-4 text-center">No delivery events yet</p>
 					) : (
-						<div className="overflow-x-auto border border-border/30">
-							<table className="w-full text-xs font-mono border-collapse">
-								<thead>
-									<tr className="border-b border-border/30 text-muted-foreground bg-muted/20">
-										<th className="text-left py-1.5 px-3">Time</th>
-										<th className="text-left py-1.5 px-3">Status</th>
-										<th className="text-left py-1.5 px-3">Event</th>
-										<th className="text-left py-1.5 px-3">Source</th>
-										<th className="text-left py-1.5 px-3">Collection</th>
-										<th className="text-left py-1.5 px-3">Rkey</th>
-										<th className="text-left py-1.5 px-3">Delivered To</th>
-									</tr>
-								</thead>
-								<tbody>
-									{eventLogs.map((log) => (
-										<tr key={`${log.rkey}-${log.deliveredAt}`} className="border-b border-border/20 hover:bg-muted/20">
-											<td className="py-1.5 px-3 text-muted-foreground whitespace-nowrap">
-												{new Date(log.deliveredAt).toLocaleTimeString()}
-											</td>
-											<td className="py-1.5 px-3">
-												<Badge variant={log.status === 'ok' ? 'default' : 'destructive'} className="text-[10px]">
-													{log.status}
-												</Badge>
-											</td>
-											<td className="py-1.5 px-3">{log.eventKind}</td>
-											<td className="py-1.5 px-3 truncate max-w-[8rem]">{log.eventDid}</td>
-											<td className="py-1.5 px-3">{log.eventCollection}</td>
-											<td className="py-1.5 px-3">{log.eventRkey}</td>
-											<td className="py-1.5 px-3 truncate max-w-[8rem]">{log.url}</td>
-										</tr>
-									))}
-								</tbody>
-							</table>
+						<div className="space-y-1">
+							{eventLogs.map((log) => (
+								<div
+									key={`${log.rkey}-${log.deliveredAt}`}
+									className="flex items-center gap-3 p-2.5 border border-border/20 hover:bg-muted/10 transition-colors"
+								>
+									{/* Status indicator */}
+									<div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+										log.status === 'ok' ? 'bg-green-500' : 'bg-red-500'
+									}`} />
+
+									{/* Event info */}
+									<div className="flex-1 min-w-0">
+										<div className="flex items-center gap-2">
+											<Badge
+												variant={log.status === 'ok' ? 'default' : 'destructive'}
+												className="text-[10px]"
+											>
+												{log.status === 'ok' ? '200' : 'ERR'}
+											</Badge>
+											<span className="text-xs font-medium capitalize">{log.eventKind}</span>
+											<span className="text-xs text-muted-foreground truncate">{log.eventCollection}</span>
+										</div>
+										<div className="flex items-center gap-2 mt-0.5">
+											<span className="text-[10px] text-muted-foreground truncate max-w-[12rem]">{log.url}</span>
+											<span className="text-[10px] text-muted-foreground/50">•</span>
+											<span className="text-[10px] text-muted-foreground whitespace-nowrap">{formatTimeAgo(log.deliveredAt)}</span>
+										</div>
+									</div>
+								</div>
+							))}
 						</div>
 					)}
 				</div>

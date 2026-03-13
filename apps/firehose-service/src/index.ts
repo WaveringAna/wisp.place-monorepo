@@ -246,15 +246,15 @@ async function main() {
 
 	logger.info(`Health endpoint: http://localhost:${config.healthPort}/health`)
 
+	// Always start firehose and revalidate worker
+	startFirehose()
+	await startRevalidateWorker()
+
 	if (config.isBackfill) {
-		// Run backfill and exit
+		// Run backfill while firehose is already consuming events
+		logger.info('Running backfill with firehose active')
 		await runBackfill()
-		await closeDatabase()
-		process.exit(0)
-	} else {
-		// Start firehose
-		startFirehose()
-		await startRevalidateWorker()
+		logger.info('Backfill complete, continuing firehose consumption')
 	}
 }
 

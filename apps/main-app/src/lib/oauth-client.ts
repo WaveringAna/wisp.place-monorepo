@@ -6,7 +6,7 @@ import { SlingshotHandleResolver } from './slingshot-handle-resolver'
 
 // OAuth scope for all client types
 const OAUTH_SCOPE =
-	'atproto repo:place.wisp.fs repo:place.wisp.domain repo:place.wisp.subfs repo:place.wisp.settings blob:*/*'
+	'atproto repo:place.wisp.fs repo:place.wisp.domain repo:place.wisp.subfs repo:place.wisp.settings repo:place.wisp.v2.wh blob:*/*'
 // Session timeout configuration (30 days in seconds)
 const SESSION_TIMEOUT = 30 * 24 * 60 * 60 // 2592000 seconds
 // OAuth state timeout (1 hour in seconds)
