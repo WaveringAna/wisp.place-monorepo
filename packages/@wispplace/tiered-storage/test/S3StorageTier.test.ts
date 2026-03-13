@@ -1,10 +1,10 @@
 import { Readable } from 'node:stream'
 import { gzipSync } from 'node:zlib'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, test } from 'bun:test'
 import { S3StorageTier } from '../src/tiers/S3StorageTier.js'
 
 describe('S3StorageTier metadata fallback', () => {
-	it('getWithMetadata should synthesize metadata when S3 metadata headers are missing', async () => {
+	test('getWithMetadata should synthesize metadata when S3 metadata headers are missing', async () => {
 		const tier = new S3StorageTier({
 			bucket: 'test-bucket',
 			region: 'us-east-1',
@@ -34,7 +34,7 @@ describe('S3StorageTier metadata fallback', () => {
 		})
 	})
 
-	it('getStream should synthesize metadata when S3 metadata headers are missing', async () => {
+	test('getStream should synthesize metadata when S3 metadata headers are missing', async () => {
 		const tier = new S3StorageTier({
 			bucket: 'test-bucket',
 			region: 'us-east-1',
@@ -57,7 +57,7 @@ describe('S3StorageTier metadata fallback', () => {
 		expect(result!.metadata.checksum).toBe('etag-stream')
 	})
 
-	it('getMetadata should synthesize metadata from HeadObject when headers are missing', async () => {
+	test('getMetadata should synthesize metadata from HeadObject when headers are missing', async () => {
 		const tier = new S3StorageTier({
 			bucket: 'test-bucket',
 			region: 'us-east-1',
@@ -81,7 +81,7 @@ describe('S3StorageTier metadata fallback', () => {
 		expect(metadata!.customMetadata).toEqual({ mimeType: 'text/html' })
 	})
 
-	it('getWithMetadata should infer gzip encoding from magic bytes for text-like content', async () => {
+	test('getWithMetadata should infer gzip encoding from magic bytes for text-like content', async () => {
 		const tier = new S3StorageTier({
 			bucket: 'test-bucket',
 			region: 'us-east-1',
@@ -109,7 +109,7 @@ describe('S3StorageTier metadata fallback', () => {
 		})
 	})
 
-	it('getWithMetadata should decode base64 payload and infer gzip encoding for text-like content', async () => {
+	test('getWithMetadata should decode base64 payload and infer gzip encoding for text-like content', async () => {
 		const tier = new S3StorageTier({
 			bucket: 'test-bucket',
 			region: 'us-east-1',

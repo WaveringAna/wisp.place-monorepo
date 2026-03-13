@@ -12,6 +12,9 @@ cache/
 
 # Test cache directories
 test-cache/
+test-disk-cache/
+test-disk-gc/
+test-streaming-cache/
 
 # Build artifacts
 *.tsbuildinfo
