@@ -73,6 +73,15 @@ export interface DiskStorageTierConfig {
 	 * ```
 	 */
 	encodeColons?: boolean
+
+	/**
+	 * Interval in milliseconds for automatic garbage collection of expired entries.
+	 *
+	 * @remarks
+	 * When set, a periodic sweep deletes entries whose TTL has expired,
+	 * reclaiming disk space. Call `dispose()` to stop the interval.
+	 */
+	gcIntervalMs?: number
 }
 
 /**
@@ -110,9 +119,10 @@ export interface DiskStorageTierConfig {
  * ```
  */
 export class DiskStorageTier implements StorageTier {
-	private metadataIndex = new Map<string, { size: number; createdAt: Date; lastAccessed: Date }>()
+	private metadataIndex = new Map<string, { size: number; createdAt: Date; lastAccessed: Date; ttl?: Date }>()
 	private currentSize = 0
 	private readonly encodeColons: boolean
+	private gcTimer: ReturnType<typeof setInterval> | null = null
 
 	constructor(private config: DiskStorageTierConfig) {
 		if (!config.directory) {
@@ -128,6 +138,11 @@ export class DiskStorageTier implements StorageTier {
 
 		void this.ensureDirectory()
 		void this.rebuildIndex()
+
+		if (config.gcIntervalMs) {
+			this.gcTimer = setInterval(() => void this.gc(), config.gcIntervalMs)
+			if (this.gcTimer.unref) this.gcTimer.unref()
+		}
 	}
 
 	private async rebuildIndex(): Promise<void> {
@@ -160,6 +175,7 @@ export class DiskStorageTier implements StorageTier {
 						size: fileStats.size,
 						createdAt: new Date(metadata.createdAt),
 						lastAccessed: new Date(metadata.lastAccessed),
+					...(metadata.ttl && { ttl: new Date(metadata.ttl) }),
 					})
 
 					this.currentSize += fileStats.size
@@ -316,6 +332,7 @@ export class DiskStorageTier implements StorageTier {
 			size: metadata.size,
 			createdAt: metadata.createdAt,
 			lastAccessed: metadata.lastAccessed,
+			...(metadata.ttl && { ttl: metadata.ttl }),
 		})
 		this.currentSize += metadata.size
 	}
@@ -345,6 +362,7 @@ export class DiskStorageTier implements StorageTier {
 			size: data.byteLength,
 			createdAt: metadata.createdAt,
 			lastAccessed: metadata.lastAccessed,
+			...(metadata.ttl && { ttl: metadata.ttl }),
 		})
 		this.currentSize += data.byteLength
 	}
@@ -500,6 +518,38 @@ export class DiskStorageTier implements StorageTier {
 		return { bytes, items }
 	}
 
+	/**
+	 * Sweep and delete all entries whose TTL has expired.
+	 *
+	 * @returns Number of expired entries deleted
+	 */
+	async gc(): Promise<number> {
+		const now = Date.now()
+		const expired: string[] = []
+
+		for (const [key, entry] of this.metadataIndex) {
+			if (entry.ttl && now > entry.ttl.getTime()) {
+				expired.push(key)
+			}
+		}
+
+		for (const key of expired) {
+			await this.delete(key)
+		}
+
+		return expired.length
+	}
+
+	/**
+	 * Stop the automatic GC interval. Call this before discarding the tier.
+	 */
+	dispose(): void {
+		if (this.gcTimer) {
+			clearInterval(this.gcTimer)
+			this.gcTimer = null
+		}
+	}
+
 	async clear(): Promise<void> {
 		if (existsSync(this.config.directory)) {
 			await rm(this.config.directory, { recursive: true, force: true })
@@ -547,6 +597,9 @@ export class DiskStorageTier implements StorageTier {
 			await rename(tempMetaPath, metaPath)
 		} catch (error) {
 			await unlink(tempMetaPath).catch(() => {})
+			// If the directory was removed (e.g. concurrent clear/cleanup), don't propagate
+			const code = getErrnoCode(error)
+			if (code === 'ENOENT' || code === 'EINVAL') return
 			throw error
 		}
 	}

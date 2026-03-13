@@ -1,15 +1,19 @@
 import { createHash } from 'node:crypto'
 import { rm } from 'node:fs/promises'
 import { Readable } from 'node:stream'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import { TieredStorage } from '../src/TieredStorage.js'
 import { DiskStorageTier } from '../src/tiers/DiskStorageTier.js'
 import { MemoryStorageTier } from '../src/tiers/MemoryStorageTier.js'
 
-describe('Streaming Operations', () => {
-	const testDir = './test-streaming-cache'
+const testDir = './test-streaming-cache'
 
-	afterEach(async () => {
+describe('Streaming Operations', () => {
+	beforeEach(async () => {
+		await rm(testDir, { recursive: true, force: true })
+	})
+
+	afterAll(async () => {
 		await rm(testDir, { recursive: true, force: true })
 	})
 
@@ -39,7 +43,7 @@ describe('Streaming Operations', () => {
 	}
 
 	describe('DiskStorageTier Streaming', () => {
-		it('should write and read data using streams', async () => {
+		test('should write and read data using streams', async () => {
 			const tier = new DiskStorageTier({ directory: testDir })
 
 			const testData = 'Hello, streaming world! '.repeat(100)
@@ -71,7 +75,7 @@ describe('Streaming Operations', () => {
 			expect(result!.metadata.key).toBe('streaming-test.txt')
 		})
 
-		it('should handle large data without memory issues', async () => {
+		test('should handle large data without memory issues', async () => {
 			const tier = new DiskStorageTier({ directory: testDir })
 
 			// Create a 1MB chunk and repeat pattern
@@ -100,14 +104,14 @@ describe('Streaming Operations', () => {
 			expect(retrievedData.equals(chunk)).toBe(true)
 		})
 
-		it('should return null for non-existent key', async () => {
+		test('should return null for non-existent key', async () => {
 			const tier = new DiskStorageTier({ directory: testDir })
 
 			const result = await tier.getStream('non-existent-key')
 			expect(result).toBeNull()
 		})
 
-		it('should handle nested directories with streaming', async () => {
+		test('should handle nested directories with streaming', async () => {
 			const tier = new DiskStorageTier({ directory: testDir })
 
 			const testData = 'nested streaming data'
@@ -134,7 +138,7 @@ describe('Streaming Operations', () => {
 	})
 
 	describe('MemoryStorageTier Streaming', () => {
-		it('should write and read data using streams', async () => {
+		test('should write and read data using streams', async () => {
 			const tier = new MemoryStorageTier({ maxSizeBytes: 10 * 1024 * 1024 })
 
 			const testData = 'Memory tier streaming test'
@@ -161,7 +165,7 @@ describe('Streaming Operations', () => {
 			expect(retrievedData.toString()).toBe(testData)
 		})
 
-		it('should return null for non-existent key', async () => {
+		test('should return null for non-existent key', async () => {
 			const tier = new MemoryStorageTier({ maxSizeBytes: 10 * 1024 * 1024 })
 
 			const result = await tier.getStream('non-existent-key')
@@ -170,7 +174,7 @@ describe('Streaming Operations', () => {
 	})
 
 	describe('TieredStorage Streaming', () => {
-		it('should store and retrieve data using streams', async () => {
+		test('should store and retrieve data using streams', async () => {
 			const storage = new TieredStorage({
 				tiers: {
 					hot: new MemoryStorageTier({ maxSizeBytes: 10 * 1024 * 1024 }),
@@ -202,7 +206,7 @@ describe('Streaming Operations', () => {
 			expect(retrievedData.toString()).toBe(testData)
 		})
 
-		it('should compute checksum during streaming write', async () => {
+		test('should compute checksum during streaming write', async () => {
 			const storage = new TieredStorage({
 				tiers: {
 					warm: new DiskStorageTier({ directory: `${testDir}/warm` }),
@@ -222,7 +226,7 @@ describe('Streaming Operations', () => {
 			expect(setResult.metadata.checksum).toBe(expectedChecksum)
 		})
 
-		it('should use provided checksum without computing', async () => {
+		test('should use provided checksum without computing', async () => {
 			const storage = new TieredStorage({
 				tiers: {
 					cold: new DiskStorageTier({ directory: `${testDir}/cold` }),
@@ -241,7 +245,7 @@ describe('Streaming Operations', () => {
 			expect(setResult.metadata.checksum).toBe(providedChecksum)
 		})
 
-		it('should return null for non-existent key', async () => {
+		test('should return null for non-existent key', async () => {
 			const storage = new TieredStorage({
 				tiers: {
 					cold: new DiskStorageTier({ directory: `${testDir}/cold` }),
@@ -252,7 +256,7 @@ describe('Streaming Operations', () => {
 			expect(result).toBeNull()
 		})
 
-		it('should read from appropriate tier (warm before cold)', async () => {
+		test('should read from appropriate tier (warm before cold)', async () => {
 			const warm = new DiskStorageTier({ directory: `${testDir}/warm` })
 			const cold = new DiskStorageTier({ directory: `${testDir}/cold` })
 
@@ -277,7 +281,7 @@ describe('Streaming Operations', () => {
 			expect(result!.source).toBe('warm')
 		})
 
-		it('should fall back to cold tier when warm has no data', async () => {
+		test('should fall back to cold tier when warm has no data', async () => {
 			const warm = new DiskStorageTier({ directory: `${testDir}/warm` })
 			const cold = new DiskStorageTier({ directory: `${testDir}/cold` })
 
@@ -306,7 +310,7 @@ describe('Streaming Operations', () => {
 			expect(result!.source).toBe('cold')
 		})
 
-		it('should handle TTL with metadata', async () => {
+		test('should handle TTL with metadata', async () => {
 			const storage = new TieredStorage({
 				tiers: {
 					cold: new DiskStorageTier({ directory: `${testDir}/cold` }),
@@ -326,7 +330,7 @@ describe('Streaming Operations', () => {
 			expect(setResult.metadata.ttl!.getTime()).toBeGreaterThan(Date.now())
 		})
 
-		it('should include mimeType in metadata', async () => {
+		test('should include mimeType in metadata', async () => {
 			const storage = new TieredStorage({
 				tiers: {
 					cold: new DiskStorageTier({ directory: `${testDir}/cold` }),
@@ -344,7 +348,7 @@ describe('Streaming Operations', () => {
 			expect(setResult.metadata.mimeType).toBe('application/json')
 		})
 
-		it('should write to multiple tiers simultaneously', async () => {
+		test('should write to multiple tiers simultaneously', async () => {
 			const warm = new DiskStorageTier({ directory: `${testDir}/warm` })
 			const cold = new DiskStorageTier({ directory: `${testDir}/cold` })
 
@@ -373,7 +377,7 @@ describe('Streaming Operations', () => {
 			expect(coldData.toString()).toBe(testData)
 		})
 
-		it('should skip hot tier by default for streaming writes', async () => {
+		test('should skip hot tier by default for streaming writes', async () => {
 			const hot = new MemoryStorageTier({ maxSizeBytes: 10 * 1024 * 1024 })
 			const warm = new DiskStorageTier({ directory: `${testDir}/warm` })
 			const cold = new DiskStorageTier({ directory: `${testDir}/cold` })
@@ -398,7 +402,7 @@ describe('Streaming Operations', () => {
 			expect(setResult.tiersWritten).toContain('cold')
 		})
 
-		it('should allow including hot tier explicitly', async () => {
+		test('should allow including hot tier explicitly', async () => {
 			const hot = new MemoryStorageTier({ maxSizeBytes: 10 * 1024 * 1024 })
 			const cold = new DiskStorageTier({ directory: `${testDir}/cold` })
 
@@ -421,7 +425,7 @@ describe('Streaming Operations', () => {
 	})
 
 	describe('Streaming with Compression', () => {
-		it('should compress stream data when compression is enabled', async () => {
+		test('should compress stream data when compression is enabled', async () => {
 			const storage = new TieredStorage({
 				tiers: {
 					warm: new DiskStorageTier({ directory: `${testDir}/warm` }),
@@ -443,7 +447,7 @@ describe('Streaming Operations', () => {
 			expect(setResult.metadata.checksum).toBe(computeChecksum(testBuffer))
 		})
 
-		it('should decompress stream data automatically on read', async () => {
+		test('should decompress stream data automatically on read', async () => {
 			const storage = new TieredStorage({
 				tiers: {
 					warm: new DiskStorageTier({ directory: `${testDir}/warm` }),
@@ -469,7 +473,7 @@ describe('Streaming Operations', () => {
 			expect(retrievedData.toString()).toBe(testData)
 		})
 
-		it('should not compress when compression is disabled', async () => {
+		test('should not compress when compression is disabled', async () => {
 			const storage = new TieredStorage({
 				tiers: {
 					cold: new DiskStorageTier({ directory: `${testDir}/cold` }),
@@ -494,7 +498,7 @@ describe('Streaming Operations', () => {
 			expect(retrievedData.toString()).toBe(testData)
 		})
 
-		it('should preserve checksum of original data when compressed', async () => {
+		test('should preserve checksum of original data when compressed', async () => {
 			const storage = new TieredStorage({
 				tiers: {
 					cold: new DiskStorageTier({ directory: `${testDir}/cold` }),
@@ -521,7 +525,7 @@ describe('Streaming Operations', () => {
 	})
 
 	describe('Edge Cases', () => {
-		it('should handle empty streams', async () => {
+		test('should handle empty streams', async () => {
 			const tier = new DiskStorageTier({ directory: testDir })
 
 			const metadata = {
@@ -543,7 +547,7 @@ describe('Streaming Operations', () => {
 			expect(data.length).toBe(0)
 		})
 
-		it('should preserve binary data integrity', async () => {
+		test('should preserve binary data integrity', async () => {
 			const tier = new DiskStorageTier({ directory: testDir })
 
 			// Create binary data with all possible byte values
@@ -571,7 +575,7 @@ describe('Streaming Operations', () => {
 			expect(retrievedData.equals(binaryData)).toBe(true)
 		})
 
-		it('should handle special characters in keys', async () => {
+		test('should handle special characters in keys', async () => {
 			const tier = new DiskStorageTier({ directory: testDir })
 
 			const testData = 'special key test'

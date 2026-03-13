@@ -1,18 +1,22 @@
 import { rm } from 'node:fs/promises'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import { TieredStorage } from '../src/TieredStorage.js'
 import { DiskStorageTier } from '../src/tiers/DiskStorageTier.js'
 import { MemoryStorageTier } from '../src/tiers/MemoryStorageTier.js'
 
-describe('TieredStorage', () => {
-	const testDir = './test-cache'
+const testDir = './test-cache'
 
-	afterEach(async () => {
+describe('TieredStorage', () => {
+	beforeEach(async () => {
+		await rm(testDir, { recursive: true, force: true })
+	})
+
+	afterAll(async () => {
 		await rm(testDir, { recursive: true, force: true })
 	})
 
 	describe('Basic Operations', () => {
-		it('should store and retrieve data', async () => {
+		test('should store and retrieve data', async () => {
 			const storage = new TieredStorage({
 				tiers: {
 					hot: new MemoryStorageTier({ maxSizeBytes: 1024 * 1024 }),
@@ -27,7 +31,7 @@ describe('TieredStorage', () => {
 			expect(result).toEqual({ message: 'Hello, world!' })
 		})
 
-		it('should return null for non-existent key', async () => {
+		test('should return null for non-existent key', async () => {
 			const storage = new TieredStorage({
 				tiers: {
 					cold: new DiskStorageTier({ directory: `${testDir}/cold` }),
@@ -38,7 +42,7 @@ describe('TieredStorage', () => {
 			expect(result).toBeNull()
 		})
 
-		it('should delete data from all tiers', async () => {
+		test('should delete data from all tiers', async () => {
 			const storage = new TieredStorage({
 				tiers: {
 					hot: new MemoryStorageTier({ maxSizeBytes: 1024 * 1024 }),
@@ -54,7 +58,7 @@ describe('TieredStorage', () => {
 			expect(result).toBeNull()
 		})
 
-		it('should check if key exists', async () => {
+		test('should check if key exists', async () => {
 			const storage = new TieredStorage({
 				tiers: {
 					cold: new DiskStorageTier({ directory: `${testDir}/cold` }),
@@ -69,7 +73,7 @@ describe('TieredStorage', () => {
 	})
 
 	describe('Cascading Write', () => {
-		it('should write to all configured tiers', async () => {
+		test('should write to all configured tiers', async () => {
 			const hot = new MemoryStorageTier({ maxSizeBytes: 1024 * 1024 })
 			const warm = new DiskStorageTier({ directory: `${testDir}/warm` })
 			const cold = new DiskStorageTier({ directory: `${testDir}/cold` })
@@ -86,7 +90,7 @@ describe('TieredStorage', () => {
 			expect(await cold.exists('test-key')).toBe(true)
 		})
 
-		it('should skip tiers when specified', async () => {
+		test('should skip tiers when specified', async () => {
 			const hot = new MemoryStorageTier({ maxSizeBytes: 1024 * 1024 })
 			const warm = new DiskStorageTier({ directory: `${testDir}/warm` })
 			const cold = new DiskStorageTier({ directory: `${testDir}/cold` })
@@ -103,7 +107,7 @@ describe('TieredStorage', () => {
 			expect(await cold.exists('test-key')).toBe(true)
 		})
 
-		it('should write only to specified tiers with onlyTiers', async () => {
+		test('should write only to specified tiers with onlyTiers', async () => {
 			const hot = new MemoryStorageTier({ maxSizeBytes: 1024 * 1024 })
 			const warm = new DiskStorageTier({ directory: `${testDir}/warm` })
 			const cold = new DiskStorageTier({ directory: `${testDir}/cold` })
@@ -120,7 +124,7 @@ describe('TieredStorage', () => {
 			expect(await cold.exists('test-key')).toBe(true)
 		})
 
-		it('should write only to warm and cold with onlyTiers', async () => {
+		test('should write only to warm and cold with onlyTiers', async () => {
 			const hot = new MemoryStorageTier({ maxSizeBytes: 1024 * 1024 })
 			const warm = new DiskStorageTier({ directory: `${testDir}/warm` })
 			const cold = new DiskStorageTier({ directory: `${testDir}/cold` })
@@ -137,7 +141,7 @@ describe('TieredStorage', () => {
 			expect(await cold.exists('test-key')).toBe(true)
 		})
 
-		it('should allow onlyTiers to override placement rules', async () => {
+		test('should allow onlyTiers to override placement rules', async () => {
 			const hot = new MemoryStorageTier({ maxSizeBytes: 1024 * 1024 })
 			const warm = new DiskStorageTier({ directory: `${testDir}/warm` })
 			const cold = new DiskStorageTier({ directory: `${testDir}/cold` })
@@ -155,7 +159,7 @@ describe('TieredStorage', () => {
 			expect(await cold.exists('test-key')).toBe(true)
 		})
 
-		it('should prioritize onlyTiers over skipTiers if both are provided', async () => {
+		test('should prioritize onlyTiers over skipTiers if both are provided', async () => {
 			const hot = new MemoryStorageTier({ maxSizeBytes: 1024 * 1024 })
 			const warm = new DiskStorageTier({ directory: `${testDir}/warm` })
 			const cold = new DiskStorageTier({ directory: `${testDir}/cold` })
@@ -181,7 +185,7 @@ describe('TieredStorage', () => {
 	})
 
 	describe('Bubbling Read', () => {
-		it('should read from hot tier first', async () => {
+		test('should read from hot tier first', async () => {
 			const hot = new MemoryStorageTier({ maxSizeBytes: 1024 * 1024 })
 			const warm = new DiskStorageTier({ directory: `${testDir}/warm` })
 			const cold = new DiskStorageTier({ directory: `${testDir}/cold` })
@@ -197,7 +201,7 @@ describe('TieredStorage', () => {
 			expect(result?.data).toEqual({ data: 'test' })
 		})
 
-		it('should fall back to warm tier on hot miss', async () => {
+		test('should fall back to warm tier on hot miss', async () => {
 			const hot = new MemoryStorageTier({ maxSizeBytes: 1024 * 1024 })
 			const warm = new DiskStorageTier({ directory: `${testDir}/warm` })
 			const cold = new DiskStorageTier({ directory: `${testDir}/cold` })
@@ -215,7 +219,7 @@ describe('TieredStorage', () => {
 			expect(result?.data).toEqual({ data: 'test' })
 		})
 
-		it('should fall back to cold tier on hot and warm miss', async () => {
+		test('should fall back to cold tier on hot and warm miss', async () => {
 			const hot = new MemoryStorageTier({ maxSizeBytes: 1024 * 1024 })
 			const cold = new DiskStorageTier({ directory: `${testDir}/cold` })
 
@@ -242,7 +246,7 @@ describe('TieredStorage', () => {
 	})
 
 	describe('Promotion Strategy', () => {
-		it('should eagerly promote data to upper tiers', async () => {
+		test('should eagerly promote data to upper tiers', async () => {
 			const hot = new MemoryStorageTier({ maxSizeBytes: 1024 * 1024 })
 			const warm = new DiskStorageTier({ directory: `${testDir}/warm` })
 			const cold = new DiskStorageTier({ directory: `${testDir}/cold` })
@@ -270,7 +274,7 @@ describe('TieredStorage', () => {
 			expect(await warm.exists('test-key')).toBe(true)
 		})
 
-		it('should lazily promote data (not automatic)', async () => {
+		test('should lazily promote data (not automatic)', async () => {
 			const hot = new MemoryStorageTier({ maxSizeBytes: 1024 * 1024 })
 			const warm = new DiskStorageTier({ directory: `${testDir}/warm` })
 			const cold = new DiskStorageTier({ directory: `${testDir}/cold` })
@@ -300,7 +304,7 @@ describe('TieredStorage', () => {
 	})
 
 	describe('TTL Management', () => {
-		it('should expire data after TTL', async () => {
+		test('should expire data after TTL', async () => {
 			const storage = new TieredStorage({
 				tiers: {
 					cold: new DiskStorageTier({ directory: `${testDir}/cold` }),
@@ -320,7 +324,7 @@ describe('TieredStorage', () => {
 			expect(await storage.get('test-key')).toBeNull()
 		})
 
-		it('should renew TTL with touch', async () => {
+		test('should renew TTL with touch', async () => {
 			const storage = new TieredStorage({
 				tiers: {
 					cold: new DiskStorageTier({ directory: `${testDir}/cold` }),
@@ -345,7 +349,7 @@ describe('TieredStorage', () => {
 	})
 
 	describe('Prefix Invalidation', () => {
-		it('should invalidate all keys with prefix', async () => {
+		test('should invalidate all keys with prefix', async () => {
 			const storage = new TieredStorage({
 				tiers: {
 					hot: new MemoryStorageTier({ maxSizeBytes: 1024 * 1024 }),
@@ -367,7 +371,7 @@ describe('TieredStorage', () => {
 	})
 
 	describe('Compression', () => {
-		it('should compress data when enabled', async () => {
+		test('should compress data when enabled', async () => {
 			const cold = new DiskStorageTier({ directory: `${testDir}/cold` })
 
 			const storage = new TieredStorage({
@@ -388,7 +392,7 @@ describe('TieredStorage', () => {
 	})
 
 	describe('Bootstrap', () => {
-		it('should bootstrap hot from warm', async () => {
+		test('should bootstrap hot from warm', async () => {
 			const hot = new MemoryStorageTier({ maxSizeBytes: 1024 * 1024 })
 			const warm = new DiskStorageTier({ directory: `${testDir}/warm` })
 			const cold = new DiskStorageTier({ directory: `${testDir}/cold` })
@@ -414,7 +418,7 @@ describe('TieredStorage', () => {
 			expect(await hot.exists('key3')).toBe(true)
 		})
 
-		it('should bootstrap warm from cold', async () => {
+		test('should bootstrap warm from cold', async () => {
 			const warm = new DiskStorageTier({ directory: `${testDir}/warm` })
 			const cold = new DiskStorageTier({ directory: `${testDir}/cold` })
 
@@ -442,7 +446,7 @@ describe('TieredStorage', () => {
 	})
 
 	describe('Statistics', () => {
-		it('should return statistics for all tiers', async () => {
+		test('should return statistics for all tiers', async () => {
 			const storage = new TieredStorage({
 				tiers: {
 					hot: new MemoryStorageTier({ maxSizeBytes: 1024 * 1024 }),
@@ -463,7 +467,7 @@ describe('TieredStorage', () => {
 	})
 
 	describe('Placement Rules', () => {
-		it('should place index.html in all tiers based on rule', async () => {
+		test('should place index.html in all tiers based on rule', async () => {
 			const hot = new MemoryStorageTier({ maxSizeBytes: 1024 * 1024 })
 			const warm = new DiskStorageTier({ directory: `${testDir}/warm` })
 			const cold = new DiskStorageTier({ directory: `${testDir}/cold` })
@@ -483,7 +487,7 @@ describe('TieredStorage', () => {
 			expect(await cold.exists('site:abc/index.html')).toBe(true)
 		})
 
-		it('should skip hot tier for non-matching files', async () => {
+		test('should skip hot tier for non-matching files', async () => {
 			const hot = new MemoryStorageTier({ maxSizeBytes: 1024 * 1024 })
 			const warm = new DiskStorageTier({ directory: `${testDir}/warm` })
 			const cold = new DiskStorageTier({ directory: `${testDir}/cold` })
@@ -503,7 +507,7 @@ describe('TieredStorage', () => {
 			expect(await cold.exists('site:abc/about.html')).toBe(true)
 		})
 
-		it('should match directory patterns', async () => {
+		test('should match directory patterns', async () => {
 			const hot = new MemoryStorageTier({ maxSizeBytes: 1024 * 1024 })
 			const warm = new DiskStorageTier({ directory: `${testDir}/warm` })
 			const cold = new DiskStorageTier({ directory: `${testDir}/cold` })
@@ -527,7 +531,7 @@ describe('TieredStorage', () => {
 			expect(await hot.exists('index.html')).toBe(true)
 		})
 
-		it('should match file extension patterns', async () => {
+		test('should match file extension patterns', async () => {
 			const hot = new MemoryStorageTier({ maxSizeBytes: 1024 * 1024 })
 			const warm = new DiskStorageTier({ directory: `${testDir}/warm` })
 			const cold = new DiskStorageTier({ directory: `${testDir}/cold` })
@@ -552,7 +556,7 @@ describe('TieredStorage', () => {
 			expect(await hot.exists('site/index.html')).toBe(true)
 		})
 
-		it('should use first matching rule', async () => {
+		test('should use first matching rule', async () => {
 			const hot = new MemoryStorageTier({ maxSizeBytes: 1024 * 1024 })
 			const warm = new DiskStorageTier({ directory: `${testDir}/warm` })
 			const cold = new DiskStorageTier({ directory: `${testDir}/cold` })
@@ -578,7 +582,7 @@ describe('TieredStorage', () => {
 			expect(await hot.exists('assets/style.css')).toBe(false)
 		})
 
-		it('should allow skipTiers to override placement rules', async () => {
+		test('should allow skipTiers to override placement rules', async () => {
 			const hot = new MemoryStorageTier({ maxSizeBytes: 1024 * 1024 })
 			const warm = new DiskStorageTier({ directory: `${testDir}/warm` })
 			const cold = new DiskStorageTier({ directory: `${testDir}/cold` })
@@ -596,7 +600,7 @@ describe('TieredStorage', () => {
 			expect(await cold.exists('large-file.bin')).toBe(true)
 		})
 
-		it('should always include cold tier even if not in rule', async () => {
+		test('should always include cold tier even if not in rule', async () => {
 			const hot = new MemoryStorageTier({ maxSizeBytes: 1024 * 1024 })
 			const warm = new DiskStorageTier({ directory: `${testDir}/warm` })
 			const cold = new DiskStorageTier({ directory: `${testDir}/cold` })
@@ -614,7 +618,7 @@ describe('TieredStorage', () => {
 			expect(await cold.exists('test-key')).toBe(true)
 		})
 
-		it('should write to all tiers when no rules match', async () => {
+		test('should write to all tiers when no rules match', async () => {
 			const hot = new MemoryStorageTier({ maxSizeBytes: 1024 * 1024 })
 			const warm = new DiskStorageTier({ directory: `${testDir}/warm` })
 			const cold = new DiskStorageTier({ directory: `${testDir}/cold` })

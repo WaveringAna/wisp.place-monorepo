@@ -1,19 +1,23 @@
 import { existsSync } from 'node:fs'
 import { readdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import { DiskStorageTier } from '../src/tiers/DiskStorageTier.js'
 
-describe('DiskStorageTier - Recursive Directory Support', () => {
-	const testDir = './test-disk-cache'
+const testDir = './test-disk-cache'
 
-	afterEach(async () => {
+describe('DiskStorageTier - Recursive Directory Support', () => {
+	beforeEach(async () => {
+		await rm(testDir, { recursive: true, force: true })
+	})
+
+	afterAll(async () => {
 		await rm(testDir, { recursive: true, force: true })
 	})
 
 	describe('Nested Directory Creation', () => {
-		it('should create nested directories for keys with slashes', async () => {
-			const tier = new DiskStorageTier({ directory: testDir })
+		test('should create nested directories for keys with slashes', async () => {
+			const tier = new DiskStorageTier({ directory: testDir, encodeColons: true })
 
 			const data = new TextEncoder().encode('test data')
 			const metadata = {
@@ -36,7 +40,7 @@ describe('DiskStorageTier - Recursive Directory Support', () => {
 			expect(existsSync(join(testDir, 'did%3Aplc%3Aabc/site/pages/index.html.meta'))).toBe(true)
 		})
 
-		it('should handle multiple files in different nested directories', async () => {
+		test('should handle multiple files in different nested directories', async () => {
 			const tier = new DiskStorageTier({ directory: testDir })
 
 			const data = new TextEncoder().encode('test')
@@ -61,7 +65,7 @@ describe('DiskStorageTier - Recursive Directory Support', () => {
 	})
 
 	describe('Recursive Listing', () => {
-		it('should list all keys across nested directories', async () => {
+		test('should list all keys across nested directories', async () => {
 			const tier = new DiskStorageTier({ directory: testDir })
 
 			const data = new TextEncoder().encode('test')
@@ -95,7 +99,7 @@ describe('DiskStorageTier - Recursive Directory Support', () => {
 			expect(listedKeys.sort()).toEqual(keys.sort())
 		})
 
-		it('should list keys with prefix filter across directories', async () => {
+		test('should list keys with prefix filter across directories', async () => {
 			const tier = new DiskStorageTier({ directory: testDir })
 
 			const data = new TextEncoder().encode('test')
@@ -122,7 +126,7 @@ describe('DiskStorageTier - Recursive Directory Support', () => {
 			expect(siteKeys.sort()).toEqual(['site:a/about.html', 'site:a/index.html', 'site:b/index.html'])
 		})
 
-		it('should handle empty directories gracefully', async () => {
+		test('should handle empty directories gracefully', async () => {
 			const tier = new DiskStorageTier({ directory: testDir })
 
 			const keys: string[] = []
@@ -135,7 +139,7 @@ describe('DiskStorageTier - Recursive Directory Support', () => {
 	})
 
 	describe('Recursive Stats Collection', () => {
-		it('should calculate stats across all nested directories', async () => {
+		test('should calculate stats across all nested directories', async () => {
 			const tier = new DiskStorageTier({ directory: testDir })
 
 			const data1 = new TextEncoder().encode('small')
@@ -162,7 +166,7 @@ describe('DiskStorageTier - Recursive Directory Support', () => {
 			expect(stats.bytes).toBe(data1.byteLength + data2.byteLength + data3.byteLength)
 		})
 
-		it('should return zero stats for empty directory', async () => {
+		test('should return zero stats for empty directory', async () => {
 			const tier = new DiskStorageTier({ directory: testDir })
 
 			const stats = await tier.getStats()
@@ -173,7 +177,7 @@ describe('DiskStorageTier - Recursive Directory Support', () => {
 	})
 
 	describe('Index Rebuilding', () => {
-		it('should rebuild index from nested directory structure on init', async () => {
+		test('should rebuild index from nested directory structure on init', async () => {
 			const data = new TextEncoder().encode('test data')
 			const createMetadata = (key: string) => ({
 				key,
@@ -207,7 +211,7 @@ describe('DiskStorageTier - Recursive Directory Support', () => {
 			expect(stats.items).toBe(3)
 		})
 
-		it('should handle corrupted metadata files during rebuild', async () => {
+		test('should handle corrupted metadata files during rebuild', async () => {
 			const tier = new DiskStorageTier({ directory: testDir })
 
 			const data = new TextEncoder().encode('test')
@@ -238,7 +242,7 @@ describe('DiskStorageTier - Recursive Directory Support', () => {
 	})
 
 	describe('getWithMetadata Optimization', () => {
-		it('should retrieve data and metadata from nested directories in parallel', async () => {
+		test('should retrieve data and metadata from nested directories in parallel', async () => {
 			const tier = new DiskStorageTier({ directory: testDir })
 
 			const data = new TextEncoder().encode('test data content')
@@ -264,7 +268,7 @@ describe('DiskStorageTier - Recursive Directory Support', () => {
 	})
 
 	describe('Deletion from Nested Directories', () => {
-		it('should delete files from nested directories', async () => {
+		test('should delete files from nested directories', async () => {
 			const tier = new DiskStorageTier({ directory: testDir })
 
 			const data = new TextEncoder().encode('test')
@@ -289,7 +293,7 @@ describe('DiskStorageTier - Recursive Directory Support', () => {
 			expect(await tier.exists('a/b/file2.txt')).toBe(true)
 		})
 
-		it('should delete multiple files across nested directories', async () => {
+		test('should delete multiple files across nested directories', async () => {
 			const tier = new DiskStorageTier({ directory: testDir })
 
 			const data = new TextEncoder().encode('test')
@@ -318,7 +322,7 @@ describe('DiskStorageTier - Recursive Directory Support', () => {
 	})
 
 	describe('Edge Cases', () => {
-		it('should handle keys with many nested levels', async () => {
+		test('should handle keys with many nested levels', async () => {
 			const tier = new DiskStorageTier({ directory: testDir })
 
 			const data = new TextEncoder().encode('deep')
@@ -341,7 +345,7 @@ describe('DiskStorageTier - Recursive Directory Support', () => {
 			expect(retrieved).toEqual(data)
 		})
 
-		it('should handle keys with special characters', async () => {
+		test('should handle keys with special characters', async () => {
 			const tier = new DiskStorageTier({ directory: testDir })
 
 			const data = new TextEncoder().encode('test')
