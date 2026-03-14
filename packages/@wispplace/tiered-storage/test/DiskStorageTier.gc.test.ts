@@ -190,3 +190,71 @@ describe('DiskStorageTier - Garbage Collection', () => {
 		})
 	})
 })
+
+describe('DiskStorageTier - LRU eviction respects setMetadata updates', () => {
+	const lruTestDir = './test-disk-lru'
+
+	beforeEach(async () => {
+		await rm(lruTestDir, { recursive: true, force: true })
+	})
+
+	afterAll(async () => {
+		await rm(lruTestDir, { recursive: true, force: true })
+	})
+
+	test('setMetadata updates lastAccessed on disk so LRU order survives restart', async () => {
+		const data = new TextEncoder().encode('x'.repeat(80))
+
+		const tier1 = new DiskStorageTier({ directory: lruTestDir, maxSizeBytes: 200, evictionPolicy: 'lru' })
+
+		const old = new Date(Date.now() - 3000)
+		const mid = new Date(Date.now() - 2000)
+
+		await tier1.set('a', data, { ...makeMetadata('a', data.byteLength), lastAccessed: old })
+		await tier1.set('b', data, { ...makeMetadata('b', data.byteLength), lastAccessed: mid })
+
+		// Touch 'a' so its lastAccessed is now newest — persisted to disk via setMetadata
+		const metaA = (await tier1.getMetadata('a'))!
+		metaA.lastAccessed = new Date()
+		await tier1.setMetadata('a', metaA)
+
+		// Simulate restart — new instance rebuilds index from disk
+		const tier2 = new DiskStorageTier({ directory: lruTestDir, maxSizeBytes: 200, evictionPolicy: 'lru' })
+		await new Promise((resolve) => setTimeout(resolve, 100)) // let rebuildIndex complete
+
+		// 'b' is now LRU; writing a third entry should evict 'b', not 'a'
+		await tier2.set('c', data, makeMetadata('c', data.byteLength))
+
+		expect(await tier2.exists('a')).toBe(true)
+		expect(await tier2.exists('b')).toBe(false)
+		expect(await tier2.exists('c')).toBe(true)
+	})
+
+	test('recently-accessed entry survives eviction over stale entries', async () => {
+		// Capacity: 200 bytes, each entry is 80 bytes.
+		// Write 'a' (old) and 'b' (mid) — 160 bytes total, fits fine.
+		// Touch 'a' to make it freshest. Then write 'c' (160+80=240 > 200) → eviction.
+		// 'b' is now the LRU victim; 'a' must survive.
+		const tier = new DiskStorageTier({ directory: lruTestDir, maxSizeBytes: 200, evictionPolicy: 'lru' })
+		const data = new TextEncoder().encode('x'.repeat(80))
+
+		const old = new Date(Date.now() - 3000)
+		const mid = new Date(Date.now() - 2000)
+
+		await tier.set('a', data, { ...makeMetadata('a', data.byteLength), lastAccessed: old })
+		await tier.set('b', data, { ...makeMetadata('b', data.byteLength), lastAccessed: mid })
+
+		// Touch 'a' so it becomes the most recently accessed
+		const metaA = (await tier.getMetadata('a'))!
+		metaA.lastAccessed = new Date()
+		await tier.setMetadata('a', metaA)
+
+		// Writing 'c' triggers eviction. Without the fix, 'a' would be evicted
+		// (stale timestamp in metadataIndex). With the fix, 'b' is evicted instead.
+		await tier.set('c', data, makeMetadata('c', data.byteLength))
+
+		expect(await tier.exists('a')).toBe(true)  // freshly touched — must survive
+		expect(await tier.exists('b')).toBe(false) // true LRU victim
+		expect(await tier.exists('c')).toBe(true)
+	})
+})

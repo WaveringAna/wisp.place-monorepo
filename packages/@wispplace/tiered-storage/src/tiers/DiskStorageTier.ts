@@ -482,6 +482,15 @@ export class DiskStorageTier implements StorageTier {
 		}
 
 		await this.writeMetadataAtomically(metaPath, metadata)
+
+		// Keep in-memory index in sync so eviction (LRU sort) sees updated lastAccessed
+		const entry = this.metadataIndex.get(key)
+		if (entry) {
+			entry.lastAccessed = metadata.lastAccessed
+			if (metadata.ttl) {
+				entry.ttl = metadata.ttl
+			}
+		}
 	}
 
 	async getStats(): Promise<TierStats> {
