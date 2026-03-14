@@ -27,6 +27,13 @@ let activeHandlers = 0
 let queuedHandlers = 0
 const siteQueues = new Map<string, Promise<void>>()
 
+// Track current firehose sequence number for cursor-based resumption
+let currentSeq: number | undefined
+
+export function getCurrentSeq(): number | undefined {
+	return currentSeq
+}
+
 export function getFirehoseHealth() {
 	return {
 		connected: isConnected,
@@ -85,6 +92,7 @@ function scheduleSiteWork(siteKey: string, handler: () => Promise<void>): void {
 async function handleEvent(evt: Event | CommitEvt): Promise<void> {
 	try {
 		lastEventTime = Date.now()
+		if ('seq' in evt) currentSeq = evt.seq
 
 		if (!('event' in evt)) return
 
@@ -154,10 +162,14 @@ let firehoseHandle: { destroy: () => void } | null = null
 /**
  * Start the firehose worker
  */
-export function startFirehose(): void {
+export function startFirehose(initialCursor?: number): void {
 	logger.info(`Starting firehose (runtime: ${isBun ? 'Bun' : 'Node.js'})`)
 	logger.info(`Service: ${config.firehoseService}`)
 	logger.info(`Max concurrency: ${config.firehoseMaxConcurrency}`)
+	if (initialCursor !== undefined) {
+		currentSeq = initialCursor
+		logger.info(`Resuming from cursor: ${initialCursor}`)
+	}
 
 	if (isBun) {
 		// Use BunFirehose for Bun runtime
@@ -167,6 +179,7 @@ export function startFirehose(): void {
 			filterCollections: ['place.wisp.fs', 'place.wisp.settings'],
 			handleEvent,
 			onError: handleError,
+			getCursor: () => currentSeq,
 			onConnect: () => {
 				isConnected = true
 				logger.info('Firehose connected')
@@ -217,4 +230,5 @@ export function stopFirehose(): void {
 	isConnected = false
 	firehoseHandle?.destroy()
 	firehoseHandle = null
+	currentSeq = undefined
 }

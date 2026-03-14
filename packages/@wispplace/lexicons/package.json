@@ -87,12 +87,12 @@
   },
   "dependencies": {
     "@atcute/lexicons": "^1.2.9",
-    "@atproto/lexicon": "^0.5.1",
-    "@atproto/xrpc-server": "^0.9.5"
+    "@atproto/lexicon": "^0.6.1",
+    "@atproto/xrpc-server": "^0.9.6"
   },
   "devDependencies": {
     "@atcute/lex-cli": "^2.5.3",
-    "@atproto/lex-cli": "^0.9.5",
+    "@atproto/lex-cli": "^0.9.7",
     "multiformats": "^13.4.1"
   }
 }

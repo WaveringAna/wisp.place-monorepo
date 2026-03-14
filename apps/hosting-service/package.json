@@ -9,10 +9,10 @@
     "check": "tsc --noEmit"
   },
   "dependencies": {
-    "@atproto/api": "^0.17.4",
-    "@atproto/identity": "^0.4.9",
-    "@atproto/lexicon": "^0.5.2",
-    "@atproto/sync": "^0.1.36",
+    "@atproto/api": "^0.18.17",
+    "@atproto/identity": "^0.4.10",
+    "@atproto/lexicon": "^0.6.1",
+    "@atproto/sync": "^0.1.40",
     "@atproto/xrpc": "^0.7.5",
     "@wispplace/atproto-utils": "workspace:*",
     "@wispplace/page-generators": "workspace:*",
