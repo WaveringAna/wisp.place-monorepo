@@ -13,9 +13,9 @@
     "db-fill": "NODE_OPTIONS='--max-old-space-size=2048' tsx src/index.ts --db-fill-only"
   },
   "dependencies": {
-    "@atproto/api": "^0.17.4",
-    "@atproto/identity": "^0.4.9",
-    "@atproto/sync": "^0.1.36",
+    "@atproto/api": "^0.18.17",
+    "@atproto/identity": "^0.4.10",
+    "@atproto/sync": "^0.1.40",
     "@hono/node-server": "^1.19.6",
     "@wispplace/atproto-utils": "workspace:*",
     "@wispplace/bun-firehose": "workspace:*",

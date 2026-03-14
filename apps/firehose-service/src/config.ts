@@ -27,6 +27,13 @@ export const config = {
 	revalidateStream: process.env.WISP_REVALIDATE_STREAM || 'wisp:revalidate',
 	revalidateGroup: process.env.WISP_REVALIDATE_GROUP || 'firehose-service',
 
+	// Leader election (for distributed HA deployments)
+	leaderElection: process.env.LEADER_ELECTION === 'true',
+	leaderTtlMs: parseInt(process.env.LEADER_TTL_MS || '30000', 10),
+	leaderRenewIntervalMs: parseInt(process.env.LEADER_RENEW_INTERVAL_MS || '10000', 10),
+	leaderPollIntervalMs: parseInt(process.env.LEADER_POLL_INTERVAL_MS || '5000', 10),
+	cursorSaveIntervalMs: parseInt(process.env.CURSOR_SAVE_INTERVAL_MS || '5000', 10),
+
 	// Mode
 	isDbFillOnly: process.argv.includes('--db-fill-only') || process.env.DB_FILL_ONLY === 'true',
 	isBackfill:

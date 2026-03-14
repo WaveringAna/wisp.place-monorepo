@@ -21,7 +21,8 @@ import { config } from './config'
 import { closeCacheInvalidationPublisher } from './lib/cache-invalidation'
 import { fetchSiteRecord, handleSiteCreateOrUpdate, listSiteRecordsForDid } from './lib/cache-writer'
 import { closeDatabase, getSiteCache, listAllKnownDids, listAllSiteCaches, listAllSites, upsertSite } from './lib/db'
-import { getFirehoseHealth, startFirehose, stopFirehose } from './lib/firehose'
+import { getCurrentSeq, getFirehoseHealth, startFirehose, stopFirehose } from './lib/firehose'
+import { closeLeaderRedis, getLeaderInfo, readCursor, runLeaderElection, saveCursor } from './lib/leader'
 import { startRevalidateWorker, stopRevalidateWorker } from './lib/revalidate-worker'
 import { storage } from './lib/storage'
 
@@ -51,11 +52,14 @@ app.get('/health', async (c) => {
 		mode: config.isDbFillOnly ? 'db-fill-only' : config.isBackfill ? 'backfill' : 'firehose',
 		firehose: firehoseHealth,
 		storage: storageStats,
+		...(config.leaderElection && { leader: getLeaderInfo() }),
 	})
 })
 
 // Graceful shutdown
 let isShuttingDown = false
+let leaderAbortController: AbortController | null = null
+let cursorSaveTimer: ReturnType<typeof setInterval> | null = null
 
 async function shutdown(signal: string) {
 	if (isShuttingDown) return
@@ -63,9 +67,12 @@ async function shutdown(signal: string) {
 
 	logger.info(`Received ${signal}, shutting down...`)
 
+	if (cursorSaveTimer) clearInterval(cursorSaveTimer)
+	leaderAbortController?.abort()
 	stopFirehose()
 	await stopRevalidateWorker()
 	await closeCacheInvalidationPublisher()
+	await closeLeaderRedis()
 	await closeDatabase()
 
 	logger.info('Shutdown complete')
@@ -267,9 +274,28 @@ async function main() {
 
 	logger.info(`Health endpoint: http://localhost:${config.healthPort}/health`)
 
-	// Always start firehose and revalidate worker
-	startFirehose()
 	await startRevalidateWorker()
+
+	if (config.leaderElection) {
+		logger.info('Leader election enabled, waiting to win leadership before starting firehose')
+		leaderAbortController = new AbortController()
+
+		// Save cursor to Redis periodically so a new leader can resume from it
+		cursorSaveTimer = setInterval(async () => {
+			const seq = getCurrentSeq()
+			if (seq !== undefined) await saveCursor(seq)
+		}, config.cursorSaveIntervalMs)
+
+		// Run election loop (non-blocking)
+		runLeaderElection(
+			(cursor) => startFirehose(cursor),
+			() => stopFirehose(),
+			leaderAbortController.signal,
+		).catch((err) => logger.error('[Leader] Election loop fatal error', err))
+	} else {
+		// Single-instance mode: start firehose directly
+		startFirehose()
+	}
 
 	if (config.isBackfill) {
 		// Run backfill while firehose is already consuming events
