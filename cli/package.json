@@ -44,5 +44,8 @@
     "build": "bun build ./index.ts --outdir ./dist --target node --sourcemap=linked && sed -i '' '1s|#!/usr/bin/env bun|#!/usr/bin/env node|' ./dist/index.js",
     "typecheck": "tsc --noEmit"
   },
-  "type": "module"
+  "type": "module",
+  "dependencies": {
+    "@napi-rs/keyring": "^1.2.0"
+  }
 }

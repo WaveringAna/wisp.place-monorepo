@@ -14,8 +14,24 @@ import {
 import { serve as honoNodeServe } from '@hono/node-server'
 import { resolvePdsFromHandle } from '@wispplace/atproto-utils'
 import { isBun } from '@wispplace/bun-firehose'
+import { Entry as KeyringEntry } from '@napi-rs/keyring'
+import { confirm, log } from '@clack/prompts'
 import { Hono } from 'hono'
 import open from 'open'
+
+const KEYCHAIN_SERVICE = 'wispctl'
+
+function probeKeychain(): boolean {
+	const testKey = '__wispctl_probe__'
+	try {
+		const entry = new KeyringEntry(KEYCHAIN_SERVICE, testKey)
+		entry.setPassword('1')
+		entry.deletePassword()
+		return true
+	} catch {
+		return false
+	}
+}
 
 // All scopes requested upfront so the client_id is stable across commands
 const OAUTH_SCOPE = [
@@ -51,6 +67,7 @@ interface KvAdapter {
 	set(key: string, value: string, expiresAt: number | null): void
 	del(key: string): void
 	clear(): void
+	valuesByPrefix(prefix: string): string[]
 }
 
 const SCHEMA = `
@@ -72,11 +89,13 @@ async function openKv(dbPath: string): Promise<KvAdapter> {
 		const getStmt = db.query<KvRow, [string]>('SELECT value, expires_at FROM kv WHERE key = ?')
 		const setStmt = db.query('INSERT OR REPLACE INTO kv (key, value, expires_at) VALUES (?, ?, ?)')
 		const delStmt = db.query('DELETE FROM kv WHERE key = ?')
+		const prefixStmt = db.query<{ value: string }, [string]>('SELECT value FROM kv WHERE key LIKE ?')
 		return {
 			get: (key) => getStmt.get(key) ?? undefined,
 			set: (key, value, expiresAt) => { setStmt.run(key, value, expiresAt) },
 			del: (key) => { delStmt.run(key) },
 			clear: () => db.run('DELETE FROM kv'),
+			valuesByPrefix: (prefix) => prefixStmt.all(`${prefix}%`).map((r) => r.value),
 		}
 	} else {
 		const { DatabaseSync } = await import('node:sqlite')
@@ -86,11 +105,13 @@ async function openKv(dbPath: string): Promise<KvAdapter> {
 		const getStmt = db.prepare('SELECT value, expires_at FROM kv WHERE key = ?')
 		const setStmt = db.prepare('INSERT OR REPLACE INTO kv (key, value, expires_at) VALUES (?, ?, ?)')
 		const delStmt = db.prepare('DELETE FROM kv WHERE key = ?')
+		const prefixStmt = db.prepare('SELECT value FROM kv WHERE key LIKE ?')
 		return {
 			get: (key) => getStmt.get(key) as KvRow | undefined,
 			set: (key, value, expiresAt) => { setStmt.run(key, value, expiresAt) },
 			del: (key) => { delStmt.run(key) },
 			clear: () => db.exec('DELETE FROM kv'),
+			valuesByPrefix: (prefix) => (prefixStmt.all(`${prefix}%`) as { value: string }[]).map((r) => r.value),
 		}
 	}
 }
@@ -126,7 +147,26 @@ function createStateStore(kv: KvAdapter): NodeSavedStateStore {
 	}
 }
 
-function createSessionStore(kv: KvAdapter): NodeSavedSessionStore {
+function createSessionStore(kv: KvAdapter, useKeychain: boolean): NodeSavedSessionStore {
+	if (useKeychain) {
+		return {
+			async set(sub, session) {
+				new KeyringEntry(KEYCHAIN_SERVICE, sub).setPassword(JSON.stringify(session))
+			},
+			async get(sub) {
+				try {
+					const raw = new KeyringEntry(KEYCHAIN_SERVICE, sub).getPassword()
+					if (!raw) return undefined
+					return JSON.parse(raw) as NodeSavedSession
+				} catch {
+					return undefined
+				}
+			},
+			async del(sub) {
+				try { new KeyringEntry(KEYCHAIN_SERVICE, sub).deletePassword() } catch {}
+			},
+		}
+	}
 	return {
 		async set(sub: string, session: NodeSavedSession) {
 			kvSet(kv, `oauth_session:${sub}`, JSON.stringify(session), 60 * 60 * 24 * 14)
@@ -185,6 +225,18 @@ export async function authenticateOAuth(
 ): Promise<{ agent: Agent; did: string }> {
 	const kv = await openKv(options.dbPath || DEFAULT_DB_PATH)
 
+	let useKeychain = probeKeychain()
+	if (!useKeychain) {
+		log.warn('System keychain is unavailable (no Secret Service daemon or equivalent).')
+		const fallback = await confirm({
+			message: 'Fall back to storing session tokens unencrypted in SQLite? (On headless systems, prefer --password instead.)',
+			initialValue: false,
+		})
+		if (!fallback) {
+			throw new Error('Cannot store session securely. Use --password for app-password authentication.')
+		}
+	}
+
 	const redirectUri = `http://${LOOPBACK_HOST}:${LOOPBACK_PORT}/oauth/callback`
 	const clientIdParams = new URLSearchParams()
 	clientIdParams.append('redirect_uri', redirectUri)
@@ -204,7 +256,7 @@ export async function authenticateOAuth(
 			dpop_bound_access_tokens: false,
 		},
 		stateStore: createStateStore(kv),
-		sessionStore: createSessionStore(kv),
+		sessionStore: createSessionStore(kv, useKeychain),
 		requestLock: requestLocalLock,
 	})
 
@@ -429,6 +481,11 @@ export async function clearDirSession(dbPath?: string) {
 export async function clearSessions(dbPath?: string) {
 	try {
 		const kv = await openKv(dbPath || DEFAULT_DB_PATH)
+		// Delete any keychain entries for DIDs we know about via dir mappings
+		const dids = kv.valuesByPrefix('dir:')
+		for (const did of dids) {
+			try { new KeyringEntry(KEYCHAIN_SERVICE, did).deletePassword() } catch {}
+		}
 		kv.clear()
 		console.log('Cleared all stored OAuth sessions')
 	} catch {
