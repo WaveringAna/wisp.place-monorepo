@@ -43,6 +43,14 @@ await db`
 `
 
 await db`
+  CREATE TABLE IF NOT EXISTS firehose_cursor (
+    id       TEXT PRIMARY KEY DEFAULT 'singleton',
+    seq      BIGINT NOT NULL,
+    saved_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )
+`
+
+await db`
   CREATE TABLE IF NOT EXISTS webhook_event_logs (
     id               BIGSERIAL PRIMARY KEY,
     owner_did        TEXT NOT NULL,
@@ -233,6 +241,48 @@ export async function listEventLogs(ownerDid: string, limit = 100): Promise<Even
 		status: r.status as 'ok' | 'failed',
 		deliveredAt: r.delivered_at,
 	}))
+}
+
+/** Persist the current firehose sequence number so restarts can resume. */
+export async function saveCursor(seq: number): Promise<void> {
+	await db`
+    INSERT INTO firehose_cursor (id, seq, saved_at)
+    VALUES ('singleton', ${seq}, NOW())
+    ON CONFLICT (id) DO UPDATE SET seq = EXCLUDED.seq, saved_at = NOW()
+  `
+}
+
+/** Load the last saved firehose sequence number, or undefined if none. */
+export async function loadCursor(): Promise<number | undefined> {
+	const rows = await db<Array<{ seq: number }>>`
+    SELECT seq FROM firehose_cursor WHERE id = 'singleton'
+  `
+	return rows[0]?.seq
+}
+
+/**
+ * Collect all DIDs we know about from the local DB.
+ * Used during startup backfill to find repos that may already have
+ * place.wisp.v2.wh records that arrived before the service started.
+ */
+export async function listAllKnownDids(): Promise<string[]> {
+	const dids = new Set<string>()
+
+	const sites = await db<Array<{ did: string }>>`
+    SELECT DISTINCT did FROM sites WHERE did IS NOT NULL AND did <> ''
+  `
+	for (const r of sites) dids.add(r.did)
+
+	try {
+		const sessions = await db<Array<{ sub: string }>>`
+      SELECT DISTINCT sub FROM oauth_sessions WHERE sub IS NOT NULL AND sub <> ''
+    `
+		for (const r of sessions) dids.add(r.sub)
+	} catch {
+		// oauth_sessions schema may differ; skip gracefully
+	}
+
+	return [...dids].sort()
 }
 
 /** Close all database connections gracefully. */

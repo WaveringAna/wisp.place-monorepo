@@ -145,6 +145,7 @@
         "@atproto/identity": "^0.4.10",
         "@atproto/sync": "^0.1.40",
         "@atproto/syntax": "^0.5.0",
+        "@wispplace/atproto-utils": "workspace:*",
         "@wispplace/bun-firehose": "workspace:*",
         "@wispplace/lexicons": "workspace:*",
         "@wispplace/observability": "workspace:*",

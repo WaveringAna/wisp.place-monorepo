@@ -1,7 +1,8 @@
 import { createLogger } from '@wispplace/observability'
 import { config } from './config'
-import { closeDatabase, db } from './lib/db'
-import { getFirehoseHealth, startFirehose, stopFirehose } from './lib/firehose'
+import { closeDatabase, db, loadAllWebhooks } from './lib/db'
+import { runStartupBackfill } from './lib/backfill'
+import { getFirehoseHealth, initScopeDids, startFirehose, stopFirehose } from './lib/firehose'
 import { closeRedisPublisher } from './lib/redis'
 
 const logger = createLogger('webhook-service')
@@ -104,10 +105,35 @@ process.on('SIGTERM', () => shutdown('SIGTERM'))
 
 async function main() {
 	logger.info('Starting webhook-service')
-	logger.info(`Firehose: ${config.firehoseService}`)
+	logger.info(`Jetstream: ${config.jetstreamUrl}`)
 	logger.info(`Health endpoint: http://localhost:${config.healthPort}/health`)
 
+	const webhooks = await loadAllWebhooks()
+	if (webhooks.length === 0) {
+		logger.info('[registry] No webhook records in DB')
+	} else {
+		logger.info(`[registry] Tracking ${webhooks.length} webhook(s) across ${new Set(webhooks.map((w) => w.record.scope.aturi.replace(/^at:\/\//, '').split('/')[0])).size} DID(s)`)
+		for (const w of webhooks) {
+			logger.info(
+				`[registry]  ${w.did}/${w.rkey}` +
+					`  scope=${w.record.scope.aturi}` +
+					`  events=${w.record.events?.join(',') ?? 'all'}` +
+					`  backlinks=${w.record.scope.backlinks ?? false}` +
+					`  enabled=${w.record.enabled ?? true}` +
+					`  url=${w.record.url}`,
+			)
+		}
+	}
+
+	// Populate sync pre-filter sets before starting the firehose
+	initScopeDids(webhooks)
+
 	startFirehose()
+
+	// Backfill any place.wisp.v2.wh records that existed before this run
+	await runStartupBackfill()
+	// Re-init after backfill in case it added new webhooks
+	initScopeDids(await loadAllWebhooks())
 }
 
 main().catch((err) => {
