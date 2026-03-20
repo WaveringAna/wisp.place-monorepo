@@ -101,7 +101,9 @@ The project is a monorepo. The package handler it uses is bun. Please when you w
 
 ### Typescript Bun Workspace Layout
 
-Bun workspaces: `packages/@wisp/*`, `apps/main-app`, `apps/hosting-service`
+Bun workspaces: `packages/@wisp/*`, `apps/main-app`, `apps/hosting-service`, etc
+
+PLEASE USE `bun check` to type check and `biome check --write` to lint.
 
 There are three typescript apps
 **`apps/main-app`** - Main backend (Bun + Elysia)
@@ -121,6 +123,10 @@ There are three typescript apps
 - Watches AT Protocol firehose for `place.wisp.*` record changes
 - Downloads and caches site files to S3
 - Backfill mode for syncing existing sites
+
+**`apps/webhook-service`** - ATProto Webhooks service
+- Watches AT Protocol firehose for `place.wisp.v2.wh` record changes and CRUDs webhooks
+- Watches AT Protocol firehose for scoped aturis based on what is in place.wisp.v2.wh and POSTs them
 
 
 ### Shared Packages (`packages/@wisp/*`)
