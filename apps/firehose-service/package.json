@@ -28,6 +28,7 @@
     "hono": "^4.10.4",
     "ioredis": "^5.9.2",
     "multiformats": "^13.4.1",
+    "node-html-parser": "^7.1.0",
     "postgres": "^3.4.5"
   },
   "devDependencies": {

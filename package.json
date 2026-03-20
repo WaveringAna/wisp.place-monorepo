@@ -13,6 +13,7 @@
   "dependencies": {
     "@tailwindcss/cli": "^4.1.17",
     "bun-plugin-tailwind": "^0.1.2",
+    "node-html-parser": "^7.1.0",
     "tailwindcss": "^4.1.17"
   },
   "scripts": {

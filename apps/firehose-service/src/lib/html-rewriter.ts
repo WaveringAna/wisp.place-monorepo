@@ -1,141 +1,90 @@
+import { parse } from 'node-html-parser'
+
 /**
- * HTML path rewriting for firehose-service
- * Rewrites absolute/relative paths in HTML to be served from a base path
+ * Attributes whose values are rewritten.
+ * - `'url'`    — a single URL string
+ * - `'srcset'` — a comma-separated list of `<url> [descriptor]` entries
  */
+const REWRITABLE_ATTRS: Record<string, 'url' | 'srcset'> = {
+	src: 'url',
+	href: 'url',
+	action: 'url',
+	data: 'url',
+	poster: 'url',
+	srcset: 'srcset',
+}
 
-const REWRITABLE_ATTRIBUTES = ['src', 'href', 'action', 'data', 'poster', 'srcset'] as const
-
-function shouldRewritePath(path: string): boolean {
-	if (!path) return false
-
-	// Don't rewrite external URLs
-	if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('//')) {
-		return false
-	}
-
-	// Don't rewrite data URIs or other schemes
-	if (path.includes(':') && !path.startsWith('./') && !path.startsWith('../')) {
-		return false
-	}
-
+/** Returns true if the URL is a root-relative path that needs prefixing (e.g. `/style.css`). */
+function isRootRelative(url: string): boolean {
+	if (!url || !url.startsWith('/')) return false
+	// Protocol-relative (//cdn.example.com) — not a local path
+	if (url.startsWith('//')) return false
 	return true
 }
 
-function normalizePath(path: string): string {
-	const parts = path.split('/')
-	const result: string[] = []
-
-	for (const part of parts) {
-		if (part === '.' || part === '') {
-			if (part === '' && result.length === 0) {
-				result.push(part)
-			}
-			continue
-		}
-		if (part === '..') {
-			if (result.length > 0 && result[result.length - 1] !== '..') {
-				result.pop()
-			}
-			continue
-		}
-		result.push(part)
-	}
-
-	return result.join('/')
+/**
+ * Prepend `basePath` to a root-relative URL, preserving query string and hash.
+ */
+function rewriteUrl(url: string, basePath: string): string {
+	if (!isRootRelative(url)) return url
+	if (url.startsWith(basePath)) return url
+	const resolved = new URL(url, 'http://x')
+	return basePath + resolved.pathname.slice(1) + resolved.search + resolved.hash
 }
 
-function getDirectory(filepath: string): string {
-	const lastSlash = filepath.lastIndexOf('/')
-	if (lastSlash === -1) {
-		return ''
-	}
-	return filepath.substring(0, lastSlash + 1)
-}
-
-function rewritePath(path: string, basePath: string, documentPath: string): string {
-	if (!shouldRewritePath(path)) {
-		return path
-	}
-
-	// Handle absolute paths: /file.js -> /base/file.js
-	if (path.startsWith('/')) {
-		return basePath + path.slice(1)
-	}
-
-	// Handle relative paths
-	const documentDir = getDirectory(documentPath)
-	let resolvedPath: string
-
-	if (path.startsWith('./')) {
-		resolvedPath = documentDir + path.slice(2)
-	} else if (path.startsWith('../')) {
-		resolvedPath = documentDir + path
-	} else {
-		resolvedPath = documentDir + path
-	}
-
-	resolvedPath = normalizePath(resolvedPath)
-	return basePath + resolvedPath
-}
-
-function rewriteSrcset(srcset: string, basePath: string, documentPath: string): string {
+/** Rewrite each root-relative URL in a `srcset` value (comma-separated `<url> [descriptor]` list). */
+function rewriteSrcset(srcset: string, basePath: string): string {
 	return srcset
 		.split(',')
-		.map((part) => {
-			const trimmed = part.trim()
-			const spaceIndex = trimmed.indexOf(' ')
-
-			if (spaceIndex === -1) {
-				return rewritePath(trimmed, basePath, documentPath)
-			}
-
-			const url = trimmed.substring(0, spaceIndex)
-			const descriptor = trimmed.substring(spaceIndex)
-			return rewritePath(url, basePath, documentPath) + descriptor
+		.map((entry) => {
+			const trimmed = entry.trim()
+			const spaceIdx = trimmed.search(/\s/)
+			if (spaceIdx === -1) return rewriteUrl(trimmed, basePath)
+			const url = trimmed.slice(0, spaceIdx)
+			const descriptor = trimmed.slice(spaceIdx) // keeps leading whitespace + e.g. "2x"
+			return rewriteUrl(url, basePath) + descriptor
 		})
 		.join(', ')
 }
 
 /**
- * Rewrite paths in HTML content for serving from a base path
+ * Rewrite root-relative paths in an HTML document so it serves correctly from `basePath`.
+ *
+ * @param html         Raw HTML string.
+ * @param basePath     Wisp serving prefix, e.g. `/did/rkey/`.
+ * @param documentPath Storage path of this file — unused for path resolution but
+ *                     kept in the signature for potential future use (e.g. logging).
  */
-export function rewriteHtmlPaths(html: string, basePath: string, documentPath: string): string {
+export function rewriteHtmlPaths(html: string, basePath: string, _documentPath: string): string {
 	const normalizedBase = basePath.endsWith('/') ? basePath : `${basePath}/`
 
-	let rewritten = html
+	const root = parse(html, {
+		comment: true,
+		blockTextElements: { script: true, style: true, pre: true, code: true },
+	})
 
-	for (const attr of REWRITABLE_ATTRIBUTES) {
-		if (attr === 'srcset') {
-			const srcsetRegex = new RegExp(`\\b${attr}[ \\t]{0,5}=[ \\t]{0,5}"([^"]*)"`, 'gi')
-			rewritten = rewritten.replace(srcsetRegex, (_match, value) => {
-				const rewrittenValue = rewriteSrcset(value, normalizedBase, documentPath)
-				return `${attr}="${rewrittenValue}"`
-			})
-		} else {
-			const doubleQuoteRegex = new RegExp(`\\b${attr}[ \\t]{0,5}=[ \\t]{0,5}"([^"]*)"`, 'gi')
-			const singleQuoteRegex = new RegExp(`\\b${attr}[ \\t]{0,5}=[ \\t]{0,5}'([^']*)'`, 'gi')
-			const unquotedRegex = new RegExp(`\\b${attr}[ \\t]{0,5}=[ \\t]{0,5}(?!["'])([^\\s>]+)`, 'gi')
-
-			rewritten = rewritten.replace(doubleQuoteRegex, (_match, value) => {
-				const rewrittenValue = rewritePath(value, normalizedBase, documentPath)
-				return `${attr}="${rewrittenValue}"`
-			})
-
-			rewritten = rewritten.replace(singleQuoteRegex, (_match, value) => {
-				const rewrittenValue = rewritePath(value, normalizedBase, documentPath)
-				return `${attr}='${rewrittenValue}'`
-			})
-
-			rewritten = rewritten.replace(unquotedRegex, (_match, value) => {
-				const rewrittenValue = rewritePath(value, normalizedBase, documentPath)
-				return `${attr}=${rewrittenValue}`
-			})
+	// Rewrite <base href> so the browser uses the correct base at runtime for
+	// JS fetch, form submits, dynamic navigation, etc.
+	const baseEl = root.querySelector('base')
+	if (baseEl) {
+		const baseHref = baseEl.getAttribute('href')
+		if (baseHref) {
+			baseEl.setAttribute('href', rewriteUrl(baseHref, normalizedBase))
 		}
 	}
 
-	return rewritten
+	for (const el of root.querySelectorAll('*')) {
+		for (const [attr, type] of Object.entries(REWRITABLE_ATTRS)) {
+			const value = el.getAttribute(attr)
+			if (value == null) continue
+			el.setAttribute(attr, type === 'srcset' ? rewriteSrcset(value, normalizedBase) : rewriteUrl(value, normalizedBase))
+		}
+	}
+
+	return root.toString()
 }
 
+/** Returns true for `.html` and `.htm` files. */
 export function isHtmlFile(filepath: string): boolean {
 	const ext = filepath.toLowerCase().split('.').pop()
 	return ext === 'html' || ext === 'htm'
