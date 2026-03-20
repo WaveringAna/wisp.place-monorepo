@@ -11,13 +11,14 @@ import {
 	type NodeSavedStateStore,
 	requestLocalLock,
 } from '@atproto/oauth-client-node'
+import { confirm, log } from '@clack/prompts'
 import { serve as honoNodeServe } from '@hono/node-server'
+import { Entry as KeyringEntry } from '@napi-rs/keyring'
 import { resolvePdsFromHandle } from '@wispplace/atproto-utils'
 import { isBun } from '@wispplace/bun-firehose'
-import { Entry as KeyringEntry } from '@napi-rs/keyring'
-import { confirm, log } from '@clack/prompts'
 import { Hono } from 'hono'
 import open from 'open'
+import { WISP_OAUTH_SCOPE } from './wisp-service'
 
 const KEYCHAIN_SERVICE = 'wispctl'
 
@@ -32,23 +33,6 @@ function probeKeychain(): boolean {
 		return false
 	}
 }
-
-// All scopes requested upfront so the client_id is stable across commands
-const OAUTH_SCOPE = [
-	'atproto',
-	'repo:place.wisp.fs',
-	'repo:place.wisp.subfs',
-	'repo:place.wisp.settings',
-	'blob:*/*',
-	'rpc:place.wisp.v2.site.getList?aud=*',
-	'rpc:place.wisp.v2.site.delete?aud=*',
-	'rpc:place.wisp.v2.domain.getList?aud=*',
-	'rpc:place.wisp.v2.domain.claim?aud=*',
-	'rpc:place.wisp.v2.domain.claimSubdomain?aud=*',
-	'rpc:place.wisp.v2.domain.getStatus?aud=*',
-	'rpc:place.wisp.v2.domain.addSite?aud=*',
-	'rpc:place.wisp.v2.domain.delete?aud=*',
-].join(' ')
 
 const DEFAULT_DB_PATH = join(homedir(), '.config', 'wispctl', 'state.sqlite')
 
@@ -92,8 +76,12 @@ async function openKv(dbPath: string): Promise<KvAdapter> {
 		const prefixStmt = db.query<{ value: string }, [string]>('SELECT value FROM kv WHERE key LIKE ?')
 		return {
 			get: (key) => getStmt.get(key) ?? undefined,
-			set: (key, value, expiresAt) => { setStmt.run(key, value, expiresAt) },
-			del: (key) => { delStmt.run(key) },
+			set: (key, value, expiresAt) => {
+				setStmt.run(key, value, expiresAt)
+			},
+			del: (key) => {
+				delStmt.run(key)
+			},
 			clear: () => db.run('DELETE FROM kv'),
 			valuesByPrefix: (prefix) => prefixStmt.all(`${prefix}%`).map((r) => r.value),
 		}
@@ -108,8 +96,12 @@ async function openKv(dbPath: string): Promise<KvAdapter> {
 		const prefixStmt = db.prepare('SELECT value FROM kv WHERE key LIKE ?')
 		return {
 			get: (key) => getStmt.get(key) as KvRow | undefined,
-			set: (key, value, expiresAt) => { setStmt.run(key, value, expiresAt) },
-			del: (key) => { delStmt.run(key) },
+			set: (key, value, expiresAt) => {
+				setStmt.run(key, value, expiresAt)
+			},
+			del: (key) => {
+				delStmt.run(key)
+			},
 			clear: () => db.exec('DELETE FROM kv'),
 			valuesByPrefix: (prefix) => (prefixStmt.all(`${prefix}%`) as { value: string }[]).map((r) => r.value),
 		}
@@ -163,7 +155,9 @@ function createSessionStore(kv: KvAdapter, useKeychain: boolean): NodeSavedSessi
 				}
 			},
 			async del(sub) {
-				try { new KeyringEntry(KEYCHAIN_SERVICE, sub).deletePassword() } catch {}
+				try {
+					new KeyringEntry(KEYCHAIN_SERVICE, sub).deletePassword()
+				} catch {}
 			},
 		}
 	}
@@ -225,11 +219,12 @@ export async function authenticateOAuth(
 ): Promise<{ agent: Agent; did: string }> {
 	const kv = await openKv(options.dbPath || DEFAULT_DB_PATH)
 
-	let useKeychain = probeKeychain()
+	const useKeychain = probeKeychain()
 	if (!useKeychain) {
 		log.warn('System keychain is unavailable (no Secret Service daemon or equivalent).')
 		const fallback = await confirm({
-			message: 'Fall back to storing session tokens unencrypted in SQLite? (On headless systems, prefer --password instead.)',
+			message:
+				'Fall back to storing session tokens unencrypted in SQLite? (On headless systems, prefer --password instead.)',
 			initialValue: false,
 		})
 		if (!fallback) {
@@ -240,7 +235,7 @@ export async function authenticateOAuth(
 	const redirectUri = `http://${LOOPBACK_HOST}:${LOOPBACK_PORT}/oauth/callback`
 	const clientIdParams = new URLSearchParams()
 	clientIdParams.append('redirect_uri', redirectUri)
-	clientIdParams.append('scope', OAUTH_SCOPE)
+	clientIdParams.append('scope', WISP_OAUTH_SCOPE)
 
 	const client = new NodeOAuthClient({
 		clientMetadata: {
@@ -252,7 +247,7 @@ export async function authenticateOAuth(
 			response_types: ['code'],
 			application_type: 'web',
 			token_endpoint_auth_method: 'none',
-			scope: OAUTH_SCOPE,
+			scope: WISP_OAUTH_SCOPE,
 			dpop_bound_access_tokens: false,
 		},
 		stateStore: createStateStore(kv),
@@ -393,7 +388,7 @@ export async function authenticateOAuth(
 		}
 	})
 
-	const authUrl = await client.authorize(handle, { scope: OAUTH_SCOPE })
+	const authUrl = await client.authorize(handle, { scope: WISP_OAUTH_SCOPE })
 
 	emitStatus(options, 'Opening browser for authentication...')
 	emitStatus(options, `If browser does not open, visit: ${authUrl}`)
@@ -404,7 +399,7 @@ export async function authenticateOAuth(
 
 	const tokenInfo = await session.getTokenInfo(false)
 	const grantedScopes = new Set((tokenInfo.scope || '').split(/\s+/).filter(Boolean))
-	const missingScopes = OAUTH_SCOPE.split(' ').filter((s) => !grantedScopes.has(decodeURIComponent(s)))
+	const missingScopes = WISP_OAUTH_SCOPE.split(' ').filter((s) => !grantedScopes.has(decodeURIComponent(s)))
 	if (missingScopes.length > 0) {
 		emitWarning(
 			options,
@@ -484,7 +479,9 @@ export async function clearSessions(dbPath?: string) {
 		// Delete any keychain entries for DIDs we know about via dir mappings
 		const dids = kv.valuesByPrefix('dir:')
 		for (const did of dids) {
-			try { new KeyringEntry(KEYCHAIN_SERVICE, did).deletePassword() } catch {}
+			try {
+				new KeyringEntry(KEYCHAIN_SERVICE, did).deletePassword()
+			} catch {}
 		}
 		kv.clear()
 		console.log('Cleared all stored OAuth sessions')

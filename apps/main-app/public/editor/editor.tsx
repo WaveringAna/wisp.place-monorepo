@@ -16,7 +16,7 @@ import { SkeletonShimmer } from '@public/components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@public/components/ui/tabs'
 import Layout from '@public/layouts'
 import { Loader2, LogOut, Trash2 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { type ChangeEvent, type KeyboardEvent as ReactKeyboardEvent, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { useDomainData } from './hooks/useDomainData'
@@ -568,7 +568,7 @@ function Dashboard() {
 			</footer>
 
 			{/* Site Configuration Modal */}
-			<Dialog open={configuringSite !== null} onOpenChange={(open) => !open && setConfiguringSite(null)}>
+			<Dialog open={configuringSite !== null} onOpenChange={(open: boolean) => !open && setConfiguringSite(null)}>
 				<DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
 					<DialogHeader>
 						<DialogTitle>Configure Site</DialogTitle>
@@ -611,7 +611,7 @@ function Dashboard() {
 												<Checkbox
 													id={domainId}
 													checked={selectedDomains.has(domainId)}
-													onCheckedChange={(checked) => {
+													onCheckedChange={(checked: boolean | 'indeterminate') => {
 														const newSelected = new Set(selectedDomains)
 														if (checked) {
 															newSelected.add(domainId)
@@ -643,7 +643,7 @@ function Dashboard() {
 												<Checkbox
 													id={domain.id}
 													checked={selectedDomains.has(domain.id)}
-													onCheckedChange={(checked) => {
+													onCheckedChange={(checked: boolean | 'indeterminate') => {
 														const newSelected = new Set(selectedDomains)
 														if (checked) {
 															newSelected.add(domain.id)
@@ -685,7 +685,10 @@ function Dashboard() {
 									{/* Routing Mode */}
 									<div className="space-y-3">
 										<Label className="text-sm font-medium">Routing Mode</Label>
-										<RadioGroup value={routingMode} onValueChange={(value) => setRoutingMode(value as RoutingMode)}>
+										<RadioGroup
+											value={routingMode}
+											onValueChange={(value: string) => setRoutingMode(value as RoutingMode)}
+										>
 											<div className="flex items-center space-x-3 p-3 border rounded-lg">
 												<RadioGroupItem value="default" id="mode-default" />
 												<Label htmlFor="mode-default" className="flex-1 cursor-pointer">
@@ -712,7 +715,7 @@ function Dashboard() {
 													<Input
 														id="spa-file"
 														value={spaFile}
-														onChange={(e) => setSpaFile(e.target.value)}
+														onChange={(e: ChangeEvent<HTMLInputElement>) => setSpaFile(e.target.value)}
 														placeholder="index.html"
 													/>
 												</div>
@@ -743,7 +746,7 @@ function Dashboard() {
 													<Input
 														id="404-file"
 														value={custom404File}
-														onChange={(e) => setCustom404File(e.target.value)}
+														onChange={(e: ChangeEvent<HTMLInputElement>) => setCustom404File(e.target.value)}
 														placeholder="404.html"
 													/>
 												</div>
@@ -763,7 +766,7 @@ function Dashboard() {
 												<div key={file || idx} className="flex items-center gap-2">
 													<Input
 														value={file}
-														onChange={(e) => {
+														onChange={(e: ChangeEvent<HTMLInputElement>) => {
 															const newFiles = [...indexFiles]
 															newFiles[idx] = e.target.value
 															setIndexFiles(newFiles)
@@ -787,9 +790,9 @@ function Dashboard() {
 											<div className="flex items-center gap-2">
 												<Input
 													value={newIndexFile}
-													onChange={(e) => setNewIndexFile(e.target.value)}
+													onChange={(e: ChangeEvent<HTMLInputElement>) => setNewIndexFile(e.target.value)}
 													placeholder="Add index file..."
-													onKeyDown={(e) => {
+													onKeyDown={(e: ReactKeyboardEvent<HTMLInputElement>) => {
 														if (e.key === 'Enter' && newIndexFile.trim()) {
 															setIndexFiles([...indexFiles, newIndexFile.trim()])
 															setNewIndexFile('')
@@ -820,7 +823,7 @@ function Dashboard() {
 										<Checkbox
 											id="clean-urls"
 											checked={cleanUrls}
-											onCheckedChange={(checked) => setCleanUrls(!!checked)}
+											onCheckedChange={(checked: boolean | 'indeterminate') => setCleanUrls(!!checked)}
 										/>
 										<Label htmlFor="clean-urls" className="flex-1 cursor-pointer">
 											<div>
@@ -838,7 +841,7 @@ function Dashboard() {
 											<Checkbox
 												id="cors-enabled"
 												checked={corsEnabled}
-												onCheckedChange={(checked) => setCorsEnabled(!!checked)}
+												onCheckedChange={(checked: boolean | 'indeterminate') => setCorsEnabled(!!checked)}
 											/>
 											<Label htmlFor="cors-enabled" className="flex-1 cursor-pointer">
 												<div>
@@ -855,7 +858,7 @@ function Dashboard() {
 												<Input
 													id="cors-origin"
 													value={corsOrigin}
-													onChange={(e) => setCorsOrigin(e.target.value)}
+													onChange={(e: ChangeEvent<HTMLInputElement>) => setCorsOrigin(e.target.value)}
 													placeholder="*"
 												/>
 												<p className="text-xs text-muted-foreground">
@@ -916,7 +919,7 @@ function Dashboard() {
 			</Dialog>
 
 			{/* Delete Site Confirmation Modal */}
-			<Dialog open={deleteConfirmSite !== null} onOpenChange={(open) => !open && setDeleteConfirmSite(null)}>
+			<Dialog open={deleteConfirmSite !== null} onOpenChange={(open: boolean) => !open && setDeleteConfirmSite(null)}>
 				<DialogContent className="sm:max-w-md">
 					<DialogHeader>
 						<DialogTitle>Delete Site</DialogTitle>

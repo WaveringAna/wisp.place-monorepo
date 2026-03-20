@@ -1,7 +1,7 @@
+import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { readdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
-import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import { DiskStorageTier } from '../src/tiers/DiskStorageTier.js'
 
 const testDir = './test-disk-cache'

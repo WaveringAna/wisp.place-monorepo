@@ -7,7 +7,6 @@ import {
 	findWebhooksForDid,
 	loadAllWebhooks,
 	upsertWebhookRecord,
-	type WebhookEntry,
 } from './db'
 import { deliverWebhook } from './delivery'
 import { JetstreamClient, type JetstreamEvent } from './jetstream'
@@ -112,7 +111,14 @@ async function getWebhooksForEvent(eventDid: string, eventRecord: unknown) {
 	return combined
 }
 
-async function deliver(did: string, collection: string, rkey: string, op: string, cid: string | undefined, record: unknown): Promise<void> {
+async function deliver(
+	did: string,
+	collection: string,
+	rkey: string,
+	op: string,
+	cid: string | undefined,
+	record: unknown,
+): Promise<void> {
 	const candidates = await getWebhooksForEvent(did, record)
 	if (candidates.length === 0) return
 
@@ -151,7 +157,9 @@ async function handleWhRecord(op: string, did: string, rkey: string, record: unk
 	}
 	invalidate(did)
 	invalidate('__backlinks__')
-	loadAllWebhooks().then(initScopeDids).catch(() => {})
+	loadAllWebhooks()
+		.then(initScopeDids)
+		.catch(() => {})
 }
 
 let directJetstream: JetstreamClient | null = null
@@ -191,8 +199,13 @@ function restartDirectJetstream(): void {
 		cursor,
 		onEvent: handleDirectEvent,
 		onError: (err) => logger.error('Direct Jetstream error', err),
-		onConnect: () => { isConnected = true; logger.info('Direct Jetstream connected') },
-		onDisconnect: () => { isConnected = false },
+		onConnect: () => {
+			isConnected = true
+			logger.info('Direct Jetstream connected')
+		},
+		onDisconnect: () => {
+			isConnected = false
+		},
 	})
 	directJetstream.start()
 }

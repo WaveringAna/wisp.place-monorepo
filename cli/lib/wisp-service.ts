@@ -1,6 +1,14 @@
 export const DEFAULT_WISP_SERVICE_DID = 'did:web:wisp.place'
 export const WISP_PROXY_SERVICE_ID = 'wisp_xrpc'
 
+export const WISP_OAUTH_BASE_SCOPES = [
+	'atproto',
+	'repo:place.wisp.fs',
+	'repo:place.wisp.subfs',
+	'repo:place.wisp.settings',
+	'blob:*/*',
+] as const
+
 export const WISP_SERVICE_LXMS = [
 	'place.wisp.v2.domain.addSite',
 	'place.wisp.v2.domain.claim',
@@ -47,7 +55,12 @@ function buildRpcScope(aud: string, lxm: string): string {
 	return `rpc:${lxm}?aud=${aud}`
 }
 
-export function buildWispRpcScopes(aud: `did:${string}:${string}`): string[] {
-	void aud
+export function buildWispRpcScopes(): string[] {
 	return WISP_SERVICE_LXMS.map((lxm) => buildRpcScope('*', lxm))
 }
+
+export function buildWispOAuthScopes(): string[] {
+	return [...WISP_OAUTH_BASE_SCOPES, ...buildWispRpcScopes()]
+}
+
+export const WISP_OAUTH_SCOPE = buildWispOAuthScopes().join(' ')

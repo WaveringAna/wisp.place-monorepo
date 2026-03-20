@@ -198,7 +198,7 @@ describe('not rewritten', () => {
 		})
 
 		test('url() inside <style> text is not rewritten', () => {
-			const html = '<style>.hero { background: url(\'/images/hero.jpg\') }</style>'
+			const html = "<style>.hero { background: url('/images/hero.jpg') }</style>"
 			expect(rewrite(html)).toBe(html)
 		})
 	})
@@ -226,16 +226,13 @@ describe('<base> tag', () => {
 	})
 })
 
-
 describe('URL features preserved', () => {
 	test('query string', () => {
 		expect(rewrite('<img src="/img.png?v=3">')).toBe('<img src="/did:plc:abc123/mysite/img.png?v=3">')
 	})
 
 	test('hash fragment on a path URL', () => {
-		expect(rewrite('<a href="/page#section">Link</a>')).toBe(
-			'<a href="/did:plc:abc123/mysite/page#section">Link</a>',
-		)
+		expect(rewrite('<a href="/page#section">Link</a>')).toBe('<a href="/did:plc:abc123/mysite/page#section">Link</a>')
 	})
 
 	test('query string and hash fragment together', () => {
@@ -244,7 +241,6 @@ describe('URL features preserved', () => {
 		)
 	})
 })
-
 
 describe('basePath normalisation', () => {
 	test('basePath without trailing slash is normalised', () => {
@@ -257,7 +253,6 @@ describe('basePath normalisation', () => {
 		expect(result).toBe('<img src="/did:plc:abc123/mysite/img.png">')
 	})
 })
-
 
 describe('real-world scenarios', () => {
 	test('Vite SPA with already-prefixed paths not double-rewritten', () => {

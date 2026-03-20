@@ -101,11 +101,15 @@
 		/* Completeness */
 		// "skipDefaultLibCheck": true,                      /* Skip type checking .d.ts files that are included with TypeScript. */
 		"skipLibCheck": true, /* Skip type checking all .d.ts files. */
+		"allowImportingTsExtensions": true,
+		"noEmit": true,
 		"baseUrl": ".",
 		"paths": {
-			"@server": ["./src/index.ts"],
-			"@server/*": ["./src/*"],
-			"@public/*": ["./public/*"],
+			"@server": ["./apps/main-app/src/index.ts"],
+			"@server/*": ["./apps/main-app/src/*"],
+			"@public/*": ["./apps/main-app/public/*"],
+			"@wispplace/*": ["./packages/@wispplace/*/src"]
 		}
-	}
+	},
+	"exclude": ["docs", "node_modules"]
 }

@@ -184,7 +184,7 @@ async function staticSiteHostingExample() {
 	if (aboutPage) {
 		console.log(`  Source: ${aboutPage.source} tier`)
 		console.log(`  Access count: ${aboutPage.metadata.accessCount}`)
-		console.log(`  Preview: ${aboutPage.data.toString().slice(0, 100)}...`)
+		console.log(`  Preview: ${(aboutPage.data as Uint8Array).toString().slice(0, 100)}...`)
 	}
 
 	// Invalidate entire site

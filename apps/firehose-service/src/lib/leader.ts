@@ -8,9 +8,9 @@
  * Enable with LEADER_ELECTION=true. Requires REDIS_URL.
  */
 
+import { randomUUID } from 'node:crypto'
 import { createLogger } from '@wispplace/observability'
 import Redis from 'ioredis'
-import { randomUUID } from 'node:crypto'
 import { config } from '../config'
 
 const logger = createLogger('firehose-service')
@@ -51,7 +51,9 @@ async function tryBecomeLeader(): Promise<boolean> {
 }
 
 async function renewLeadership(): Promise<boolean> {
-	const result = (await getRedis().eval(RENEW_SCRIPT, 1, LEADER_KEY, instanceId, String(config.leaderTtlMs))) as string | null
+	const result = (await getRedis().eval(RENEW_SCRIPT, 1, LEADER_KEY, instanceId, String(config.leaderTtlMs))) as
+		| string
+		| null
 	return result === 'OK'
 }
 
@@ -68,7 +70,7 @@ export async function readCursor(): Promise<number | undefined> {
 		const val = await getRedis().get(CURSOR_KEY)
 		if (!val) return undefined
 		const n = parseInt(val, 10)
-		return isNaN(n) ? undefined : n
+		return Number.isNaN(n) ? undefined : n
 	} catch (err) {
 		logger.warn('[Leader] Failed to read cursor', { error: String(err) })
 		return undefined

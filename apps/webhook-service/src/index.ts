@@ -1,7 +1,7 @@
 import { createLogger } from '@wispplace/observability'
 import { config } from './config'
-import { closeDatabase, db, loadAllWebhooks } from './lib/db'
 import { runStartupBackfill } from './lib/backfill'
+import { closeDatabase, db, loadAllWebhooks } from './lib/db'
 import { getFirehoseHealth, initScopeDids, startFirehose, stopFirehose } from './lib/firehose'
 import { closeRedisPublisher } from './lib/redis'
 
@@ -112,7 +112,9 @@ async function main() {
 	if (webhooks.length === 0) {
 		logger.info('[registry] No webhook records in DB')
 	} else {
-		logger.info(`[registry] Tracking ${webhooks.length} webhook(s) across ${new Set(webhooks.map((w) => w.record.scope.aturi.replace(/^at:\/\//, '').split('/')[0])).size} DID(s)`)
+		logger.info(
+			`[registry] Tracking ${webhooks.length} webhook(s) across ${new Set(webhooks.map((w) => w.record.scope.aturi.replace(/^at:\/\//, '').split('/')[0])).size} DID(s)`,
+		)
 		for (const w of webhooks) {
 			logger.info(
 				`[registry]  ${w.did}/${w.rkey}` +

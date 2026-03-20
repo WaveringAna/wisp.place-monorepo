@@ -1,5 +1,5 @@
-import { rm } from 'node:fs/promises'
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
+import { rm } from 'node:fs/promises'
 import { DiskStorageTier } from '../src/tiers/DiskStorageTier.js'
 import type { StorageMetadata } from '../src/types/index.js'
 
@@ -253,7 +253,7 @@ describe('DiskStorageTier - LRU eviction respects setMetadata updates', () => {
 		// (stale timestamp in metadataIndex). With the fix, 'b' is evicted instead.
 		await tier.set('c', data, makeMetadata('c', data.byteLength))
 
-		expect(await tier.exists('a')).toBe(true)  // freshly touched — must survive
+		expect(await tier.exists('a')).toBe(true) // freshly touched — must survive
 		expect(await tier.exists('b')).toBe(false) // true LRU victim
 		expect(await tier.exists('c')).toBe(true)
 	})

@@ -1,6 +1,6 @@
+import { describe, expect, test } from 'bun:test'
 import { Readable } from 'node:stream'
 import { gzipSync } from 'node:zlib'
-import { describe, expect, test } from 'bun:test'
 import { S3StorageTier } from '../src/tiers/S3StorageTier.js'
 
 describe('S3StorageTier metadata fallback', () => {

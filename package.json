@@ -11,10 +11,12 @@
     "cli"
   ],
   "dependencies": {
+    "@napi-rs/keyring": "^1.2.0",
     "@tailwindcss/cli": "^4.1.17",
     "bun-plugin-tailwind": "^0.1.2",
     "node-html-parser": "^7.1.0",
-    "tailwindcss": "^4.1.17"
+    "tailwindcss": "^4.1.17",
+    "typescript": "^5.9.3"
   },
   "scripts": {
     "test": "bun test",

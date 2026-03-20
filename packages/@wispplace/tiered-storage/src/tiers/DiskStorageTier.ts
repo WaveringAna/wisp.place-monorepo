@@ -175,7 +175,7 @@ export class DiskStorageTier implements StorageTier {
 						size: fileStats.size,
 						createdAt: new Date(metadata.createdAt),
 						lastAccessed: new Date(metadata.lastAccessed),
-					...(metadata.ttl && { ttl: new Date(metadata.ttl) }),
+						...(metadata.ttl && { ttl: new Date(metadata.ttl) }),
 					})
 
 					this.currentSize += fileStats.size

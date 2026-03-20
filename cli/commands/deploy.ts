@@ -73,8 +73,8 @@ function createIgnoreMatcher(siteDir: string): Ignore {
 
 function toUnixPath(p: string): string {
 	// A backslash is a path separator on Windows
-	if (process.platform === "win32") {
-		return p.replace(/\\/g, "/")
+	if (process.platform === 'win32') {
+		return p.replace(/\\/g, '/')
 	}
 	// on Unix systems, you're typically allowed to have backslashes in file names
 	return p
@@ -513,7 +513,11 @@ export async function deploy(agent: Agent, did: string, options: DeployOptions):
 	// Check individual file sizes
 	for (const file of files) {
 		if (file.size > MAX_FILE_SIZE) {
-			console.log(pc.yellow(`\nWarning: ${file.relativePath} exceeds max size (${formatBytes(file.size)} > ${formatBytes(MAX_FILE_SIZE)})`))
+			console.log(
+				pc.yellow(
+					`\nWarning: ${file.relativePath} exceeds max size (${formatBytes(file.size)} > ${formatBytes(MAX_FILE_SIZE)})`,
+				),
+			)
 			console.log(pc.yellow('This file may not be cached by the hosting service.\n'))
 		}
 	}

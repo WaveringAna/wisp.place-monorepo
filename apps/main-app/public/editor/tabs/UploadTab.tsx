@@ -2,7 +2,7 @@ import { Button } from '@public/components/ui/button'
 import { Input } from '@public/components/ui/input'
 import { Label } from '@public/components/ui/label'
 import { AlertCircle, CheckCircle2, ChevronDown, ChevronUp, Loader2, RefreshCw, Upload, XCircle } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { type ChangeEvent, useEffect, useRef, useState } from 'react'
 import type { SiteWithDomains } from '../hooks/useSiteData'
 
 type FileStatus = 'pending' | 'checking' | 'uploading' | 'uploaded' | 'reused' | 'failed'
@@ -58,7 +58,7 @@ export function UploadTab({ sites, sitesLoading, onUploadComplete }: UploadTabPr
 		}
 	}, [])
 
-	const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+	const handleFileSelect = (e: ChangeEvent<HTMLInputElement>) => {
 		if (e.target.files && e.target.files.length > 0) {
 			setSelectedFiles(e.target.files)
 		}
@@ -489,7 +489,7 @@ export function UploadTab({ sites, sitesLoading, onUploadComplete }: UploadTabPr
 							id="new-site-name"
 							placeholder="my-awesome-site"
 							value={newSiteName}
-							onChange={(e) => setNewSiteName(e.target.value)}
+							onChange={(e: ChangeEvent<HTMLInputElement>) => setNewSiteName(e.target.value)}
 							disabled={isUploading}
 							className="h-9"
 						/>

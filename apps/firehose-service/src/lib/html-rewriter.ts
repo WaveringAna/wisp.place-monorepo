@@ -77,7 +77,10 @@ export function rewriteHtmlPaths(html: string, basePath: string, _documentPath: 
 		for (const [attr, type] of Object.entries(REWRITABLE_ATTRS)) {
 			const value = el.getAttribute(attr)
 			if (value == null) continue
-			el.setAttribute(attr, type === 'srcset' ? rewriteSrcset(value, normalizedBase) : rewriteUrl(value, normalizedBase))
+			el.setAttribute(
+				attr,
+				type === 'srcset' ? rewriteSrcset(value, normalizedBase) : rewriteUrl(value, normalizedBase),
+			)
 		}
 	}
 

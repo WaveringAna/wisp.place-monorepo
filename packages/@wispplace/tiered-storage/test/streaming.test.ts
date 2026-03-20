@@ -1,7 +1,7 @@
+import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
 import { rm } from 'node:fs/promises'
 import { Readable } from 'node:stream'
-import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import { TieredStorage } from '../src/TieredStorage.js'
 import { DiskStorageTier } from '../src/tiers/DiskStorageTier.js'
 import { MemoryStorageTier } from '../src/tiers/MemoryStorageTier.js'

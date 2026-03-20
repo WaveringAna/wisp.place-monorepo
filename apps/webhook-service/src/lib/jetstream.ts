@@ -27,7 +27,6 @@ export interface JetstreamOptions {
 	onConnect?: () => void
 	onDisconnect?: () => void
 	onError?: (err: Error) => void
-
 }
 
 export class JetstreamClient {

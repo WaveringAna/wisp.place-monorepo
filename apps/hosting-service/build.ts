@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+export {}
 
 const result = await Bun.build({
 	entrypoints: ['./src/index.ts'],

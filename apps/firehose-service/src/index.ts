@@ -22,7 +22,7 @@ import { closeCacheInvalidationPublisher } from './lib/cache-invalidation'
 import { fetchSiteRecord, handleSiteCreateOrUpdate, listSiteRecordsForDid } from './lib/cache-writer'
 import { closeDatabase, getSiteCache, listAllKnownDids, listAllSiteCaches, listAllSites, upsertSite } from './lib/db'
 import { getCurrentSeq, getFirehoseHealth, startFirehose, stopFirehose } from './lib/firehose'
-import { closeLeaderRedis, getLeaderInfo, readCursor, runLeaderElection, saveCursor } from './lib/leader'
+import { closeLeaderRedis, getLeaderInfo, runLeaderElection, saveCursor } from './lib/leader'
 import { startRevalidateWorker, stopRevalidateWorker } from './lib/revalidate-worker'
 import { storage } from './lib/storage'
 
@@ -125,12 +125,16 @@ async function backfillSitesTableFromKnownDids(): Promise<void> {
 			logger.error(`[Backfill:sites] Failed to list records for DID ${did}`, err)
 			didsFailed++
 		}
-		logger.info(`[Backfill:sites] Progress ${didsProcessed + didsFailed}/${dids.length} DIDs (${sitesSynced} sites synced, ${sitesFailed} sites failed)`)
+		logger.info(
+			`[Backfill:sites] Progress ${didsProcessed + didsFailed}/${dids.length} DIDs (${sitesSynced} sites synced, ${sitesFailed} sites failed)`,
+		)
 	}
 
 	const inFlight = new Set<Promise<void>>()
 	for (const did of dids) {
-		const task = processDid(did).then(() => { inFlight.delete(task) })
+		const task = processDid(did).then(() => {
+			inFlight.delete(task)
+		})
 		inFlight.add(task)
 		if (inFlight.size >= concurrency) {
 			await Promise.race(inFlight)
@@ -210,13 +214,17 @@ async function runBackfill(): Promise<void> {
 			failed++
 		}
 
-		logger.info(`Progress: ${processed + skipped + failed}/${sites.length} (${processed} processed, ${skipped} skipped, ${failed} failed)`)
+		logger.info(
+			`Progress: ${processed + skipped + failed}/${sites.length} (${processed} processed, ${skipped} skipped, ${failed} failed)`,
+		)
 	}
 
 	// Sliding window: keep `concurrency` tasks in flight at all times
 	const inFlight = new Set<Promise<void>>()
 	for (const site of sites) {
-		const task = processSite(site).then(() => { inFlight.delete(task) })
+		const task = processSite(site).then(() => {
+			inFlight.delete(task)
+		})
 		inFlight.add(task)
 		if (inFlight.size >= concurrency) {
 			await Promise.race(inFlight)

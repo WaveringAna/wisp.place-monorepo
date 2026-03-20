@@ -1,5 +1,5 @@
-import { rm } from 'node:fs/promises'
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
+import { rm } from 'node:fs/promises'
 import { TieredStorage } from '../src/TieredStorage.js'
 import { DiskStorageTier } from '../src/tiers/DiskStorageTier.js'
 import { MemoryStorageTier } from '../src/tiers/MemoryStorageTier.js'

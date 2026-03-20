@@ -33,7 +33,6 @@ const storage = new TieredStorage({
 		}),
 		cold: new S3StorageTier({
 			bucket: S3_BUCKET,
-			metadataBucket: S3_METADATA_BUCKET,
 			region: S3_REGION,
 			endpoint: S3_ENDPOINT,
 			forcePathStyle: S3_FORCE_PATH_STYLE,
@@ -388,14 +387,14 @@ function startCacheClearInterval() {
 
 		try {
 			// Clear hot tier (memory)
-			if (storage.config.tiers.hot) {
-				await storage.config.tiers.hot.clear()
+			if ((storage as any).config.tiers.hot) {
+				await (storage as any).config.tiers.hot.clear()
 				console.log('✓ Hot tier (memory) cleared')
 			}
 
 			// Clear warm tier (disk)
-			if (storage.config.tiers.warm) {
-				await storage.config.tiers.warm.clear()
+			if ((storage as any).config.tiers.warm) {
+				await (storage as any).config.tiers.warm.clear()
 				console.log('✓ Warm tier (disk) cleared')
 			}
 

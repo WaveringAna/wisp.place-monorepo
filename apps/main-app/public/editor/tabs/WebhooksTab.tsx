@@ -4,8 +4,8 @@ import { Checkbox } from '@public/components/ui/checkbox'
 import { Input } from '@public/components/ui/input'
 import { Label } from '@public/components/ui/label'
 import { SkeletonShimmer } from '@public/components/ui/skeleton'
-import { CheckCircle2, ChevronDown, ChevronUp, ExternalLink, Loader2, Plus, RefreshCw, Trash2, Webhook } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { CheckCircle2, ChevronUp, ExternalLink, Loader2, Plus, RefreshCw, Trash2, Webhook } from 'lucide-react'
+import { type ChangeEvent, useCallback, useEffect, useRef, useState } from 'react'
 import type { WebhookEventLog, WebhookRecord } from '../hooks/useWebhookData'
 
 const APPS = [
@@ -116,6 +116,20 @@ export function WebhooksTab({
 		}
 	}, [webhooks.length, focusedWebhook])
 
+	const handleDelete = useCallback(
+		async (rkey: string) => {
+			setDeletingRkey(rkey)
+			try {
+				await onDeleteWebhook(rkey)
+			} catch (err) {
+				alert(err instanceof Error ? err.message : 'Failed to delete webhook')
+			} finally {
+				setDeletingRkey(null)
+			}
+		},
+		[onDeleteWebhook],
+	)
+
 	// Keyboard navigation
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
@@ -147,7 +161,7 @@ export function WebhooksTab({
 
 		window.addEventListener('keydown', handleKeyDown)
 		return () => window.removeEventListener('keydown', handleKeyDown)
-	}, [webhooks, focusedWebhook, showCreateForm])
+	}, [webhooks, focusedWebhook, showCreateForm, handleDelete])
 
 	// Scroll focused item into view
 	useEffect(() => {
@@ -216,22 +230,13 @@ export function WebhooksTab({
 		}
 	}
 
-	const handleDelete = async (rkey: string) => {
-		setDeletingRkey(rkey)
-		try {
-			await onDeleteWebhook(rkey)
-		} catch (err) {
-			alert(err instanceof Error ? err.message : 'Failed to delete webhook')
-		} finally {
-			setDeletingRkey(null)
-		}
-	}
-
 	const Kbd = ({ children }: { children: React.ReactNode }) => (
 		<kbd className="px-2 py-1 bg-muted/50 rounded border border-border/50">{children}</kbd>
 	)
 
 	return (
+		// biome-ignore lint/a11y/noStaticElementInteractions: keyboard navigation container, interaction handled via window keydown listener
+		// biome-ignore lint/a11y/useKeyWithClickEvents: onClick only focuses container, keyboard nav handled via useEffect
 		<div
 			ref={containerRef}
 			className="h-full flex flex-col border border-border/30 bg-card/50 font-mono outline-none"
@@ -308,7 +313,7 @@ export function WebhooksTab({
 									<Input
 										id="wh-url"
 										value={url}
-										onChange={(e) => setUrl(e.target.value)}
+										onChange={(e: ChangeEvent<HTMLInputElement>) => setUrl(e.target.value)}
 										placeholder="https://example.com/webhook"
 										required
 										className="h-8 text-sm font-mono"
@@ -361,7 +366,7 @@ export function WebhooksTab({
 											<input
 												id="wh-path"
 												value={scopePath}
-												onChange={(e) => setScopePath(e.target.value)}
+												onChange={(e: ChangeEvent<HTMLInputElement>) => setScopePath(e.target.value)}
 												placeholder="app.bsky.*"
 												className="flex-1 px-2.5 py-1.5 text-xs bg-transparent outline-none font-mono"
 											/>
@@ -396,7 +401,7 @@ export function WebhooksTab({
 										{otherMode === 'collection' && (
 											<Input
 												value={otherCollection}
-												onChange={(e) => setOtherCollection(e.target.value)}
+												onChange={(e: ChangeEvent<HTMLInputElement>) => setOtherCollection(e.target.value)}
 												placeholder="app.bsky.feed.post"
 												className="h-8 text-xs font-mono"
 											/>
@@ -405,13 +410,13 @@ export function WebhooksTab({
 											<div className="flex gap-2">
 												<Input
 													value={otherCollection}
-													onChange={(e) => setOtherCollection(e.target.value)}
+													onChange={(e: ChangeEvent<HTMLInputElement>) => setOtherCollection(e.target.value)}
 													placeholder="collection"
 													className="h-8 text-xs flex-1 font-mono"
 												/>
 												<Input
 													value={otherRkey}
-													onChange={(e) => setOtherRkey(e.target.value)}
+													onChange={(e: ChangeEvent<HTMLInputElement>) => setOtherRkey(e.target.value)}
 													placeholder="rkey"
 													className="h-8 text-xs flex-1 font-mono"
 												/>
@@ -431,7 +436,8 @@ export function WebhooksTab({
 								{/* Wildcard hint */}
 								{scopeAturi.includes('*') && (
 									<p className="text-xs text-muted-foreground">
-										<code className="bg-muted/50 px-1.5 py-0.5 rounded-sm border border-border/20">*</code> matches any collection name at that level
+										<code className="bg-muted/50 px-1.5 py-0.5 rounded-sm border border-border/20">*</code> matches any
+										collection name at that level
 									</p>
 								)}
 
@@ -440,7 +446,11 @@ export function WebhooksTab({
 									<div className="flex flex-col sm:flex-row sm:items-start gap-4 pt-1">
 										{/* Backlinks */}
 										<div className="flex items-center gap-2">
-											<Checkbox id="wh-backlinks" checked={backlinks} onCheckedChange={(v) => setBacklinks(!!v)} />
+											<Checkbox
+												id="wh-backlinks"
+												checked={backlinks}
+												onCheckedChange={(v: boolean | 'indeterminate') => setBacklinks(!!v)}
+											/>
 											<Label htmlFor="wh-backlinks" className="cursor-pointer text-xs">
 												Backlinks
 											</Label>
@@ -457,7 +467,11 @@ export function WebhooksTab({
 												] as const
 											).map(([name, val, set]) => (
 												<div key={name} className="flex items-center gap-1.5">
-													<Checkbox id={`wh-event-${name}`} checked={val} onCheckedChange={(v) => set(!!v)} />
+													<Checkbox
+														id={`wh-event-${name}`}
+														checked={val}
+														onCheckedChange={(v: boolean | 'indeterminate') => set(!!v)}
+													/>
 													<Label htmlFor={`wh-event-${name}`} className="cursor-pointer text-xs capitalize">
 														{name}
 													</Label>
@@ -512,12 +526,7 @@ export function WebhooksTab({
 								</p>
 							</div>
 							{!showCreateForm && (
-								<Button
-									variant="outline"
-									size="sm"
-									className="text-xs"
-									onClick={() => setShowCreateForm(true)}
-								>
+								<Button variant="outline" size="sm" className="text-xs" onClick={() => setShowCreateForm(true)}>
 									<Plus className="w-3 h-3 mr-1.5" />
 									Create your first webhook
 								</Button>
@@ -543,7 +552,9 @@ export function WebhooksTab({
 									>
 										<div className="space-y-1.5 min-w-0 flex-1">
 											<div className="flex items-center gap-2">
-												<div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${wh.enabled ? 'bg-green-500' : 'bg-muted-foreground/30'}`} />
+												<div
+													className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${wh.enabled ? 'bg-green-500' : 'bg-muted-foreground/30'}`}
+												/>
 												<p className="text-xs font-medium truncate">{wh.url}</p>
 												<a
 													href={wh.url}
@@ -567,17 +578,17 @@ export function WebhooksTab({
 														backlinks
 													</Badge>
 												)}
-												{wh.events.length > 0
-													? wh.events.map((e) => (
-															<Badge key={e} variant="outline" className="text-[10px]">
-																{e}
-															</Badge>
-														))
-													: (
-														<Badge variant="outline" className="text-[10px]">
-															all events
+												{wh.events.length > 0 ? (
+													wh.events.map((e) => (
+														<Badge key={e} variant="outline" className="text-[10px]">
+															{e}
 														</Badge>
-													)}
+													))
+												) : (
+													<Badge variant="outline" className="text-[10px]">
+														all events
+													</Badge>
+												)}
 											</div>
 										</div>
 										<Button
@@ -603,9 +614,7 @@ export function WebhooksTab({
 				{/* Event Logs */}
 				<div className="p-4 border-t border-border/30 space-y-2">
 					<div className="flex items-center justify-between mb-3">
-						<p className="text-xs uppercase tracking-wider text-muted-foreground">
-							Recent Deliveries
-						</p>
+						<p className="text-xs uppercase tracking-wider text-muted-foreground">Recent Deliveries</p>
 						<Button
 							variant="outline"
 							size="sm"
@@ -634,17 +643,16 @@ export function WebhooksTab({
 									className="flex items-center gap-3 p-2.5 border border-border/20 hover:bg-muted/10 transition-colors"
 								>
 									{/* Status indicator */}
-									<div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-										log.status === 'ok' ? 'bg-green-500' : 'bg-red-500'
-									}`} />
+									<div
+										className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+											log.status === 'ok' ? 'bg-green-500' : 'bg-red-500'
+										}`}
+									/>
 
 									{/* Event info */}
 									<div className="flex-1 min-w-0">
 										<div className="flex items-center gap-2">
-											<Badge
-												variant={log.status === 'ok' ? 'default' : 'destructive'}
-												className="text-[10px]"
-											>
+											<Badge variant={log.status === 'ok' ? 'default' : 'destructive'} className="text-[10px]">
 												{log.status === 'ok' ? '200' : 'ERR'}
 											</Badge>
 											<span className="text-xs font-medium capitalize">{log.eventKind}</span>
@@ -653,7 +661,9 @@ export function WebhooksTab({
 										<div className="flex items-center gap-2 mt-0.5">
 											<span className="text-[10px] text-muted-foreground truncate max-w-[12rem]">{log.url}</span>
 											<span className="text-[10px] text-muted-foreground/50">•</span>
-											<span className="text-[10px] text-muted-foreground whitespace-nowrap">{formatTimeAgo(log.deliveredAt)}</span>
+											<span className="text-[10px] text-muted-foreground whitespace-nowrap">
+												{formatTimeAgo(log.deliveredAt)}
+											</span>
 										</div>
 									</div>
 								</div>

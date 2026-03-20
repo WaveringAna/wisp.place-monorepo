@@ -12,7 +12,7 @@ import { Input } from '@public/components/ui/input'
 import { Label } from '@public/components/ui/label'
 import { SkeletonShimmer } from '@public/components/ui/skeleton'
 import { AlertCircle, CheckCircle2, Loader2, Trash2, XCircle } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { type ChangeEvent, type KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from 'react'
 import type { CustomDomain, WispDomain } from '../hooks/useDomainData'
 import type { UserInfo } from '../hooks/useUserInfo'
 
@@ -360,12 +360,12 @@ export function DomainsTab({
 												id="wisp-handle"
 												placeholder="mysite"
 												value={wispHandle}
-												onChange={(e) => {
+												onChange={(e: ChangeEvent<HTMLInputElement>) => {
 													setWispHandle(e.target.value)
 													if (e.target.value.trim()) checkWispAvailability(e.target.value)
 													else setWispAvailability({ available: null, checking: false })
 												}}
-												onKeyDown={(e) => {
+												onKeyDown={(e: ReactKeyboardEvent<HTMLInputElement>) => {
 													if (e.key === 'Enter') handleClaimWispDomain()
 												}}
 												disabled={isClaimingWisp}
@@ -543,8 +543,8 @@ export function DomainsTab({
 								id="new-domain"
 								placeholder="example.com"
 								value={customDomain}
-								onChange={(e) => setCustomDomain(e.target.value)}
-								onKeyDown={(e) => {
+								onChange={(e: ChangeEvent<HTMLInputElement>) => setCustomDomain(e.target.value)}
+								onKeyDown={(e: ReactKeyboardEvent<HTMLInputElement>) => {
 									if (e.key === 'Enter') handleAddCustomDomain()
 								}}
 							/>
@@ -584,7 +584,7 @@ export function DomainsTab({
 			</Dialog>
 
 			{/* View DNS Records Modal */}
-			<Dialog open={viewDomainDNS !== null} onOpenChange={(open) => !open && setViewDomainDNS(null)}>
+			<Dialog open={viewDomainDNS !== null} onOpenChange={(open: boolean) => !open && setViewDomainDNS(null)}>
 				<DialogContent className="sm:max-w-lg max-h-[80vh] overflow-hidden">
 					<DialogHeader>
 						<DialogTitle>DNS Configuration</DialogTitle>
