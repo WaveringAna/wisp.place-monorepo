@@ -4,8 +4,21 @@ import { Checkbox } from '@public/components/ui/checkbox'
 import { Input } from '@public/components/ui/input'
 import { Label } from '@public/components/ui/label'
 import { SkeletonShimmer } from '@public/components/ui/skeleton'
-import { CheckCircle2, ChevronUp, ExternalLink, Loader2, Plus, RefreshCw, Trash2, Webhook } from 'lucide-react'
-import { type ChangeEvent, useCallback, useEffect, useRef, useState } from 'react'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@public/components/ui/table'
+import {
+	CheckCircle2,
+	ChevronDown,
+	ChevronsUpDown,
+	ChevronUp,
+	ExternalLink,
+	Loader2,
+	Plus,
+	RefreshCw,
+	Trash2,
+	Webhook,
+	X,
+} from 'lucide-react'
+import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { WebhookEventLog, WebhookRecord } from '../hooks/useWebhookData'
 
 const APPS = [
@@ -229,6 +242,74 @@ export function WebhooksTab({
 			setError(err instanceof Error ? err.message : 'Failed to create webhook')
 		}
 	}
+
+	// ── Delivery-table state ──────────────────────────────────────────────────
+	type DeliveryColumn = 'status' | 'eventKind' | 'eventCollection' | 'url' | 'deliveredAt'
+	const [sortCol, setSortCol] = useState<DeliveryColumn>('deliveredAt')
+	const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+	const [filterScope, setFilterScope] = useState('')
+	const [filterStatus, setFilterStatus] = useState<'all' | 'ok' | 'failed'>('all')
+	const [filterKind, setFilterKind] = useState<string>('all')
+
+	const handleSortCol = (col: DeliveryColumn) => {
+		if (sortCol === col) {
+			setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+		} else {
+			setSortCol(col)
+			setSortDir(col === 'deliveredAt' ? 'desc' : 'asc')
+		}
+	}
+
+	const filteredLogs = useMemo(() => {
+		let list = [...eventLogs]
+		if (filterStatus !== 'all') list = list.filter((l) => l.status === filterStatus)
+		if (filterKind !== 'all') list = list.filter((l) => l.eventKind === filterKind)
+		if (filterScope.trim()) {
+			const q = filterScope.trim().toLowerCase()
+			list = list.filter((l) => l.eventCollection.toLowerCase().includes(q) || l.url.toLowerCase().includes(q))
+		}
+		list.sort((a, b) => {
+			let valA: string
+			let valB: string
+			switch (sortCol) {
+				case 'status':
+					valA = a.status
+					valB = b.status
+					break
+				case 'eventKind':
+					valA = a.eventKind
+					valB = b.eventKind
+					break
+				case 'eventCollection':
+					valA = a.eventCollection
+					valB = b.eventCollection
+					break
+				case 'url':
+					valA = a.url
+					valB = b.url
+					break
+				default:
+					valA = a.deliveredAt
+					valB = b.deliveredAt
+					break
+			}
+			const cmp = valA < valB ? -1 : valA > valB ? 1 : 0
+			return sortDir === 'asc' ? cmp : -cmp
+		})
+		return list
+	}, [eventLogs, filterStatus, filterKind, filterScope, sortCol, sortDir])
+
+	const uniqueKinds = useMemo(() => Array.from(new Set(eventLogs.map((l) => l.eventKind))).sort(), [eventLogs])
+
+	const SortIcon = ({ col }: { col: DeliveryColumn }) => {
+		if (sortCol !== col) return <ChevronsUpDown className="inline w-3 h-3 ml-1 opacity-30" />
+		return sortDir === 'asc' ? (
+			<ChevronUp className="inline w-3 h-3 ml-1" />
+		) : (
+			<ChevronDown className="inline w-3 h-3 ml-1" />
+		)
+	}
+	// ─────────────────────────────────────────────────────────────────────────
 
 	const Kbd = ({ children }: { children: React.ReactNode }) => (
 		<kbd className="px-2 py-1 bg-muted/50 rounded border border-border/50">{children}</kbd>
@@ -611,9 +692,10 @@ export function WebhooksTab({
 					)}
 				</div>
 
-				{/* Event Logs */}
-				<div className="p-4 border-t border-border/30 space-y-2">
-					<div className="flex items-center justify-between mb-3">
+				{/* Event Logs — table */}
+				<div className="p-4 border-t border-border/30 space-y-3">
+					{/* Section header */}
+					<div className="flex items-center justify-between">
 						<p className="text-xs uppercase tracking-wider text-muted-foreground">Recent Deliveries</p>
 						<Button
 							variant="outline"
@@ -627,47 +709,186 @@ export function WebhooksTab({
 						</Button>
 					</div>
 
+					{/* Filter bar — only show when there's data */}
+					{!eventLogsLoading && eventLogs.length > 0 && (
+						<div className="flex flex-wrap gap-2 items-center">
+							{/* Scope / URL search */}
+							<div className="relative">
+								<Input
+									value={filterScope}
+									onChange={(e: ChangeEvent<HTMLInputElement>) => setFilterScope(e.target.value)}
+									placeholder="Filter by collection or URL…"
+									className="h-7 text-xs pr-7 w-72 font-mono"
+								/>
+								{filterScope && (
+									<button
+										type="button"
+										onClick={() => setFilterScope('')}
+										className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+									>
+										<X className="w-3 h-3" />
+									</button>
+								)}
+							</div>
+
+							{/* Status filter */}
+							<div className="flex items-center gap-1 border border-border/30 rounded-sm overflow-hidden">
+								{(['all', 'ok', 'failed'] as const).map((s) => (
+									<button
+										key={s}
+										type="button"
+										onClick={() => setFilterStatus(s)}
+										className={`px-2.5 py-1 text-[10px] uppercase tracking-wider transition-colors ${
+											filterStatus === s
+												? s === 'failed'
+													? 'bg-destructive/20 text-destructive'
+													: s === 'ok'
+														? 'bg-green-500/20 text-green-500'
+														: 'bg-accent/20 text-foreground'
+												: 'text-muted-foreground hover:text-foreground hover:bg-muted/20'
+										}`}
+									>
+										{s}
+									</button>
+								))}
+							</div>
+
+							{/* Event-kind filter */}
+							{uniqueKinds.length > 0 && (
+								<div className="flex items-center gap-1 border border-border/30 rounded-sm overflow-hidden">
+									<button
+										type="button"
+										onClick={() => setFilterKind('all')}
+										className={`px-2.5 py-1 text-[10px] uppercase tracking-wider transition-colors ${
+											filterKind === 'all'
+												? 'bg-accent/20 text-foreground'
+												: 'text-muted-foreground hover:text-foreground hover:bg-muted/20'
+										}`}
+									>
+										all
+									</button>
+									{uniqueKinds.map((k) => (
+										<button
+											key={k}
+											type="button"
+											onClick={() => setFilterKind(k)}
+											className={`px-2.5 py-1 text-[10px] uppercase tracking-wider capitalize transition-colors ${
+												filterKind === k
+													? 'bg-accent/20 text-foreground'
+													: 'text-muted-foreground hover:text-foreground hover:bg-muted/20'
+											}`}
+										>
+											{k}
+										</button>
+									))}
+								</div>
+							)}
+
+							{/* Active-filter count badge */}
+							{filteredLogs.length !== eventLogs.length && (
+								<span className="text-[10px] text-muted-foreground">
+									{filteredLogs.length} / {eventLogs.length}
+								</span>
+							)}
+						</div>
+					)}
+
+					{/* Table */}
 					{eventLogsLoading ? (
 						<div className="space-y-1.5">
 							{['a', 'b', 'c'].map((id) => (
-								<SkeletonShimmer key={id} className="h-10 w-full" />
+								<SkeletonShimmer key={id} className="h-9 w-full" />
 							))}
 						</div>
 					) : eventLogs.length === 0 ? (
 						<p className="text-xs text-muted-foreground py-4 text-center">No delivery events yet</p>
+					) : filteredLogs.length === 0 ? (
+						<p className="text-xs text-muted-foreground py-4 text-center">No deliveries match the current filters</p>
 					) : (
-						<div className="space-y-1">
-							{eventLogs.map((log) => (
-								<div
-									key={`${log.rkey}-${log.deliveredAt}`}
-									className="flex items-center gap-3 p-2.5 border border-border/20 hover:bg-muted/10 transition-colors"
-								>
-									{/* Status indicator */}
-									<div
-										className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-											log.status === 'ok' ? 'bg-green-500' : 'bg-red-500'
-										}`}
-									/>
+						<div className="border border-border/30 rounded-sm overflow-hidden">
+							<Table>
+								<TableHeader>
+									<TableRow className="hover:bg-transparent">
+										{/* Status */}
+										<TableHead className="cursor-pointer select-none w-16" onClick={() => handleSortCol('status')}>
+											Status <SortIcon col="status" />
+										</TableHead>
+										{/* Event kind */}
+										<TableHead className="cursor-pointer select-none w-24" onClick={() => handleSortCol('eventKind')}>
+											Event <SortIcon col="eventKind" />
+										</TableHead>
+										{/* Collection / scope */}
+										<TableHead className="cursor-pointer select-none" onClick={() => handleSortCol('eventCollection')}>
+											Collection <SortIcon col="eventCollection" />
+										</TableHead>
+										{/* URL */}
+										<TableHead
+											className="cursor-pointer select-none hidden md:table-cell"
+											onClick={() => handleSortCol('url')}
+										>
+											Endpoint <SortIcon col="url" />
+										</TableHead>
+										{/* Time */}
+										<TableHead
+											className="cursor-pointer select-none w-24 text-right"
+											onClick={() => handleSortCol('deliveredAt')}
+										>
+											Time <SortIcon col="deliveredAt" />
+										</TableHead>
+									</TableRow>
+								</TableHeader>
+								<TableBody>
+									{filteredLogs.map((log) => (
+										<TableRow key={`${log.rkey}-${log.deliveredAt}`}>
+											{/* Status */}
+											<TableCell>
+												<Badge
+													variant={log.status === 'ok' ? 'default' : 'destructive'}
+													className="text-[10px] tabular-nums"
+												>
+													{log.status === 'ok' ? '200' : 'ERR'}
+												</Badge>
+											</TableCell>
 
-									{/* Event info */}
-									<div className="flex-1 min-w-0">
-										<div className="flex items-center gap-2">
-											<Badge variant={log.status === 'ok' ? 'default' : 'destructive'} className="text-[10px]">
-												{log.status === 'ok' ? '200' : 'ERR'}
-											</Badge>
-											<span className="text-xs font-medium capitalize">{log.eventKind}</span>
-											<span className="text-xs text-muted-foreground truncate">{log.eventCollection}</span>
-										</div>
-										<div className="flex items-center gap-2 mt-0.5">
-											<span className="text-[10px] text-muted-foreground truncate max-w-[12rem]">{log.url}</span>
-											<span className="text-[10px] text-muted-foreground/50">•</span>
-											<span className="text-[10px] text-muted-foreground whitespace-nowrap">
-												{formatTimeAgo(log.deliveredAt)}
-											</span>
-										</div>
-									</div>
-								</div>
-							))}
+											{/* Event kind */}
+											<TableCell>
+												<span className="text-xs capitalize font-medium">{log.eventKind}</span>
+											</TableCell>
+
+											{/* Collection */}
+											<TableCell>
+												<span
+													className="text-xs font-mono text-muted-foreground truncate block max-w-[16rem]"
+													title={log.eventCollection}
+												>
+													{log.eventCollection || '—'}
+												</span>
+											</TableCell>
+
+											{/* URL */}
+											<TableCell className="hidden md:table-cell">
+												<a
+													href={log.url}
+													target="_blank"
+													rel="noopener noreferrer"
+													className="text-xs text-muted-foreground hover:text-foreground inline-flex items-center gap-1 max-w-[14rem] truncate transition-colors"
+													title={log.url}
+												>
+													<span className="truncate">{log.url}</span>
+													<ExternalLink className="w-2.5 h-2.5 flex-shrink-0" />
+												</a>
+											</TableCell>
+
+											{/* Time */}
+											<TableCell className="text-right">
+												<span className="text-[10px] text-muted-foreground whitespace-nowrap">
+													{formatTimeAgo(log.deliveredAt)}
+												</span>
+											</TableCell>
+										</TableRow>
+									))}
+								</TableBody>
+							</Table>
 						</div>
 					)}
 				</div>

@@ -9,6 +9,8 @@ export default defineConfig({
 			title: 'Wisp.place Docs',
 			components: {
 				SocialIcons: './src/components/SocialIcons.astro',
+				PageFrame: './src/components/PageFrame.astro',
+				Head: './src/components/Head.astro',
 			},
 			sidebar: [
 				{
@@ -33,7 +35,10 @@ export default defineConfig({
 				},
 				{
 					label: 'Reference',
-					autogenerate: { directory: 'reference' },
+					items: [
+						{ label: 'XRPC API', slug: 'reference/xrpc-api' },
+						{ label: 'Main App API', slug: 'reference/main-app-api' },
+					],
 				},
 			],
 			customCss: ['./src/styles/custom.css'],

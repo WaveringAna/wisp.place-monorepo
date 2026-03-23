@@ -3,22 +3,17 @@ title: Lexicon Reference
 description: AT Protocol lexicons used by Wisp.place
 ---
 
-Wisp.place uses custom AT Protocol lexicons to store and manage static site data. These lexicons define the structure of records stored in your PDS.
+Wisp.place uses three custom AT Protocol lexicons to store site data in your PDS.
 
-## Available Lexicons
+**[place.wisp.fs](/lexicons/place-wisp-fs)** — the main site manifest. Stores the full directory tree with references to file blobs.
 
-### [place.wisp.fs](/lexicons/place-wisp-fs)
-The main lexicon for storing static site manifests. Contains the directory tree structure with references to file blobs.
+**[place.wisp.subfs](/lexicons/place-wisp-subfs)** — subtree records for splitting large sites across multiple records. Entries from subfs records are merged into the parent directory.
 
-### [place.wisp.subfs](/lexicons/place-wisp-subfs)
-Subtree lexicon for splitting large sites across multiple records. Entries from subfs records are merged (flattened) into the parent directory.
+**[place.wisp.domain](/lexicons/place-wisp-domain)** — metadata record for claiming a wisp.place subdomain.
 
-### [place.wisp.domain](/lexicons/place-wisp-domain)
-Domain registration record for claiming wisp.place subdomains.
+**[place.wisp.v2.wh](/lexicons/place-wisp-wh)** — webhook record for receiving HTTP callbacks when AT Protocol records change.
 
-## How Lexicons Work
-
-### Storage Model
+## Storage Model
 
 Sites are stored as `place.wisp.fs` records in your AT Protocol repository:
 
@@ -26,28 +21,11 @@ Sites are stored as `place.wisp.fs` records in your AT Protocol repository:
 at://did:plc:abc123/place.wisp.fs/my-site
 ```
 
-Each record contains:
-- **Site metadata** (name, file count, timestamps)
-- **Directory tree** (hierarchical structure)
-- **Blob references** (content-addressed file storage)
+Files are gzipped for compression and uploaded as `application/octet-stream` blobs. They may also be base64-encoded to bypass content sniffing on legacy reference PDS. The original MIME type is preserved in the manifest.
 
-### File Processing
+Sites with 250+ files are automatically split: large directories are extracted into `place.wisp.subfs` records, referenced by AT-URI from the main manifest, and merged back together by the hosting service at serve time. This keeps the main manifest under the 150 KB PDS record size limit.
 
-1. Files are **gzipped** for compression
-2. Text files are **base64 encoded** to bypass PDS content sniffing
-3. Uploaded as blobs with `application/octet-stream` MIME type
-4. Original MIME type stored in manifest metadata
-
-### Large Site Splitting
-
-Sites with 250+ files are automatically split:
-
-1. Large directories are extracted into `place.wisp.subfs` records
-2. Main manifest references subfs records via AT-URI
-3. Hosting services merge (flatten) subfs entries when serving
-4. Keeps manifest size under 150KB PDS limit
-
-## Example Record Structure
+## Example Record
 
 ```json
 {
@@ -70,13 +48,6 @@ Sites with 250+ files are automatically split:
           "mimeType": "text/html",
           "base64": true
         }
-      },
-      {
-        "name": "assets",
-        "node": {
-          "type": "directory",
-          "entries": [...]
-        }
       }
     ]
   },
@@ -84,11 +55,3 @@ Sites with 250+ files are automatically split:
   "createdAt": "2024-01-15T10:30:00Z"
 }
 ```
-
-## Learn More
-
-- [place.wisp.fs Reference](/lexicons/place-wisp-fs)
-- [place.wisp.subfs Reference](/lexicons/place-wisp-subfs)
-- [place.wisp.domain Reference](/lexicons/place-wisp-domain)
-- [AT Protocol Lexicons](https://atproto.com/specs/lexicon)
-

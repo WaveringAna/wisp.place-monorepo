@@ -1,114 +1,563 @@
-/* Use the same color scheme as the main app */
+/*
+ * wisp.place docs
+ *
+ * Matches the editor dashboard aesthetic:
+ *   Clean, flat, keyboard-first · sharp corners · tight spacing
+ *   JetBrains Mono on chrome/code · warm-beige light / slate-violet dark
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap');
+
+/* ── Color tokens ──────────────────────────────────────────────────────────── */
+
 :root {
+	--sl-font-mono: "JetBrains Mono", ui-monospace, monospace;
 	--sl-content-width: 70rem;
-	
-	/* Increase base font size by 10% */
-	font-size: 110%;
+	--noise-opacity: 0.18;
 
-	/* Light theme - Warm beige with improved contrast */
-	--sl-color-bg: oklch(0.92 0.012 35);
-	--sl-color-bg-sidebar: oklch(0.95 0.008 35);
-	--sl-color-bg-nav: oklch(0.95 0.008 35);
-	--sl-color-text: oklch(0.15 0.015 30);
+	/* Light — warm beige */
+	--sl-color-bg:          oklch(0.92 0.012 35);
+	--sl-color-bg-sidebar:  oklch(0.88 0.01 35);
+	--sl-color-bg-nav:      oklch(0.88 0.01 35);
+	--sl-color-text:        oklch(0.15 0.015 30);
 	--sl-color-text-accent: oklch(0.65 0.18 345);
-	--sl-color-accent: oklch(0.65 0.18 345);
-	--sl-color-accent-low: oklch(0.92 0.05 345);
-	--sl-color-border: oklch(0.65 0.02 30);
-	--sl-color-gray-1: oklch(0.45 0.02 30);
-	--sl-color-gray-2: oklch(0.35 0.02 30);
-	--sl-color-gray-3: oklch(0.28 0.02 30);
-	--sl-color-gray-4: oklch(0.20 0.015 30);
-	--sl-color-gray-5: oklch(0.65 0.02 30);
-	--sl-color-bg-accent: oklch(0.88 0.01 35);
+	--sl-color-accent:      oklch(0.65 0.18 345);
+	--sl-color-accent-low:  oklch(0.90 0.06 345);
+	--sl-color-accent-high: oklch(0.48 0.22 345);
+	--sl-color-border:      oklch(0.60 0.02 30);
+	--sl-color-gray-1:      oklch(0.42 0.02 30);
+	--sl-color-gray-2:      oklch(0.32 0.02 30);
+	--sl-color-gray-3:      oklch(0.25 0.02 30);
+	--sl-color-gray-4:      oklch(0.18 0.015 30);
+	--sl-color-gray-5:      oklch(0.58 0.02 30);
+	--sl-color-bg-accent:   oklch(0.86 0.012 35);
+
+	/* Terminal code block chrome (light) */
+	--term-bg:     #f6f8fa;
+	--term-header: #eaeef2;
+	--term-border: oklch(0.60 0.02 30);
+	--term-title:  #57606a;
 }
 
-/* Dark theme - Slate violet background from app */
+/* Dark — slate violet */
 [data-theme="dark"] {
-	--sl-color-bg: oklch(0.23 0.015 285);
-	--sl-color-bg-sidebar: oklch(0.28 0.015 285);
-	--sl-color-bg-nav: oklch(0.28 0.015 285);
-	--sl-color-text: oklch(0.90 0.005 285);
+	--noise-opacity: 0.12;
+	--sl-color-bg:          oklch(0.23 0.015 285);
+	--sl-color-bg-sidebar:  oklch(0.20 0.015 285);
+	--sl-color-bg-nav:      oklch(0.20 0.015 285);
+	--sl-color-text:        oklch(0.90 0.005 285);
 	--sl-color-text-accent: oklch(0.85 0.08 5);
-	--sl-color-accent: oklch(0.85 0.08 5);
-	--sl-color-accent-low: oklch(0.92 0.05 5);
-	--sl-color-border: oklch(0.38 0.02 285);
-	--sl-color-gray-1: oklch(0.82 0.01 285);
-	--sl-color-gray-2: oklch(0.75 0.01 285);
-	--sl-color-gray-3: oklch(0.68 0.01 285);
-	--sl-color-gray-4: oklch(0.60 0.01 285);
-	--sl-color-gray-5: oklch(0.50 0.02 285);
-	--sl-color-bg-accent: oklch(0.33 0.015 285);
+	--sl-color-accent:      oklch(0.85 0.08 5);
+	--sl-color-accent-low:  oklch(0.30 0.04 5);
+	--sl-color-accent-high: oklch(0.92 0.06 5);
+	--sl-color-border:      oklch(0.35 0.02 285);
+	--sl-color-gray-1:      oklch(0.82 0.01 285);
+	--sl-color-gray-2:      oklch(0.75 0.01 285);
+	--sl-color-gray-3:      oklch(0.68 0.01 285);
+	--sl-color-gray-4:      oklch(0.60 0.01 285);
+	--sl-color-gray-5:      oklch(0.40 0.02 285);
+	--sl-color-bg-accent:   oklch(0.28 0.015 285);
+
+	/* Terminal code block chrome (dark) */
+	--term-bg:     #0d1117;
+	--term-header: #161b22;
+	--term-border: oklch(0.32 0.02 285);
+	--term-title:  #8b949e;
 }
 
-/* Make sidebar narrower */
+/* ── Sidebar width ─────────────────────────────────────────────────────────── */
+
 @media (min-width: 50rem) {
-	:root {
-		--sl-sidebar-width: 14rem;
-	}
+	:root { --sl-sidebar-width: 16rem; }
 }
 
-/* Increase main grid layout to give more space to content */
-@media (min-width: 50rem) {
-	.main-wrapper {
-		display: grid;
-		grid-template-columns: 1fr;
-		gap: 0;
-	}
+/* ── Global ────────────────────────────────────────────────────────────────── */
+
+/* Sharp corners */
+*, *::before, *::after { border-radius: 0 !important; }
+
+/*
+ * Grain texture — SVG fractal noise as a fixed overlay.
+ * Gives a subtle paper/matte quality without any trendy pattern.
+ * pointer-events: none so it never interferes with interaction.
+ */
+body::after {
+	content: "";
+	position: fixed;
+	inset: 0;
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)'/%3E%3C/svg%3E");
+	background-size: 200px 200px;
+	opacity: var(--noise-opacity);
+	mix-blend-mode: multiply;
+	pointer-events: none;
+	z-index: 9999;
 }
 
-/* Text selection styling */
-::selection {
-	background: var(--sl-color-accent);
-	color: white;
+
+
+/* Scrollbar */
+::-webkit-scrollbar        { width: 5px; height: 5px; }
+::-webkit-scrollbar-track  { background: transparent; }
+::-webkit-scrollbar-thumb  { background: var(--sl-color-border); }
+::-webkit-scrollbar-thumb:hover { background: var(--sl-color-gray-5); }
+
+/* Selection — dimmed so it doesn't overpower the text */
+::selection      { background: color-mix(in oklch, var(--sl-color-accent) 25%, transparent); color: var(--sl-color-text); }
+::-moz-selection { background: color-mix(in oklch, var(--sl-color-accent) 25%, transparent); color: var(--sl-color-text); }
+
+/* ── Nav bar ───────────────────────────────────────────────────────────────── */
+
+header.header {
+	border-bottom: 1px solid var(--sl-color-border) !important;
+	background: var(--sl-color-bg-nav) !important;
+	/* Thin accent stripe across the very top of the page */
+	box-shadow: 0 -3px 0 var(--sl-color-accent) inset !important;
 }
 
-::-moz-selection {
-	background: var(--sl-color-accent);
-	color: white;
+a.site-title {
+	font-family: "JetBrains Mono", ui-monospace, monospace;
+	font-weight: 700;
+	font-size: 1rem;
+	letter-spacing: -0.01em;
+	color: var(--sl-color-text) !important;
+	text-decoration: none !important;
 }
 
-/* Sidebar active/hover state text contrast fix */
-.sidebar a[aria-current="page"],
-.sidebar a[aria-current="page"] span {
-	color: oklch(0.15 0.015 30) !important;
+a.site-title > :first-child,
+a.site-title span:first-child {
+	color: var(--sl-color-accent) !important;
 }
 
-[data-theme="dark"] .sidebar a[aria-current="page"],
-[data-theme="dark"] .sidebar a[aria-current="page"] span {
-	color: oklch(0.98 0.01 285) !important;
+/* ── Sidebar ───────────────────────────────────────────────────────────────── */
+
+.sidebar-pane {
+	border-right: 1px solid var(--sl-color-border) !important;
+	background: var(--sl-color-bg-sidebar) !important;
 }
 
-/* CLI download links styling */
-.downloads {
-	margin: 2rem 0;
+/* Group labels */
+.group-label span,
+.top-level > li > details > summary,
+summary.large {
+	font-family: "JetBrains Mono", ui-monospace, monospace !important;
+	font-size: 0.625rem !important;
+	font-weight: 700 !important;
+	text-transform: uppercase !important;
+	letter-spacing: 0.12em !important;
+	color: var(--sl-color-gray-2) !important;
+	padding-top: 0.75rem !important;
+	padding-bottom: 0.35rem !important;
+	border-bottom: 1px solid var(--sl-color-border) !important;
+	display: block !important;
+	margin-bottom: 0.15rem !important;
 }
 
-.downloads h2 {
-	margin-bottom: 1rem;
-	font-size: 1.5rem;
+/* Sidebar links */
+.sidebar-content a {
+	font-family: "JetBrains Mono", ui-monospace, monospace !important;
+	font-size: 0.8rem !important;
+	padding: 0.28rem 0.75rem !important;
+	color: var(--sl-color-gray-1) !important;
+	border-left: 2px solid transparent !important;
+	text-decoration: none !important;
+	transform: translateX(0) !important;
+	transition: background 0.15s, color 0.15s, border-color 0.15s, transform 0.15s !important;
 }
+
+.sidebar-content a:hover {
+	background: var(--sl-color-bg-accent) !important;
+	color: var(--sl-color-text) !important;
+	border-left-color: var(--sl-color-border) !important;
+	transform: translateX(4px) !important;
+	text-decoration: none !important;
+}
+
+a[aria-current="page"],
+a[aria-current="page"]:hover {
+	background: var(--sl-color-accent-low) !important;
+	color: var(--sl-color-accent-high) !important;
+	border-left: 2px solid var(--sl-color-accent) !important;
+	font-weight: 600 !important;
+	transform: translateX(4px) !important;
+}
+
+[data-theme="dark"] a[aria-current="page"],
+[data-theme="dark"] a[aria-current="page"]:hover {
+	background: oklch(0.27 0.018 285) !important;
+	color: var(--sl-color-accent) !important;
+}
+
+a[aria-current="page"] span,
+a[aria-current="page"] .inaccessible {
+	color: inherit !important;
+}
+
+.sidebar-content ul ul a {
+	padding-left: 1.5rem !important;
+}
+
+/* ── Content ───────────────────────────────────────────────────────────────── */
+
+/* Starlight splits h1 and body into separate .content-panel divs each with
+   1.5rem top+bottom padding — halve it so they don't stack into a huge gap */
+.content-panel {
+	padding-block: 0.75rem !important;
+}
+
+.sl-markdown-content {
+	line-height: 1.65;
+}
+
+.sl-markdown-content h1 {
+	font-weight: 700 !important;
+	font-size: 1.75rem !important;
+	letter-spacing: -0.02em !important;
+	border-bottom: 1px solid var(--sl-color-border) !important;
+	padding-bottom: 0.6rem !important;
+	margin-bottom: 0.75rem !important;
+}
+
+/* Small accent pip before section headings — inline-block keeps h2/h3 as
+   block elements so margin collapsing with siblings still works correctly */
+.sl-markdown-content h2 {
+	font-size: 1.15rem !important;
+	font-weight: 700 !important;
+	border-bottom: 1px solid var(--sl-color-border) !important;
+	padding-bottom: 0.35rem !important;
+	margin-top: 1.75rem !important;
+	margin-bottom: 0.65rem !important;
+	letter-spacing: -0.01em !important;
+}
+
+.sl-markdown-content h2::before {
+	content: "" !important;
+	display: inline-block !important;
+	width: 8px !important;
+	height: 8px !important;
+	background: var(--sl-color-accent) !important;
+	opacity: 0.8 !important;
+	margin-right: 0.5rem !important;
+	vertical-align: middle !important;
+	position: relative !important;
+	top: -1px !important;
+}
+
+.sl-markdown-content h3 {
+	font-size: 1rem !important;
+	font-weight: 600 !important;
+	margin-top: 1.25rem !important;
+	margin-bottom: 0.35rem !important;
+}
+
+.sl-markdown-content h3::before {
+	content: "" !important;
+	display: inline-block !important;
+	width: 5px !important;
+	height: 5px !important;
+	background: var(--sl-color-accent) !important;
+	opacity: 0.5 !important;
+	margin-right: 0.45rem !important;
+	vertical-align: middle !important;
+	position: relative !important;
+	top: -1px !important;
+}
+
+.sl-markdown-content h4 {
+	font-size: 0.95rem !important;
+	font-weight: 600 !important;
+	margin-top: 0.875rem !important;
+	margin-bottom: 0.25rem !important;
+	color: var(--sl-color-gray-1) !important;
+}
+
+.sl-markdown-content p {
+	margin-bottom: 0.75rem !important;
+}
+
+/* Links — animated underline wipe */
+.sl-markdown-content a:not([class]) {
+	color: var(--sl-color-accent) !important;
+	text-decoration: none !important;
+	background-image: linear-gradient(var(--sl-color-accent), var(--sl-color-accent)) !important;
+	background-size: 0% 1px !important;
+	background-repeat: no-repeat !important;
+	background-position: left bottom !important;
+	transition: background-size 0.2s ease, color 0.15s !important;
+}
+
+.sl-markdown-content a:not([class]):hover {
+	background-size: 100% 1px !important;
+}
+
+/* Inline code */
+.sl-markdown-content :not(pre) > code {
+	font-family: "JetBrains Mono", ui-monospace, monospace !important;
+	font-size: 0.875em !important;
+	background: var(--sl-color-bg-accent) !important;
+	border: 1px solid var(--sl-color-border) !important;
+	padding: 0.1em 0.35em !important;
+	color: var(--sl-color-text-accent) !important;
+}
+
+/* Lists */
+.sl-markdown-content ul {
+	margin-bottom: 0.75rem !important;
+}
+
+.sl-markdown-content ul > li,
+.sl-markdown-content ol > li {
+	margin-bottom: 0.2rem !important;
+}
+
+.sl-markdown-content ol {
+	margin-bottom: 0.75rem !important;
+}
+
+/* Tables */
+.sl-markdown-content table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 0.875rem;
+	margin: 1rem 0;
+}
+
+.sl-markdown-content th {
+	background: var(--sl-color-bg-accent) !important;
+	border: 1px solid var(--sl-color-border) !important;
+	padding: 0.4rem 0.75rem !important;
+	text-align: left !important;
+	font-weight: 700 !important;
+	font-size: 0.7rem !important;
+	text-transform: uppercase !important;
+	letter-spacing: 0.08em !important;
+	color: var(--sl-color-gray-2) !important;
+}
+
+.sl-markdown-content td {
+	border: 1px solid var(--sl-color-border) !important;
+	padding: 0.4rem 0.75rem !important;
+}
+
+.sl-markdown-content tr:hover td {
+	background: var(--sl-color-bg-accent) !important;
+}
+
+/* Blockquotes */
+.sl-markdown-content blockquote {
+	border-left: 2px solid var(--sl-color-accent) !important;
+	border-top: none !important;
+	border-right: none !important;
+	border-bottom: none !important;
+	margin: 1rem 0 !important;
+	padding: 0.5rem 1rem !important;
+	background: var(--sl-color-bg-accent) !important;
+	color: var(--sl-color-gray-1) !important;
+}
+
+/* Horizontal rule */
+.sl-markdown-content hr {
+	border: none !important;
+	border-top: 1px solid var(--sl-color-border) !important;
+	margin: 1.5rem 0 !important;
+}
+
+.sl-markdown-content strong {
+	color: var(--sl-color-text) !important;
+	font-weight: 700 !important;
+}
+
+/* ── Code blocks ───────────────────────────────────────────────────────────── */
+
+.expressive-code {
+	margin: 1rem 0 !important;
+}
+
+.expressive-code .frame {
+	border: 1px solid var(--term-border) !important;
+	overflow: hidden !important;
+	background: var(--term-bg) !important;
+}
+
+/* Non-terminal frames — hide the empty header entirely */
+.expressive-code .frame:not(.is-terminal) .header {
+	display: none !important;
+}
+
+/* Terminal frames only — titlebar with traffic-light dots */
+.expressive-code .frame.is-terminal .header {
+	background: var(--term-header) !important;
+	border-bottom: 1px solid var(--term-border) !important;
+	padding: 0 1rem 0 3.5rem !important;
+	min-height: 1.875rem !important;
+	display: flex !important;
+	align-items: center !important;
+	position: relative !important;
+}
+
+.expressive-code .frame.is-terminal .header::before {
+	content: "" !important;
+	position: absolute !important;
+	left: 12px !important;
+	top: 50% !important;
+	transform: translateY(-50%) !important;
+	width: 40px !important;
+	height: 12px !important;
+	/* All three dots drawn as a single background — no border-radius or box-shadow needed */
+	background-image:
+		radial-gradient(circle at 5px 6px, #ff5f56 5px, transparent 5px),
+		radial-gradient(circle at 20px 6px, #ffbd2e 5px, transparent 5px),
+		radial-gradient(circle at 35px 6px, #27ca40 5px, transparent 5px) !important;
+	background-repeat: no-repeat !important;
+	transition: filter 0.2s !important;
+}
+
+.expressive-code .frame.is-terminal:hover .header::before {
+	filter: brightness(1.2) drop-shadow(0 0 3px #ff5f5688) !important;
+}
+
+/* Named file title */
+.expressive-code .title {
+	font-size: 0.75rem !important;
+	color: var(--term-title) !important;
+	font-family: "JetBrains Mono", ui-monospace, monospace !important;
+}
+
+.expressive-code pre {
+	background: var(--term-bg) !important;
+	margin: 0 !important;
+	padding: 0.75rem 1.25rem !important;
+	font-size: 0.875rem !important;
+	line-height: 1.65 !important;
+}
+
+.expressive-code code {
+	font-family: "JetBrains Mono", ui-monospace, monospace !important;
+	font-size: inherit !important;
+}
+
+.expressive-code .copy {
+	opacity: 0.4 !important;
+	transition: opacity 0.15s !important;
+}
+
+.expressive-code .frame:hover .copy {
+	opacity: 0.8 !important;
+}
+
+/* ── Callouts ──────────────────────────────────────────────────────────────── */
+
+aside.starlight-aside,
+.starlight-aside {
+	border: 1px solid var(--sl-color-border) !important;
+	border-left: 3px solid var(--sl-color-accent) !important;
+	background: var(--sl-color-bg-accent) !important;
+	padding: 0.6rem 1rem !important;
+	margin: 1rem 0 !important;
+}
+
+.starlight-aside--note    { border-left-color: oklch(0.60 0.15 240) !important; }
+.starlight-aside--tip     { border-left-color: var(--sl-color-accent) !important; }
+.starlight-aside--caution { border-left-color: oklch(0.68 0.16 85) !important; }
+.starlight-aside--danger  { border-left-color: oklch(0.55 0.22 25) !important; }
+
+.starlight-aside .starlight-aside__title {
+	font-size: 0.65rem !important;
+	font-weight: 700 !important;
+	text-transform: uppercase !important;
+	letter-spacing: 0.1em !important;
+	margin-bottom: 0.35rem !important;
+}
+
+/* ── Right sidebar / TOC ───────────────────────────────────────────────────── */
+
+.right-sidebar {
+	border-left: 1px solid var(--sl-color-border) !important;
+}
+
+.right-sidebar h2::before {
+	display: none !important;
+}
+
+starlight-toc a {
+	font-size: 0.78rem !important;
+	border-left: 2px solid transparent !important;
+	padding-left: 0.5rem !important;
+	transition: color 0.1s, border-color 0.1s !important;
+	text-decoration: none !important;
+}
+
+starlight-toc a:hover {
+	color: var(--sl-color-accent) !important;
+	border-left-color: var(--sl-color-border) !important;
+}
+
+starlight-toc a[aria-current="true"] {
+	color: var(--sl-color-accent) !important;
+	border-left-color: var(--sl-color-accent) !important;
+	font-weight: 600 !important;
+}
+
+/* ── Badges ────────────────────────────────────────────────────────────────── */
+
+.sl-badge {
+	font-family: "JetBrains Mono", ui-monospace, monospace !important;
+	font-size: 0.6rem !important;
+	font-weight: 700 !important;
+	text-transform: uppercase !important;
+	letter-spacing: 0.08em !important;
+}
+
+/* ── Pagination ────────────────────────────────────────────────────────────── */
+
+.pagination-links {
+	border-top: 1px solid var(--sl-color-border) !important;
+	padding-top: 1.25rem !important;
+	margin-top: 1.5rem !important;
+}
+
+.pagination-links a {
+	border: 1px solid var(--sl-color-border) !important;
+	padding: 0.45rem 0.75rem !important;
+	font-size: 0.825rem !important;
+	color: var(--sl-color-text) !important;
+	text-decoration: none !important;
+	transition: background 0.1s, border-color 0.1s !important;
+	display: inline-flex !important;
+	align-items: center !important;
+	gap: 0.4rem !important;
+}
+
+.pagination-links a:hover {
+	background: var(--sl-color-bg-accent) !important;
+	border-color: var(--sl-color-accent) !important;
+}
+
+/* ── Download links (CLI page) ─────────────────────────────────────────────── */
+
+.downloads { margin: 1.5rem 0; }
 
 .download-link {
-	display: block;
-	padding: 0.75rem 1rem;
-	margin-bottom: 0.5rem;
-	background: var(--sl-color-bg-nav);
-	border: 1px solid var(--sl-color-gray-5);
-	border-radius: 0.5rem;
-	text-decoration: none;
-	color: var(--sl-color-text);
-	transition: all 0.2s ease;
+	display: flex !important;
+	align-items: center !important;
+	gap: 0.5rem !important;
+	padding: 0.55rem 1rem !important;
+	margin-bottom: 0.35rem !important;
+	background: var(--sl-color-bg-accent) !important;
+	border: 1px solid var(--sl-color-border) !important;
+	text-decoration: none !important;
+	color: var(--sl-color-text) !important;
+	font-size: 0.875rem !important;
+	transition: background 0.1s, border-color 0.1s !important;
 }
 
 .download-link:hover {
-	background: var(--sl-color-bg-accent);
-	border-color: var(--sl-color-accent);
-	text-decoration: none;
+	background: var(--sl-color-bg) !important;
+	border-color: var(--sl-color-accent) !important;
+	text-decoration: none !important;
 }
 
 .platform {
-	font-weight: 600;
-	color: var(--sl-color-accent);
-	margin-right: 0.5rem;
+	font-weight: 600 !important;
+	color: var(--sl-color-accent) !important;
+	margin-right: 0.4rem !important;
 }
-

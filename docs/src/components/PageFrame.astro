@@ -1,0 +1,139 @@
+---
+import MobileMenuToggle from 'virtual:starlight/components/MobileMenuToggle';
+
+const { hasSidebar } = Astro.locals.starlightRoute;
+---
+
+<div class="page sl-flex">
+	<header class="header"><slot name="header" /></header>
+	<div class="main-frame">
+		<div class="frame-content">
+			{
+				hasSidebar && (
+					<nav class="sidebar print:hidden" aria-label={Astro.locals.t('sidebarNav.accessibleLabel')} transition:persist transition:name="sidebar">
+						<MobileMenuToggle />
+						<div id="starlight__sidebar" class="sidebar-pane">
+							<div class="sidebar-content sl-flex">
+								<slot name="sidebar" />
+							</div>
+						</div>
+					</nav>
+				)
+			}
+			<div class="content-col"><slot /></div>
+		</div>
+	</div>
+</div>
+
+<style>
+	@layer starlight.core {
+		.page {
+			flex-direction: column;
+			min-height: 100vh;
+		}
+
+		.header {
+			z-index: var(--sl-z-index-navbar);
+			position: fixed;
+			inset-inline-start: 0;
+			inset-block-start: 0;
+			width: 100%;
+			height: var(--sl-nav-height);
+			border-bottom: 1px solid var(--sl-color-hairline-shade);
+			padding: var(--sl-nav-pad-y) var(--sl-nav-pad-x);
+			background-color: var(--sl-color-bg-nav);
+		}
+
+		/* Mobile: show hamburger button space */
+		:global([data-has-sidebar]) .header {
+			padding-inline-end: calc(
+				var(--sl-nav-gap) + var(--sl-nav-pad-x) + var(--sl-menu-button-size)
+			);
+		}
+
+		.main-frame {
+			padding-top: calc(var(--sl-nav-height) + var(--sl-mobile-toc-height));
+			flex: 1;
+		}
+
+		.frame-content {
+			display: flex;
+			height: 100%;
+			max-width: calc(var(--sl-content-width) + 2 * var(--sl-sidebar-width));
+			margin-inline: auto;
+			width: 100%;
+		}
+
+		/* ── Mobile: sidebar is a full-screen overlay ── */
+		.sidebar-pane {
+			visibility: var(--sl-sidebar-visibility, hidden);
+			position: fixed;
+			z-index: var(--sl-z-index-menu);
+			inset-block: var(--sl-nav-height) 0;
+			inset-inline-start: 0;
+			width: 100%;
+			background-color: var(--sl-color-black);
+			overflow-y: auto;
+		}
+
+		:global([aria-expanded='true']) ~ .sidebar-pane {
+			--sl-sidebar-visibility: visible;
+		}
+
+		.sidebar-content {
+			height: 100%;
+			min-height: max-content;
+			padding: 1rem var(--sl-sidebar-pad-x) 0;
+			flex-direction: column;
+			gap: 1rem;
+		}
+
+		.content-col {
+			flex: 1;
+			min-width: 0;
+		}
+
+		/* ── Desktop: sidebar is in-flow and sticky ── */
+		@media (min-width: 50rem) {
+			:global([data-has-sidebar]) .header {
+				padding-inline-end: var(--sl-nav-pad-x);
+			}
+
+			.sidebar {
+				width: var(--sl-sidebar-width);
+				flex-shrink: 0;
+				position: sticky;
+				top: var(--sl-nav-height);
+				height: calc(100vh - var(--sl-nav-height));
+				overflow-y: auto;
+			}
+
+			.sidebar-pane {
+				--sl-sidebar-visibility: visible;
+				position: relative;
+				inset: unset;
+				width: 100%;
+				height: 100%;
+				background-color: var(--sl-color-bg-sidebar);
+				overflow-y: auto;
+				z-index: 1;
+			}
+		}
+	}
+</style>
+
+<script>
+	// Since the sidebar is persisted across view transitions, Astro won't
+	// update aria-current automatically. Update it manually after each swap.
+	document.addEventListener('astro:after-swap', () => {
+		const currentPath = window.location.pathname;
+		document.querySelectorAll('#starlight__sidebar a').forEach((link) => {
+			const linkPath = new URL(link.href, window.location.origin).pathname;
+			if (linkPath === currentPath) {
+				link.setAttribute('aria-current', 'page');
+			} else {
+				link.removeAttribute('aria-current');
+			}
+		});
+	});
+</script>

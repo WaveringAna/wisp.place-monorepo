@@ -1,59 +1,48 @@
 ---
 title: Main App API
-description: Expected responses from the main-app Elysia routes.
+description: REST endpoints served by the main app
 ---
 
-These endpoints power the main wisp.place backend (Bun + Elysia). Responses below are the shapes returned by the handlers in `apps/main-app/src/routes/*`.
+Internal REST API for the main app (Bun + Elysia). Authenticated routes require a signed `did` cookie. Admin routes require a signed `admin_session` cookie and return `401 { error: 'Unauthorized' }` otherwise.
 
-Notes:
-- Authenticated routes rely on the signed `did` cookie. If authentication fails, the handler throws and Elysia returns an error response.
-- Admin routes rely on the signed `admin_session` cookie. Unauthorized requests return `401 { error: 'Unauthorized' }`.
+For the AT Protocol XRPC endpoints, see [XRPC API](/reference/xrpc-api).
 
-## Auth (`/api/auth/*`)
+---
+
+## Auth `/api/auth/*`
 
 ### `GET /api/auth/login`
 Redirects to the AT Protocol OAuth authorize URL.
 
 - **302** → OAuth URL
-- **302** → `/?error=missing_handle` if no handle/PDS provided
+- **302** → `/?error=missing_handle` if no handle provided
 - **302** → `/?error=auth_failed` on failure
 
 ### `POST /api/auth/signin`
 ```json
 { "url": "https://..." }
 ```
-On failure:
-```json
-{ "error": "Authentication failed", "details": "..." }
-```
+On failure: `{ "error": "Authentication failed", "details": "..." }`
 
 ### `GET /api/auth/callback`
-Redirects after OAuth completes.
-
-- **302** → `/onboarding` (no sites or domain)
-- **302** → `/editor` (existing user)
+- **302** → `/onboarding` (new user)
+- **302** → `/editor` (returning user)
 - **302** → `/?error=auth_failed` on failure
 
 ### `POST /api/auth/logout`
 ```json
 { "success": true }
 ```
-On failure:
-```json
-{ "error": "Logout failed" }
-```
 
 ### `GET /api/auth/status`
-Authenticated:
 ```json
 { "authenticated": true, "did": "did:plc:..." }
-```
-Not authenticated:
-```json
 { "authenticated": false }
 ```
 
-## User (`/api/user/*`)
+---
+
+## User `/api/user/*`
 
 ### `GET /api/user/status`
 ```json
@@ -73,14 +62,14 @@ Not authenticated:
 
 ### `GET /api/user/sites`
 ```json
-{ "sites": [/* site rows */] }
+{ "sites": [ /* site rows */ ] }
 ```
 
 ### `GET /api/user/domains`
 ```json
 {
   "wispDomains": [{ "domain": "name.wisp.place", "rkey": "site-rkey" }],
-  "customDomains": [/* custom domain rows */]
+  "customDomains": [ /* custom domain rows */ ]
 }
 ```
 
@@ -91,36 +80,24 @@ Not authenticated:
 
 ### `GET /api/user/site/:rkey/domains`
 ```json
-{ "rkey": "site-rkey", "domains": [/* domain rows */] }
+{ "rkey": "site-rkey", "domains": [ /* domain rows */ ] }
 ```
 
-## Domain (`/api/domain/*`)
+---
+
+## Domain `/api/domain/*`
 
 ### `GET /api/domain/check`
 ```json
 { "available": true, "domain": "name.wisp.place" }
-```
-Invalid handle:
-```json
 { "available": false, "reason": "invalid" }
 ```
 
 ### `GET /api/domain/registered`
-Registered:
 ```json
 { "registered": true, "type": "wisp", "domain": "name.wisp.place", "did": "did:plc:...", "rkey": "site-rkey" }
-```
-Custom domain:
-```json
 { "registered": true, "type": "custom", "domain": "example.com", "did": "did:plc:...", "rkey": "site-rkey", "verified": true }
-```
-Unregistered:
-```json
 { "registered": false }
-```
-Missing domain:
-```json
-{ "error": "Domain parameter required" }
 ```
 
 ### `POST /api/domain/claim`
@@ -163,73 +140,54 @@ Missing domain:
 { "success": true }
 ```
 
-## Site (`/api/site/*`)
+---
+
+## Site `/api/site/*`
 
 ### `DELETE /api/site/:rkey`
 ```json
 { "success": true, "message": "Site deleted successfully" }
 ```
-On failure:
-```json
-{ "success": false, "error": "..." }
-```
+On failure: `{ "success": false, "error": "..." }`
 
 ### `GET /api/site/:rkey/settings`
-Returns the `place.wisp.settings` record when present, otherwise defaults:
+Returns the `place.wisp.settings` record or defaults:
 ```json
 { "indexFiles": ["index.html"], "cleanUrls": false, "directoryListing": false }
-```
-On failure:
-```json
-{ "success": false, "error": "..." }
 ```
 
 ### `POST /api/site/:rkey/settings`
 ```json
 { "success": true, "uri": "at://...", "cid": "bafy..." }
 ```
-On validation failure:
-```json
-{ "success": false, "error": "Only one of spaMode, directoryListing, or custom404 can be enabled" }
-```
+On failure: `{ "success": false, "error": "Only one of spaMode, directoryListing, or custom404 can be enabled" }`
 
-## Wisp Uploads (`/wisp/*`)
+---
 
-### `GET /wisp/upload-progress/:jobId`
-Server-sent events stream for upload progress.
-
-- **event:** `progress` → `{ status, progress, result, error }`
-- **event:** `done` → `result`
-- **event:** `error` → `{ error }`
-
-Errors:
-```json
-{ "error": "Job not found" }
-```
-```json
-{ "error": "Unauthorized" }
-```
+## Uploads `/wisp/*`
 
 ### `POST /wisp/upload-files`
-Empty upload (no files):
-```json
-{ "success": true, "uri": "at://...", "cid": "bafy...", "fileCount": 0, "siteName": "my-site" }
-```
-Async upload:
 ```json
 { "success": true, "jobId": "...", "message": "Upload started. Connect to /wisp/upload-progress/..." }
 ```
+Empty upload: `{ "success": true, "uri": "at://...", "cid": "bafy...", "fileCount": 0, "siteName": "my-site" }`
 
-## Admin (`/api/admin/*`)
+### `GET /wisp/upload-progress/:jobId`
+Server-sent events stream:
+
+- `progress` → `{ status, progress, result, error }`
+- `done` → `result`
+- `error` → `{ error }`
+
+---
+
+## Admin `/api/admin/*`
 
 ### `POST /api/admin/login`
 ```json
 { "success": true }
 ```
-Invalid credentials (401):
-```json
-{ "error": "Invalid credentials" }
-```
+On failure (401): `{ "error": "Invalid credentials" }`
 
 ### `POST /api/admin/logout`
 ```json
@@ -237,23 +195,19 @@ Invalid credentials (401):
 ```
 
 ### `GET /api/admin/status`
-Authenticated:
 ```json
 { "authenticated": true, "username": "admin" }
-```
-Not authenticated:
-```json
 { "authenticated": false }
 ```
 
 ### `GET /api/admin/logs`
 ```json
-{ "logs": [/* combined logs */] }
+{ "logs": [ /* combined log entries */ ] }
 ```
 
 ### `GET /api/admin/errors`
 ```json
-{ "errors": [/* combined errors */] }
+{ "errors": [ /* combined error entries */ ] }
 ```
 
 ### `GET /api/admin/metrics`
@@ -267,14 +221,14 @@ Not authenticated:
 ```
 
 ### `GET /api/admin/cache`
-Returns the hosting service cache stats payload or:
+Returns hosting service cache stats, or:
 ```json
 { "error": "Failed to fetch cache stats from hosting service", "message": "Hosting service unavailable" }
 ```
 
 ### `GET /api/admin/sites`
 ```json
-{ "sites": [/* sites */], "customDomains": [/* domains */] }
+{ "sites": [ /* sites */ ], "customDomains": [ /* domains */ ] }
 ```
 
 ### `GET /api/admin/health`

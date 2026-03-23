@@ -1,21 +1,210 @@
 ---
-title: Wisp CLI v1.0.0
+title: Wisp CLI
 description: Command-line tool for deploying static sites to the AT Protocol
 ---
 
-**Deploy static sites to the AT Protocol**
+`wispctl` deploys static sites to your AT Protocol account from the terminal. Supports incremental updates, OAuth and app password auth, and a local dev server with live firehose updates.
 
-The Wisp CLI is a command-line tool for deploying static websites directly to your AT Protocol account. Host your sites on wisp.place with full ownership and control, backed by the decentralized AT Protocol.
+## Installation
 
-## Features
+```bash
+npm install -g wispctl
+```
 
-- **Deploy**: Push static sites directly from your terminal
-- **Pull**: Download sites from the PDS for development or backup
-- **Serve**: Run a local server with real-time firehose updates
-- **Authenticate** with app password or OAuth
-- **Incremental updates**: Only upload changed files
+Then use `wispctl` anywhere:
 
-## Downloads
+```bash
+wispctl deploy your-handle.bsky.social --path ./dist --site my-site
+```
+
+## Quick Deploy
+
+No install needed — use `npm create wisp` to deploy directly:
+
+```bash
+npm create wisp your-handle.bsky.social --path ./dist --site my-site
+```
+
+Or with `npx`:
+
+```bash
+npx wispctl deploy your-handle.bsky.social --path ./dist --site my-site
+```
+
+## Deploying a Site
+
+```bash
+wispctl deploy your-handle.bsky.social --path ./dist --site my-site
+```
+
+Your site will be at `https://sites.wisp.place/your-handle/my-site`.
+
+The CLI tracks files by content hash (CID), so subsequent deploys only upload what actually changed. First deploy uploads everything; after that, deploys complete in seconds when only a few files differ.
+
+## Authentication
+
+OAuth is the default — it opens your browser and saves a session to `/tmp/wisp-oauth-session.json`. For CI/CD or headless environments, use an app password instead:
+
+```bash
+wispctl deploy your-handle.bsky.social \
+  --path ./dist \
+  --site my-site \
+  --password YOUR_APP_PASSWORD
+```
+
+Generate app passwords from your AT Protocol account settings. Don't use your main password.
+
+## Domain Management
+
+```bash
+# Claim a wisp.place subdomain
+wispctl domain claim-subdomain your-handle.bsky.social --subdomain alice
+
+# Claim a custom domain
+wispctl domain claim your-handle.bsky.social --domain example.com
+
+# Check domain status
+wispctl domain status your-handle.bsky.social --domain example.com
+
+# Attach a site to a domain
+wispctl domain add-site your-handle.bsky.social --domain example.com --site mysite
+
+# Delete a domain or site
+wispctl domain delete your-handle.bsky.social --domain example.com
+wispctl site delete your-handle.bsky.social --site mysite
+```
+
+```bash
+wispctl list domains your-handle.bsky.social
+wispctl list sites your-handle.bsky.social
+```
+
+## Pulling a Site
+
+Download a site from the PDS to your local machine:
+
+```bash
+wispctl pull your-handle.bsky.social --site my-site --path ./my-site
+```
+
+## Local Dev Server
+
+Serve a site locally with real-time updates from the firehose:
+
+```bash
+wispctl serve your-handle.bsky.social --site my-site
+wispctl serve your-handle.bsky.social --site my-site --port 3000
+wispctl serve your-handle.bsky.social --site my-site --spa        # serve index.html for all routes
+wispctl serve your-handle.bsky.social --site my-site --directory  # directory listing
+```
+
+## CI/CD
+
+Deploy automatically on every push using Tangled Spindle:
+
+```yaml
+when:
+  - event: ['push']
+    branch: ['main']
+  - event: ['manual']
+
+engine: 'nixery'
+
+dependencies:
+  nixpkgs:
+    - coreutils
+    - curl
+    - glibc
+  github:NixOS/nixpkgs/nixpkgs-unstable:
+    - bun
+
+environment:
+  SITE_PATH: 'dist'
+  SITE_NAME: 'my-site'
+  WISP_HANDLE: 'your-handle.bsky.social'
+
+steps:
+  - name: build site
+    command: |
+      export PATH="$HOME/.nix-profile/bin:$PATH"
+      bun install
+      bun run build
+
+  - name: deploy to wisp
+    command: |
+      curl -fsSL https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-x86_64-linux -o wispctl
+      chmod +x wispctl
+      ./wispctl deploy \
+        "$WISP_HANDLE" \
+        --path "$SITE_PATH" \
+        --site "$SITE_NAME" \
+        --password "$WISP_APP_PASSWORD"
+```
+
+Set `WISP_APP_PASSWORD` as a secret in your Tangled Spindle repository settings.
+
+## File Processing
+
+Files are gzip-compressed at level 9 and uploaded as `application/octet-stream` blobs with the original MIME type stored in the manifest. They may also be base64-encoded to bypass content sniffing on legacy reference PDS. The hosting service handles decompression transparently.
+
+Common build artifacts like `.git`, `node_modules`, and `.env` are excluded automatically. Customize this with a [`.wispignore` file](/file-filtering).
+
+## Limits
+
+- Max file size: 100 MB (after compression)
+- Max total size: 300 MB per site
+- Max files: 1,000 per site
+- Site name: alphanumeric, hyphens, underscores (AT Protocol rkey format)
+
+## Command Reference
+
+### deploy
+
+```
+wispctl deploy [OPTIONS] <INPUT>
+
+Arguments:
+  <INPUT>  Handle (e.g., alice.bsky.social), DID, or PDS URL
+
+Options:
+  -p, --path <PATH>           Path to site directory [default: .]
+  -s, --site <SITE>           Site name (defaults to directory name)
+      --store <STORE>         OAuth session file [default: /tmp/wisp-oauth-session.json]
+      --password <PASSWORD>   App password
+```
+
+### pull
+
+```
+wispctl pull [OPTIONS] --site <SITE> <INPUT>
+
+Arguments:
+  <INPUT>  Handle or DID
+
+Options:
+  -s, --site <SITE>   Site name to download
+  -p, --path <PATH>   Output directory [default: .]
+```
+
+### serve
+
+```
+wispctl serve [OPTIONS] --site <SITE> <INPUT>
+
+Arguments:
+  <INPUT>  Handle or DID
+
+Options:
+  -s, --site <SITE>    Site name
+  -p, --path <PATH>    Site files directory [default: .]
+  -P, --port <PORT>    Port [default: 8080]
+      --spa            Serve index.html for all routes
+      --directory      Directory listing for paths without index files
+```
+
+## Binary Downloads
+
+Pre-built binaries are available if you can't use npm.
 
 <div class="downloads">
 
@@ -56,257 +245,19 @@ The Wisp CLI is a command-line tool for deploying static websites directly to yo
 
 </div>
 
-## CI/CD Integration
+## Building from Source
 
-Deploy automatically on every push using Tangled Spindle:
-
-```yaml
-when:
-  - event: ['push']
-    branch: ['main']
-  - event: ['manual']
-
-engine: 'nixery'
-
-dependencies:
-  nixpkgs:
-    - nodejs
-    - coreutils
-    - curl
-  github:NixOS/nixpkgs/nixpkgs-unstable:
-    - bun
-
-environment:
-  SITE_PATH: 'dist'
-  SITE_NAME: 'my-site'
-  WISP_HANDLE: 'your-handle.bsky.social'
-
-steps:
-  - name: build site
-    command: |
-      export PATH="$HOME/.nix-profile/bin:$PATH"
-      
-      # you may need to regenerate the lockfile due to nixery being weird
-      # rm package-lock.json bun.lock
-      bun install
-
-      bun run build
-
-  - name: deploy to wisp
-    command: |
-      # Download Wisp CLI
-      curl https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-x86_64-linux -o wisp-cli
-      chmod +x wisp-cli
-
-      # Deploy to Wisp
-      ./wisp-cli \
-        "$WISP_HANDLE" \
-        --path "$SITE_PATH" \
-        --site "$SITE_NAME" \
-        --password "$WISP_APP_PASSWORD"
-```
-
-**Note:** Set `WISP_APP_PASSWORD` as a secret in your Tangled Spindle repository settings. Generate an app password from your AT Protocol account settings.
-
-## Basic Usage
-
-### Deploy a Site
-
-```bash
-# Download and make executable
-curl -O https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-aarch64-darwin
-chmod +x wisp-cli-aarch64-darwin
-
-# Deploy your site
-./wisp-cli-aarch64-darwin deploy your-handle.bsky.social \
-  --path ./dist \
-  --site my-site
-```
-
-Your site will be available at: `https://sites.wisp.place/your-handle/my-site`
-
-### Domain Management
-
-```bash
-# Claim a custom domain
-./wisp-cli domain claim your-handle.bsky.social --domain example.com
-
-# Claim a subdomain
-./wisp-cli domain claim-subdomain your-handle.bsky.social --subdomain alice
-
-# Check domain status
-./wisp-cli domain status your-handle.bsky.social --domain example.com
-
-# Attach a site to a domain
-./wisp-cli domain add-site your-handle.bsky.social --domain example.com --site mysite
-
-# Delete a domain or site
-./wisp-cli domain delete your-handle.bsky.social --domain example.com
-./wisp-cli site delete your-handle.bsky.social --site mysite
-```
-
-### List Domains & Sites
-
-```bash
-./wisp-cli list domains your-handle.bsky.social
-./wisp-cli list sites your-handle.bsky.social
-```
-
-### Options
-
-Use an alternate proxy service DID:
-
-```bash
-./wisp-cli list domains your-handle.bsky.social --service did:web:example.com
-```
-
-### Pull a Site from PDS
-
-Download a site from the PDS to your local machine:
-
-```bash
-# Pull a site to a specific directory
-wisp-cli pull your-handle.bsky.social \
-  --site my-site \
-  --path ./my-site
-
-# Pull to current directory
-wisp-cli pull your-handle.bsky.social \
-  --site my-site
-```
-
-### Serve a Site Locally with Real-Time Updates
-
-Run a local server that monitors the firehose for real-time updates:
-
-```bash
-# Serve on http://localhost:8080 (default)
-wisp-cli serve your-handle.bsky.social \
-  --site my-site
-
-# Serve on a custom port
-wisp-cli serve your-handle.bsky.social \
-  --site my-site \
-  --port 3000
-
-# Enable SPA mode (serve index.html for all routes)
-wisp-cli serve your-handle.bsky.social \
-  --site my-site \
-  --spa
-
-# Enable directory listing for paths without index files
-wisp-cli serve your-handle.bsky.social \
-  --site my-site \
-  --directory
-```
-
-Downloads site, serves it, and watches firehose for live updates!
-
-## Authentication
-
-### OAuth (Recommended)
-
-The CLI uses OAuth by default, opening your browser for secure authentication:
-
-```bash
-wisp-cli deploy your-handle.bsky.social --path ./dist --site my-site
-```
-
-This creates a session stored locally (default: `/tmp/wisp-oauth-session.json`).
-
-### App Password
-
-For headless environments or CI/CD, use an app password:
-
-```bash
-wisp-cli deploy your-handle.bsky.social \
-  --path ./dist \
-  --site my-site \
-  --password YOUR_APP_PASSWORD
-```
-
-**Generate app passwords** from your AT Protocol account settings.
-
-## File Processing
-
-The CLI handles all file processing automatically to ensure reliable storage and delivery. Files are compressed with gzip at level 9 for optimal size reduction, then base64 encoded to bypass PDS content sniffing restrictions. Everything is uploaded as `application/octet-stream` blobs while preserving the original MIME type as metadata. When serving your site, the hosting service automatically decompresses non-HTML/CSS/JS files, ensuring your content is delivered correctly to visitors.
-
-**File Filtering**: The CLI automatically excludes common files like `.git`, `node_modules`, `.env`, and other development artifacts. Customize this with a [`.wispignore` file](/file-filtering).
-
-## Incremental Updates
-
-The CLI tracks file changes using CID-based content addressing to minimize upload times and bandwidth usage. On your first deploy, all files are uploaded to establish the initial site. For subsequent deploys, the CLI compares content-addressed CIDs to detect which files have actually changed, uploading only those that differ from the previous version. This makes fast iterations possible even for large sites, with deploys completing in seconds when only a few files have changed.
-
-## Limits
-
-- **Max file size**: 100MB per file (after compression)
-- **Max total size**: 300MB per site
-- **Max files**: 1000 files per site
-- **Site name**: Must follow AT Protocol rkey format (alphanumeric, hyphens, underscores)
-
-## Command Reference
-
-### Deploy Command
-
-```bash
-wisp-cli deploy [OPTIONS] <INPUT>
-
-Arguments:
-  <INPUT>  Handle (e.g., alice.bsky.social), DID, or PDS URL
-
-Options:
-  -p, --path <PATH>           Path to site directory [default: .]
-  -s, --site <SITE>           Site name (defaults to directory name)
-      --store <STORE>         OAuth session file path [default: /tmp/wisp-oauth-session.json]
-      --password <PASSWORD>   App password for authentication
-  -h, --help                  Print help
-```
-
-### Pull Command
-
-```bash
-wisp-cli pull [OPTIONS] --site <SITE> <INPUT>
-
-Arguments:
-  <INPUT>  Handle or DID
-
-Options:
-  -s, --site <SITE>           Site name to download
-  -p, --path <PATH>           Output directory [default: .]
-  -h, --help                  Print help
-```
-
-### Serve Command
-
-```bash
-wisp-cli serve [OPTIONS] --site <SITE> <INPUT>
-
-Arguments:
-  <INPUT>  Handle or DID
-
-Options:
-  -s, --site <SITE>           Site name to serve
-  -p, --path <PATH>           Site files directory [default: .]
-  -P, --port <PORT>           Port to serve on [default: 8080]
-      --spa                   Enable SPA mode (serve index.html for all routes)
-      --directory             Enable directory listing mode for paths without index files
-  -h, --help                  Print help
-```
-
-## Development
-
-The CLI is written in Rust using the Jacquard AT Protocol library. To build from source:
+The CLI is written in TypeScript and supports both Node.js and Bun runtimes. Run directly with Bun during development, or build a Node.js-compatible bundle for distribution.
 
 ```bash
 git clone https://tangled.org/@nekomimi.pet/wisp.place-monorepo
 cd cli
-cargo build --release
+bun install
+
+# Run directly with Bun
+bun run index.ts
+
+# Build a Node.js bundle (outputs to dist/)
+bun run build
+node dist/index.js
 ```
-
-Built binaries are available in `target/release/`.
-
-## Related
-
-- [place.wisp.fs](/lexicons/place-wisp-fs) - Site manifest lexicon
-- [place.wisp.subfs](/lexicons/place-wisp-subfs) - Subtree records for large sites
-- [AT Protocol](https://atproto.com) - The decentralized protocol powering Wisp

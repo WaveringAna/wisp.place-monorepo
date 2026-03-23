@@ -1,13 +1,9 @@
 ---
 title: Monitoring & Metrics
-description: Track performance and debug issues with Grafana integration
+description: Grafana integration for logs and metrics
 ---
 
-Wisp.place includes built-in observability with automatic Grafana integration for logs and metrics. Monitor request performance, track errors, and analyze usage patterns across both the main backend and hosting service.
-
-## Quick Start
-
-Set environment variables to enable Grafana export:
+Set these environment variables and restart your services. Metrics and logs will flow to Grafana automatically.
 
 ```bash
 # Grafana Cloud
@@ -17,62 +13,73 @@ GRAFANA_LOKI_TOKEN=glc_xxx
 GRAFANA_PROMETHEUS_URL=https://prometheus-prod-xxx.grafana.net/api/prom
 GRAFANA_PROMETHEUS_TOKEN=glc_xxx
 
-# Self-hosted Grafana
+# Self-hosted (basic auth instead of bearer token)
 GRAFANA_LOKI_USERNAME=your-username
 GRAFANA_LOKI_PASSWORD=your-password
 ```
 
-Restart services. Metrics and logs now flow to Grafana automatically.
+See [Grafana Setup](/guides/grafana-setup) for a step-by-step walkthrough.
 
-## Metrics Collected
+## Metrics
 
-### HTTP Requests
-- `http_requests_total` - Total request count by path, method, status
-- `http_request_duration_ms` - Request duration histogram
-- `errors_total` - Error count by service
+- `http_requests_total` — request count by path, method, and status
+- `http_request_duration_ms` — duration histogram (P50/P95/P99 available)
+- `errors_total` — error count by service
 
-### Performance Stats
-- P50, P95, P99 response times
-- Requests per minute
-- Error rates
-- Average duration by endpoint
+## Log Labels
 
-## Log Aggregation
-
-Logs are sent to Loki with automatic categorization:
+Logs are tagged by service so you can filter them in Loki:
 
 ```
-{job="main-app"} |= "error"        # OAuth and upload errors
-{job="hosting-service"} |= "cache"  # Cache operations
-{service="hosting-service", level="warn"}  # Warnings only
+{job="main-app"}         # OAuth, uploads, domain management
+{job="hosting-service"}  # Firehose, caching, content serving
 ```
 
-## Service Identification
-
-Each service is tagged separately:
-- `main-app` - OAuth, uploads, domain management
-- `hosting-service` - Firehose, caching, content serving
-
-## Configuration Options
-
-### Environment Variables
+## All Options
 
 ```bash
-# Required
-GRAFANA_LOKI_URL          # Loki endpoint
-GRAFANA_PROMETHEUS_URL    # Prometheus endpoint (add /api/prom for OTLP)
+GRAFANA_LOKI_URL            # Loki push endpoint
+GRAFANA_PROMETHEUS_URL      # Prometheus remote write endpoint
 
-# Authentication (use one)
-GRAFANA_LOKI_TOKEN        # Bearer token (Grafana Cloud)
-GRAFANA_LOKI_USERNAME     # Basic auth (self-hosted)
+GRAFANA_LOKI_TOKEN          # Bearer token (Grafana Cloud)
+GRAFANA_LOKI_USERNAME       # Basic auth (self-hosted)
 GRAFANA_LOKI_PASSWORD
 
-# Optional
-GRAFANA_BATCH_SIZE=100    # Batch size before flush
-GRAFANA_FLUSH_INTERVAL=5000  # Flush interval in ms
+GRAFANA_BATCH_SIZE=100      # Entries per flush
+GRAFANA_FLUSH_INTERVAL=5000 # Flush interval in ms
 ```
 
-### Programmatic Setup
+## Dashboard Queries
+
+```promql
+# Average response time by endpoint
+avg by (path) (
+  rate(http_request_duration_ms_sum[5m]) /
+  rate(http_request_duration_ms_count[5m])
+)
+
+# Request rate by service
+sum(rate(http_requests_total[1m])) by (service)
+
+# Error rate
+sum(rate(errors_total[5m])) by (service) /
+sum(rate(http_requests_total[5m])) by (service)
+```
+
+```logql
+{job="main-app"} |= "error" | json
+{job="hosting-service"} |~ "duration.*[1-9][0-9]{3,}"
+```
+
+## Without Grafana
+
+Metrics and logs are always stored in-memory. Access them directly:
+
+- `http://localhost:8000/api/observability/logs`
+- `http://localhost:8000/api/observability/metrics`
+- `http://localhost:8000/api/observability/errors`
+
+## Programmatic Setup
 
 ```typescript
 import { initializeGrafanaExporters } from '@wisp/observability'
@@ -86,71 +93,4 @@ initializeGrafanaExporters({
   batchSize: 100,
   flushIntervalMs: 5000
 })
-```
-
-## Grafana Dashboard Queries
-
-### Request Performance
-```promql
-# Average response time by endpoint
-avg by (path) (
-  rate(http_request_duration_ms_sum[5m]) /
-  rate(http_request_duration_ms_count[5m])
-)
-
-# Request rate
-sum(rate(http_requests_total[1m])) by (service)
-
-# Error rate
-sum(rate(errors_total[5m])) by (service) /
-sum(rate(http_requests_total[5m])) by (service)
-```
-
-### Log Analysis
-```logql
-# Recent errors
-{job="main-app"} |= "error" | json
-
-# Slow requests (>1s)
-{job="hosting-service"} |~ "duration.*[1-9][0-9]{3,}"
-
-# Failed OAuth attempts
-{job="main-app"} |= "OAuth" |= "failed"
-```
-
-## Troubleshooting
-
-### Logs not appearing
-- Check `GRAFANA_LOKI_URL` is correct (no trailing `/loki/api/v1/push`)
-- Verify authentication token/credentials
-- Look for connection errors in service logs
-
-### Metrics missing
-- Ensure `GRAFANA_PROMETHEUS_URL` includes `/api/prom` suffix
-- Check firewall rules allow outbound HTTPS
-- Verify OpenTelemetry export errors in logs
-
-### High memory usage
-- Reduce `GRAFANA_BATCH_SIZE` (default: 100)
-- Lower `GRAFANA_FLUSH_INTERVAL` to flush more frequently
-
-## Local Development
-
-Metrics and logs are stored in-memory when Grafana isn't configured. Access them via:
-
-- `http://localhost:8000/api/observability/logs`
-- `http://localhost:8000/api/observability/metrics`
-- `http://localhost:8000/api/observability/errors`
-
-## Testing Integration
-
-Run integration tests to verify setup:
-
-```bash
-cd packages/@wisp/observability
-bun test src/integration-test.test.ts
-
-# Test with live Grafana
-GRAFANA_LOKI_URL=... GRAFANA_LOKI_USERNAME=... GRAFANA_LOKI_PASSWORD=... \
-bun test src/integration-test.test.ts
 ```
