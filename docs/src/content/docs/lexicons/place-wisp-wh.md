@@ -5,11 +5,11 @@ description: Webhook record lexicon for receiving HTTP callbacks on AT Protocol 
 
 Webhooks let you receive HTTP POST notifications when AT Protocol records are created, updated, or deleted. They're scoped to an AT-URI — you can watch a specific record, an entire collection, or everything from a DID.
 
-Webhooks are stored as `place.wisp.v2.wh` records in your AT Protocol repository. The webhook service watches the firehose and delivers payloads to your URL.
+Webhooks are stored as `place.wisp.v2.wh` records in your AT Protocol repository. The webhook service watches the firehose for `place.wisp.v2.wh` record changes, reads the full record back from your PDS (read-after-write), then begins delivering matching events to your URL.
 
 ## Creating a Webhook
 
-Create and manage webhooks from the **Webhooks** tab in the editor, or via the [REST API](#rest-api).
+Create a webhook by writing a `place.wisp.v2.wh` record to your PDS, or by using the **Webhooks** tab in the editor. The record schema is [below](#record-schema).
 
 **Scope** controls what you're watching:
 
@@ -91,9 +91,9 @@ Webhooks are stored as `place.wisp.v2.wh` records in your PDS:
 }
 ```
 
-## REST API
+## API Convenience Routes
 
-Webhooks can also be managed via the main app API. All routes require the signed `did` cookie.
+The main app exposes API routes that wrap PDS record operations. All routes require the signed `did` cookie.
 
 ### `GET /api/webhook`
 
@@ -101,11 +101,11 @@ Lists all webhook records for the authenticated user.
 
 ### `POST /api/webhook`
 
-Creates a new webhook. Body matches the `place.wisp.v2.wh` record shape.
+Creates a new webhook record. Body matches the `place.wisp.v2.wh` record shape.
 
 ### `DELETE /api/webhook/:rkey`
 
-Deletes a webhook by its record key.
+Deletes a webhook record by its record key.
 
 ### `GET /api/webhook/events`
 
