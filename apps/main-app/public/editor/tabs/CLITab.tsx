@@ -216,7 +216,7 @@ export function CLITab() {
 
 engine: 'nixery'
 dependencies:
-  nixpkgs: [nodejs, coreutils, curl]
+  nixpkgs: [nodejs, coreutils, curl, glibc]
   github:NixOS/nixpkgs/nixpkgs-unstable: [bun]
 
 environment:
