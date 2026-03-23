@@ -26,7 +26,7 @@ import {
 import type { Directory } from '@wispplace/lexicons/types/place/wisp/fs'
 import { createLogger } from '@wispplace/observability'
 import { Elysia } from 'elysia'
-import { upsertSite, upsertSiteCache } from '../lib/db'
+import { upsertSite } from '../lib/db'
 import { createIgnoreMatcher, parseWispignore, shouldIgnore } from '../lib/ignore-patterns'
 import {
 	addJobListener,
@@ -885,19 +885,6 @@ async function processUploadInBackground(
 
 		// Store site in database cache
 		await upsertSite(did, rkey, siteName)
-
-		// Cache the site files for the hosting service
-		try {
-			const fileCids: Record<string, string> = {}
-			for (const blob of finalBlobs) {
-				const normalizedPath = blob.filePath.replace(/^[^/]*\//, '')
-				fileCids[normalizedPath] = blob.result.hash
-			}
-			await upsertSiteCache(did, rkey, record.data.cid, fileCids)
-		} catch (err) {
-			// Don't fail the upload if caching fails
-			logger.warn('Failed to cache site files', err as any)
-		}
 
 		// Clean up old subfs records if we had any
 		if (oldSubfsUris.length > 0) {
