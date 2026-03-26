@@ -1,6 +1,7 @@
 import { Badge } from '@public/components/ui/badge'
 import { CodeBlock } from '@public/components/ui/code-block'
 import { Download, ExternalLink } from 'lucide-react'
+import { memo } from 'react'
 
 const BASE_URL = 'https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries'
 
@@ -44,7 +45,7 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 	)
 }
 
-export function CLITab() {
+export const CLITab = memo(function CLITab() {
 	return (
 		<div className="h-full flex flex-col border border-border/30 bg-card/50 font-mono">
 			{/* Header */}
@@ -251,4 +252,4 @@ steps:
 			</div>
 		</div>
 	)
-}
+})

@@ -16,7 +16,7 @@ import { SkeletonShimmer } from '@public/components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@public/components/ui/tabs'
 import Layout from '@public/layouts'
 import { Loader2, LogOut, Trash2 } from 'lucide-react'
-import { type ChangeEvent, type KeyboardEvent as ReactKeyboardEvent, useEffect, useState } from 'react'
+import { type ChangeEvent, type KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { useDomainData } from './hooks/useDomainData'
@@ -133,7 +133,7 @@ function Dashboard() {
 	}, [activeTab, configuringSite])
 
 	// Handle site configuration modal
-	const handleConfigureSite = async (site: SiteWithDomains) => {
+	const handleConfigureSite = useCallback(async (site: SiteWithDomains) => {
 		setConfiguringSite(site)
 
 		// Build set of currently mapped domains
@@ -207,7 +207,7 @@ function Dashboard() {
 			setCorsEnabled(false)
 			setCorsOrigin('*')
 		}
-	}
+	}, [])
 
 	const handleSaveSiteConfig = async () => {
 		if (!configuringSite) return
@@ -306,9 +306,9 @@ function Dashboard() {
 		}
 	}
 
-	const handleDeleteConfirmSite = async (site: SiteWithDomains) => {
+	const handleDeleteConfirmSite = useCallback((site: SiteWithDomains) => {
 		setDeleteConfirmSite(site)
-	}
+	}, [])
 
 	const handleDeleteSite = async () => {
 		const site = configuringSite || deleteConfirmSite
@@ -325,9 +325,9 @@ function Dashboard() {
 		setIsDeletingSite(false)
 	}
 
-	const handleUploadComplete = async () => {
+	const handleUploadComplete = useCallback(async () => {
 		await fetchSites()
-	}
+	}, [fetchSites])
 
 	const handleLogout = async () => {
 		try {
@@ -470,58 +470,72 @@ function Dashboard() {
 							</TabsTrigger>
 						</TabsList>
 
-						{/* Sites Tab */}
-						<TabsContent value="sites" className="flex-1 m-0 mt-4 overflow-hidden data-[state=inactive]:hidden">
-							<SitesTab
-								sites={sites}
-								sitesLoading={sitesLoading}
-								userInfo={userInfo}
-								onConfigureSite={handleConfigureSite}
-								onDeleteSite={handleDeleteConfirmSite}
-							/>
-						</TabsContent>
+						{/* Tab content — all tabs stay in the layout tree via absolute positioning to avoid
+						    the display:none→visible reflow cost. Inactive tabs use visibility:hidden instead. */}
+						<div className="flex-1 relative mt-4 overflow-hidden">
+							<TabsContent
+								value="sites"
+								className="absolute inset-0 overflow-hidden data-[state=inactive]:invisible data-[state=inactive]:pointer-events-none"
+							>
+								<SitesTab
+									sites={sites}
+									sitesLoading={sitesLoading}
+									userInfo={userInfo}
+									onConfigureSite={handleConfigureSite}
+									onDeleteSite={handleDeleteConfirmSite}
+								/>
+							</TabsContent>
 
-						{/* Domains Tab */}
-						<TabsContent value="domains" className="flex-1 m-0 mt-4 overflow-hidden data-[state=inactive]:hidden">
-							<DomainsTab
-								wispDomains={wispDomains}
-								customDomains={customDomains}
-								domainsLoading={domainsLoading}
-								verificationStatus={verificationStatus}
-								userInfo={userInfo}
-								onAddCustomDomain={addCustomDomain}
-								onVerifyDomain={verifyDomain}
-								onDeleteCustomDomain={deleteCustomDomain}
-								onDeleteWispDomain={deleteWispDomain}
-								onClaimWispDomain={claimWispDomain}
-								onCheckWispAvailability={checkWispAvailability}
-							/>
-						</TabsContent>
+							<TabsContent
+								value="domains"
+								className="absolute inset-0 overflow-hidden data-[state=inactive]:invisible data-[state=inactive]:pointer-events-none"
+							>
+								<DomainsTab
+									wispDomains={wispDomains}
+									customDomains={customDomains}
+									domainsLoading={domainsLoading}
+									verificationStatus={verificationStatus}
+									userInfo={userInfo}
+									onAddCustomDomain={addCustomDomain}
+									onVerifyDomain={verifyDomain}
+									onDeleteCustomDomain={deleteCustomDomain}
+									onDeleteWispDomain={deleteWispDomain}
+									onClaimWispDomain={claimWispDomain}
+									onCheckWispAvailability={checkWispAvailability}
+								/>
+							</TabsContent>
 
-						{/* Upload Tab */}
-						<TabsContent value="upload" className="flex-1 m-0 mt-4 overflow-hidden data-[state=inactive]:hidden">
-							<UploadTab sites={sites} sitesLoading={sitesLoading} onUploadComplete={handleUploadComplete} />
-						</TabsContent>
+							<TabsContent
+								value="upload"
+								className="absolute inset-0 overflow-hidden data-[state=inactive]:invisible data-[state=inactive]:pointer-events-none"
+							>
+								<UploadTab sites={sites} sitesLoading={sitesLoading} onUploadComplete={handleUploadComplete} />
+							</TabsContent>
 
-						{/* Webhooks Tab */}
-						<TabsContent value="webhooks" className="flex-1 m-0 mt-4 overflow-hidden data-[state=inactive]:hidden">
-							<WebhooksTab
-								webhooks={webhooks}
-								webhooksLoading={webhooksLoading}
-								eventLogs={eventLogs}
-								eventLogsLoading={eventLogsLoading}
-								isCreating={isCreating}
-								userDid={userInfo?.did}
-								onCreateWebhook={createWebhook}
-								onDeleteWebhook={deleteWebhook}
-								onRefreshEvents={fetchEventLogs}
-							/>
-						</TabsContent>
+							<TabsContent
+								value="webhooks"
+								className="absolute inset-0 overflow-hidden data-[state=inactive]:invisible data-[state=inactive]:pointer-events-none"
+							>
+								<WebhooksTab
+									webhooks={webhooks}
+									webhooksLoading={webhooksLoading}
+									eventLogs={eventLogs}
+									eventLogsLoading={eventLogsLoading}
+									isCreating={isCreating}
+									userDid={userInfo?.did}
+									onCreateWebhook={createWebhook}
+									onDeleteWebhook={deleteWebhook}
+									onRefreshEvents={fetchEventLogs}
+								/>
+							</TabsContent>
 
-						{/* CLI Tab */}
-						<TabsContent value="cli" className="flex-1 m-0 mt-4 overflow-hidden data-[state=inactive]:hidden">
-							<CLITab />
-						</TabsContent>
+							<TabsContent
+								value="cli"
+								className="absolute inset-0 overflow-hidden data-[state=inactive]:invisible data-[state=inactive]:pointer-events-none"
+							>
+								<CLITab />
+							</TabsContent>
+						</div>
 					</Tabs>
 				</div>
 			</div>

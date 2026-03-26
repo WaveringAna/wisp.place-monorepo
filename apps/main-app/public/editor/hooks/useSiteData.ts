@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 
 export interface Site {
 	did: string
@@ -24,7 +24,7 @@ export function useSiteData() {
 	const [sitesLoading, setSitesLoading] = useState(true)
 	const [isSyncing, setIsSyncing] = useState(false)
 
-	const fetchSites = async () => {
+	const fetchSites = useCallback(async () => {
 		try {
 			const response = await fetch('/api/user/sites')
 			const data = await response.json()
@@ -56,9 +56,9 @@ export function useSiteData() {
 		} finally {
 			setSitesLoading(false)
 		}
-	}
+	}, [])
 
-	const syncSites = async () => {
+	const syncSites = useCallback(async () => {
 		setIsSyncing(true)
 		try {
 			const response = await fetch('/api/user/sync', {
@@ -76,28 +76,31 @@ export function useSiteData() {
 		} finally {
 			setIsSyncing(false)
 		}
-	}
+	}, [fetchSites])
 
-	const deleteSite = async (rkey: string) => {
-		try {
-			const response = await fetch(`/api/site/${rkey}`, {
-				method: 'DELETE',
-			})
+	const deleteSite = useCallback(
+		async (rkey: string) => {
+			try {
+				const response = await fetch(`/api/site/${rkey}`, {
+					method: 'DELETE',
+				})
 
-			const data = await response.json()
-			if (data.success) {
-				// Refresh sites list
-				await fetchSites()
-				return true
-			} else {
-				throw new Error(data.error || 'Failed to delete site')
+				const data = await response.json()
+				if (data.success) {
+					// Refresh sites list
+					await fetchSites()
+					return true
+				} else {
+					throw new Error(data.error || 'Failed to delete site')
+				}
+			} catch (err) {
+				console.error('Delete site error:', err)
+				alert(`Failed to delete site: ${err instanceof Error ? err.message : 'Unknown error'}`)
+				return false
 			}
-		} catch (err) {
-			console.error('Delete site error:', err)
-			alert(`Failed to delete site: ${err instanceof Error ? err.message : 'Unknown error'}`)
-			return false
-		}
-	}
+		},
+		[fetchSites],
+	)
 
 	return {
 		sites,

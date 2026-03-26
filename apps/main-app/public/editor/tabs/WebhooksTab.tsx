@@ -18,7 +18,7 @@ import {
 	Webhook,
 	X,
 } from 'lucide-react'
-import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { type ChangeEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { WebhookEventLog, WebhookRecord } from '../hooks/useWebhookData'
 
 const APPS = [
@@ -80,7 +80,7 @@ function formatTimeAgo(dateStr: string): string {
 	return new Date(dateStr).toLocaleDateString()
 }
 
-export function WebhooksTab({
+export const WebhooksTab = memo(function WebhooksTab({
 	webhooks,
 	webhooksLoading,
 	eventLogs,
@@ -895,4 +895,4 @@ export function WebhooksTab({
 			</div>
 		</div>
 	)
-}
+})

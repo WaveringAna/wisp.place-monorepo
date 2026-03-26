@@ -2,7 +2,7 @@ import { Button } from '@public/components/ui/button'
 import { Input } from '@public/components/ui/input'
 import { Label } from '@public/components/ui/label'
 import { AlertCircle, CheckCircle2, ChevronDown, ChevronUp, Loader2, RefreshCw, Upload, XCircle } from 'lucide-react'
-import { type ChangeEvent, useEffect, useRef, useState } from 'react'
+import { type ChangeEvent, memo, useEffect, useRef, useState } from 'react'
 import type { SiteWithDomains } from '../hooks/useSiteData'
 
 type FileStatus = 'pending' | 'checking' | 'uploading' | 'uploaded' | 'reused' | 'failed'
@@ -19,7 +19,7 @@ interface UploadTabProps {
 	onUploadComplete: () => Promise<void>
 }
 
-export function UploadTab({ sites, sitesLoading, onUploadComplete }: UploadTabProps) {
+export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUploadComplete }: UploadTabProps) {
 	// Upload state
 	const [siteMode, setSiteMode] = useState<'existing' | 'new'>('existing')
 	const [selectedSiteRkey, setSelectedSiteRkey] = useState<string>('')
@@ -661,4 +661,4 @@ export function UploadTab({ sites, sitesLoading, onUploadComplete }: UploadTabPr
 			</div>
 		</div>
 	)
-}
+})

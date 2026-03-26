@@ -12,7 +12,7 @@ import { Input } from '@public/components/ui/input'
 import { Label } from '@public/components/ui/label'
 import { SkeletonShimmer } from '@public/components/ui/skeleton'
 import { AlertCircle, CheckCircle2, Loader2, Trash2, XCircle } from 'lucide-react'
-import { type ChangeEvent, type KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from 'react'
+import { type ChangeEvent, memo, type KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from 'react'
 import type { CustomDomain, WispDomain } from '../hooks/useDomainData'
 import type { UserInfo } from '../hooks/useUserInfo'
 
@@ -42,7 +42,7 @@ const Kbd = ({ children }: { children: React.ReactNode }) => (
 	<kbd className="px-2 py-1 bg-muted/50 rounded border border-border/50">{children}</kbd>
 )
 
-export function DomainsTab({
+export const DomainsTab = memo(function DomainsTab({
 	wispDomains,
 	customDomains,
 	domainsLoading,
@@ -104,7 +104,7 @@ export function DomainsTab({
 			if (wasOpen && !isOpen) setTimeout(() => containerRef.current?.focus(), 50)
 			wasOpen = isOpen
 		})
-		observer.observe(document.body, { childList: true, subtree: true })
+		observer.observe(document.body, { childList: true })
 		return () => observer.disconnect()
 	}, [])
 
@@ -762,4 +762,4 @@ export function DomainsTab({
 			</Dialog>
 		</>
 	)
-}
+})

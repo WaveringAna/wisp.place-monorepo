@@ -2,7 +2,7 @@ import { Badge } from '@public/components/ui/badge'
 import { Button } from '@public/components/ui/button'
 import { SkeletonShimmer } from '@public/components/ui/skeleton'
 import { ChevronDown, ChevronRight, ExternalLink, Globe, Settings as SettingsIcon, Trash2 } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import type { SiteWithDomains } from '../hooks/useSiteData'
 import type { UserInfo } from '../hooks/useUserInfo'
 
@@ -32,7 +32,13 @@ const Kbd = ({ children }: { children: React.ReactNode }) => (
 	<kbd className="px-2 py-1 bg-muted/50 rounded border border-border/50">{children}</kbd>
 )
 
-export function SitesTab({ sites, sitesLoading, userInfo, onConfigureSite, onDeleteSite }: SitesTabProps) {
+export const SitesTab = memo(function SitesTab({
+	sites,
+	sitesLoading,
+	userInfo,
+	onConfigureSite,
+	onDeleteSite,
+}: SitesTabProps) {
 	// State: only one site can be expanded at a time (null = none expanded)
 	const [expandedSiteKey, setExpandedSiteKey] = useState<string | null>(null)
 	const [focusedIndex, setFocusedIndex] = useState(0)
@@ -95,7 +101,7 @@ export function SitesTab({ sites, sitesLoading, userInfo, onConfigureSite, onDel
 			wasDialogOpen = isDialogOpen
 		})
 
-		observer.observe(document.body, { childList: true, subtree: true })
+		observer.observe(document.body, { childList: true })
 
 		return () => observer.disconnect()
 	}, [])
@@ -385,4 +391,4 @@ export function SitesTab({ sites, sitesLoading, userInfo, onConfigureSite, onDel
 			</div>
 		</div>
 	)
-}
+})
