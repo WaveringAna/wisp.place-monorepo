@@ -43,10 +43,11 @@ await db`
 `
 
 await db`
-  CREATE TABLE IF NOT EXISTS firehose_cursor (
-    id       TEXT PRIMARY KEY DEFAULT 'singleton',
-    seq      BIGINT NOT NULL,
-    saved_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  CREATE TABLE IF NOT EXISTS jetstream_cursor (
+    id            TEXT PRIMARY KEY DEFAULT 'singleton',
+    seq           BIGINT NOT NULL,
+    jetstream_url TEXT,
+    saved_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )
 `
 
@@ -129,8 +130,9 @@ export async function loadAllWebhooks(): Promise<Array<{ did: string; rkey: stri
  * Insert or update a webhook record in both tables.
  * `webhooks` holds structured columns for quick filtering; `webhook_records` holds the full JSONB record.
  * Key is `did/rkey`.
+ * Returns true if the record was inserted or its content changed, false if it was already up-to-date.
  */
-export async function upsertWebhookRecord(did: string, rkey: string, record: WhRecord): Promise<void> {
+export async function upsertWebhookRecord(did: string, rkey: string, record: WhRecord): Promise<boolean> {
 	const k = `${did}/${rkey}`
 	try {
 		await db`
@@ -143,13 +145,21 @@ export async function upsertWebhookRecord(did: string, rkey: string, record: WhR
         enabled    = EXCLUDED.enabled,
         updated_at = EXTRACT(EPOCH FROM NOW())
     `
-		await db`
+		const rows = await db<Array<{ changed: boolean }>>`
+      WITH existing AS (
+        SELECT v FROM webhook_records WHERE k = ${k}
+      )
       INSERT INTO webhook_records (k, v, updated_at)
       VALUES (${k}, ${record}, EXTRACT(EPOCH FROM NOW()))
       ON CONFLICT (k) DO UPDATE SET
         v          = EXCLUDED.v,
         updated_at = EXTRACT(EPOCH FROM NOW())
+      RETURNING (
+        NOT EXISTS (SELECT 1 FROM existing)
+        OR (SELECT v FROM existing) IS DISTINCT FROM webhook_records.v
+      ) AS changed
     `
+		return rows[0]?.changed ?? true
 	} catch (err) {
 		logger.error(`[DB] upsertWebhookRecord error for ${k}`, err)
 		throw err
@@ -243,21 +253,30 @@ export async function listEventLogs(ownerDid: string, limit = 100): Promise<Even
 	}))
 }
 
-/** Persist the current firehose sequence number so restarts can resume. */
-export async function saveCursor(seq: number): Promise<void> {
+const CURSOR_REWIND_US = 2_000_000 // 2 seconds in microseconds
+
+/** Persist the current Jetstream cursor (time_us) and the URL it came from. */
+export async function saveCursor(seq: number, jetstreamUrl: string): Promise<void> {
 	await db`
-    INSERT INTO firehose_cursor (id, seq, saved_at)
-    VALUES ('singleton', ${seq}, NOW())
-    ON CONFLICT (id) DO UPDATE SET seq = EXCLUDED.seq, saved_at = NOW()
+    INSERT INTO jetstream_cursor (id, seq, jetstream_url, saved_at)
+    VALUES ('singleton', ${seq}, ${jetstreamUrl}, NOW())
+    ON CONFLICT (id) DO UPDATE SET seq = EXCLUDED.seq, jetstream_url = EXCLUDED.jetstream_url, saved_at = NOW()
   `
 }
 
-/** Load the last saved firehose sequence number, or undefined if none. */
-export async function loadCursor(): Promise<number | undefined> {
-	const rows = await db<Array<{ seq: number }>>`
-    SELECT seq FROM firehose_cursor WHERE id = 'singleton'
+/**
+ * Load the saved Jetstream cursor, rewound by 2 seconds to ensure gapless playback.
+ * Returns undefined if no cursor is saved or the saved cursor is from a different Jetstream instance
+ * (time_us is not comparable across instances).
+ */
+export async function loadCursor(jetstreamUrl: string): Promise<number | undefined> {
+	const rows = await db<Array<{ seq: number; jetstream_url: string | null }>>`
+    SELECT seq, jetstream_url FROM jetstream_cursor WHERE id = 'singleton'
   `
-	return rows[0]?.seq
+	const row = rows[0]
+	if (!row) return undefined
+	if (row.jetstream_url && row.jetstream_url !== jetstreamUrl) return undefined
+	return Math.max(0, Number(row.seq) - CURSOR_REWIND_US)
 }
 
 /**
@@ -281,6 +300,13 @@ export async function listAllKnownDids(): Promise<string[]> {
 	} catch {
 		// oauth_sessions schema may differ; skip gracefully
 	}
+
+	// Include any DIDs that already have webhook records — they may not be wisp.place
+	// users but still have place.wisp.v2.wh records we need to stay in sync with.
+	const webhookDids = await db<Array<{ did: string }>>`
+    SELECT DISTINCT did FROM webhooks WHERE did IS NOT NULL AND did <> ''
+  `
+	for (const r of webhookDids) dids.add(r.did)
 
 	return [...dids].sort()
 }

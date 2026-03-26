@@ -6,6 +6,7 @@ import {
 	findBacklinkWebhooks,
 	findWebhooksForDid,
 	loadAllWebhooks,
+	saveCursor,
 	upsertWebhookRecord,
 } from './db'
 import { deliverWebhook } from './delivery'
@@ -35,22 +36,44 @@ export function getEventStats() {
 
 let directScopeDids = new Set<string>()
 let backlinkScopeDids = new Set<string>()
+let firehoseStarted = false
+
+function setsEqual(a: Set<string>, b: Set<string>): boolean {
+	if (a.size !== b.size) return false
+	for (const v of a) if (!b.has(v)) return false
+	return true
+}
 
 export function initScopeDids(webhooks: Array<{ record: { scope: { aturi: string; backlinks?: boolean } } }>): void {
-	directScopeDids = new Set()
-	backlinkScopeDids = new Set()
+	const newDirectDids = new Set<string>()
+	const newBacklinkDids = new Set<string>()
 	for (const w of webhooks) {
 		const did = w.record.scope.aturi.replace(/^at:\/\//, '').split('/')[0]
 		if (!did) continue
-		directScopeDids.add(did)
-		if (w.record.scope.backlinks) backlinkScopeDids.add(did)
+		newDirectDids.add(did)
+		if (w.record.scope.backlinks) newBacklinkDids.add(did)
 	}
+
+	const directChanged = !setsEqual(directScopeDids, newDirectDids)
+	const backlinkChanged = !setsEqual(backlinkScopeDids, newBacklinkDids)
+
+	directScopeDids = newDirectDids
+	backlinkScopeDids = newBacklinkDids
+
 	logger.info(`[registry] tracking ${directScopeDids.size} scope DID(s), ${backlinkScopeDids.size} with backlinks`)
-	restartDirectJetstream()
-	if (backlinkScopeDids.size > 0 && !backlinkJetstream) {
-		startBacklinkJetstream()
-	} else if (backlinkScopeDids.size === 0 && backlinkJetstream) {
-		stopBacklinkJetstream()
+
+	if (!firehoseStarted) return
+
+	if (directChanged) {
+		restartDirectJetstream()
+	}
+
+	if (backlinkChanged) {
+		if (backlinkScopeDids.size > 0 && !backlinkJetstream) {
+			startBacklinkJetstream()
+		} else if (backlinkScopeDids.size === 0 && backlinkJetstream) {
+			stopBacklinkJetstream()
+		}
 	}
 }
 
@@ -91,9 +114,9 @@ async function getWebhooksForEvent(eventDid: string, eventRecord: unknown) {
 	}
 
 	let backlink = getCached('__backlinks__')
-	if (!backlink) {
+	if (!backlink || backlink.length === 0) {
 		backlink = await findBacklinkWebhooks()
-		setCached('__backlinks__', backlink)
+		if (backlink.length > 0) setCached('__backlinks__', backlink)
 	}
 
 	const includeBacklinks = backlink.length > 0 && recordReferencesAnyOf(eventRecord, backlinkScopeDids)
@@ -142,18 +165,27 @@ async function deliver(
 
 async function handleWhRecord(op: string, did: string, rkey: string, record: unknown): Promise<void> {
 	logger.info(`[wh] ${op} ${did}/${rkey}`)
+	let changed = true
 	if (op === 'delete') {
 		deleteWebhookRecord(did, rkey).catch((err) => logger.error(`[DB] delete ${did}/${rkey}`, err))
 	} else if (record) {
 		const wh = record as WhRecord
 		if (!wh.scope?.aturi || !wh.url) {
 			logger.error(`[wh] Skipping ${did}/${rkey} — invalid record`, { record })
-		} else {
-			logger.info(`[wh] scope=${wh.scope.aturi} url=${wh.url} enabled=${wh.enabled ?? true}`)
-			upsertWebhookRecord(did, rkey, wh).catch((err) => logger.error(`[DB] upsert ${did}/${rkey}`, err))
+			return
 		}
+		logger.info(`[wh] scope=${wh.scope.aturi} url=${wh.url} enabled=${wh.enabled ?? true}`)
+		changed = await upsertWebhookRecord(did, rkey, wh).catch((err) => {
+			logger.error(`[DB] upsert ${did}/${rkey}`, err)
+			return false
+		})
 	} else {
 		logger.warn(`[wh] ${op} ${did}/${rkey} — record missing`)
+		return
+	}
+	if (!changed) {
+		logger.debug(`[wh] ${did}/${rkey} unchanged, skipping reload`)
+		return
 	}
 	invalidate(did)
 	invalidate('__backlinks__')
@@ -184,8 +216,8 @@ async function handleDirectEvent(event: JetstreamEvent): Promise<void> {
 	}
 }
 
-function restartDirectJetstream(): void {
-	const cursor = directJetstream?.cursor
+function restartDirectJetstream(overrideCursor?: number): void {
+	const cursor = overrideCursor ?? directJetstream?.cursor
 	directJetstream?.destroy()
 
 	if (directScopeDids.size === 0) {
@@ -225,6 +257,9 @@ async function handleBacklinkEvent(event: JetstreamEvent): Promise<void> {
 			return
 		}
 
+		// Skip events from scoped DIDs — the direct jetstream already handles those
+		if (directScopeDids.has(did)) return
+
 		if (!recordReferencesAnyOf(record, backlinkScopeDids)) return
 
 		await deliver(did, collection, rkey, op, cid, record)
@@ -233,9 +268,10 @@ async function handleBacklinkEvent(event: JetstreamEvent): Promise<void> {
 	}
 }
 
-function startBacklinkJetstream(): void {
+function startBacklinkJetstream(cursor?: number): void {
 	backlinkJetstream = new JetstreamClient({
 		url: config.jetstreamUrl,
+		cursor,
 		onEvent: handleBacklinkEvent,
 		onError: (err) => logger.error('Backlink Jetstream error', err),
 		onConnect: () => logger.info('Backlink Jetstream connected'),
@@ -249,16 +285,35 @@ function stopBacklinkJetstream(): void {
 	backlinkJetstream = null
 }
 
-export function startFirehose(): void {
+export function startFirehose(initialCursor?: number): void {
 	logger.info(`Jetstream: ${config.jetstreamUrl}`)
-	restartDirectJetstream()
-	if (backlinkScopeDids.size > 0) startBacklinkJetstream()
+	if (initialCursor !== undefined) {
+		logger.info(`Resuming from cursor ${initialCursor}`)
+	}
+	firehoseStarted = true
+	restartDirectJetstream(initialCursor)
+	if (backlinkScopeDids.size > 0) startBacklinkJetstream(initialCursor)
 
 	setInterval(() => {
 		if (Date.now() - lastEventTime > 30_000) {
 			logger.warn(`No events for ${Math.round((Date.now() - lastEventTime) / 1000)}s`)
 		}
 	}, 30_000)
+
+	let lastSavedCursor: number | undefined
+	setInterval(() => {
+		const direct = directJetstream?.cursor
+		const backlink = backlinkJetstream?.cursor
+		const cursor = direct !== undefined && backlink !== undefined
+			? Math.max(direct, backlink)
+			: (direct ?? backlink ?? (isConnected ? Date.now() * 1000 : undefined))
+		if (cursor !== undefined && cursor !== lastSavedCursor) {
+			lastSavedCursor = cursor
+			saveCursor(cursor, config.jetstreamUrl)
+				.then(() => logger.debug(`[cursor] Saved ${cursor}`))
+				.catch((err) => logger.error('[cursor] Failed to save cursor', err))
+		}
+	}, 5_000)
 }
 
 export function stopFirehose(): void {

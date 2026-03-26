@@ -1,7 +1,7 @@
 import { createLogger } from '@wispplace/observability'
 import { config } from './config'
 import { runStartupBackfill } from './lib/backfill'
-import { closeDatabase, db, loadAllWebhooks } from './lib/db'
+import { closeDatabase, db, loadAllWebhooks, loadCursor } from './lib/db'
 import { getFirehoseHealth, initScopeDids, startFirehose, stopFirehose } from './lib/firehose'
 import { closeRedisPublisher } from './lib/redis'
 
@@ -130,7 +130,11 @@ async function main() {
 	// Populate sync pre-filter sets before starting the firehose
 	initScopeDids(webhooks)
 
-	startFirehose()
+	const cursor = await loadCursor(config.jetstreamUrl)
+	if (cursor !== undefined) {
+		logger.info(`[cursor] Resuming from ${cursor}`)
+	}
+	startFirehose(cursor)
 
 	// Backfill any place.wisp.v2.wh records that existed before this run
 	await runStartupBackfill()
