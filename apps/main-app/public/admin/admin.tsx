@@ -266,7 +266,7 @@ function Dashboard() {
 		}, 300)
 
 		return () => clearTimeout(timeoutId)
-	}, [newSupporterIdentifier, searchActors])
+	}, [newSupporterIdentifier])
 
 	const selectActor = (actor: any) => {
 		setNewSupporterIdentifier(actor.handle)
