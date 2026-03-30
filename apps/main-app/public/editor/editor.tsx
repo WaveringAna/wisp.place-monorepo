@@ -475,7 +475,7 @@ function Dashboard() {
 						<div className="flex-1 relative mt-4 overflow-hidden">
 							<TabsContent
 								value="sites"
-								className="absolute inset-0 overflow-hidden data-[state=inactive]:invisible data-[state=inactive]:pointer-events-none"
+								className="absolute inset-0 overflow-hidden content-visibility-auto data-[state=inactive]:invisible data-[state=inactive]:pointer-events-none"
 							>
 								<SitesTab
 									sites={sites}
@@ -488,7 +488,7 @@ function Dashboard() {
 
 							<TabsContent
 								value="domains"
-								className="absolute inset-0 overflow-hidden data-[state=inactive]:invisible data-[state=inactive]:pointer-events-none"
+								className="absolute inset-0 overflow-hidden content-visibility-auto data-[state=inactive]:invisible data-[state=inactive]:pointer-events-none"
 							>
 								<DomainsTab
 									wispDomains={wispDomains}
@@ -507,14 +507,14 @@ function Dashboard() {
 
 							<TabsContent
 								value="upload"
-								className="absolute inset-0 overflow-hidden data-[state=inactive]:invisible data-[state=inactive]:pointer-events-none"
+								className="absolute inset-0 overflow-hidden content-visibility-auto data-[state=inactive]:invisible data-[state=inactive]:pointer-events-none"
 							>
 								<UploadTab sites={sites} sitesLoading={sitesLoading} onUploadComplete={handleUploadComplete} />
 							</TabsContent>
 
 							<TabsContent
 								value="webhooks"
-								className="absolute inset-0 overflow-hidden data-[state=inactive]:invisible data-[state=inactive]:pointer-events-none"
+								className="absolute inset-0 overflow-hidden content-visibility-auto data-[state=inactive]:invisible data-[state=inactive]:pointer-events-none"
 							>
 								<WebhooksTab
 									webhooks={webhooks}
@@ -531,7 +531,7 @@ function Dashboard() {
 
 							<TabsContent
 								value="cli"
-								className="absolute inset-0 overflow-hidden data-[state=inactive]:invisible data-[state=inactive]:pointer-events-none"
+								className="absolute inset-0 overflow-hidden content-visibility-auto data-[state=inactive]:invisible data-[state=inactive]:pointer-events-none"
 							>
 								<CLITab />
 							</TabsContent>

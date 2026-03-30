@@ -259,6 +259,10 @@
   --color-soft-blush-900: #fef9fa;
 }
 
+@utility content-visibility-auto {
+	content-visibility: auto;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
