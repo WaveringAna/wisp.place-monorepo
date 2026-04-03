@@ -20,6 +20,9 @@ echo "  ✓ aarch64-linux"
 bun build --compile --minify --target=bun-linux-x64 "$ENTRY" --outfile "$OUTDIR/wisp-cli-x86_64-linux"
 echo "  ✓ x86_64-linux"
 
+bun build --compile --minify --target=bun-windows-x64 "$ENTRY" --outfile "$OUTDIR/wisp-cli-x86_64-windows.exe"
+echo "  ✓ x86_64-windows"
+
 lipo -create -output "$OUTDIR/wisp-cli-darwin-universal" \
   "$OUTDIR/wisp-cli-aarch64-darwin" \
   "$OUTDIR/wisp-cli-x86_64-darwin"

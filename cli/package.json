@@ -45,7 +45,7 @@
     "typecheck": "tsc --noEmit"
   },
   "type": "module",
-  "dependencies": {
+  "optionalDependencies": {
     "@napi-rs/keyring": "^1.2.0"
   }
 }

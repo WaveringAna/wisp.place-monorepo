@@ -13,7 +13,6 @@ import {
 } from '@atproto/oauth-client-node'
 import { confirm, log } from '@clack/prompts'
 import { serve as honoNodeServe } from '@hono/node-server'
-import { Entry as KeyringEntry } from '@napi-rs/keyring'
 import { resolvePdsFromHandle } from '@wispplace/atproto-utils'
 import { isBun } from '@wispplace/bun-firehose'
 import { Hono } from 'hono'
@@ -22,7 +21,33 @@ import { WISP_OAUTH_SCOPE } from './wisp-service'
 
 const KEYCHAIN_SERVICE = 'wispctl'
 
-function probeKeychain(): boolean {
+interface KeyringEntryLike {
+	setPassword(password: string): void
+	getPassword(): string | null
+	deletePassword(): void
+}
+
+type KeyringEntryConstructor = new (service: string, account: string) => KeyringEntryLike
+
+let keyringEntryConstructor: KeyringEntryConstructor | null | undefined
+
+async function getKeyringEntryConstructor(): Promise<KeyringEntryConstructor | null> {
+	if (keyringEntryConstructor !== undefined) {
+		return keyringEntryConstructor
+	}
+	try {
+		const module = await import('@napi-rs/keyring')
+		keyringEntryConstructor = module.Entry as KeyringEntryConstructor
+	} catch {
+		keyringEntryConstructor = null
+	}
+	return keyringEntryConstructor
+}
+
+async function probeKeychain(): Promise<boolean> {
+	const KeyringEntry = await getKeyringEntryConstructor()
+	if (!KeyringEntry) return false
+
 	const testKey = '__wispctl_probe__'
 	try {
 		const entry = new KeyringEntry(KEYCHAIN_SERVICE, testKey)
@@ -139,15 +164,18 @@ function createStateStore(kv: KvAdapter): NodeSavedStateStore {
 	}
 }
 
-function createSessionStore(kv: KvAdapter, useKeychain: boolean): NodeSavedSessionStore {
-	if (useKeychain) {
+function createSessionStore(
+	kv: KvAdapter,
+	keyringEntryConstructor: KeyringEntryConstructor | null,
+): NodeSavedSessionStore {
+	if (keyringEntryConstructor) {
 		return {
 			async set(sub, session) {
-				new KeyringEntry(KEYCHAIN_SERVICE, sub).setPassword(JSON.stringify(session))
+				new keyringEntryConstructor(KEYCHAIN_SERVICE, sub).setPassword(JSON.stringify(session))
 			},
 			async get(sub) {
 				try {
-					const raw = new KeyringEntry(KEYCHAIN_SERVICE, sub).getPassword()
+					const raw = new keyringEntryConstructor(KEYCHAIN_SERVICE, sub).getPassword()
 					if (!raw) return undefined
 					return JSON.parse(raw) as NodeSavedSession
 				} catch {
@@ -156,7 +184,7 @@ function createSessionStore(kv: KvAdapter, useKeychain: boolean): NodeSavedSessi
 			},
 			async del(sub) {
 				try {
-					new KeyringEntry(KEYCHAIN_SERVICE, sub).deletePassword()
+					new keyringEntryConstructor(KEYCHAIN_SERVICE, sub).deletePassword()
 				} catch {}
 			},
 		}
@@ -219,7 +247,7 @@ export async function authenticateOAuth(
 ): Promise<{ agent: Agent; did: string }> {
 	const kv = await openKv(options.dbPath || DEFAULT_DB_PATH)
 
-	const useKeychain = probeKeychain()
+	const useKeychain = await probeKeychain()
 	if (!useKeychain) {
 		log.warn('System keychain is unavailable (no Secret Service daemon or equivalent).')
 		const fallback = await confirm({
@@ -251,7 +279,7 @@ export async function authenticateOAuth(
 			dpop_bound_access_tokens: false,
 		},
 		stateStore: createStateStore(kv),
-		sessionStore: createSessionStore(kv, useKeychain),
+		sessionStore: createSessionStore(kv, useKeychain ? await getKeyringEntryConstructor() : null),
 		requestLock: requestLocalLock,
 	})
 
@@ -478,10 +506,13 @@ export async function clearSessions(dbPath?: string) {
 		const kv = await openKv(dbPath || DEFAULT_DB_PATH)
 		// Delete any keychain entries for DIDs we know about via dir mappings
 		const dids = kv.valuesByPrefix('dir:')
-		for (const did of dids) {
-			try {
-				new KeyringEntry(KEYCHAIN_SERVICE, did).deletePassword()
-			} catch {}
+		const KeyringEntry = await getKeyringEntryConstructor()
+		if (KeyringEntry) {
+			for (const did of dids) {
+				try {
+					new KeyringEntry(KEYCHAIN_SERVICE, did).deletePassword()
+				} catch {}
+			}
 		}
 		kv.clear()
 		console.log('Cleared all stored OAuth sessions')
