@@ -1,4 +1,4 @@
-# Wisp.place
+# Wisp.place ^.^
 
 Decentralized static site hosting on the AT Protocol. [https://wisp.place](https://wisp.place)
 
