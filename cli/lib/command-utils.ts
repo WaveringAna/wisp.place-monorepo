@@ -34,6 +34,7 @@ export function addXrpcAuthOptions<T extends Command>(command: T): T {
 
 const OAUTH_FALLBACK_PREFIX = 'If browser does not open, visit: '
 const MAX_SPINNER_TEXT_LENGTH = 120
+const APP_PASSWORD_PATTERN = /^[a-z0-9]{4}(?:-[a-z0-9]{4}){3}$/i
 
 function truncateSpinnerText(message: string): string {
 	const compact = message.replace(/\s+/g, ' ').trim()
@@ -54,6 +55,14 @@ export function bindAuthStatusToSpinner(spinner: SpinnerLike): (message: string)
 
 		spinner.text = truncateSpinnerText(message)
 	}
+}
+
+function looksLikeHandle(value: string): boolean {
+	return value.includes('.') && /^[a-z0-9._:-]+$/i.test(value)
+}
+
+function looksLikeAppPassword(value: string): boolean {
+	return APP_PASSWORD_PATTERN.test(value)
 }
 
 export async function resolveIdentifier(
@@ -90,6 +99,12 @@ export async function authenticateForXrpc(
 	identifier: string | undefined,
 	options: XrpcCommandOptions,
 ): Promise<{ agent: Agent; serviceDid: string; did: string }> {
+	if (!identifier && options.password && looksLikeHandle(options.password) && !looksLikeAppPassword(options.password)) {
+		throw new Error(
+			'`--password` appears to have consumed the handle argument. Provide a password value and pass the handle separately.',
+		)
+	}
+
 	// Skip the handle prompt if the current directory already has a stored session
 	const resolvedIdentifier =
 		identifier ?? ((await hasDirSession(options.db)) ? undefined : await resolveIdentifier(undefined))

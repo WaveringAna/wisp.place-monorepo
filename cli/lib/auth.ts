@@ -1,4 +1,5 @@
 import { mkdirSync } from 'node:fs'
+import { createServer } from 'node:net'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { cwd } from 'node:process'
@@ -63,6 +64,82 @@ const DEFAULT_DB_PATH = join(homedir(), '.config', 'wispctl', 'state.sqlite')
 
 const LOOPBACK_PORT = 4000
 const LOOPBACK_HOST = '127.0.0.1'
+
+interface LoopbackPortSelection {
+	port: number
+	usedFallback: boolean
+}
+
+function parsePort(value: string | undefined): number | undefined {
+	if (!value) {
+		return undefined
+	}
+	const parsed = Number.parseInt(value, 10)
+	if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 65535) {
+		return undefined
+	}
+	return parsed
+}
+
+async function isPortAvailable(host: string, port: number): Promise<boolean> {
+	return await new Promise<boolean>((resolve, reject) => {
+		const server = createServer()
+
+		server.once('error', (err: NodeJS.ErrnoException) => {
+			if (err.code === 'EADDRINUSE') {
+				resolve(false)
+				return
+			}
+			reject(err)
+		})
+
+		server.once('listening', () => {
+			server.close((err) => {
+				if (err) {
+					reject(err)
+					return
+				}
+				resolve(true)
+			})
+		})
+
+		server.listen({ host, port, exclusive: true })
+	})
+}
+
+async function findRandomAvailablePort(host: string): Promise<number> {
+	return await new Promise<number>((resolve, reject) => {
+		const server = createServer()
+
+		server.once('error', reject)
+		server.once('listening', () => {
+			const address = server.address()
+			if (!address || typeof address === 'string') {
+				server.close(() => reject(new Error('Failed to determine loopback callback port')))
+				return
+			}
+
+			const port = address.port
+			server.close((err) => {
+				if (err) {
+					reject(err)
+					return
+				}
+				resolve(port)
+			})
+		})
+
+		server.listen({ host, port: 0, exclusive: true })
+	})
+}
+
+async function resolveLoopbackPort(preferredPort: number, host: string): Promise<LoopbackPortSelection> {
+	if (await isPortAvailable(host, preferredPort)) {
+		return { port: preferredPort, usedFallback: false }
+	}
+	const port = await findRandomAvailablePort(host)
+	return { port, usedFallback: true }
+}
 
 // Runtime-agnostic KV adapter — all SQL is baked in so return types are known
 
@@ -260,31 +337,38 @@ export async function authenticateOAuth(
 		}
 	}
 
-	const redirectUri = `http://${LOOPBACK_HOST}:${LOOPBACK_PORT}/oauth/callback`
-	const clientIdParams = new URLSearchParams()
-	clientIdParams.append('redirect_uri', redirectUri)
-	clientIdParams.append('scope', WISP_OAUTH_SCOPE)
-
-	const client = new NodeOAuthClient({
-		clientMetadata: {
-			client_id: `http://localhost?${clientIdParams.toString()}`,
-			client_name: 'Wisp CLI',
-			client_uri: 'https://wisp.place',
-			redirect_uris: [redirectUri],
-			grant_types: ['authorization_code', 'refresh_token'],
-			response_types: ['code'],
-			application_type: 'web',
-			token_endpoint_auth_method: 'none',
-			scope: WISP_OAUTH_SCOPE,
-			dpop_bound_access_tokens: false,
-		},
-		stateStore: createStateStore(kv),
-		sessionStore: createSessionStore(kv, useKeychain ? await getKeyringEntryConstructor() : null),
-		requestLock: requestLocalLock,
-	})
+	const keyringEntryConstructor = useKeychain ? await getKeyringEntryConstructor() : null
+	const stateStore = createStateStore(kv)
+	const sessionStore = createSessionStore(kv, keyringEntryConstructor)
+	const createOAuthClient = (redirectUri: string): NodeOAuthClient => {
+		const clientIdParams = new URLSearchParams()
+		clientIdParams.append('redirect_uri', redirectUri)
+		clientIdParams.append('scope', WISP_OAUTH_SCOPE)
+		return new NodeOAuthClient({
+			clientMetadata: {
+				client_id: `http://localhost?${clientIdParams.toString()}`,
+				client_name: 'Wisp CLI',
+				client_uri: 'https://wisp.place',
+				redirect_uris: [redirectUri],
+				grant_types: ['authorization_code', 'refresh_token'],
+				response_types: ['code'],
+				application_type: 'web',
+				token_endpoint_auth_method: 'none',
+				scope: WISP_OAUTH_SCOPE,
+				dpop_bound_access_tokens: false,
+			},
+			stateStore,
+			sessionStore,
+			requestLock: requestLocalLock,
+		})
+	}
 
 	// Try to restore the session mapped to the current directory
 	const dirKey = `dir:${cwd()}`
+	const dirOAuthPortKey = `dir_oauth_port:${cwd()}`
+	let oauthPort = parsePort(kvGet(kv, dirOAuthPortKey)) ?? LOOPBACK_PORT
+	let redirectUri = `http://${LOOPBACK_HOST}:${oauthPort}/oauth/callback`
+	let client = createOAuthClient(redirectUri)
 	const storedDid = kvGet(kv, dirKey)
 	if (storedDid) {
 		try {
@@ -302,6 +386,21 @@ export async function authenticateOAuth(
 	// Need a handle to start a new OAuth flow
 	if (!handle) {
 		throw new Error('No active session for this directory. Run `wispctl login <handle>` first.')
+	}
+
+	const preferredPort = oauthPort
+	const portSelection = await resolveLoopbackPort(preferredPort, LOOPBACK_HOST)
+	if (portSelection.usedFallback) {
+		emitStatus(
+			options,
+			`OAuth callback port ${preferredPort} is unavailable. Using ${portSelection.port} for this login flow.`,
+		)
+	}
+
+	if (portSelection.port !== oauthPort) {
+		oauthPort = portSelection.port
+		redirectUri = `http://${LOOPBACK_HOST}:${oauthPort}/oauth/callback`
+		client = createOAuthClient(redirectUri)
 	}
 
 	// Start new OAuth flow
@@ -387,7 +486,7 @@ export async function authenticateOAuth(
 
 		if (isBun) {
 			const bunServer = Bun.serve({
-				port: LOOPBACK_PORT,
+				port: oauthPort,
 				hostname: LOOPBACK_HOST,
 				fetch: app.fetch,
 			})
@@ -395,7 +494,7 @@ export async function authenticateOAuth(
 		} else {
 			const nodeServer = honoNodeServe({
 				fetch: app.fetch,
-				port: LOOPBACK_PORT,
+				port: oauthPort,
 				hostname: LOOPBACK_HOST,
 			})
 			serverHandle = { close: () => nodeServer.close() }
@@ -440,6 +539,11 @@ export async function authenticateOAuth(
 
 	// Map the current directory to this DID for future restores
 	kvSet(kv, dirKey, did)
+	if (oauthPort === LOOPBACK_PORT) {
+		kv.del(dirOAuthPortKey)
+	} else {
+		kvSet(kv, dirOAuthPortKey, String(oauthPort))
+	}
 
 	emitStatus(options, `Authenticated as ${did}`)
 
@@ -478,9 +582,13 @@ export async function authenticateAppPassword(
  * Authenticate - tries OAuth if no password provided, otherwise uses app password
  */
 export async function authenticate(handle?: string, options: AuthOptions = {}): Promise<{ agent: Agent; did: string }> {
-	if (options.appPassword) {
+	if (options.appPassword !== undefined) {
+		const trimmedPassword = options.appPassword.trim()
+		if (!trimmedPassword) {
+			throw new Error('App password is required when using --password')
+		}
 		if (!handle) throw new Error('Handle required with app password authentication')
-		return authenticateAppPassword(handle, options.appPassword, undefined, options)
+		return authenticateAppPassword(handle, trimmedPassword, undefined, options)
 	}
 	return authenticateOAuth(handle, options)
 }
