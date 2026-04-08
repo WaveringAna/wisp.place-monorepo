@@ -142,7 +142,7 @@ async function deleteSiteWithSelection(
 	}
 }
 
-program.name('wisp-cli').description('CLI for wisp.place - deploy static sites to the AT Protocol').version('1.0.0')
+program.name('wisp-cli').description('CLI for wisp.place - deploy static sites to the AT Protocol').version('1.1.0')
 
 // Deploy command (default)
 program
