@@ -30,6 +30,12 @@ interface KeyringEntryLike {
 
 type KeyringEntryConstructor = new (service: string, account: string) => KeyringEntryLike
 
+interface KeychainProbeResult {
+	available: boolean
+	detail?: string
+	moduleAvailable: boolean
+}
+
 let keyringEntryConstructor: KeyringEntryConstructor | null | undefined
 
 async function getKeyringEntryConstructor(): Promise<KeyringEntryConstructor | null> {
@@ -45,18 +51,70 @@ async function getKeyringEntryConstructor(): Promise<KeyringEntryConstructor | n
 	return keyringEntryConstructor
 }
 
-async function probeKeychain(): Promise<boolean> {
+function formatProbeError(error: unknown): string | undefined {
+	if (error instanceof Error) {
+		return error.message
+	}
+	if (typeof error === 'string') {
+		return error
+	}
+	return undefined
+}
+
+function describeUnavailableKeychain(result: KeychainProbeResult): string {
+	if (process.platform === 'darwin') {
+		if (!result.moduleAvailable) {
+			return 'macOS Keychain support is unavailable in this build.'
+		}
+		if (result.detail?.toLowerCase().includes('authorization')) {
+			return 'macOS Keychain access could not be authorized.'
+		}
+		return result.detail ? `macOS Keychain access failed: ${result.detail}` : 'macOS Keychain access is unavailable.'
+	}
+
+	if (process.platform === 'linux') {
+		if (!result.moduleAvailable) {
+			return 'System keychain support is unavailable in this build.'
+		}
+		if (result.detail?.toLowerCase().includes('secret service')) {
+			return 'System keychain is unavailable (no Secret Service daemon or equivalent).'
+		}
+		return result.detail ? `System keychain access failed: ${result.detail}` : 'System keychain is unavailable.'
+	}
+
+	if (process.platform === 'win32') {
+		if (!result.moduleAvailable) {
+			return 'Windows Credential Manager support is unavailable in this build.'
+		}
+		return result.detail
+			? `Windows Credential Manager access failed: ${result.detail}`
+			: 'Windows Credential Manager is unavailable.'
+	}
+
+	if (!result.moduleAvailable) {
+		return 'Secure OS credential storage is unavailable in this build.'
+	}
+	return result.detail ? `Secure OS credential storage failed: ${result.detail}` : 'Secure OS credential storage is unavailable.'
+}
+
+async function probeKeychain(): Promise<KeychainProbeResult> {
 	const KeyringEntry = await getKeyringEntryConstructor()
-	if (!KeyringEntry) return false
+	if (!KeyringEntry) {
+		return { available: false, moduleAvailable: false }
+	}
 
 	const testKey = '__wispctl_probe__'
 	try {
 		const entry = new KeyringEntry(KEYCHAIN_SERVICE, testKey)
 		entry.setPassword('1')
 		entry.deletePassword()
-		return true
-	} catch {
-		return false
+		return { available: true, moduleAvailable: true }
+	} catch (error) {
+		return {
+			available: false,
+			detail: formatProbeError(error),
+			moduleAvailable: true,
+		}
 	}
 }
 
@@ -324,9 +382,10 @@ export async function authenticateOAuth(
 ): Promise<{ agent: Agent; did: string }> {
 	const kv = await openKv(options.dbPath || DEFAULT_DB_PATH)
 
-	const useKeychain = await probeKeychain()
+	const keychainProbe = await probeKeychain()
+	const useKeychain = keychainProbe.available
 	if (!useKeychain) {
-		log.warn('System keychain is unavailable (no Secret Service daemon or equivalent).')
+		log.warn(describeUnavailableKeychain(keychainProbe))
 		const fallback = await confirm({
 			message:
 				'Fall back to storing session tokens unencrypted in SQLite? (On headless systems, prefer --password instead.)',
