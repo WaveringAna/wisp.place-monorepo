@@ -25,6 +25,7 @@ let lastEventTime = Date.now()
 let isConnected = false
 let activeHandlers = 0
 let queuedHandlers = 0
+let consecutiveFailures = 0
 const siteQueues = new Map<string, Promise<void>>()
 
 // Track current firehose sequence number for cursor-based resumption
@@ -41,8 +42,13 @@ export function getFirehoseHealth() {
 		timeSinceLastEvent: Date.now() - lastEventTime,
 		queueSize: queuedHandlers,
 		activeHandlers,
+		consecutiveFailures,
 		healthy: isConnected && Date.now() - lastEventTime < 60000,
 	}
+}
+
+export function getConsecutiveFailures(): number {
+	return consecutiveFailures
 }
 
 /**
@@ -92,6 +98,7 @@ function scheduleSiteWork(siteKey: string, handler: () => Promise<void>): void {
 async function handleEvent(evt: Event | CommitEvt): Promise<void> {
 	try {
 		lastEventTime = Date.now()
+		if (consecutiveFailures > 0) consecutiveFailures = 0
 		if ('seq' in evt) currentSeq = evt.seq
 
 		if (!('event' in evt)) return
@@ -153,8 +160,13 @@ async function handleEvent(evt: Event | CommitEvt): Promise<void> {
 	}
 }
 
-function handleError(err: Error): void {
+function handleError(err: Error, onTooManyFailures?: () => void): void {
 	logger.error('Firehose connection error', err)
+	consecutiveFailures++
+	if (consecutiveFailures >= 3) {
+		logger.warn(`Firehose failed ${consecutiveFailures} times, triggering offline callback`)
+		onTooManyFailures?.()
+	}
 }
 
 let firehoseHandle: { destroy: () => void } | null = null
@@ -162,7 +174,7 @@ let firehoseHandle: { destroy: () => void } | null = null
 /**
  * Start the firehose worker
  */
-export function startFirehose(initialCursor?: number): void {
+export function startFirehose(initialCursor?: number, onTooManyFailures?: () => void): void {
 	logger.info(`Starting firehose (runtime: ${isBun ? 'Bun' : 'Node.js'})`)
 	logger.info(`Service: ${config.firehoseService}`)
 	logger.info(`Max concurrency: ${config.firehoseMaxConcurrency}`)
@@ -178,10 +190,11 @@ export function startFirehose(initialCursor?: number): void {
 			service: config.firehoseService,
 			filterCollections: ['place.wisp.fs', 'place.wisp.settings'],
 			handleEvent,
-			onError: handleError,
+			onError: (err: Error) => handleError(err, onTooManyFailures),
 			getCursor: () => currentSeq,
 			onConnect: () => {
 				isConnected = true
+				consecutiveFailures = 0
 				logger.info('Firehose connected')
 			},
 			onDisconnect: () => {
@@ -199,7 +212,7 @@ export function startFirehose(initialCursor?: number): void {
 			service: config.firehoseService,
 			filterCollections: ['place.wisp.fs', 'place.wisp.settings'],
 			handleEvent: handleEvent as any,
-			onError: handleError,
+			onError: (err: Error) => handleError(err, onTooManyFailures),
 		})
 		nodeFirehose.start()
 		firehoseHandle = { destroy: () => nodeFirehose.destroy() }
@@ -228,6 +241,7 @@ export function startFirehose(initialCursor?: number): void {
 export function stopFirehose(): void {
 	logger.info('Stopping firehose')
 	isConnected = false
+	consecutiveFailures = 0
 	firehoseHandle?.destroy()
 	firehoseHandle = null
 	currentSeq = undefined

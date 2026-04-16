@@ -556,7 +556,8 @@ function Dashboard() {
 					src="/corner.png"
 					alt=""
 					aria-hidden="true"
-					className="w-full max-w-none -translate-x-[95%] translate-y-[14%] select-none"
+					className="w-full max-w-none select-none"
+					style={{ transform: 'translate(-95%, 14%)' }}
 				/>
 			</div>
 

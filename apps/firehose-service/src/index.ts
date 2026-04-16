@@ -22,7 +22,7 @@ import { closeCacheInvalidationPublisher } from './lib/cache-invalidation'
 import { fetchSiteRecord, handleSiteCreateOrUpdate, listSiteRecordsForDid } from './lib/cache-writer'
 import { closeDatabase, getSiteCache, listAllKnownDids, listAllSiteCaches, listAllSites, upsertSite } from './lib/db'
 import { getCurrentSeq, getFirehoseHealth, startFirehose, stopFirehose } from './lib/firehose'
-import { closeLeaderRedis, getLeaderInfo, runLeaderElection, saveCursor } from './lib/leader'
+import { closeLeaderRedis, getLeaderInfo, releaseLeadership, runLeaderElection, saveCursor } from './lib/leader'
 import { startRevalidateWorker, stopRevalidateWorker } from './lib/revalidate-worker'
 import { storage } from './lib/storage'
 
@@ -70,6 +70,7 @@ async function shutdown(signal: string) {
 	if (cursorSaveTimer) clearInterval(cursorSaveTimer)
 	leaderAbortController?.abort()
 	stopFirehose()
+	if (config.leaderElection) await releaseLeadership()
 	await stopRevalidateWorker()
 	await closeCacheInvalidationPublisher()
 	await closeLeaderRedis()
@@ -296,13 +297,19 @@ async function main() {
 
 		// Run election loop (non-blocking)
 		runLeaderElection(
-			(cursor) => startFirehose(cursor),
+			(cursor) =>
+				startFirehose(cursor, () => {
+					logger.warn('Firehose failed 3 times, stepping down from leadership')
+					releaseLeadership().finally(() => leaderAbortController?.abort())
+				}),
 			() => stopFirehose(),
 			leaderAbortController.signal,
 		).catch((err) => logger.error('[Leader] Election loop fatal error', err))
 	} else {
 		// Single-instance mode: start firehose directly
-		startFirehose()
+		startFirehose(undefined, () => {
+			logger.warn('Firehose failed 3 times, stopping service')
+		})
 	}
 
 	if (config.isBackfill) {

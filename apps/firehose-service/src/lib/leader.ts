@@ -30,6 +30,15 @@ else
 end
 `
 
+// Lua script: release leadership only if this instance still owns the key
+const RELEASE_SCRIPT = `
+if redis.call('get', KEYS[1]) == ARGV[1] then
+  return redis.call('del', KEYS[1])
+else
+  return 0
+end
+`
+
 let redis: Redis | null = null
 
 function getRedis(): Redis {
@@ -55,6 +64,15 @@ async function renewLeadership(): Promise<boolean> {
 		| string
 		| null
 	return result === 'OK'
+}
+
+export async function releaseLeadership(): Promise<void> {
+	try {
+		const deleted = (await getRedis().eval(RELEASE_SCRIPT, 1, LEADER_KEY, instanceId)) as number
+		if (deleted === 1) logger.info('[Leader] Released leader key for immediate standby takeover')
+	} catch (err) {
+		logger.warn('[Leader] Failed to release leader key', { error: String(err) })
+	}
 }
 
 export async function saveCursor(seq: number): Promise<void> {
@@ -97,13 +115,51 @@ export async function runLeaderElection(
 ): Promise<void> {
 	logger.info(`[Leader] Starting election loop (instance: ${instanceId})`)
 
+	const MAX_RENEWAL_FAILURES = 3
 	let isLeader = false
-	let renewalTimer: ReturnType<typeof setInterval> | null = null
+	let renewalTimer: ReturnType<typeof setTimeout> | null = null
+	let renewalFailures = 0
+
+	const clearRenewal = () => {
+		if (renewalTimer) clearTimeout(renewalTimer)
+		renewalTimer = null
+	}
 
 	signal.addEventListener('abort', () => {
-		if (renewalTimer) clearInterval(renewalTimer)
+		clearRenewal()
 		if (isLeader) onLoseLeadership()
 	})
+
+	const scheduleRenew = () => {
+		renewalTimer = setTimeout(async () => {
+			if (signal.aborted || !isLeader) return
+
+			const renewed = await renewLeadership().catch((err) => {
+				logger.error('[Leader] Renewal error', err)
+				return false
+			})
+
+			if (renewed) {
+				renewalFailures = 0
+				scheduleRenew()
+				return
+			}
+
+			renewalFailures++
+			logger.warn(`[Leader] Renewal failed (${renewalFailures}/${MAX_RENEWAL_FAILURES})`)
+
+			if (renewalFailures >= MAX_RENEWAL_FAILURES) {
+				logger.warn('[Leader] Lost leadership (renewal failed), stepping down')
+				clearRenewal()
+				isLeader = false
+				renewalFailures = 0
+				onLoseLeadership()
+				return
+			}
+
+			scheduleRenew()
+		}, config.leaderRenewIntervalMs)
+	}
 
 	while (!signal.aborted) {
 		if (!isLeader) {
@@ -118,25 +174,11 @@ export async function runLeaderElection(
 			}
 
 			isLeader = true
+			renewalFailures = 0
 			const cursor = await readCursor()
 			logger.info(`[Leader] Won leadership, cursor: ${cursor ?? 'none (starting from head)'}`)
 			onBecomeLeader(cursor)
-
-			renewalTimer = setInterval(async () => {
-				if (signal.aborted) return
-				const renewed = await renewLeadership().catch((err) => {
-					logger.error('[Leader] Renewal error', err)
-					return false
-				})
-
-				if (!renewed) {
-					logger.warn('[Leader] Lost leadership (renewal failed), stepping down')
-					if (renewalTimer) clearInterval(renewalTimer)
-					renewalTimer = null
-					isLeader = false
-					onLoseLeadership()
-				}
-			}, config.leaderRenewIntervalMs)
+			scheduleRenew()
 		}
 
 		await sleep(config.leaderPollIntervalMs)
