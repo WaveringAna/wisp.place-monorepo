@@ -30,6 +30,13 @@ import { UploadTab } from './tabs/UploadTab'
 import { WebhooksTab } from './tabs/WebhooksTab'
 
 function Dashboard() {
+	const dashboardInset = '2.8rem'
+	const dashboardMaxWidth = '72rem'
+	const mascotStyle = {
+		left: `calc((100vw - min(${dashboardMaxWidth}, 100vw)) / 2 + ${dashboardInset})`,
+		width: 'clamp(14rem, 19vw, 17rem)',
+	} as const
+
 	// Use custom hooks
 	const { userInfo, loading, isAuthenticated, fetchUserInfo } = useUserInfo()
 	const { sites, sitesLoading, fetchSites, deleteSite } = useSiteData()
@@ -394,9 +401,9 @@ function Dashboard() {
 	}
 
 	return (
-		<div className="w-full h-screen bg-background flex flex-col font-mono overflow-hidden">
+		<div className="relative isolate w-full h-screen bg-background flex flex-col font-mono overflow-hidden">
 			{/* Header */}
-			<header className="w-full border-b border-border/40 bg-background flex-shrink-0">
+			<header className="relative z-10 w-full border-b border-border/40 bg-background flex-shrink-0">
 				<div className="max-w-6xl w-full mx-auto px-6 py-6 flex items-start justify-between">
 					<div className="space-y-2">
 						<h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
@@ -419,8 +426,8 @@ function Dashboard() {
 			</header>
 
 			{/* Main content area - fills remaining space */}
-			<div className="flex-1 overflow-hidden flex flex-col">
-				<div className="container mx-auto px-6 py-6 max-w-6xl w-full flex flex-col h-full">
+			<div className="relative z-10 flex-1 overflow-hidden flex flex-col">
+				<div className="container relative mx-auto px-6 py-6 max-w-6xl w-full flex flex-col h-full overflow-visible">
 					{/* Keyboard shortcuts hint */}
 					<div className="mb-4 flex items-center gap-4 text-xs text-muted-foreground flex-shrink-0">
 						<div className="flex items-center gap-2">
@@ -436,7 +443,11 @@ function Dashboard() {
 						</div>
 					</div>
 
-					<Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col flex-1 overflow-hidden">
+					<Tabs
+						value={activeTab}
+						onValueChange={setActiveTab}
+						className="relative z-10 flex flex-col flex-1 overflow-hidden"
+					>
 						<TabsList className="grid w-full grid-cols-5 bg-card border-b border-border/50 rounded-none h-auto p-0 flex-shrink-0">
 							<TabsTrigger
 								value="sites"
@@ -540,8 +551,17 @@ function Dashboard() {
 				</div>
 			</div>
 
+			<div className="pointer-events-none absolute bottom-0 z-20" style={mascotStyle}>
+				<img
+					src="/corner.png"
+					alt=""
+					aria-hidden="true"
+					className="w-full max-w-none -translate-x-[95%] translate-y-[14%] select-none"
+				/>
+			</div>
+
 			{/* Footer - always visible */}
-			<footer className="border-t border-border/30 font-mono flex-shrink-0 bg-background">
+			<footer className="relative z-10 border-t border-border/30 font-mono flex-shrink-0 bg-background">
 				<div className="container mx-auto px-6 py-4 max-w-6xl">
 					<div className="flex items-center justify-between text-xs text-muted-foreground">
 						<div className="flex items-center gap-6">

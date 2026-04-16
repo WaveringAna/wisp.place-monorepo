@@ -21,6 +21,9 @@
 
     <!-- Theme -->
     <meta name="theme-color" content="#000000" />
+    <script>
+        document.documentElement.classList.add('js');
+    </script>
 
     <link rel="icon" type="image/x-icon" href="./favicon.ico">
     <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32x32.png">
@@ -228,6 +231,22 @@
             margin-bottom: 0.25rem;
         }
 
+        .js .terminal[data-animate-on-view] .terminal-body > .terminal-line,
+        .js .terminal[data-animate-on-view] .terminal-body > .terminal-spacer {
+            opacity: 0;
+            transform: translateY(10px);
+            transition: opacity 240ms ease, transform 240ms ease;
+            will-change: opacity, transform;
+        }
+
+        .js .terminal[data-animate-on-view] .terminal-body > .terminal-line.is-visible,
+        .js .terminal[data-animate-on-view] .terminal-body > .terminal-spacer.is-visible,
+        .js .terminal[data-animate-on-view].is-complete .terminal-body > .terminal-line,
+        .js .terminal[data-animate-on-view].is-complete .terminal-body > .terminal-spacer {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
         .t-prompt { color: #7c7cff; }
         .t-cmd { color: #c9d1d9; }
         .t-muted { color: #666; }
@@ -265,6 +284,14 @@
             .t-success { color: #1a7f37; }
             .t-cyan { color: #0969da; }
             .t-output { color: #656d76; }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .js .terminal[data-animate-on-view] .terminal-body > .terminal-line,
+            .js .terminal[data-animate-on-view] .terminal-body > .terminal-spacer {
+                transition: none;
+                transform: none;
+            }
         }
 
         /* Features */
@@ -517,7 +544,7 @@
 
     <section class="demo">
         <div class="demo-inner">
-            <div class="terminal">
+            <div class="terminal" data-animate-on-view>
                 <div class="terminal-header">
                     <div class="terminal-dots">
                         <span class="terminal-dot red"></span>
@@ -604,7 +631,7 @@
                     </div>
                 </div>
                 <div>
-                    <div class="terminal">
+                    <div class="terminal" data-animate-on-view data-visible-items="5">
                         <div class="terminal-header">
                             <div class="terminal-dots">
                                 <span class="terminal-dot red"></span>
@@ -679,5 +706,95 @@
             </nav>
         </div>
     </footer>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const terminals = Array.from(document.querySelectorAll('.terminal[data-animate-on-view]'));
+
+            if (!terminals.length) {
+                return;
+            }
+
+            const revealAll = (terminal) => {
+                terminal.classList.add('is-complete');
+
+                for (const item of terminal.querySelectorAll('.terminal-body > .terminal-line, .terminal-body > .terminal-spacer')) {
+                    item.classList.add('is-visible');
+                }
+            };
+
+            const getVisibleItems = (terminal) => {
+                const items = Array.from(terminal.querySelectorAll('.terminal-body > .terminal-line, .terminal-body > .terminal-spacer'));
+                const visibleCount = Number.parseInt(terminal.dataset.visibleItems || '0', 10);
+
+                if (Number.isNaN(visibleCount) || visibleCount <= 0) {
+                    return { items, hiddenItems: items };
+                }
+
+                items.slice(0, visibleCount).forEach((item) => {
+                    item.classList.add('is-visible');
+                });
+
+                return {
+                    items,
+                    hiddenItems: items.slice(visibleCount),
+                };
+            };
+
+            terminals.forEach((terminal) => {
+                getVisibleItems(terminal);
+            });
+
+            if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                terminals.forEach(revealAll);
+                return;
+            }
+
+            const animateTerminal = (terminal) => {
+                const { hiddenItems } = getVisibleItems(terminal);
+                const lineDelayMs = 180;
+
+                if (!hiddenItems.length) {
+                    terminal.classList.add('is-complete');
+                    return;
+                }
+
+                hiddenItems.forEach((item, index) => {
+                    window.setTimeout(() => {
+                        item.classList.add('is-visible');
+
+                        if (index === hiddenItems.length - 1) {
+                            terminal.classList.add('is-complete');
+                        }
+                    }, index * lineDelayMs);
+                });
+            };
+
+            const observer = new IntersectionObserver((entries) => {
+                for (const entry of entries) {
+                    if (!entry.isIntersecting) {
+                        continue;
+                    }
+
+                    const terminal = entry.target;
+
+                    if (terminal.dataset.animated === 'true') {
+                        observer.unobserve(terminal);
+                        continue;
+                    }
+
+                    terminal.dataset.animated = 'true';
+                    animateTerminal(terminal);
+                    observer.unobserve(terminal);
+                }
+            }, {
+                threshold: 0.35,
+                rootMargin: '0px 0px -10% 0px',
+            });
+
+            terminals.forEach((terminal) => {
+                observer.observe(terminal);
+            });
+        });
+    </script>
 </body>
 </html>
