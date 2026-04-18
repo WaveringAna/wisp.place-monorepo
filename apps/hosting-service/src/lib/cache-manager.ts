@@ -20,6 +20,7 @@ interface CacheEntry {
 	value: unknown
 	timestamp: number
 	size: number
+	ttl?: number
 }
 
 interface NamespaceStats {
@@ -33,6 +34,8 @@ interface NamespaceStats {
 interface GetOrFetchOpts<T> {
 	/** Skip caching when predicate returns false (e.g. don't cache null). */
 	cacheIf?: (value: T) => boolean
+	/** Per-entry TTL override (ms). Can be a number or a function of the value. */
+	ttl?: number | ((value: T) => number | undefined)
 }
 
 export class CacheManager<NS extends string = string> {
@@ -58,7 +61,8 @@ export class CacheManager<NS extends string = string> {
 		const value = await fetcher()
 
 		if (!opts?.cacheIf || opts.cacheIf(value)) {
-			this.set(ns, key, value)
+			const ttl = typeof opts?.ttl === 'function' ? opts.ttl(value) : opts?.ttl
+			this.set(ns, key, value, ttl)
 		}
 
 		return value
@@ -76,8 +80,9 @@ export class CacheManager<NS extends string = string> {
 			return undefined
 		}
 
-		// TTL check
-		if (cfg.ttl && Date.now() - entry.timestamp > cfg.ttl) {
+		// TTL check (per-entry override takes precedence over namespace default)
+		const effectiveTtl = entry.ttl ?? cfg.ttl
+		if (effectiveTtl && Date.now() - entry.timestamp > effectiveTtl) {
 			map.delete(key)
 			st.entries = map.size
 			st.sizeBytes -= entry.size
@@ -93,7 +98,7 @@ export class CacheManager<NS extends string = string> {
 		return entry.value as T
 	}
 
-	set(ns: NS, key: string, value: unknown): void {
+	set(ns: NS, key: string, value: unknown, ttl?: number): void {
 		const map = this.namespaces.get(ns)
 		const cfg = this.configs.get(ns)
 		const st = this.stats.get(ns)
@@ -122,7 +127,7 @@ export class CacheManager<NS extends string = string> {
 			st.evictions++
 		}
 
-		map.set(key, { value, timestamp: Date.now(), size })
+		map.set(key, { value, timestamp: Date.now(), size, ttl })
 		st.sizeBytes += size
 		st.entries = map.size
 	}
@@ -182,11 +187,11 @@ export class CacheManager<NS extends string = string> {
 		this.cleanupTimer = setInterval(() => {
 			const now = Date.now()
 			for (const [ns, cfg] of this.configs) {
-				if (!cfg.ttl) continue
 				const map = this.namespaces.get(ns)!
 				const st = this.stats.get(ns)!
 				for (const [key, entry] of map) {
-					if (now - entry.timestamp > cfg.ttl) {
+					const effectiveTtl = entry.ttl ?? cfg.ttl
+					if (effectiveTtl && now - entry.timestamp > effectiveTtl) {
 						map.delete(key)
 						st.sizeBytes -= entry.size
 					}

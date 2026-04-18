@@ -11,20 +11,31 @@ const sql = postgres(process.env.DATABASE_URL || 'postgres://postgres:postgres@l
 // Cache-only mode: skip all DB writes and only use tiered storage
 export const CACHE_ONLY = process.env.CACHE_ONLY === 'true'
 
+// Short TTL for negative / unmapped lookups so newly-mapped domains appear quickly.
+const NEGATIVE_TTL_MS = 10_000
+
 export async function getWispDomain(domain: string): Promise<DomainLookup | null> {
 	const key = domain.toLowerCase()
-	return cache.getOrFetch('domains', key, async () => {
-		const result = await sql<DomainLookup[]>`
+	return cache.getOrFetch(
+		'domains',
+		key,
+		async () => {
+			const result = await sql<DomainLookup[]>`
       SELECT did, rkey FROM domains WHERE domain = ${key} LIMIT 1
     `
-		return result[0] || null
-	})
+			return result[0] || null
+		},
+		{ ttl: (v) => (!v || !v.rkey ? NEGATIVE_TTL_MS : undefined) },
+	)
 }
 
 export async function getCustomDomain(domain: string): Promise<CustomDomainLookup | null> {
 	const key = domain.toLowerCase()
-	return cache.getOrFetch('customDomains', key, async () => {
-		const result = await sql<CustomDomainLookup[]>`
+	return cache.getOrFetch(
+		'customDomains',
+		key,
+		async () => {
+			const result = await sql<CustomDomainLookup[]>`
       SELECT cd.id, cd.domain, cd.did, cd.rkey, cd.verified
       FROM custom_domains cd
       LEFT JOIN site_cache sc
@@ -38,18 +49,25 @@ export async function getCustomDomain(domain: string): Promise<CustomDomainLooku
         cd.created_at DESC
       LIMIT 1
     `
-		return result[0] || null
-	})
+			return result[0] || null
+		},
+		{ ttl: (v) => (!v || !v.rkey ? NEGATIVE_TTL_MS : undefined) },
+	)
 }
 
 export async function getCustomDomainByHash(hash: string): Promise<CustomDomainLookup | null> {
-	return cache.getOrFetch('customDomains', `hash:${hash}`, async () => {
-		const result = await sql<CustomDomainLookup[]>`
+	return cache.getOrFetch(
+		'customDomains',
+		`hash:${hash}`,
+		async () => {
+			const result = await sql<CustomDomainLookup[]>`
       SELECT id, domain, did, rkey, verified FROM custom_domains
       WHERE id = ${hash} AND verified = true LIMIT 1
     `
-		return result[0] || null
-	})
+			return result[0] || null
+		},
+		{ ttl: (v) => (!v || !v.rkey ? NEGATIVE_TTL_MS : undefined) },
+	)
 }
 
 export async function upsertSite(did: string, rkey: string, displayName?: string) {
