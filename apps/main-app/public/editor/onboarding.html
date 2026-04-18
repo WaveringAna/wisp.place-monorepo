@@ -248,6 +248,34 @@
             window.location.href = '/editor';
         });
 
+        function waitForUploadJob(jobId) {
+            return new Promise((resolve, reject) => {
+                const es = new EventSource(`/wisp/upload-progress/${jobId}`);
+                let settled = false;
+                const finish = (fn, val) => { if (settled) return; settled = true; es.close(); fn(val); };
+                es.addEventListener('progress', (ev) => {
+                    try {
+                        const d = JSON.parse(ev.data);
+                        if (d.status === 'completed') finish(resolve);
+                        else if (d.status === 'failed') finish(reject, new Error(d.error || 'Upload failed'));
+                    } catch (_) {}
+                });
+                es.addEventListener('done', () => finish(resolve));
+                es.addEventListener('error', (ev) => {
+                    if (ev && ev.data) {
+                        try {
+                            const d = JSON.parse(ev.data);
+                            finish(reject, new Error(d.error || 'Upload failed'));
+                            return;
+                        } catch (_) {}
+                    }
+                    if (es.readyState === EventSource.CLOSED) {
+                        finish(reject, new Error('Upload connection closed'));
+                    }
+                });
+            });
+        }
+
         // Upload
         uploadBtn.addEventListener('click', async () => {
             if (!state.siteName) return;
@@ -274,14 +302,30 @@
                 });
                 const data = await res.json();
 
-                if (data.success) {
-                    progressText.textContent = 'Upload complete!';
-                    setTimeout(() => {
-                        window.location.href = `https://${state.claimedDomain}`;
-                    }, 1500);
-                } else {
+                if (!data.success) {
                     throw new Error(data.error || 'Upload failed');
                 }
+
+                if (data.jobId) {
+                    progressText.textContent = 'Uploading files...';
+                    await waitForUploadJob(data.jobId);
+                }
+
+                progressText.textContent = 'Linking domain to site...';
+                const mapRes = await fetch('/api/domain/wisp/map-site', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ domain: state.claimedDomain, siteRkey: state.siteName })
+                });
+                const mapData = await mapRes.json();
+                if (!mapData.success) {
+                    throw new Error('Failed to link domain to site');
+                }
+
+                progressText.textContent = 'All set! Redirecting...';
+                setTimeout(() => {
+                    window.location.href = `https://${state.claimedDomain}`;
+                }, 1500);
             } catch (err) {
                 alert(`Upload failed: ${err.message}`);
                 uploadBtn.disabled = false;
