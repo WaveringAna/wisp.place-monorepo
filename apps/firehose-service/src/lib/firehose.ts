@@ -26,10 +26,24 @@ let isConnected = false
 let activeHandlers = 0
 let queuedHandlers = 0
 let consecutiveFailures = 0
+// Counts how many times we've switched relays without a successful event since
+// the last successful connection. Used to detect when both relays are down.
+let swapsWithoutSuccess = 0
+// Counts stall watchdog firings without a received event in between. 1 = try a
+// same-relay reconnect; 2 = relay is dead, fail over.
+let stallReconnects = 0
+let activeService: string = config.firehoseService
 const siteQueues = new Map<string, Promise<void>>()
+
+const STALL_THRESHOLD_MS = 30_000
 
 // Track current firehose sequence number for cursor-based resumption
 let currentSeq: number | undefined
+
+function getAlternateService(current: string): string | undefined {
+	if (!config.firehoseServiceSecondary) return undefined
+	return current === config.firehoseService ? config.firehoseServiceSecondary : config.firehoseService
+}
 
 export function getCurrentSeq(): number | undefined {
 	return currentSeq
@@ -99,6 +113,10 @@ async function handleEvent(evt: Event | CommitEvt): Promise<void> {
 	try {
 		lastEventTime = Date.now()
 		if (consecutiveFailures > 0) consecutiveFailures = 0
+		// Any successful event means the active relay is working — reset the
+		// cross-relay failover counter so a future failure triggers a fresh swap.
+		if (swapsWithoutSuccess > 0) swapsWithoutSuccess = 0
+		if (stallReconnects > 0) stallReconnects = 0
 		if ('seq' in evt) currentSeq = evt.seq
 
 		if (!('event' in evt)) return
@@ -161,33 +179,78 @@ async function handleEvent(evt: Event | CommitEvt): Promise<void> {
 }
 
 function handleError(err: Error, onTooManyFailures?: () => void): void {
-	logger.error('Firehose connection error', err)
+	logger.error(`Firehose connection error on ${activeService}`, err)
 	consecutiveFailures++
-	if (consecutiveFailures >= 3) {
-		logger.warn(`Firehose failed ${consecutiveFailures} times, triggering offline callback`)
-		onTooManyFailures?.()
+	if (consecutiveFailures < 3) return
+
+	const alternate = getAlternateService(activeService)
+	if (alternate && swapsWithoutSuccess < 2) {
+		logger.warn(`Firehose ${activeService} failed ${consecutiveFailures} times, failing over to ${alternate}`)
+		consecutiveFailures = 0
+		swapsWithoutSuccess++
+		firehoseHandle?.destroy()
+		firehoseHandle = null
+		activeService = alternate
+		connect(onTooManyFailures)
+		return
 	}
+
+	if (alternate) {
+		logger.error('Both primary and secondary relays failing, triggering offline callback')
+	} else {
+		logger.warn(`Firehose failed ${consecutiveFailures} times, triggering offline callback`)
+	}
+	onTooManyFailures?.()
 }
 
 let firehoseHandle: { destroy: () => void } | null = null
+let stallWatchdogHandle: ReturnType<typeof setInterval> | null = null
 
-/**
- * Start the firehose worker
- */
-export function startFirehose(initialCursor?: number, onTooManyFailures?: () => void): void {
-	logger.info(`Starting firehose (runtime: ${isBun ? 'Bun' : 'Node.js'})`)
-	logger.info(`Service: ${config.firehoseService}`)
-	logger.info(`Max concurrency: ${config.firehoseMaxConcurrency}`)
-	if (initialCursor !== undefined) {
-		currentSeq = initialCursor
-		logger.info(`Resuming from cursor: ${initialCursor}`)
+function handleStall(onTooManyFailures?: () => void): void {
+	const silenceMs = Date.now() - lastEventTime
+	if (silenceMs < STALL_THRESHOLD_MS) return
+
+	stallReconnects++
+	const silenceSec = Math.round(silenceMs / 1000)
+
+	// First stall: try reconnecting to the same relay with the current cursor.
+	if (stallReconnects === 1) {
+		logger.warn(`No events for ${silenceSec}s on ${activeService}, reconnecting with cursor`)
+		firehoseHandle?.destroy()
+		firehoseHandle = null
+		// Grace window so the next watchdog tick doesn't fire before reconnect
+		// has had a chance to receive events.
+		lastEventTime = Date.now()
+		connect(onTooManyFailures)
+		return
 	}
 
+	// Second stall: same-relay reconnect didn't help — fail over if possible.
+	const alternate = getAlternateService(activeService)
+	if (alternate && swapsWithoutSuccess < 2) {
+		logger.warn(`${activeService} still silent after reconnect, failing over to ${alternate}`)
+		swapsWithoutSuccess++
+		stallReconnects = 0
+		consecutiveFailures = 0
+		activeService = alternate
+		firehoseHandle?.destroy()
+		firehoseHandle = null
+		lastEventTime = Date.now()
+		connect(onTooManyFailures)
+		return
+	}
+
+	logger.error(`Firehose stalled on ${activeService} with no recoverable relay, triggering offline callback`)
+	onTooManyFailures?.()
+}
+
+function connect(onTooManyFailures?: () => void): void {
+	logger.info(`Connecting firehose to ${activeService}`)
 	if (isBun) {
 		// Use BunFirehose for Bun runtime
 		const bunFirehose = new BunFirehose({
 			idResolver,
-			service: config.firehoseService,
+			service: activeService,
 			filterCollections: ['place.wisp.fs', 'place.wisp.settings'],
 			handleEvent,
 			onError: (err: Error) => handleError(err, onTooManyFailures),
@@ -195,7 +258,8 @@ export function startFirehose(initialCursor?: number, onTooManyFailures?: () => 
 			onConnect: () => {
 				isConnected = true
 				consecutiveFailures = 0
-				logger.info('Firehose connected')
+				swapsWithoutSuccess = 0
+				logger.info(`Firehose connected to ${activeService}`)
 			},
 			onDisconnect: () => {
 				isConnected = false
@@ -209,7 +273,7 @@ export function startFirehose(initialCursor?: number, onTooManyFailures?: () => 
 		isConnected = true
 		const nodeFirehose = new Firehose({
 			idResolver,
-			service: config.firehoseService,
+			service: activeService,
 			filterCollections: ['place.wisp.fs', 'place.wisp.settings'],
 			handleEvent: handleEvent as any,
 			onError: (err: Error) => handleError(err, onTooManyFailures),
@@ -217,6 +281,26 @@ export function startFirehose(initialCursor?: number, onTooManyFailures?: () => 
 		nodeFirehose.start()
 		firehoseHandle = { destroy: () => nodeFirehose.destroy() }
 	}
+}
+
+/**
+ * Start the firehose worker
+ */
+export function startFirehose(initialCursor?: number, onTooManyFailures?: () => void): void {
+	logger.info(`Starting firehose (runtime: ${isBun ? 'Bun' : 'Node.js'})`)
+	logger.info(`Primary service: ${config.firehoseService}`)
+	if (config.firehoseServiceSecondary) {
+		logger.info(`Secondary service: ${config.firehoseServiceSecondary}`)
+	}
+	logger.info(`Max concurrency: ${config.firehoseMaxConcurrency}`)
+	if (initialCursor !== undefined) {
+		currentSeq = initialCursor
+		logger.info(`Resuming from cursor: ${initialCursor}`)
+	}
+
+	activeService = config.firehoseService
+	swapsWithoutSuccess = 0
+	connect(onTooManyFailures)
 
 	// Log cache info hourly
 	setInterval(
@@ -226,13 +310,10 @@ export function startFirehose(initialCursor?: number, onTooManyFailures?: () => 
 		60 * 60 * 1000,
 	)
 
-	// Log status periodically
-	setInterval(() => {
-		const health = getFirehoseHealth()
-		if (health.timeSinceLastEvent > 30000) {
-			logger.warn(`No events for ${Math.round(health.timeSinceLastEvent / 1000)}s`)
-		}
-	}, 30000)
+	// Stall watchdog: if no events for STALL_THRESHOLD_MS, reconnect (same relay
+	// first, then fail over on the next stall).
+	if (stallWatchdogHandle) clearInterval(stallWatchdogHandle)
+	stallWatchdogHandle = setInterval(() => handleStall(onTooManyFailures), STALL_THRESHOLD_MS)
 }
 
 /**
@@ -242,6 +323,13 @@ export function stopFirehose(): void {
 	logger.info('Stopping firehose')
 	isConnected = false
 	consecutiveFailures = 0
+	swapsWithoutSuccess = 0
+	stallReconnects = 0
+	activeService = config.firehoseService
+	if (stallWatchdogHandle) {
+		clearInterval(stallWatchdogHandle)
+		stallWatchdogHandle = null
+	}
 	firehoseHandle?.destroy()
 	firehoseHandle = null
 	currentSeq = undefined

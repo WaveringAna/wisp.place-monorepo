@@ -8,6 +8,7 @@ export const config = {
 
 	// Firehose
 	firehoseService: process.env.FIREHOSE_SERVICE || 'wss://bsky.network',
+	firehoseServiceSecondary: process.env.FIREHOSE_SERVICE_SECONDARY || undefined,
 	firehoseMaxConcurrency: parseInt(process.env.FIREHOSE_MAX_CONCURRENCY || '5', 10),
 
 	// S3 storage (write destination)
