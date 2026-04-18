@@ -2,7 +2,7 @@
 
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
-import { chromium, type Page } from 'playwright'
+import { type BrowserContext, chromium, type Page } from 'playwright'
 import { db } from '../src/lib/db'
 
 const SITE_IMAGES_DIR = join(process.cwd(), 'site-images')
@@ -11,6 +11,9 @@ const VIEWPORT_HEIGHT = 1080
 const TIMEOUT = 10_000
 const MAX_RETRIES = 1
 const CONCURRENCY = 10
+
+const COLOR_SCHEMES = ['light', 'dark'] as const
+type ColorScheme = (typeof COLOR_SCHEMES)[number]
 
 interface DomainBackedSite {
 	did: string
@@ -80,10 +83,11 @@ function sanitizeFilename(value: string): string {
 async function screenshotSite(
 	page: Page,
 	site: DomainBackedSite,
+	scheme: ColorScheme,
 	retries: number = MAX_RETRIES,
 ): Promise<ScreenshotResult> {
 	const filename = `${sanitizeFilename(site.domain)}.png`
-	const filepath = join(SITE_IMAGES_DIR, filename)
+	const filepath = join(SITE_IMAGES_DIR, scheme, filename)
 
 	for (let attempt = 0; attempt <= retries; attempt++) {
 		try {
@@ -118,8 +122,10 @@ async function screenshotSite(
 
 async function main() {
 	console.log('Starting site image poller')
-	await mkdir(SITE_IMAGES_DIR, { recursive: true })
-	console.log(`Saving screenshots to ${SITE_IMAGES_DIR}`)
+	for (const scheme of COLOR_SCHEMES) {
+		await mkdir(join(SITE_IMAGES_DIR, scheme), { recursive: true })
+	}
+	console.log(`Saving screenshots to ${SITE_IMAGES_DIR}/{light,dark}`)
 
 	const sites = await getDomainBackedSites()
 	console.log(`Found ${sites.length} sites with custom domains or wisp subdomains`)
@@ -132,14 +138,20 @@ async function main() {
 		headless: true,
 	})
 
-	const context = await browser.newContext({
-		viewport: {
-			width: VIEWPORT_WIDTH,
-			height: VIEWPORT_HEIGHT,
-		},
-		userAgent:
-			'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 WispSiteImageBot/1.0',
-	})
+	const contexts: Record<ColorScheme, BrowserContext> = {
+		light: await browser.newContext({
+			viewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
+			colorScheme: 'light',
+			userAgent:
+				'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 WispSiteImageBot/1.0',
+		}),
+		dark: await browser.newContext({
+			viewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
+			colorScheme: 'dark',
+			userAgent:
+				'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 WispSiteImageBot/1.0',
+		}),
+	}
 
 	const results = {
 		success: 0,
@@ -152,22 +164,24 @@ async function main() {
 		const batchNum = Math.floor(i / CONCURRENCY) + 1
 		const totalBatches = Math.ceil(sites.length / CONCURRENCY)
 
-		console.log(`Batch ${batchNum}/${totalBatches}: ${batch.length} sites`)
+		console.log(`Batch ${batchNum}/${totalBatches}: ${batch.length} sites × 2 schemes`)
 
 		const batchResults = await Promise.all(
-			batch.map(async (site, index) => {
-				const page = await context.newPage()
-				const globalIndex = i + index + 1
-				console.log(`  [${globalIndex}/${sites.length}] ${site.url} (${site.domainType})`)
+			batch.flatMap((site, index) =>
+				COLOR_SCHEMES.map(async (scheme) => {
+					const page = await contexts[scheme].newPage()
+					const globalIndex = i + index + 1
+					console.log(`  [${globalIndex}/${sites.length}] ${site.url} (${site.domainType}, ${scheme})`)
 
-				const result = await screenshotSite(page, site)
-				await page.close()
+					const result = await screenshotSite(page, site, scheme)
+					await page.close()
 
-				return { site, result }
-			}),
+					return { site, scheme, result }
+				}),
+			),
 		)
 
-		for (const { site, result } of batchResults) {
+		for (const { site, scheme, result } of batchResults) {
 			if (result.success) {
 				results.success++
 				continue
@@ -175,7 +189,7 @@ async function main() {
 
 			results.failed++
 			results.errors.push({
-				site: `${site.did}/${site.rkey} (${site.domain})`,
+				site: `${site.did}/${site.rkey} (${site.domain}, ${scheme})`,
 				error: result.error || 'Unknown error',
 			})
 		}

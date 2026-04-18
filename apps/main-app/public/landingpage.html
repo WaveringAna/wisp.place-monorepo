@@ -4,20 +4,20 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>wisp.place - Static Hosting on AT Protocol</title>
-    <meta name="description" content="Deploy static sites on AT Protocol. Your site lives in your PDS. Global CDN included. Push updates instantly. Forever free." />
+    <meta name="description" content="Somewhere to put your stuff. A folder becomes a website. That's the whole thing." />
 
     <!-- Open Graph / Facebook -->
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://wisp.place/" />
     <meta property="og:title" content="wisp.place - Static Hosting on AT Protocol" />
-    <meta property="og:description" content="Deploy static sites on AT Protocol. Your site lives in your PDS. Global CDN included. Push updates instantly. Forever free." />
+    <meta property="og:description" content="Somewhere to put your stuff. A folder becomes a website. That's the whole thing." />
     <meta property="og:site_name" content="wisp.place" />
 
     <!-- Twitter -->
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:url" content="https://wisp.place/" />
     <meta name="twitter:title" content="wisp.place - Static Hosting on AT Protocol" />
-    <meta name="twitter:description" content="Deploy static sites on AT Protocol. Your site lives in your PDS. Global CDN included. Push updates instantly. Forever free." />
+    <meta name="twitter:description" content="Somewhere to put your stuff. A folder becomes a website. That's the whole thing." />
 
     <!-- Theme -->
     <meta name="theme-color" content="#000000" />
@@ -39,13 +39,23 @@
     <style>
         /* Hero */
         .hero {
-            padding: 8rem 2rem 6rem;
-            text-align: center;
+            padding: 6rem 2rem 5rem;
         }
 
         .hero-inner {
-            max-width: 700px;
+            max-width: 1100px;
             margin: 0 auto;
+        }
+
+        .hero-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 4rem;
+            align-items: center;
+        }
+
+        .hero-left {
+            text-align: left;
         }
 
         .hero-badge {
@@ -55,134 +65,39 @@
             font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.1em;
-            margin-bottom: 2rem;
-            padding: 0.5rem 1rem;
+            margin-bottom: 1.75rem;
+            padding: 0.4rem 0.9rem;
             border: 1px solid var(--accent);
         }
 
-        .hero h1 {
-            font-size: clamp(2.75rem, 7vw, 4.25rem);
-            text-align: center;
+        .hero-left h1 {
+            font-size: clamp(2rem, 3.8vw, 3rem);
+            text-align: left;
+            line-height: 1.1;
+            letter-spacing: -0.02em;
+            margin-bottom: 1.25rem;
+            max-width: 22ch;
         }
 
         .hero-desc {
             font-size: 1.25rem;
             color: var(--text-muted);
-            max-width: 500px;
-            margin: 0 auto 3rem;
-            line-height: 1.7;
-        }
-
-        .cta-group {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 1.5rem;
+            margin: 0 0 2.25rem;
+            line-height: 1.5;
+            max-width: 34rem;
         }
 
         .cta-buttons {
             display: flex;
             gap: 1rem;
             flex-wrap: wrap;
-            justify-content: center;
         }
 
-        .hero-cmd {
-            color: var(--text-subtle);
-            font-size: 1rem;
+        .hero-right {
+            min-width: 0;
         }
 
-        .hero-cmd code {
-            color: var(--text);
-            background: var(--code-bg);
-            padding: 0.5rem 0.75rem;
-            border: 1px solid var(--border-light);
-            border-radius: 4px;
-        }
-
-        .hero-cmd code .prompt {
-            color: var(--text-muted);
-            user-select: none;
-        }
-
-        /* How it works */
-        .how-it-works {
-            padding: 6rem 2rem;
-            background: var(--bg-alt);
-        }
-
-        .how-it-works-inner {
-            max-width: 900px;
-            margin: 0 auto;
-        }
-
-        .section-label {
-            color: var(--accent);
-            font-size: 0.875rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.1em;
-            margin-bottom: 1rem;
-        }
-
-        .section-title {
-            font-size: 2rem;
-            font-weight: 700;
-            margin-bottom: 4rem;
-            letter-spacing: -0.02em;
-        }
-
-        .steps {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 3rem;
-        }
-
-        .step {
-            position: relative;
-        }
-
-        .step-number {
-            font-size: 3.25rem;
-            font-weight: 700;
-            color: var(--border-light);
-            margin-bottom: 1rem;
-            line-height: 1;
-        }
-
-        .step h3 {
-            font-size: 1.125rem;
-            font-weight: 600;
-            margin-bottom: 0.75rem;
-        }
-
-        .step p {
-            font-size: 1rem;
-            color: var(--text-muted);
-            line-height: 1.7;
-        }
-
-        .step code {
-            display: block;
-            margin-top: 1rem;
-            font-size: 0.875rem;
-            color: var(--accent);
-            background: var(--code-bg);
-            padding: 0.75rem;
-            border: 1px solid var(--border-light);
-            text-align: center;
-        }
-
-        /* Terminal Demo */
-        .demo {
-            padding: 6rem 2rem;
-        }
-
-        .demo-inner {
-            max-width: 700px;
-            margin: 0 auto;
-        }
-
+        /* Terminal */
         .terminal {
             border: 1px solid var(--border);
             background: #0d1117;
@@ -222,7 +137,7 @@
 
         .terminal-body {
             padding: 1.5rem;
-            font-size: 1rem;
+            font-size: 0.95rem;
             line-height: 1.8;
             color: #c9d1d9;
         }
@@ -294,46 +209,101 @@
             }
         }
 
-        /* Features */
-        .features {
-            padding: 6rem 2rem;
+        /* Showcase */
+        .showcase {
+            padding: 5rem 2rem;
             background: var(--bg-alt);
         }
 
-        .features-inner {
-            max-width: 900px;
+        .showcase-inner {
+            max-width: 1200px;
             margin: 0 auto;
         }
 
-        .features-grid {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 1px;
-            background: var(--border-light);
-            border: 1px solid var(--border-light);
-            margin-top: 3rem;
-        }
-
-        .feature {
-            background: var(--bg);
-            padding: 2rem;
-        }
-
-        .feature-icon {
-            font-size: 1.5rem;
+        .section-label {
+            color: var(--accent);
+            font-size: 0.875rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
             margin-bottom: 1rem;
         }
 
-        .feature h3 {
-            font-size: 1.125rem;
-            font-weight: 600;
+        .section-title {
+            font-size: 2rem;
+            font-weight: 700;
             margin-bottom: 0.75rem;
+            letter-spacing: -0.02em;
         }
 
-        .feature p {
-            font-size: 1rem;
+        .showcase-desc {
             color: var(--text-muted);
-            line-height: 1.7;
+            margin-bottom: 3rem;
+            font-size: 1.0625rem;
+            max-width: 40rem;
+        }
+
+        .showcase-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 1.25rem;
+        }
+
+        .showcase-card {
+            display: block;
+            background: var(--bg);
+            border: 1px solid var(--border-light);
+            overflow: hidden;
+            text-decoration: none;
+            color: inherit;
+            transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
+        }
+
+        .showcase-card:hover {
+            transform: translateY(-2px);
+            border-color: var(--accent);
+            box-shadow: 0 12px 30px -18px rgba(0, 0, 0, 0.35);
+        }
+
+        .showcase-card picture {
+            display: block;
+        }
+
+        .showcase-thumb {
+            aspect-ratio: 16 / 10;
+            width: 100%;
+            object-fit: cover;
+            object-position: top;
+            display: block;
+            background: var(--bg-alt);
+        }
+
+        .showcase-meta {
+            padding: 0.75rem 1rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+            border-top: 1px solid var(--border-light);
+        }
+
+        .showcase-domain {
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: var(--text);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .showcase-arrow {
+            color: var(--text-subtle);
+            font-size: 0.875rem;
+        }
+
+        .showcase-empty {
+            color: var(--text-subtle);
+            font-size: 0.9375rem;
         }
 
         /* CLI Section */
@@ -342,9 +312,8 @@
         }
 
         .cli-inner {
-            max-width: 700px;
+            max-width: 1100px;
             margin: 0 auto;
-            text-align: center;
         }
 
         .cli-section .section-title {
@@ -398,7 +367,7 @@
         }
 
         .cli-subsection-grid > div > p {
-            color: var(--text-muted); 
+            color: var(--text-muted);
             margin-bottom: 1.5rem;
         }
 
@@ -406,19 +375,20 @@
             display: flex;
             align-items: center;
             gap: 1.5rem;
+            flex-wrap: wrap;
         }
         .cli-install-row code {
-            color: var(--text); 
-            background: var(--code-bg); 
-            padding: 0.5rem 0.75rem; 
-            border: 1px solid var(--border-light); 
-            border-radius: 4px; 
+            color: var(--text);
+            background: var(--code-bg);
+            padding: 0.5rem 0.75rem;
+            border: 1px solid var(--border-light);
+            border-radius: 4px;
             font-size: 0.875rem;
         }
 
         /* Final CTA */
         .final-cta {
-            padding: 8rem 2rem;
+            padding: 6rem 2rem;
             text-align: center;
             background: var(--bg-alt);
         }
@@ -440,19 +410,19 @@
             margin-bottom: 2rem;
         }
 
+        .final-cta .cta-buttons {
+            justify-content: center;
+        }
+
         /* Responsive */
-        @media (max-width: 768px) {
+        @media (max-width: 900px) {
             .hero {
-                padding: 5rem 1.5rem 4rem;
+                padding: 4rem 1.5rem 3rem;
             }
 
-            .steps {
+            .hero-grid {
                 grid-template-columns: 1fr;
-                gap: 2rem;
-            }
-
-            .features-grid {
-                grid-template-columns: 1fr;
+                gap: 3rem;
             }
 
             .cli-features {
@@ -491,7 +461,7 @@
     </script>
     <header>
         <div class="header-inner">
-            <a href="/" class="logo">wisp.place</a>
+            <a href="/" class="logo"><img src="/transparent-full-size-ico.png" alt="">wisp.place</a>
             <nav>
                 <a href="https://docs.wisp.place" target="_blank">Docs</a>
                 <a href="https://status.wisp.place" target="_blank">Status</a>
@@ -502,102 +472,56 @@
 
     <section class="hero">
         <div class="hero-inner">
-            <span class="hero-badge">Deploy static sites in seconds</span>
-            <h1>Ship fast without complexity</h1>
-            <p class="hero-desc">
-                Static hosting for developers who value simplicity. Powered by ATProto!
-            </p>
-            <div class="cta-group">
-                <div class="cta-buttons">
-                    <a href="{{ATPROTO_LOGIN_URL}}" class="cta-primary">Start Deploying</a>
-                    <a href="https://docs.wisp.place" target="_blank" class="cta-secondary">Read Docs</a>
-                </div>
-                <p class="hero-cmd">or <code><span class="prompt">$</span> npx create-wisp</code></p>
-            </div>
-        </div>
-    </section>
-
-    <section class="how-it-works">
-        <div class="how-it-works-inner">
-            <p class="section-label">How it works</p>
-            <h2 class="section-title">Three steps. No config files.</h2>
-            <div class="steps">
-                <div class="step">
-                    <div class="step-number">01</div>
-                    <h3>Sign in with your AT</h3>
-                    <p>Your Bluesky account is one! Don't have an AT?<br><a href="{{ATPROTO_LOGIN_URL}}" target="_blank">Make one here ^.^!</a></p>
-                </div>
-                <div class="step">
-                    <div class="step-number">02</div>
-                    <h3>Upload your files</h3>
-                    <p>Drag and drop or use the CLI. Your site data goes directly to your PDS.</p>
-                    <code>npx wispctl deploy</code>
-                </div>
-                <div class="step">
-                    <div class="step-number">03</div>
-                    <h3>You're live</h3>
-                    <p>Instantly available on our global CDN. Add a custom domain anytime.</p>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <section class="demo">
-        <div class="demo-inner">
-            <div class="terminal" data-animate-on-view>
-                <div class="terminal-header">
-                    <div class="terminal-dots">
-                        <span class="terminal-dot red"></span>
-                        <span class="terminal-dot yellow"></span>
-                        <span class="terminal-dot green"></span>
+            <div class="hero-grid">
+                <div class="hero-left">
+                    <h1>Somewhere to put your stuff.</h1>
+                    <p class="hero-desc">
+                        A folder becomes a website. That's the whole thing.
+                    </p>
+                    <div class="cta-buttons">
+                        <a href="{{ATPROTO_LOGIN_URL}}" class="cta-primary">Upload a folder</a>
+                        <a href="https://docs.wisp.place" target="_blank" class="cta-secondary">Read Docs</a>
                     </div>
-                    <span class="terminal-title">terminal</span>
                 </div>
-                <div class="terminal-body">
-                    <div class="terminal-line"><span class="t-prompt">$</span> <span class="t-cmd">npx wispctl deploy</span></div>
-                    <div class="terminal-spacer"></div>
-                    <div class="terminal-line"><span class="t-muted">◇</span> Authenticated as <span class="t-cyan">@nekomimi.pet</span></div>
-                    <div class="terminal-line"><span class="t-muted">◇</span> Found 12 files (24 KB)</div>
-                    <div class="terminal-line"><span class="t-muted">◇</span> Uploading to PDS...</div>
-                    <div class="terminal-spacer"></div>
-                    <div class="terminal-line"><span class="t-success">✓</span> <span class="t-success">Deployed successfully</span></div>
-                    <div class="terminal-line t-output">https://sites.wisp.place/nekomimi.pet/mysite</div>
+                <div class="hero-right">
+                    <div class="terminal" data-animate-on-view>
+                        <div class="terminal-header">
+                            <div class="terminal-dots">
+                                <span class="terminal-dot red"></span>
+                                <span class="terminal-dot yellow"></span>
+                                <span class="terminal-dot green"></span>
+                            </div>
+                            <span class="terminal-title">terminal</span>
+                        </div>
+                        <div class="terminal-body">
+                            <div class="terminal-line"><span class="t-prompt">$</span> <span class="t-cmd">npx wispctl deploy</span></div>
+                            <div class="terminal-spacer"></div>
+                            <div class="terminal-line"><span class="t-muted">◇</span> Authenticated as <span class="t-cyan">@nekomimi.pet</span></div>
+                            <div class="terminal-line"><span class="t-muted">◇</span> Found 12 files (24 KB)</div>
+                            <div class="terminal-line"><span class="t-muted">◇</span> Uploading to PDS...</div>
+                            <div class="terminal-spacer"></div>
+                            <div class="terminal-line"><span class="t-success">✓</span> <span class="t-success">Deployed successfully</span></div>
+                            <div class="terminal-line t-output">https://sites.wisp.place/nekomimi.pet/mysite</div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
     </section>
 
-    <section class="features">
-        <div class="features-inner">
-            <p class="section-label">Features</p>
-            <h2 class="section-title">Everything you need. Nothing you don't.</h2>
-            <div class="features-grid">
-                <div class="feature">
-                    <div class="feature-icon">⚡</div>
-                    <h3>Global CDN</h3>
-                    <p>Sites cached at edge locations worldwide. Sub-100ms latency everywhere.</p>
-                </div>
-                <div class="feature">
-                    <div class="feature-icon">🔒</div>
-                    <h3>Custom Domains</h3>
-                    <p>Point your domain with automatic SSL. Just add a CNAME record.</p>
-                </div>
-                <div class="feature">
-                    <div class="feature-icon">📦</div>
-                    <h3>Full Ownership</h3>
-                    <p>Your site data lives in your PDS. Export or migrate anytime.</p>
-                </div>
-                <div class="feature">
-                    <div class="feature-icon">🚀</div>
-                    <h3>Instant Updates</h3>
-                    <p>Push and it's live. No build queues, no waiting around.</p>
-                </div>
+    <section class="showcase">
+        <div class="showcase-inner">
+            <p class="section-label">In the wild</p>
+            <h2 class="section-title">Featured sites</h2>
+            <p class="showcase-desc">A handful of pages people have put on wisp.place.</p>
+            <div class="showcase-grid" id="showcase-grid">
+                <p class="showcase-empty">Loading sites…</p>
             </div>
         </div>
     </section>
 
     <section class="cli-section">
-        <div class="cli-inner" style="max-width: 1100px; text-align: left;">
+        <div class="cli-inner">
             <p class="section-label">For power users</p>
             <h2 class="section-title">Command line first</h2>
             <p class="cli-desc">Full control from your terminal. Integrates with your existing workflow.</p>
@@ -707,6 +631,78 @@
         </div>
     </footer>
     <script>
+        // Featured sites loader — pulls from /api/screenshots and renders a grid.
+        (() => {
+            const grid = document.getElementById('showcase-grid');
+            if (!grid) return;
+
+            const filenameToDomain = (filename) => filename.replace(/\.webp$/i, '').replace(/_/g, '.');
+
+            const shuffle = (arr) => {
+                const copy = arr.slice();
+                for (let i = copy.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [copy[i], copy[j]] = [copy[j], copy[i]];
+                }
+                return copy;
+            };
+
+            fetch('/api/screenshots')
+                .then((r) => r.ok ? r.json() : { light: [], dark: [] })
+                .then(({ light, dark }) => {
+                    const lightSet = new Set(Array.isArray(light) ? light : []);
+                    const darkSet = new Set(Array.isArray(dark) ? dark : []);
+                    // Only show sites that have at least one variant; prefer ones with both.
+                    const all = Array.from(new Set([...lightSet, ...darkSet]));
+
+                    if (all.length === 0) {
+                        grid.innerHTML = '<p class="showcase-empty">No sites to show yet.</p>';
+                        return;
+                    }
+
+                    const picks = shuffle(all).slice(0, 8);
+
+                    grid.innerHTML = '';
+                    for (const file of picks) {
+                        const domain = filenameToDomain(file);
+                        const hasLight = lightSet.has(file);
+                        const hasDark = darkSet.has(file);
+                        const lightSrc = hasLight ? `/screenshots/light/${encodeURIComponent(file)}` : null;
+                        const darkSrc = hasDark ? `/screenshots/dark/${encodeURIComponent(file)}` : null;
+                        const fallback = lightSrc || darkSrc;
+
+                        const card = document.createElement('a');
+                        card.className = 'showcase-card';
+                        card.href = `https://${domain}`;
+                        card.target = '_blank';
+                        card.rel = 'noopener noreferrer';
+
+                        const darkSource = darkSrc
+                            ? `<source media="(prefers-color-scheme: dark)" srcset="${darkSrc}">`
+                            : '';
+                        const lightSource = lightSrc
+                            ? `<source media="(prefers-color-scheme: light)" srcset="${lightSrc}">`
+                            : '';
+
+                        card.innerHTML = `
+                            <picture>
+                                ${darkSource}
+                                ${lightSource}
+                                <img class="showcase-thumb" src="${fallback}" alt="${domain}" loading="lazy" decoding="async">
+                            </picture>
+                            <div class="showcase-meta">
+                                <span class="showcase-domain">${domain}</span>
+                                <span class="showcase-arrow">↗</span>
+                            </div>
+                        `;
+                        grid.appendChild(card);
+                    }
+                })
+                .catch(() => {
+                    grid.innerHTML = '<p class="showcase-empty">Could not load sites.</p>';
+                });
+        })();
+
         document.addEventListener('DOMContentLoaded', () => {
             const terminals = Array.from(document.querySelectorAll('.terminal[data-animate-on-view]'));
 

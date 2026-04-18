@@ -409,14 +409,17 @@ export const app = new Elysia({
 	.get('/api/screenshots', async () => {
 		const fs = await import('node:fs/promises')
 
-		try {
-			const screenshotsDir = './apps/main-app/public/screenshots'
-			const files = await fs.readdir(screenshotsDir)
-			const screenshots = files.filter((file) => file.endsWith('.webp'))
-			return { screenshots }
-		} catch (_error) {
-			return { screenshots: [] }
+		const readScheme = async (scheme: 'light' | 'dark') => {
+			try {
+				const files = await fs.readdir(`./apps/main-app/public/screenshots/${scheme}`)
+				return files.filter((file) => file.endsWith('.webp'))
+			} catch {
+				return []
+			}
 		}
+
+		const [light, dark] = await Promise.all([readScheme('light'), readScheme('dark')])
+		return { light, dark }
 	})
 	.get('/api/admin/test', () => {
 		return { message: 'Admin routes test works!' }

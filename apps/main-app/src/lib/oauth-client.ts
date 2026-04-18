@@ -1,8 +1,40 @@
 import { JoseKey } from '@atproto/jwk-jose'
-import { type ClientMetadata, NodeOAuthClient, requestLocalLock } from '@atproto/oauth-client-node'
+import { type ClientMetadata, NodeOAuthClient, type RuntimeLock } from '@atproto/oauth-client-node'
 import { db } from './db'
 import { logger } from './logger'
 import { SlingshotHandleResolver } from './slingshot-handle-resolver'
+
+// Cluster-wide lock backed by Postgres advisory locks. Replaces requestLocalLock
+// which only serialized within a single process — with multiple main-app instances
+// sharing the oauth_sessions table, two processes could race a token refresh,
+// invalidate the single-use refresh token, and trip
+// "The session was deleted by another process" from @atproto/oauth-client.
+const LOCK_NAMESPACE = 0x0a415450524f544fn // "\nATPROTO" — stable 8-byte salt
+const lockKey = (name: string): bigint => {
+	const digest = new Bun.CryptoHasher('sha256').update(name).digest()
+	const view = new DataView(digest.buffer, digest.byteOffset, 8)
+	return view.getBigInt64(0, false) ^ LOCK_NAMESPACE
+}
+
+const requestPgLock: RuntimeLock = async (name, fn) => {
+	const key = lockKey(name)
+	const reserved = await db.reserve()
+	try {
+		await reserved`SET lock_timeout = '30s'`
+		await reserved`SELECT pg_advisory_lock(${key})`
+		try {
+			return await fn()
+		} finally {
+			try {
+				await reserved`SELECT pg_advisory_unlock(${key})`
+			} catch (err) {
+				logger.error('[OAuth] Failed to release advisory lock', { name, err })
+			}
+		}
+	} finally {
+		reserved.release()
+	}
+}
 
 // OAuth scope for all client types
 const OAUTH_SCOPE =
@@ -259,7 +291,7 @@ export const getOAuthClient = async (config: {
 		keyset: keys,
 		stateStore,
 		sessionStore,
-		requestLock: requestLocalLock,
+		requestLock: requestPgLock,
 		handleResolver: new SlingshotHandleResolver(),
 	})
 }

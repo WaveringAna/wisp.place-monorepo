@@ -9,7 +9,7 @@
 
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
-import { chromium } from 'playwright'
+import { type BrowserContext, chromium, type Page } from 'playwright'
 import { db } from '../src/lib/db'
 
 const SCREENSHOTS_DIR = join(process.cwd(), 'screenshots')
@@ -18,6 +18,9 @@ const VIEWPORT_HEIGHT = 1080
 const TIMEOUT = 10000 // 10 seconds
 const MAX_RETRIES = 1
 const CONCURRENCY = 10 // Number of parallel screenshots
+
+const COLOR_SCHEMES = ['light', 'dark'] as const
+type ColorScheme = (typeof COLOR_SCHEMES)[number]
 
 interface Site {
 	did: string
@@ -77,15 +80,16 @@ function sanitizeFilename(str: string): string {
  * Take a screenshot of a site with retry logic
  */
 async function screenshotSite(
-	page: any,
+	page: Page,
 	site: Site,
+	scheme: ColorScheme,
 	retries: number = MAX_RETRIES,
 ): Promise<{ success: boolean; error?: string }> {
 	const url = await getSiteUrl(site)
 	// Use the URL as filename (remove https:// and sanitize)
 	const urlForFilename = url.replace(/^https?:\/\//, '')
 	const filename = `${sanitizeFilename(urlForFilename)}.png`
-	const filepath = join(SCREENSHOTS_DIR, filename)
+	const filepath = join(SCREENSHOTS_DIR, scheme, filename)
 
 	for (let attempt = 0; attempt <= retries; attempt++) {
 		try {
@@ -126,9 +130,11 @@ async function screenshotSite(
 async function main() {
 	console.log('🚀 Starting site screenshot process...\n')
 
-	// Create screenshots directory if it doesn't exist
-	await mkdir(SCREENSHOTS_DIR, { recursive: true })
-	console.log(`📁 Screenshots will be saved to: ${SCREENSHOTS_DIR}\n`)
+	// Create screenshots directory (with light/dark subdirs) if it doesn't exist
+	for (const scheme of COLOR_SCHEMES) {
+		await mkdir(join(SCREENSHOTS_DIR, scheme), { recursive: true })
+	}
+	console.log(`📁 Screenshots will be saved to: ${SCREENSHOTS_DIR}/{light,dark}\n`)
 
 	// Get all sites
 	console.log('📊 Fetching sites from database...')
@@ -146,14 +152,20 @@ async function main() {
 		headless: true,
 	})
 
-	const context = await browser.newContext({
-		viewport: {
-			width: VIEWPORT_WIDTH,
-			height: VIEWPORT_HEIGHT,
-		},
-		userAgent:
-			'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 WispScreenshotBot/1.0',
-	})
+	const contexts: Record<ColorScheme, BrowserContext> = {
+		light: await browser.newContext({
+			viewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
+			colorScheme: 'light',
+			userAgent:
+				'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 WispScreenshotBot/1.0',
+		}),
+		dark: await browser.newContext({
+			viewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
+			colorScheme: 'dark',
+			userAgent:
+				'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 WispScreenshotBot/1.0',
+		}),
+	}
 
 	// Track results
 	const results = {
@@ -163,7 +175,7 @@ async function main() {
 	}
 
 	// Process sites in parallel batches
-	console.log(`📸 Screenshotting ${sites.length} sites with concurrency ${CONCURRENCY}...\n`)
+	console.log(`📸 Screenshotting ${sites.length} sites × 2 schemes with concurrency ${CONCURRENCY}...\n`)
 
 	for (let i = 0; i < sites.length; i += CONCURRENCY) {
 		const batch = sites.slice(i, i + CONCURRENCY)
@@ -172,34 +184,38 @@ async function main() {
 
 		console.log(`[Batch ${batchNum}/${totalBatches}] Processing ${batch.length} sites...`)
 
-		// Create a page for each site in the batch
+		// Create a page for each site × scheme in the batch
 		const batchResults = await Promise.all(
-			batch.map(async (site, idx) => {
-				const page = await context.newPage()
-				const globalIdx = i + idx + 1
-				console.log(`  [${globalIdx}/${sites.length}] ${site.did}/${site.rkey}`)
+			batch.flatMap((site, idx) =>
+				COLOR_SCHEMES.map(async (scheme) => {
+					const page = await contexts[scheme].newPage()
+					const globalIdx = i + idx + 1
+					console.log(`  [${globalIdx}/${sites.length}] ${site.did}/${site.rkey} (${scheme})`)
 
-				const result = await screenshotSite(page, site)
-				await page.close()
+					const result = await screenshotSite(page, site, scheme)
+					await page.close()
 
-				return { site, result }
-			}),
+					return { site, scheme, result }
+				}),
+			),
 		)
 
 		// Aggregate results
-		for (const { site, result } of batchResults) {
+		for (const { site, scheme, result } of batchResults) {
 			if (result.success) {
 				results.success++
 			} else {
 				results.failed++
 				results.errors.push({
-					site: `${site.did}/${site.rkey}`,
+					site: `${site.did}/${site.rkey} (${scheme})`,
 					error: result.error || 'Unknown error',
 				})
 			}
 		}
 
-		console.log(`  Batch complete: ${batchResults.filter((r) => r.result.success).length}/${batch.length} successful\n`)
+		console.log(
+			`  Batch complete: ${batchResults.filter((r) => r.result.success).length}/${batchResults.length} successful\n`,
+		)
 	}
 
 	// Cleanup
