@@ -142,7 +142,7 @@ async function deleteSiteWithSelection(
 	}
 }
 
-program.name('wisp-cli').description('CLI for wisp.place - deploy static sites to the AT Protocol').version('1.1.0')
+program.name('wisp-cli').description('CLI for wisp.place - deploy static sites to the AT Protocol').version('1.1.1')
 
 // Deploy command (default)
 program
@@ -537,6 +537,7 @@ program
 			const { did } = await authenticateOAuth(handle, {
 				dbPath: options.db,
 				onStatus: bindAuthStatusToSpinner(authSpinner),
+				forceReauth: true,
 			})
 			authSpinner.succeed(`Authenticated as ${did}`)
 		}),

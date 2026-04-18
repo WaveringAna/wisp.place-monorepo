@@ -12,9 +12,9 @@ import {
 	type NodeSavedStateStore,
 	requestLocalLock,
 } from '@atproto/oauth-client-node'
-import { confirm, log } from '@clack/prompts'
+import { log } from '@clack/prompts'
 import { serve as honoNodeServe } from '@hono/node-server'
-import { resolvePdsFromHandle } from '@wispplace/atproto-utils'
+import { resolveDid, resolvePdsFromHandle } from '@wispplace/atproto-utils'
 import { isBun } from '@wispplace/bun-firehose'
 import { Hono } from 'hono'
 import open from 'open'
@@ -94,7 +94,9 @@ function describeUnavailableKeychain(result: KeychainProbeResult): string {
 	if (!result.moduleAvailable) {
 		return 'Secure OS credential storage is unavailable in this build.'
 	}
-	return result.detail ? `Secure OS credential storage failed: ${result.detail}` : 'Secure OS credential storage is unavailable.'
+	return result.detail
+		? `Secure OS credential storage failed: ${result.detail}`
+		: 'Secure OS credential storage is unavailable.'
 }
 
 async function probeKeychain(): Promise<KeychainProbeResult> {
@@ -343,6 +345,7 @@ export interface AuthOptions {
 	dbPath?: string
 	appPassword?: string
 	onStatus?: (message: string) => void
+	forceReauth?: boolean
 }
 
 function emitStatus(options: AuthOptions | undefined, message: string) {
@@ -384,18 +387,6 @@ export async function authenticateOAuth(
 
 	const keychainProbe = await probeKeychain()
 	const useKeychain = keychainProbe.available
-	if (!useKeychain) {
-		log.warn(describeUnavailableKeychain(keychainProbe))
-		const fallback = await confirm({
-			message:
-				'Fall back to storing session tokens unencrypted in SQLite? (On headless systems, prefer --password instead.)',
-			initialValue: false,
-		})
-		if (!fallback) {
-			throw new Error('Cannot store session securely. Use --password for app-password authentication.')
-		}
-	}
-
 	const keyringEntryConstructor = useKeychain ? await getKeyringEntryConstructor() : null
 	const stateStore = createStateStore(kv)
 	const sessionStore = createSessionStore(kv, keyringEntryConstructor)
@@ -429,22 +420,44 @@ export async function authenticateOAuth(
 	let redirectUri = `http://${LOOPBACK_HOST}:${oauthPort}/oauth/callback`
 	let client = createOAuthClient(redirectUri)
 	const storedDid = kvGet(kv, dirKey)
-	if (storedDid) {
-		try {
-			const session = await client.restore(storedDid)
-			if (session) {
-				emitStatus(options, `Restored session for ${storedDid}`)
-				return { agent: new Agent(session), did: storedDid }
+	if (storedDid && options.forceReauth) {
+		kv.del(dirKey)
+	} else if (storedDid) {
+		let canRestore = true
+		if (handle) {
+			const resolvedDid = await resolveDid(handle)
+			if (resolvedDid && resolvedDid !== storedDid) {
+				emitStatus(
+					options,
+					`Stored session is for ${storedDid}, but ${handle} resolves to ${resolvedDid}. Re-authenticating.`,
+				)
+				kv.del(dirKey)
+				canRestore = false
 			}
-		} catch {
-			// Session invalid or expired — clear mapping and re-auth
-			kv.del(dirKey)
+		}
+		if (canRestore) {
+			try {
+				const session = await client.restore(storedDid)
+				if (session) {
+					emitStatus(options, `Restored session for ${storedDid}`)
+					return { agent: new Agent(session), did: storedDid }
+				}
+			} catch {
+				// Session invalid or expired — clear mapping and re-auth
+				kv.del(dirKey)
+			}
 		}
 	}
 
 	// Need a handle to start a new OAuth flow
 	if (!handle) {
 		throw new Error('No active session for this directory. Run `wispctl login <handle>` first.')
+	}
+
+	if (!useKeychain) {
+		log.warn(
+			`Session tokens will be stored unencrypted in SQLite: ${describeUnavailableKeychain(keychainProbe)} Use --password for headless app-password auth.`,
+		)
 	}
 
 	const preferredPort = oauthPort

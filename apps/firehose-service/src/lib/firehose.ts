@@ -49,6 +49,10 @@ export function getCurrentSeq(): number | undefined {
 	return currentSeq
 }
 
+export function getActiveService(): string {
+	return activeService
+}
+
 export function getFirehoseHealth() {
 	return {
 		connected: isConnected,
@@ -191,6 +195,8 @@ function handleError(err: Error, onTooManyFailures?: () => void): void {
 		firehoseHandle?.destroy()
 		firehoseHandle = null
 		activeService = alternate
+		// seq numbers are relay-scoped; don't carry the previous relay's cursor.
+		currentSeq = undefined
 		connect(onTooManyFailures)
 		return
 	}
@@ -233,6 +239,8 @@ function handleStall(onTooManyFailures?: () => void): void {
 		stallReconnects = 0
 		consecutiveFailures = 0
 		activeService = alternate
+		// seq numbers are relay-scoped; don't carry the previous relay's cursor.
+		currentSeq = undefined
 		firehoseHandle?.destroy()
 		firehoseHandle = null
 		lastEventTime = Date.now()

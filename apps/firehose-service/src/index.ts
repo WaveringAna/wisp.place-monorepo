@@ -21,7 +21,7 @@ import { config } from './config'
 import { closeCacheInvalidationPublisher } from './lib/cache-invalidation'
 import { fetchSiteRecord, handleSiteCreateOrUpdate, listSiteRecordsForDid } from './lib/cache-writer'
 import { closeDatabase, getSiteCache, listAllKnownDids, listAllSiteCaches, listAllSites, upsertSite } from './lib/db'
-import { getCurrentSeq, getFirehoseHealth, startFirehose, stopFirehose } from './lib/firehose'
+import { getActiveService, getCurrentSeq, getFirehoseHealth, startFirehose, stopFirehose } from './lib/firehose'
 import { closeLeaderRedis, getLeaderInfo, releaseLeadership, runLeaderElection, saveCursor } from './lib/leader'
 import { startRevalidateWorker, stopRevalidateWorker } from './lib/revalidate-worker'
 import { storage } from './lib/storage'
@@ -289,10 +289,11 @@ async function main() {
 		logger.info('Leader election enabled, waiting to win leadership before starting firehose')
 		leaderAbortController = new AbortController()
 
-		// Save cursor to Redis periodically so a new leader can resume from it
+		// Save cursor to Redis periodically so a new leader can resume from it.
+		// Namespaced by the currently-active relay — seq is relay-local.
 		cursorSaveTimer = setInterval(async () => {
 			const seq = getCurrentSeq()
-			if (seq !== undefined) await saveCursor(seq)
+			if (seq !== undefined) await saveCursor(seq, getActiveService())
 		}, config.cursorSaveIntervalMs)
 
 		// Run election loop (non-blocking)
@@ -304,6 +305,7 @@ async function main() {
 				}),
 			() => stopFirehose(),
 			leaderAbortController.signal,
+			config.firehoseService,
 		).catch((err) => logger.error('[Leader] Election loop fatal error', err))
 	} else {
 		// Single-instance mode: start firehose directly

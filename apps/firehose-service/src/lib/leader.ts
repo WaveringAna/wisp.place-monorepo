@@ -16,7 +16,18 @@ import { config } from '../config'
 const logger = createLogger('firehose-service')
 
 const LEADER_KEY = 'wisp:firehose-leader'
-const CURSOR_KEY = 'wisp:firehose-cursor'
+const CURSOR_KEY_PREFIX = 'wisp:firehose-cursor'
+
+// Cursors are seq numbers scoped to a specific relay's backfill — they are not
+// portable across relays. Namespacing by host prevents a stale cursor from one
+// relay stalling a connection to another (accepted WS, zero events).
+function cursorKey(service: string): string {
+	try {
+		return `${CURSOR_KEY_PREFIX}:${new URL(service).host}`
+	} catch {
+		return `${CURSOR_KEY_PREFIX}:${service}`
+	}
+}
 
 // Unique ID for this process instance
 const instanceId = randomUUID()
@@ -75,17 +86,17 @@ export async function releaseLeadership(): Promise<void> {
 	}
 }
 
-export async function saveCursor(seq: number): Promise<void> {
+export async function saveCursor(seq: number, service: string): Promise<void> {
 	try {
-		await getRedis().set(CURSOR_KEY, String(seq))
+		await getRedis().set(cursorKey(service), String(seq))
 	} catch (err) {
 		logger.warn('[Leader] Failed to save cursor', { error: String(err) })
 	}
 }
 
-export async function readCursor(): Promise<number | undefined> {
+export async function readCursor(service: string): Promise<number | undefined> {
 	try {
-		const val = await getRedis().get(CURSOR_KEY)
+		const val = await getRedis().get(cursorKey(service))
 		if (!val) return undefined
 		const n = parseInt(val, 10)
 		return Number.isNaN(n) ? undefined : n
@@ -112,6 +123,7 @@ export async function runLeaderElection(
 	onBecomeLeader: (cursor: number | undefined) => void,
 	onLoseLeadership: () => void,
 	signal: AbortSignal,
+	initialService: string,
 ): Promise<void> {
 	logger.info(`[Leader] Starting election loop (instance: ${instanceId})`)
 
@@ -175,8 +187,8 @@ export async function runLeaderElection(
 
 			isLeader = true
 			renewalFailures = 0
-			const cursor = await readCursor()
-			logger.info(`[Leader] Won leadership, cursor: ${cursor ?? 'none (starting from head)'}`)
+			const cursor = await readCursor(initialService)
+			logger.info(`[Leader] Won leadership, cursor for ${initialService}: ${cursor ?? 'none (starting from head)'}`)
 			onBecomeLeader(cursor)
 			scheduleRenew()
 		}
