@@ -29,6 +29,10 @@
     "./redirects": {
       "types": "./src/redirects.ts",
       "default": "./src/redirects.ts"
+    },
+    "./html-rewriter": {
+      "types": "./src/html-rewriter.ts",
+      "default": "./src/html-rewriter.ts"
     }
   },
   "dependencies": {

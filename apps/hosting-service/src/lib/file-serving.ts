@@ -6,6 +6,7 @@
 import { gunzipSync, gzipSync } from 'node:zlib'
 import { shouldCompressMimeType } from '@wispplace/atproto-utils/compression'
 import { normalizeFileCids } from '@wispplace/fs-utils'
+import { isHtmlContent, rewriteHtmlPaths } from '@wispplace/fs-utils/html-rewriter'
 import type { Record as WispSettings } from '@wispplace/lexicons/types/place/wisp/settings'
 import { createLogger } from '@wispplace/observability'
 import type { StorageResult } from '@wispplace/tiered-storage'
@@ -13,7 +14,6 @@ import { lookup } from 'mime-types'
 import { isSiteUpdating } from './cache-invalidation'
 import { cache } from './cache-manager'
 import { getSiteCache } from './db'
-import { isHtmlContent, rewriteHtmlPaths } from './html-rewriter'
 import { fetchAndCacheSite } from './on-demand-cache'
 import { generate404Page, generateDirectoryListing, siteUpdatingResponse } from './page-generators'
 import { loadRedirectRules, matchRedirectRule, parseCookies, parseQueryString } from './redirects'
@@ -260,13 +260,13 @@ function buildResponseFromStorageResult(
 	return new Response(content, { headers })
 }
 
-function buildRewrittenHtmlResponse(
+async function buildRewrittenHtmlResponse(
 	result: FileStorageResult,
 	filePath: string,
 	basePath: string,
 	settings: WispSettings | null,
 	requestHeaders?: Record<string, string>,
-): Response {
+): Promise<Response> {
 	try {
 		const content = Buffer.from(result.data)
 		const meta = result.metadata.customMetadata as { encoding?: string; mimeType?: string } | undefined
@@ -295,7 +295,7 @@ function buildRewrittenHtmlResponse(
 		}
 
 		const htmlString = new TextDecoder().decode(decoded)
-		const rewritten = rewriteHtmlPaths(htmlString, basePath, filePath)
+		const rewritten = await rewriteHtmlPaths(htmlString, basePath)
 		let output = new TextEncoder().encode(rewritten)
 
 		const shouldServeCompressed = shouldCompressMimeType(mimeType)
@@ -787,14 +787,20 @@ export async function serveFileInternalWithRewrite(
 
 	const indexFiles = getIndexFiles(settings)
 	const isDirectoryPathRequest = filePath.endsWith('/') && filePath.length > 0
-	const buildResponse = (fileResult: FileForRequestResult): Response => {
+	const buildResponse = async (fileResult: FileForRequestResult): Promise<Response> => {
 		const meta = fileResult.result.metadata.customMetadata as { encoding?: string; mimeType?: string } | undefined
 		const mimeType = meta?.mimeType || lookup(fileResult.filePath) || 'application/octet-stream'
 		const needsRewrite = !fileResult.wasRewritten && isHtmlContent(fileResult.filePath, mimeType)
 
 		if (needsRewrite) {
 			void enqueueRevalidate(did, rkey, `rewrite-miss:${fileResult.filePath}`)
-			return buildRewrittenHtmlResponse(fileResult.result, fileResult.filePath, basePath, settings, requestHeaders)
+			return await buildRewrittenHtmlResponse(
+				fileResult.result,
+				fileResult.filePath,
+				basePath,
+				settings,
+				requestHeaders,
+			)
 		}
 
 		return buildResponseFromStorageResult(fileResult.result, fileResult.filePath, settings, requestHeaders)
@@ -814,7 +820,7 @@ export async function serveFileInternalWithRewrite(
 				getFileForRequest(did, rkey, requestPath, true),
 			)
 			if (directResult) {
-				return buildResponse(directResult)
+				return await buildResponse(directResult)
 			}
 			await markExpectedMiss(requestPath)
 		}
@@ -823,7 +829,7 @@ export async function serveFileInternalWithRewrite(
 			const indexPath = requestPath ? `${requestPath}/${indexFile}` : indexFile
 			const fileResult = await span(trace, `storage:${indexPath}`, () => getFileForRequest(did, rkey, indexPath, true))
 			if (fileResult) {
-				return buildResponse(fileResult)
+				return await buildResponse(fileResult)
 			}
 			await markExpectedMiss(indexPath)
 		}
@@ -859,7 +865,7 @@ export async function serveFileInternalWithRewrite(
 		getFileForRequest(did, rkey, fileRequestPath, true),
 	)
 	if (fileResult) {
-		return buildResponse(fileResult)
+		return await buildResponse(fileResult)
 	}
 	await markExpectedMiss(fileRequestPath)
 
@@ -869,7 +875,7 @@ export async function serveFileInternalWithRewrite(
 			const indexPath = fileRequestPath ? `${fileRequestPath}/${indexFileName}` : indexFileName
 			const indexResult = await span(trace, `storage:${indexPath}`, () => getFileForRequest(did, rkey, indexPath, true))
 			if (indexResult) {
-				return buildResponse(indexResult)
+				return await buildResponse(indexResult)
 			}
 			await markExpectedMiss(indexPath)
 		}
@@ -880,7 +886,7 @@ export async function serveFileInternalWithRewrite(
 		const htmlPath = `${fileRequestPath}.html`
 		const htmlResult = await span(trace, `storage:${htmlPath}`, () => getFileForRequest(did, rkey, htmlPath, true))
 		if (htmlResult) {
-			return buildResponse(htmlResult)
+			return await buildResponse(htmlResult)
 		}
 		await markExpectedMiss(htmlPath)
 
@@ -889,7 +895,7 @@ export async function serveFileInternalWithRewrite(
 			const indexPath = fileRequestPath ? `${fileRequestPath}/${indexFileName}` : indexFileName
 			const indexResult = await span(trace, `storage:${indexPath}`, () => getFileForRequest(did, rkey, indexPath, true))
 			if (indexResult) {
-				return buildResponse(indexResult)
+				return await buildResponse(indexResult)
 			}
 			await markExpectedMiss(indexPath)
 		}
@@ -900,7 +906,7 @@ export async function serveFileInternalWithRewrite(
 		const spaFile = settings.spaMode
 		const spaResult = await getFallbackFileForRequest(did, rkey, spaFile, trace)
 		if (spaResult) {
-			return buildResponse(spaResult)
+			return await buildResponse(spaResult)
 		}
 		await markExpectedMiss(spaFile)
 	}
@@ -910,7 +916,7 @@ export async function serveFileInternalWithRewrite(
 		const custom404File = settings.custom404
 		const custom404Result = await getFallbackFileForRequest(did, rkey, custom404File, trace)
 		if (custom404Result) {
-			const response = buildResponse(custom404Result)
+			const response = await buildResponse(custom404Result)
 			return new Response(response.body, { status: 404, headers: response.headers })
 		}
 		await markExpectedMiss(custom404File)
@@ -920,7 +926,7 @@ export async function serveFileInternalWithRewrite(
 	for (const auto404Page of ['404.html', 'not_found.html']) {
 		const auto404Result = await getFallbackFileForRequest(did, rkey, auto404Page, trace)
 		if (auto404Result) {
-			const response = buildResponse(auto404Result)
+			const response = await buildResponse(auto404Result)
 			return new Response(response.body, { status: 404, headers: response.headers })
 		}
 		await markExpectedMiss(auto404Page)
@@ -957,7 +963,7 @@ export async function serveFileInternalWithRewrite(
 			const retryPath = filePath || indexFiles[0] || 'index.html'
 			const retryResult = await span(trace, `storage:${retryPath}`, () => getFileForRequest(did, rkey, retryPath, true))
 			if (retryResult) {
-				return buildResponse(retryResult)
+				return await buildResponse(retryResult)
 			}
 		}
 	}

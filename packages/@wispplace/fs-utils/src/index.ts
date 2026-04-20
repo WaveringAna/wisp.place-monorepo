@@ -3,6 +3,8 @@
 // File CID normalization
 export type { FileCidsNormalization, FileCidsNormalizationSource } from './file-cids'
 export { normalizeFileCids } from './file-cids'
+// HTML rewriting for wisp basePath-scoped serving
+export { isHtmlContent, rewriteHtmlPaths } from './html-rewriter'
 // Manifest creation
 export { createManifest } from './manifest'
 export { normalizePath, sanitizePath } from './path'

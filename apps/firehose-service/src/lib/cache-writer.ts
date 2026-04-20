@@ -8,6 +8,7 @@ import { extractBlobCid, getPdsForDid } from '@wispplace/atproto-utils'
 import { shouldCompressMimeType } from '@wispplace/atproto-utils/compression'
 import { MAX_BLOB_SIZE, MAX_FILE_COUNT, MAX_SITE_SIZE, MAX_SITE_SIZE_SUPPORTER } from '@wispplace/constants'
 import { collectFileCidsFromEntries, countFilesInDirectory, normalizeFileCids } from '@wispplace/fs-utils'
+import { isHtmlContent, rewriteHtmlPaths } from '@wispplace/fs-utils/html-rewriter'
 import type { Directory, Entry, File, Record as WispFsRecord } from '@wispplace/lexicons/types/place/wisp/fs'
 import type { Record as WispSettings } from '@wispplace/lexicons/types/place/wisp/settings'
 import type { Record as SubfsRecord } from '@wispplace/lexicons/types/place/wisp/subfs'
@@ -24,7 +25,6 @@ import {
 	upsertSiteCache,
 	upsertSiteSettingsCache,
 } from './db'
-import { isHtmlFile, rewriteHtmlPaths } from './html-rewriter'
 import { deleteFile, listFiles, writeFile } from './storage'
 
 const logger = createLogger('firehose-service')
@@ -562,7 +562,7 @@ async function downloadAndWriteBlob(did: string, rkey: string, file: FileInfo, p
 	await writeFile(key, content, metadata)
 
 	// If HTML, also write rewritten version
-	if (isHtmlFile(file.path)) {
+	if (isHtmlContent(file.path)) {
 		const basePath = `/${did}/${rkey}/`
 		let rewriteSource = content
 		if (encoding === 'gzip' && content.length >= 2 && content[0] === 0x1f && content[1] === 0x8b) {
@@ -574,7 +574,7 @@ async function downloadAndWriteBlob(did: string, rkey: string, file: FileInfo, p
 		}
 
 		const htmlString = new TextDecoder().decode(rewriteSource)
-		const rewritten = rewriteHtmlPaths(htmlString, basePath, file.path)
+		const rewritten = await rewriteHtmlPaths(htmlString, basePath)
 		const rewrittenContent = new TextEncoder().encode(rewritten)
 
 		const rewrittenKey = `${did}/${rkey}/.rewritten/${file.path}`
@@ -666,7 +666,7 @@ export async function handleSiteCreateOrUpdate(
 
 	// Find new or changed files
 	for (const file of newFiles) {
-		const shouldForceRewrite = forceRewriteHtml && isHtmlFile(file.path)
+		const shouldForceRewrite = forceRewriteHtml && isHtmlContent(file.path)
 		if (forceDownload || oldFileCids[file.path] !== file.cid || shouldForceRewrite) {
 			filesToDownload.push(file)
 		}
@@ -721,7 +721,7 @@ export async function handleSiteCreateOrUpdate(
 	const keysToDelete: string[] = []
 	for (const path of pathsToDelete) {
 		keysToDelete.push(`${did}/${rkey}/${path}`)
-		if (isHtmlFile(path)) {
+		if (isHtmlContent(path)) {
 			keysToDelete.push(`${did}/${rkey}/.rewritten/${path}`)
 		}
 	}
