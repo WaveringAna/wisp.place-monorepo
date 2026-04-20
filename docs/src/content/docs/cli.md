@@ -54,11 +54,11 @@ The Wisp CLI is a command-line tool for deploying static websites directly to yo
 <h3 style="margin-top: 1.5rem; margin-bottom: 0.5rem;">SHA-256 Checksums</h3>
 
 <pre style="font-size: 0.75rem; padding: 1rem;" class="language-bash" tabindex="0"><code class="language-bash">
-ccf8076d13a32806cd2902941d9ce2825915a7c9c82867288c0921c2eae4db7a  wisp-cli-aarch64-darwin
-9ca9e9f4dbfd6422529bcfda1fcbf12ea3b84b19dcbf212b1c3ee46f488306c9  wisp-cli-x86_64-darwin
-83cff4775f85f597c62fa50d027108b4228feff3c927300fed0d44bc2922dedb  wisp-cli-aarch64-linux
-99225a569f4ad395ca52055f5d602f1d8d649bc9ea9d542e303469a700fa3a73  wisp-cli-x86_64-linux
-65da77e8868c8fb900b788e9c613866f7af3920a0274bdb1e76a4ca4b930c5a8  wisp-cli-x86_64-windows.exe
+67c7552645d8006daa41fc6c62d7412f9a6aef50cdd04cc2e815189c6d5fa7af  wisp-cli-aarch64-darwin
+5a0b09c00eac6a8d2b1a8d8c2e54a16cf173cc6c38cc631bf19b0483d093a7f5  wisp-cli-x86_64-darwin
+b23fe58b8c53a670414a2f0cebe38f31630fd8b5ecca099cd85d543ea0c3f2d1  wisp-cli-aarch64-linux
+f1d4d655f2714879f44bb23318b30aab79f78cb329bbf6b51abe1fd7a6a5bd84  wisp-cli-x86_64-linux
+df9660b27a9d6f8bcebcafab4622be88639d15dbe74649bdb16e5001d8abe041  wisp-cli-x86_64-windows.exe
 </code></pre>
 
 </div>
