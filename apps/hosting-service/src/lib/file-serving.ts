@@ -520,16 +520,15 @@ export async function serveFileInternal(
 	}
 	await markExpectedMiss(fileRequestPath)
 
-	// Try index files for directory-like paths
-	if (!hasFileExtension(fileRequestPath)) {
-		for (const indexFileName of indexFiles) {
-			const indexPath = fileRequestPath ? `${fileRequestPath}/${indexFileName}` : indexFileName
-			const indexResult = await span(trace, `storage:${indexPath}`, () => getFileWithMetadata(did, rkey, indexPath))
-			if (indexResult) {
-				return buildResponseFromStorageResult(indexResult, indexPath, settings, requestHeaders)
-			}
-			await markExpectedMiss(indexPath)
+	// Try index files for directory-like paths (even with extensions,
+	// e.g. Astro emits `relay.md/index.html` for .md routes)
+	for (const indexFileName of indexFiles) {
+		const indexPath = fileRequestPath ? `${fileRequestPath}/${indexFileName}` : indexFileName
+		const indexResult = await span(trace, `storage:${indexPath}`, () => getFileWithMetadata(did, rkey, indexPath))
+		if (indexResult) {
+			return buildResponseFromStorageResult(indexResult, indexPath, settings, requestHeaders)
 		}
+		await markExpectedMiss(indexPath)
 	}
 
 	// Try clean URLs: /about -> /about.html
@@ -869,16 +868,15 @@ export async function serveFileInternalWithRewrite(
 	}
 	await markExpectedMiss(fileRequestPath)
 
-	// Try index files for directory-like paths
-	if (!hasFileExtension(fileRequestPath)) {
-		for (const indexFileName of indexFiles) {
-			const indexPath = fileRequestPath ? `${fileRequestPath}/${indexFileName}` : indexFileName
-			const indexResult = await span(trace, `storage:${indexPath}`, () => getFileForRequest(did, rkey, indexPath, true))
-			if (indexResult) {
-				return await buildResponse(indexResult)
-			}
-			await markExpectedMiss(indexPath)
+	// Try index files for directory-like paths (even with extensions,
+	// e.g. Astro emits `relay.md/index.html` for .md routes)
+	for (const indexFileName of indexFiles) {
+		const indexPath = fileRequestPath ? `${fileRequestPath}/${indexFileName}` : indexFileName
+		const indexResult = await span(trace, `storage:${indexPath}`, () => getFileForRequest(did, rkey, indexPath, true))
+		if (indexResult) {
+			return await buildResponse(indexResult)
 		}
+		await markExpectedMiss(indexPath)
 	}
 
 	// Try clean URLs: /about -> /about.html
