@@ -130,11 +130,6 @@ WARM_CACHE_SIZE=10737418240
 
 ## Observability
 
-Both services expose internal endpoints:
-
-- `/__internal__/observability/logs`
-- `/__internal__/observability/errors`
-- `/__internal__/observability/metrics`
-- `/__internal__/observability/cache` (hosting service only)
+Operational observability is provided through service logs and configured Grafana exporters. The old in-memory internal endpoints were removed.
 
 See [Monitoring & Metrics](/monitoring).

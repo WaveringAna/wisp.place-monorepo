@@ -200,30 +200,9 @@ On failure (401): `{ "error": "Invalid credentials" }`
 { "authenticated": false }
 ```
 
-### `GET /api/admin/logs`
-```json
-{ "logs": [ /* combined log entries */ ] }
-```
-
-### `GET /api/admin/errors`
-```json
-{ "errors": [ /* combined error entries */ ] }
-```
-
-### `GET /api/admin/metrics`
-```json
-{ "overall": {}, "mainApp": {}, "hostingService": {}, "timeWindow": 3600000 }
-```
-
 ### `GET /api/admin/database`
 ```json
 { "stats": {}, "recentSites": [], "recentDomains": [] }
-```
-
-### `GET /api/admin/cache`
-Returns hosting service cache stats, or:
-```json
-{ "error": "Failed to fetch cache stats from hosting service", "message": "Hosting service unavailable" }
 ```
 
 ### `GET /api/admin/sites`

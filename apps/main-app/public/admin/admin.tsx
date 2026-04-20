@@ -2,27 +2,6 @@ import { StrictMode, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 
-// Types
-interface LogEntry {
-	id: string
-	timestamp: string
-	level: 'info' | 'warn' | 'error' | 'debug'
-	message: string
-	service: string
-	context?: Record<string, any>
-	eventType?: string
-}
-
-interface ErrorEntry {
-	id: string
-	timestamp: string
-	message: string
-	stack?: string
-	service: string
-	count: number
-	lastSeen: string
-}
-
 // Helper function to format Unix timestamp from database
 function formatDbDate(timestamp: number | string): Date {
 	const num = typeof timestamp === 'string' ? parseFloat(timestamp) : timestamp
@@ -105,21 +84,12 @@ function Login({ onLogin }: { onLogin: () => void }) {
 // Dashboard Component
 function Dashboard() {
 	const [tab, setTab] = useState('overview')
-	const [logs, setLogs] = useState<LogEntry[]>([])
-	const [errors, setErrors] = useState<ErrorEntry[]>([])
-	const [metrics, setMetrics] = useState<any>(null)
 	const [database, setDatabase] = useState<any>(null)
 	const [sites, setSites] = useState<any>(null)
 	const [health, setHealth] = useState<any>(null)
 	const [firehose, setFirehose] = useState<any>(null)
 	const [supporters, setSupporters] = useState<any[]>([])
 	const [autoRefresh, setAutoRefresh] = useState(true)
-
-	// Filters
-	const [logLevel, setLogLevel] = useState('')
-	const [logService, setLogService] = useState('')
-	const [logSearch, setLogSearch] = useState('')
-	const [logEventType, setLogEventType] = useState('')
 
 	// Supporter management
 	const [newSupporterIdentifier, setNewSupporterIdentifier] = useState('')
@@ -129,37 +99,6 @@ function Dashboard() {
 	const [actorSearchResults, setActorSearchResults] = useState<any[]>([])
 	const [showActorDropdown, setShowActorDropdown] = useState(false)
 	const [searchLoading, setSearchLoading] = useState(false)
-
-	const fetchLogs = async () => {
-		const params = new URLSearchParams()
-		if (logLevel) params.append('level', logLevel)
-		if (logService) params.append('service', logService)
-		if (logSearch) params.append('search', logSearch)
-		if (logEventType) params.append('eventType', logEventType)
-		params.append('limit', '100')
-
-		const res = await fetch(`/api/admin/logs?${params}`, { credentials: 'include' })
-		if (res.ok) {
-			const data = await res.json()
-			setLogs(data.logs)
-		}
-	}
-
-	const fetchErrors = async () => {
-		const res = await fetch('/api/admin/errors', { credentials: 'include' })
-		if (res.ok) {
-			const data = await res.json()
-			setErrors(data.errors)
-		}
-	}
-
-	const fetchMetrics = async () => {
-		const res = await fetch('/api/admin/metrics', { credentials: 'include' })
-		if (res.ok) {
-			const data = await res.json()
-			setMetrics(data)
-		}
-	}
 
 	const fetchDatabase = async () => {
 		const res = await fetch('/api/admin/database', { credentials: 'include' })
@@ -327,32 +266,20 @@ function Dashboard() {
 	}
 
 	useEffect(() => {
-		fetchMetrics()
 		fetchDatabase()
 		fetchHealth()
 		fetchFirehose()
-		fetchLogs()
-		fetchErrors()
 		fetchSites()
 		fetchSupporters()
-	}, [fetchDatabase, fetchErrors, fetchFirehose, fetchHealth, fetchLogs, fetchMetrics, fetchSites, fetchSupporters])
-
-	useEffect(() => {
-		fetchLogs()
-	}, [fetchLogs])
+	}, [fetchDatabase, fetchFirehose, fetchHealth, fetchSites, fetchSupporters])
 
 	useEffect(() => {
 		if (!autoRefresh) return
 
 		const interval = setInterval(() => {
 			if (tab === 'overview') {
-				fetchMetrics()
 				fetchHealth()
 				fetchFirehose()
-			} else if (tab === 'logs') {
-				fetchLogs()
-			} else if (tab === 'errors') {
-				fetchErrors()
 			} else if (tab === 'database') {
 				fetchDatabase()
 			} else if (tab === 'sites') {
@@ -363,23 +290,7 @@ function Dashboard() {
 		}, 5000)
 
 		return () => clearInterval(interval)
-	}, [
-		tab,
-		autoRefresh,
-		fetchDatabase,
-		fetchErrors,
-		fetchFirehose,
-		fetchHealth,
-		fetchLogs,
-		fetchMetrics,
-		fetchSites,
-		fetchSupporters,
-	])
-
-	const _formatDuration = (ms: number) => {
-		if (ms < 1000) return `${ms}ms`
-		return `${(ms / 1000).toFixed(2)}s`
-	}
+	}, [tab, autoRefresh, fetchDatabase, fetchFirehose, fetchHealth, fetchSites, fetchSupporters])
 
 	const formatUptime = (seconds: number) => {
 		const hours = Math.floor(seconds / 3600)
@@ -413,7 +324,7 @@ function Dashboard() {
 			{/* Tabs */}
 			<div className="bg-gray-900 border-b border-gray-800 px-6">
 				<div className="flex gap-1">
-					{['overview', 'logs', 'errors', 'database', 'sites', 'supporters'].map((t) => (
+					{['overview', 'database', 'sites', 'supporters'].map((t) => (
 						<button
 							key={t}
 							onClick={() => setTab(t)}
@@ -488,217 +399,6 @@ function Dashboard() {
 								</div>
 							</div>
 						)}
-
-						{/* Metrics */}
-						{metrics && (
-							<div>
-								<h2 className="text-xl font-bold mb-4">Performance Metrics</h2>
-								<div className="space-y-4">
-									{/* Overall */}
-									<div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-										<h3 className="text-lg font-semibold mb-3">Overall (Last Hour)</h3>
-										<div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-											<div>
-												<div className="text-sm text-gray-400">Total Requests</div>
-												<div className="text-xl font-bold">{metrics.overall.totalRequests}</div>
-											</div>
-											<div>
-												<div className="text-sm text-gray-400">Avg Duration</div>
-												<div className="text-xl font-bold">{metrics.overall.avgDuration}ms</div>
-											</div>
-											<div>
-												<div className="text-sm text-gray-400">P95 Duration</div>
-												<div className="text-xl font-bold">{metrics.overall.p95Duration}ms</div>
-											</div>
-											<div>
-												<div className="text-sm text-gray-400">Error Rate</div>
-												<div className="text-xl font-bold">{metrics.overall.errorRate.toFixed(2)}%</div>
-											</div>
-										</div>
-									</div>
-
-									{/* Main App */}
-									<div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-										<h3 className="text-lg font-semibold mb-3">Main App</h3>
-										<div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-											<div>
-												<div className="text-sm text-gray-400">Requests</div>
-												<div className="text-xl font-bold">{metrics.mainApp.totalRequests}</div>
-											</div>
-											<div>
-												<div className="text-sm text-gray-400">Avg</div>
-												<div className="text-xl font-bold">{metrics.mainApp.avgDuration}ms</div>
-											</div>
-											<div>
-												<div className="text-sm text-gray-400">P95</div>
-												<div className="text-xl font-bold">{metrics.mainApp.p95Duration}ms</div>
-											</div>
-											<div>
-												<div className="text-sm text-gray-400">Req/min</div>
-												<div className="text-xl font-bold">{metrics.mainApp.requestsPerMinute}</div>
-											</div>
-										</div>
-									</div>
-
-									{/* Hosting Service */}
-									<div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-										<h3 className="text-lg font-semibold mb-3">Hosting Service</h3>
-										<div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-											<div>
-												<div className="text-sm text-gray-400">Requests</div>
-												<div className="text-xl font-bold">{metrics.hostingService.totalRequests}</div>
-											</div>
-											<div>
-												<div className="text-sm text-gray-400">Avg</div>
-												<div className="text-xl font-bold">{metrics.hostingService.avgDuration}ms</div>
-											</div>
-											<div>
-												<div className="text-sm text-gray-400">P95</div>
-												<div className="text-xl font-bold">{metrics.hostingService.p95Duration}ms</div>
-											</div>
-											<div>
-												<div className="text-sm text-gray-400">Req/min</div>
-												<div className="text-xl font-bold">{metrics.hostingService.requestsPerMinute}</div>
-											</div>
-										</div>
-									</div>
-								</div>
-							</div>
-						)}
-					</div>
-				)}
-
-				{tab === 'logs' && (
-					<div className="space-y-4">
-						<div className="flex gap-4">
-							<select
-								value={logLevel}
-								onChange={(e) => setLogLevel(e.target.value)}
-								className="px-3 py-2 bg-gray-900 border border-gray-800 rounded text-white"
-							>
-								<option value="">All Levels</option>
-								<option value="info">Info</option>
-								<option value="warn">Warn</option>
-								<option value="error">Error</option>
-								<option value="debug">Debug</option>
-							</select>
-							<select
-								value={logService}
-								onChange={(e) => setLogService(e.target.value)}
-								className="px-3 py-2 bg-gray-900 border border-gray-800 rounded text-white"
-							>
-								<option value="">All Services</option>
-								<option value="main-app">Main App</option>
-								<option value="hosting-service">Hosting Service</option>
-							</select>
-							<select
-								value={logEventType}
-								onChange={(e) => setLogEventType(e.target.value)}
-								className="px-3 py-2 bg-gray-900 border border-gray-800 rounded text-white"
-							>
-								<option value="">All Event Types</option>
-								<option value="DNS Verifier">DNS Verifier</option>
-								<option value="Auth">Auth</option>
-								<option value="User">User</option>
-								<option value="Domain">Domain</option>
-								<option value="Site">Site</option>
-								<option value="File Upload">File Upload</option>
-								<option value="Sync">Sync</option>
-								<option value="Maintenance">Maintenance</option>
-								<option value="KeyRotation">Key Rotation</option>
-								<option value="Cleanup">Cleanup</option>
-								<option value="Cache">Cache</option>
-								<option value="FirehoseWorker">Firehose Worker</option>
-							</select>
-							<input
-								type="text"
-								value={logSearch}
-								onChange={(e) => setLogSearch(e.target.value)}
-								placeholder="Search logs..."
-								className="flex-1 px-3 py-2 bg-gray-900 border border-gray-800 rounded text-white"
-							/>
-						</div>
-
-						<div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden">
-							<div className="max-h-[600px] overflow-y-auto">
-								<table className="w-full text-sm">
-									<thead className="bg-gray-800 sticky top-0">
-										<tr>
-											<th className="px-4 py-2 text-left">Time</th>
-											<th className="px-4 py-2 text-left">Level</th>
-											<th className="px-4 py-2 text-left">Service</th>
-											<th className="px-4 py-2 text-left">Event Type</th>
-											<th className="px-4 py-2 text-left">Message</th>
-										</tr>
-									</thead>
-									<tbody>
-										{logs.map((log) => (
-											<tr key={log.id} className="border-t border-gray-800 hover:bg-gray-800">
-												<td className="px-4 py-2 text-gray-400 whitespace-nowrap">
-													{new Date(log.timestamp).toLocaleTimeString()}
-												</td>
-												<td className="px-4 py-2">
-													<span
-														className={`px-2 py-1 rounded text-xs font-medium ${
-															log.level === 'error'
-																? 'bg-red-900 text-red-200'
-																: log.level === 'warn'
-																	? 'bg-yellow-900 text-yellow-200'
-																	: log.level === 'info'
-																		? 'bg-blue-900 text-blue-200'
-																		: 'bg-gray-700 text-gray-300'
-														}`}
-													>
-														{log.level}
-													</span>
-												</td>
-												<td className="px-4 py-2 text-gray-400">{log.service}</td>
-												<td className="px-4 py-2">
-													{log.eventType && (
-														<span className="px-2 py-1 bg-purple-900 text-purple-200 rounded text-xs font-medium">
-															{log.eventType}
-														</span>
-													)}
-												</td>
-												<td className="px-4 py-2">
-													<div>{log.message}</div>
-													{log.context && Object.keys(log.context).length > 0 && (
-														<div className="text-xs text-gray-500 mt-1">{JSON.stringify(log.context)}</div>
-													)}
-												</td>
-											</tr>
-										))}
-									</tbody>
-								</table>
-							</div>
-						</div>
-					</div>
-				)}
-
-				{tab === 'errors' && (
-					<div className="space-y-4">
-						<h2 className="text-xl font-bold">Recent Errors</h2>
-						<div className="space-y-3">
-							{errors.map((error) => (
-								<div key={error.id} className="bg-gray-900 border border-red-900 rounded-lg p-4">
-									<div className="flex items-start justify-between mb-2">
-										<div className="flex-1">
-											<div className="font-semibold text-red-400">{error.message}</div>
-											<div className="text-sm text-gray-400 mt-1">
-												Service: {error.service} • Count: {error.count} • Last seen:{' '}
-												{new Date(error.lastSeen).toLocaleString()}
-											</div>
-										</div>
-									</div>
-									{error.stack && (
-										<pre className="text-xs text-gray-500 bg-gray-950 p-2 rounded mt-2 overflow-x-auto">
-											{error.stack}
-										</pre>
-									)}
-								</div>
-							))}
-							{errors.length === 0 && <div className="text-center text-gray-500 py-8">No errors found</div>}
-						</div>
 					</div>
 				)}
 

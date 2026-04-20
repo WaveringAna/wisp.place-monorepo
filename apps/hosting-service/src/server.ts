@@ -4,7 +4,7 @@
  */
 
 import { sanitizePath } from '@wispplace/fs-utils'
-import { createLogger, errorTracker, logCollector, metricsCollector } from '@wispplace/observability'
+import { createLogger } from '@wispplace/observability'
 import { observabilityErrorHandler, observabilityMiddleware } from '@wispplace/observability/middleware/hono'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
@@ -12,7 +12,6 @@ import { cache } from './lib/cache-manager'
 import { getCustomDomain, getCustomDomainByHash, getWispDomain } from './lib/db'
 import { serveFromCache, serveFromCacheWithRewrite } from './lib/file-serving'
 import { extractHeaders, isValidRkey } from './lib/request-utils'
-import { getRevalidateMetrics } from './lib/revalidate-metrics'
 import { resolveDid } from './lib/utils'
 
 const logger = createLogger('hosting-service')
@@ -178,39 +177,6 @@ app.get('/*', async (c) => {
 
 	const headers = extractHeaders(c.req.raw.headers)
 	return serveFromCache(customDomain.did, rkey, path, c.req.url, headers)
-})
-
-// Internal observability endpoints (for admin panel)
-app.get('/__internal__/observability/logs', (c) => {
-	const query = c.req.query()
-	const filter: any = {}
-	if (query.level) filter.level = query.level
-	if (query.service) filter.service = query.service
-	if (query.search) filter.search = query.search
-	if (query.eventType) filter.eventType = query.eventType
-	if (query.limit) filter.limit = parseInt(query.limit as string, 10)
-	return c.json({ logs: logCollector.getLogs(filter) })
-})
-
-app.get('/__internal__/observability/errors', (c) => {
-	const query = c.req.query()
-	const filter: any = {}
-	if (query.service) filter.service = query.service
-	if (query.limit) filter.limit = parseInt(query.limit as string, 10)
-	return c.json({ errors: errorTracker.getErrors(filter) })
-})
-
-app.get('/__internal__/observability/metrics', (c) => {
-	const query = c.req.query()
-	const timeWindow = query.timeWindow ? parseInt(query.timeWindow as string, 10) : 3600000
-	const stats = metricsCollector.getStats('hosting-service', timeWindow)
-	return c.json({ stats, revalidate: getRevalidateMetrics(), timeWindow })
-})
-
-app.get('/__internal__/observability/cache', async (c) => {
-	const { getCacheStats } = await import('./lib/cache')
-	const stats = await getCacheStats()
-	return c.json({ cache: stats })
 })
 
 export default app

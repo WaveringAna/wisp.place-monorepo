@@ -8,13 +8,7 @@
  */
 
 import { serve } from '@hono/node-server'
-import {
-	createLogger,
-	errorTracker,
-	initializeGrafanaExporters,
-	logCollector,
-	metricsCollector,
-} from '@wispplace/observability'
+import { createLogger, initializeGrafanaExporters } from '@wispplace/observability'
 import { observabilityErrorHandler, observabilityMiddleware } from '@wispplace/observability/middleware/hono'
 import { Hono } from 'hono'
 import { config } from './config'
@@ -241,33 +235,6 @@ async function runBackfill(): Promise<void> {
 
 	logger.info(`Complete: ${processed} processed, ${skipped} skipped, ${failed} failed (${elapsedLabel} elapsed)`)
 }
-
-// Internal observability endpoints (for admin panel)
-app.get('/__internal__/observability/logs', (c) => {
-	const query = c.req.query()
-	const filter: any = {}
-	if (query.level) filter.level = query.level
-	if (query.service) filter.service = query.service
-	if (query.search) filter.search = query.search
-	if (query.eventType) filter.eventType = query.eventType
-	if (query.limit) filter.limit = parseInt(query.limit as string, 10)
-	return c.json({ logs: logCollector.getLogs(filter) })
-})
-
-app.get('/__internal__/observability/errors', (c) => {
-	const query = c.req.query()
-	const filter: any = {}
-	if (query.service) filter.service = query.service
-	if (query.limit) filter.limit = parseInt(query.limit as string, 10)
-	return c.json({ errors: errorTracker.getErrors(filter) })
-})
-
-app.get('/__internal__/observability/metrics', (c) => {
-	const query = c.req.query()
-	const timeWindow = query.timeWindow ? parseInt(query.timeWindow as string, 10) : 3600000
-	const stats = metricsCollector.getStats('firehose-service', timeWindow)
-	return c.json({ stats, timeWindow })
-})
 
 // Main entry point
 async function main() {

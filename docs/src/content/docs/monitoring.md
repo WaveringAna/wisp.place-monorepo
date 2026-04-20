@@ -73,11 +73,7 @@ sum(rate(http_requests_total[5m])) by (service)
 
 ## Without Grafana
 
-Metrics and logs are always stored in-memory. Access them directly:
-
-- `http://localhost:8000/api/observability/logs`
-- `http://localhost:8000/api/observability/metrics`
-- `http://localhost:8000/api/observability/errors`
+The old in-memory observability endpoints were removed. Without Grafana, use service logs and the remaining health endpoints for operational checks.
 
 ## Programmatic Setup
 
