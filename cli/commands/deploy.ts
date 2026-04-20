@@ -477,7 +477,7 @@ async function deleteOldSubfsRecords(
 
 export async function deploy(agent: Agent, did: string, options: DeployOptions): Promise<{ uri: string; url: string }> {
 	const siteDir = options.path
-	const siteName = options.site || basename(siteDir)
+	const siteName = (options.site || basename(siteDir)).toLowerCase()
 
 	// Validate site name (AT Protocol rkey format)
 	if (!/^[a-zA-Z0-9._~:-]{1,512}$/.test(siteName)) {
