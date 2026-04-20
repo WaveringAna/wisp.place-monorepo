@@ -37,6 +37,12 @@ function parseFields(raw: string[]): Record<string, string> {
 	return fields
 }
 
+export function shouldSkipInvalidationForReason(reason: string): boolean {
+	// Rewrite repairs only repopulate `.rewritten/*` HTML variants. They should not
+	// flip the whole site into "updating" while the original files remain serveable.
+	return reason.startsWith('rewrite-miss')
+}
+
 async function processMessage(id: string, rawFields: string[]): Promise<void> {
 	if (!redis) return
 
@@ -71,10 +77,11 @@ async function processMessage(id: string, rawFields: string[]): Promise<void> {
 	// For storage-miss events, force re-download all files since storage is empty
 	const forceDownload = reason.startsWith('storage-miss')
 	const forceRewriteHtml = reason.startsWith('rewrite-miss')
+	const skipInvalidation = shouldSkipInvalidationForReason(reason)
 
 	try {
 		await handleSiteCreateOrUpdate(did, rkey, record.record, record.cid, {
-			skipInvalidation: false,
+			skipInvalidation,
 			forceDownload,
 			forceRewriteHtml,
 		})

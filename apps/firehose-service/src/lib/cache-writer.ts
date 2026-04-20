@@ -563,23 +563,31 @@ async function downloadAndWriteBlob(did: string, rkey: string, file: FileInfo, p
 
 	// If HTML, also write rewritten version
 	if (isHtmlContent(file.path)) {
-		const basePath = `/${did}/${rkey}/`
-		let rewriteSource = content
-		if (encoding === 'gzip' && content.length >= 2 && content[0] === 0x1f && content[1] === 0x8b) {
-			try {
-				rewriteSource = gunzipSync(content)
-			} catch (error) {
-				logger.error(`Failed to decompress ${file.path} for rewrite, using raw content`, error)
+		try {
+			const basePath = `/${did}/${rkey}/`
+			let rewriteSource = content
+			if (encoding === 'gzip' && content.length >= 2 && content[0] === 0x1f && content[1] === 0x8b) {
+				try {
+					rewriteSource = gunzipSync(content)
+				} catch (error) {
+					logger.error(`Failed to decompress ${file.path} for rewrite, using raw content`, error)
+				}
 			}
+
+			const htmlString = new TextDecoder().decode(rewriteSource)
+			const rewritten = await rewriteHtmlPaths(htmlString, basePath)
+			const rewrittenContent = new TextEncoder().encode(rewritten)
+
+			const rewrittenKey = `${did}/${rkey}/.rewritten/${file.path}`
+			await writeFile(rewrittenKey, rewrittenContent, { mimeType: 'text/html' })
+			logger.debug(`Wrote rewritten HTML: ${rewrittenKey}`)
+		} catch (error) {
+			logger.error(`Failed to cache rewritten HTML for ${file.path}; continuing with original`, error, {
+				did,
+				rkey,
+				path: file.path,
+			})
 		}
-
-		const htmlString = new TextDecoder().decode(rewriteSource)
-		const rewritten = await rewriteHtmlPaths(htmlString, basePath)
-		const rewrittenContent = new TextEncoder().encode(rewritten)
-
-		const rewrittenKey = `${did}/${rkey}/.rewritten/${file.path}`
-		await writeFile(rewrittenKey, rewrittenContent, { mimeType: 'text/html' })
-		logger.debug(`Wrote rewritten HTML: ${rewrittenKey}`)
 	}
 
 	logger.debug(`Stored ${file.path} (${content.length} bytes)`)
@@ -655,8 +663,9 @@ export async function handleSiteCreateOrUpdate(
 
 	// Notify hosting-service that this site is about to be updated so it can
 	// show the "updating" page instead of serving stale or partially-updated files.
+	const invalidationToken = !options?.skipInvalidation ? crypto.randomUUID() : undefined
 	if (!options?.skipInvalidation) {
-		await publishCacheInvalidation(did, rkey, 'updating')
+		await publishCacheInvalidation(did, rkey, 'updating', invalidationToken)
 	}
 
 	// Compare CIDs to determine what to download/delete
@@ -783,7 +792,7 @@ export async function handleSiteCreateOrUpdate(
 				})
 
 				if (!options?.skipInvalidation) {
-					await publishCacheInvalidation(did, rkey, 'update').catch(() => undefined)
+					await publishCacheInvalidation(did, rkey, 'update', invalidationToken).catch(() => undefined)
 				}
 
 				if (allRetryBackoffed && retryBackoffUntil) {
@@ -807,7 +816,7 @@ export async function handleSiteCreateOrUpdate(
 					})),
 				})
 				if (!options?.skipInvalidation) {
-					await publishCacheInvalidation(did, rkey, 'update').catch(() => undefined)
+					await publishCacheInvalidation(did, rkey, 'update', invalidationToken).catch(() => undefined)
 				}
 				throw new Error(`Failed to delete files for ${did}/${rkey}`)
 			}
@@ -833,7 +842,7 @@ export async function handleSiteCreateOrUpdate(
 	// Notify hosting-service to invalidate its local caches (including negative 404 cache)
 	// (skip for backfill since it runs before the hosting-service serves traffic)
 	if (!options?.skipInvalidation) {
-		await publishCacheInvalidation(did, rkey, 'update')
+		await publishCacheInvalidation(did, rkey, 'update', invalidationToken)
 	}
 
 	logger.info(`Successfully cached site ${did}/${rkey}`)

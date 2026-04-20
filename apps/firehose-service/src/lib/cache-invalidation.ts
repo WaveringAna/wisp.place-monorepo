@@ -48,12 +48,13 @@ export async function publishCacheInvalidation(
 	did: string,
 	rkey: string,
 	action: 'updating' | 'update' | 'delete' | 'settings',
+	token?: string,
 ): Promise<void> {
 	const redis = getPublisher()
 	if (!redis) return
 
 	try {
-		const message = JSON.stringify({ did, rkey, action })
+		const message = JSON.stringify({ did, rkey, action, token })
 		logger.debug(`[CacheInvalidation] Publishing ${action} for ${did}/${rkey} to ${CHANNEL}`)
 		await redis.publish(CHANNEL, message)
 	} catch (err) {

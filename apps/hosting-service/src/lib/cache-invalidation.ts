@@ -16,17 +16,26 @@ import { hotTier, warmTier } from './storage'
 
 const CHANNEL = 'wisp:cache-invalidate'
 
+type CacheInvalidationAction = 'updating' | 'update' | 'delete' | 'settings'
+
+export interface CacheInvalidationMessage {
+	did: string
+	rkey: string
+	action: CacheInvalidationAction
+	token?: string
+}
+
 // Sites currently being downloaded by the firehose-service.
-// Maps `${did}/${rkey}` → timestamp when the update started.
+// Maps `${did}/${rkey}` → current update token and timestamp.
 // Used to show an "updating" page instead of serving stale files.
 const UPDATING_TTL_MS = 10 * 60 * 1000 // 10 minutes safety timeout
-const updatingSites = new Map<string, number>()
+const updatingSites = new Map<string, { since: number; token?: string }>()
 
 export function isSiteUpdating(did: string, rkey: string): boolean {
 	const key = `${did}/${rkey}`
-	const since = updatingSites.get(key)
-	if (since === undefined) return false
-	if (Date.now() - since > UPDATING_TTL_MS) {
+	const state = updatingSites.get(key)
+	if (state === undefined) return false
+	if (Date.now() - state.since > UPDATING_TTL_MS) {
 		// Firehose must have crashed; remove the stale entry
 		updatingSites.delete(key)
 		return false
@@ -34,7 +43,52 @@ export function isSiteUpdating(did: string, rkey: string): boolean {
 	return true
 }
 
+export function markSiteUpdating(did: string, rkey: string, token?: string): void {
+	updatingSites.set(`${did}/${rkey}`, { since: Date.now(), token })
+}
+
+export function clearSiteUpdating(did: string, rkey: string, token?: string): boolean {
+	const key = `${did}/${rkey}`
+	const state = updatingSites.get(key)
+	if (!state) return false
+
+	// Unversioned clears are treated as unconditional for compatibility.
+	// Versioned clears only succeed if they match the active update token.
+	if (token && state.token && state.token !== token) {
+		return false
+	}
+
+	updatingSites.delete(key)
+	return true
+}
+
+export function resetUpdatingSitesForTests(): void {
+	updatingSites.clear()
+}
+
 let subscriber: Redis | null = null
+
+export function parseCacheInvalidationMessage(message: string): CacheInvalidationMessage | null {
+	const parsed = JSON.parse(message) as Partial<CacheInvalidationMessage>
+
+	if (
+		typeof parsed.did !== 'string' ||
+		typeof parsed.rkey !== 'string' ||
+		(parsed.action !== 'updating' &&
+			parsed.action !== 'update' &&
+			parsed.action !== 'delete' &&
+			parsed.action !== 'settings')
+	) {
+		return null
+	}
+
+	return {
+		did: parsed.did,
+		rkey: parsed.rkey,
+		action: parsed.action,
+		token: typeof parsed.token === 'string' ? parsed.token : undefined,
+	}
+}
 
 /**
  * Directly invalidate a tier by listing and deleting all keys with the given prefix.
@@ -87,28 +141,29 @@ export function startCacheInvalidationSubscriber(): void {
 
 	subscriber.on('message', async (_channel: string, message: string) => {
 		try {
-			const { did, rkey, action } = JSON.parse(message) as {
-				did: string
-				rkey: string
-				action: 'updating' | 'update' | 'delete' | 'settings'
-			}
-
-			if (!did || !rkey) {
+			const parsed = parseCacheInvalidationMessage(message)
+			if (!parsed) {
 				console.warn('[CacheInvalidation] Invalid message:', message)
 				return
 			}
+
+			const { did, rkey, action, token } = parsed
 
 			console.log(`[CacheInvalidation] Received ${action} for ${did}/${rkey}`)
 
 			if (action === 'updating') {
 				// Firehose is about to download new files — mark site as updating
-				updatingSites.set(`${did}/${rkey}`, Date.now())
+				markSiteUpdating(did, rkey, token)
 				console.log(`[CacheInvalidation] Marked ${did}/${rkey} as updating`)
 				return
 			}
 
 			// For update/delete/settings: clear the updating flag and invalidate caches
-			updatingSites.delete(`${did}/${rkey}`)
+			const cleared = clearSiteUpdating(did, rkey, token)
+			if (!cleared && action === 'update' && token) {
+				console.log(`[CacheInvalidation] Ignored stale update clear for ${did}/${rkey}`)
+				return
+			}
 
 			const prefix = `${did}/${rkey}/`
 
