@@ -73,7 +73,6 @@ export const DEFAULT_IGNORE_PATTERNS: string[] = [
 	'env/**',
 	'*.swp',
 	'*.swo',
-	'*~',
 	'.tangled',
 	'.tangled/**',
 	'.wispignore',
