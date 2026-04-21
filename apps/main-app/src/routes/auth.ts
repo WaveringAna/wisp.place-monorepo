@@ -2,7 +2,6 @@ import type { NodeOAuthClient } from '@atproto/oauth-client-node'
 import { createLogger } from '@wispplace/observability'
 import { Elysia, t } from 'elysia'
 import { getDomainByDid, getSitesByDid } from '../lib/db'
-import { syncSitesFromPDS } from '../lib/sync-sites'
 import { authenticateRequest } from '../lib/wisp-auth'
 
 const logger = createLogger('main-app')
@@ -98,20 +97,7 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 					maxAge: 30 * 24 * 60 * 60, // 30 days
 				})
 
-				// Sync sites from PDS to database cache
-				logger.debug('[Auth] Syncing sites from PDS for', session.did as any)
-				try {
-					const syncResult = await syncSitesFromPDS(session.did, session)
-					logger.debug(`[Auth] Sync complete: ${syncResult.synced} sites synced`)
-					if (syncResult.errors.length > 0) {
-						logger.debug('[Auth] Sync errors:', syncResult.errors)
-					}
-				} catch (err) {
-					logger.error('[Auth] Failed to sync sites', err)
-					// Don't fail auth if sync fails, just log it
-				}
-
-				// Check if user has any sites or domain
+				// Check if user has any cached sites or a claimed domain
 				const sites = await getSitesByDid(session.did)
 				const domain = await getDomainByDid(session.did)
 

@@ -81,7 +81,7 @@ await db`
     )
 `
 
-// Sites table - cache of place.wisp.fs records from PDS
+// Legacy sites table. Main-app now uses site_cache as the authoritative runtime projection.
 await db`
     CREATE TABLE IF NOT EXISTS sites (
         did TEXT NOT NULL,
@@ -339,64 +339,18 @@ export const deleteCustomDomain = async (id: string) => {
 }
 
 export const getSitesByDid = async (did: string) => {
-	const rows = await db`SELECT * FROM sites WHERE did = ${did} ORDER BY created_at DESC`
+	const rows = await db`
+        SELECT
+            did,
+            rkey,
+            rkey AS display_name,
+            cached_at AS created_at,
+            updated_at
+        FROM site_cache
+        WHERE did = ${did}
+        ORDER BY cached_at DESC
+    `
 	return rows
-}
-
-export const upsertSite = async (did: string, rkey: string, displayName?: string) => {
-	try {
-		// Only set display_name if provided (not undefined/null/empty)
-		const cleanDisplayName = displayName?.trim() ? displayName.trim() : null
-
-		await db`
-            INSERT INTO sites (did, rkey, display_name, created_at, updated_at)
-            VALUES (${did}, ${rkey}, ${cleanDisplayName}, EXTRACT(EPOCH FROM NOW()), EXTRACT(EPOCH FROM NOW()))
-            ON CONFLICT (did, rkey)
-            DO UPDATE SET
-                display_name = CASE
-                    WHEN EXCLUDED.display_name IS NOT NULL THEN EXCLUDED.display_name
-                    ELSE sites.display_name
-                END,
-                updated_at = EXTRACT(EPOCH FROM NOW())
-        `
-		return { success: true }
-	} catch (err) {
-		console.error('Failed to upsert site', err)
-		return { success: false, error: err }
-	}
-}
-
-export const deleteSite = async (did: string, rkey: string) => {
-	try {
-		await db`DELETE FROM sites WHERE did = ${did} AND rkey = ${rkey}`
-		return { success: true }
-	} catch (err) {
-		console.error('Failed to delete site', err)
-		return { success: false, error: err }
-	}
-}
-
-export const upsertSiteCache = async (
-	did: string,
-	rkey: string,
-	recordCid: string,
-	fileCids: Record<string, string> = {},
-) => {
-	try {
-		await db`
-            INSERT INTO site_cache (did, rkey, record_cid, file_cids, cached_at, updated_at)
-            VALUES (${did}, ${rkey}, ${recordCid}, ${JSON.stringify(fileCids)}, EXTRACT(EPOCH FROM NOW()), EXTRACT(EPOCH FROM NOW()))
-            ON CONFLICT (did, rkey)
-            DO UPDATE SET
-                record_cid = EXCLUDED.record_cid,
-                file_cids = EXCLUDED.file_cids,
-                updated_at = EXTRACT(EPOCH FROM NOW())
-        `
-		return { success: true }
-	} catch (err) {
-		console.error('Failed to upsert site cache', err)
-		return { success: false, error: err }
-	}
 }
 
 // Get all domains (wisp + custom) mapped to a specific site

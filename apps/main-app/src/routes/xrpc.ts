@@ -21,7 +21,6 @@ import {
 	claimCustomDomain,
 	claimDomain,
 	deleteCustomDomain,
-	deleteSite,
 	deleteWispDomain,
 	getAllWispDomains,
 	getCustomDomainInfo,
@@ -511,15 +510,6 @@ const deleteSiteForDid = async (did: DidString, input: { siteRkey: string }) => 
 				status: mapped.verified ? 'verified' : 'pendingVerification',
 			})
 		}
-	}
-
-	const deleted = await deleteSite(did, siteRkey)
-	if (!deleted.success) {
-		throw new XRPCError({
-			status: 500,
-			error: 'InternalServerError',
-			description: 'failed to delete site',
-		})
 	}
 
 	return json({

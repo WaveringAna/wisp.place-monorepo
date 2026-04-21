@@ -10,7 +10,6 @@ import {
 	getSitesByDid,
 	isSupporter,
 } from '../lib/db'
-import { syncSitesFromPDS } from '../lib/sync-sites'
 import { requireAuth } from '../lib/wisp-auth'
 
 const logger = createLogger('main-app')
@@ -126,13 +125,13 @@ export const userRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		 */
 		.post('/sync', async ({ auth }) => {
 			try {
-				logger.debug('[User] Manual sync requested for', { did: auth.did })
-				const result = await syncSitesFromPDS(auth.did, auth.session)
+				logger.debug('[User] Manual site refresh requested; site availability is firehose-driven', { did: auth.did })
+				const sites = await getSitesByDid(auth.did)
 
 				return {
 					success: true,
-					synced: result.synced,
-					errors: result.errors,
+					synced: sites.length,
+					errors: [],
 				}
 			} catch (err) {
 				logger.error('[User] Sync error', err)

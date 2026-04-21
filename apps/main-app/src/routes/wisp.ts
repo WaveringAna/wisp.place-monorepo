@@ -26,7 +26,6 @@ import {
 import type { Directory } from '@wispplace/lexicons/types/place/wisp/fs'
 import { createLogger } from '@wispplace/observability'
 import { Elysia } from 'elysia'
-import { upsertSite } from '../lib/db'
 import { createIgnoreMatcher, parseWispignore, shouldIgnore } from '../lib/ignore-patterns'
 import {
 	addJobListener,
@@ -292,16 +291,6 @@ async function processUploadInBackground(
 				rkey: rkey,
 				record: emptyManifest,
 			})
-
-			await upsertSite(did, rkey, siteName)
-
-			// Cache the empty site for the hosting service
-			try {
-				await upsertSiteCache(did, rkey, record.data.cid, {})
-			} catch (err) {
-				// Don't fail the upload if caching fails
-				logger.warn('Failed to cache site', err as any)
-			}
 
 			completeUploadJob(jobId, {
 				success: true,
@@ -829,7 +818,6 @@ async function processUploadInBackground(
 
 		// First attempt: no base64 encoding
 		let record: Awaited<ReturnType<typeof agent.com.atproto.repo.putRecord>>
-		let finalBlobs = uploadedBlobs
 		try {
 			record = await buildManifestAndPut(uploadedBlobs)
 		} catch (err: any) {
@@ -877,14 +865,8 @@ async function processUploadInBackground(
 				}
 			}
 
-			finalBlobs = base64Blobs
 			record = await buildManifestAndPut(base64Blobs)
 		}
-
-		const rkey = siteName
-
-		// Store site in database cache
-		await upsertSite(did, rkey, siteName)
 
 		// Clean up old subfs records if we had any
 		if (oldSubfsUris.length > 0) {
@@ -1103,16 +1085,6 @@ export const wispRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 						rkey: rkey,
 						record: emptyManifest,
 					})
-
-					await upsertSite(auth.did, rkey, siteName)
-
-					// Cache the empty site for the hosting service
-					try {
-						await upsertSiteCache(auth.did, rkey, record.data.cid, {})
-					} catch (err) {
-						// Don't fail the upload if caching fails
-						logger.warn('Failed to cache site', err as any)
-					}
 
 					return {
 						success: true,

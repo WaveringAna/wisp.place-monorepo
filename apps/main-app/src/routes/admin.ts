@@ -139,7 +139,7 @@ export const adminRoutes = (cookieSecret: string) =>
 
 				try {
 					// Get total counts
-					const allSitesResult = await db`SELECT COUNT(*) as count FROM sites`
+					const allSitesResult = await db`SELECT COUNT(*) as count FROM site_cache`
 					const wispSubdomainsResult = await db`SELECT COUNT(*) as count FROM domains WHERE domain LIKE '%.wisp.place'`
 					const customDomainsResult = await db`SELECT COUNT(*) as count FROM custom_domains WHERE verified = true`
 					const siteCacheResult = await db`SELECT COUNT(*) as count FROM site_cache`
@@ -150,14 +150,14 @@ export const adminRoutes = (cookieSecret: string) =>
 					SELECT
 						s.did,
 						s.rkey,
-						s.display_name,
-						s.created_at,
+						s.rkey as display_name,
+						s.cached_at as created_at,
 						d.domain as subdomain,
 						cd.domain as custom_domain
-					FROM sites s
+					FROM site_cache s
 					LEFT JOIN domains d ON s.did = d.did AND s.rkey = d.rkey AND d.domain LIKE '%.wisp.place'
 					LEFT JOIN custom_domains cd ON s.did = cd.did AND s.rkey = cd.rkey AND cd.verified = true
-					ORDER BY s.created_at DESC
+					ORDER BY s.cached_at DESC
 					LIMIT 10
 				`
 
@@ -217,14 +217,14 @@ export const adminRoutes = (cookieSecret: string) =>
 					SELECT
 						s.did,
 						s.rkey,
-						s.display_name,
-						s.created_at,
+						s.rkey as display_name,
+						s.cached_at as created_at,
 						d.domain as subdomain,
 						cd.domain as custom_domain
-					FROM sites s
+					FROM site_cache s
 					LEFT JOIN domains d ON s.did = d.did AND s.rkey = d.rkey AND d.domain LIKE '%.wisp.place'
 					LEFT JOIN custom_domains cd ON s.did = cd.did AND s.rkey = cd.rkey AND cd.verified = true
-					ORDER BY s.created_at DESC
+					ORDER BY s.cached_at DESC
 					LIMIT ${limit} OFFSET ${offset}
 				`
 

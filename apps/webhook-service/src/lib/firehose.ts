@@ -304,9 +304,10 @@ export function startFirehose(initialCursor?: number): void {
 	setInterval(() => {
 		const direct = directJetstream?.cursor
 		const backlink = backlinkJetstream?.cursor
-		const cursor = direct !== undefined && backlink !== undefined
-			? Math.max(direct, backlink)
-			: (direct ?? backlink ?? (isConnected ? Date.now() * 1000 : undefined))
+		const cursor =
+			direct !== undefined && backlink !== undefined
+				? Math.max(direct, backlink)
+				: (direct ?? backlink ?? (isConnected ? Date.now() * 1000 : undefined))
 		if (cursor !== undefined && cursor !== lastSavedCursor) {
 			lastSavedCursor = cursor
 			saveCursor(cursor, config.jetstreamUrl)

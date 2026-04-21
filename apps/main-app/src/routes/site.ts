@@ -3,7 +3,6 @@ import type { NodeOAuthClient } from '@atproto/oauth-client-node'
 import { extractSubfsUris } from '@wispplace/atproto-utils'
 import { createLogger } from '@wispplace/observability'
 import { Elysia } from 'elysia'
-import { deleteSite } from '../lib/db'
 import { requireAuth } from '../lib/wisp-auth'
 
 const logger = createLogger('main-app')
@@ -108,12 +107,6 @@ export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 					)
 
 					logger.info(`[Site] Deleted ${subfsUris.length} subfs records for ${rkey}`)
-				}
-
-				// Delete from database
-				const result = await deleteSite(auth.did, rkey)
-				if (!result.success) {
-					throw new Error('Failed to delete site from database')
 				}
 
 				logger.info(`[Site] Successfully deleted site ${rkey} for ${auth.did}`)

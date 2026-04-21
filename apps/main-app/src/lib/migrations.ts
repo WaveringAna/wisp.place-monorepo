@@ -98,7 +98,7 @@ export const runDatabaseMigrations = async (db: SQL): Promise<void> => {
 		{ silent: true },
 	)
 
-	// Ensure existing domain mappings only point to owned sites before adding FK constraints.
+	// Ensure existing domain mappings only point to owned cached sites before adding FK constraints.
 	await runMigration('normalize invalid domains.rkey mappings', async () => {
 		await db`
             UPDATE domains d
@@ -106,7 +106,7 @@ export const runDatabaseMigrations = async (db: SQL): Promise<void> => {
             WHERE rkey IS NOT NULL
               AND NOT EXISTS (
                   SELECT 1
-                  FROM sites s
+                  FROM site_cache s
                   WHERE s.did = d.did
                     AND s.rkey = d.rkey
               )
@@ -120,7 +120,7 @@ export const runDatabaseMigrations = async (db: SQL): Promise<void> => {
             WHERE rkey IS NOT NULL
               AND NOT EXISTS (
                   SELECT 1
-                  FROM sites s
+                  FROM site_cache s
                   WHERE s.did = d.did
                     AND s.rkey = d.rkey
               )
@@ -135,7 +135,23 @@ export const runDatabaseMigrations = async (db: SQL): Promise<void> => {
 		{ silent: true },
 	)
 
-	// Enforce mapped site rkeys belong to same DID as mapped domain.
+	// Mapped site rkeys must refer to an existing cached site owned by the same DID.
+	await runMigration(
+		'drop legacy fk_domains_site_owner',
+		async () => {
+			await db`ALTER TABLE domains DROP CONSTRAINT IF EXISTS fk_domains_site_owner`
+		},
+		{ silent: true },
+	)
+
+	await runMigration(
+		'drop legacy fk_custom_domains_site_owner',
+		async () => {
+			await db`ALTER TABLE custom_domains DROP CONSTRAINT IF EXISTS fk_custom_domains_site_owner`
+		},
+		{ silent: true },
+	)
+
 	await runMigration(
 		'add fk_domains_site_owner',
 		async () => {
@@ -143,7 +159,7 @@ export const runDatabaseMigrations = async (db: SQL): Promise<void> => {
             ALTER TABLE domains
             ADD CONSTRAINT fk_domains_site_owner
             FOREIGN KEY (did, rkey)
-            REFERENCES sites(did, rkey)
+            REFERENCES site_cache(did, rkey)
             ON UPDATE CASCADE
             ON DELETE SET NULL
         `
@@ -158,7 +174,7 @@ export const runDatabaseMigrations = async (db: SQL): Promise<void> => {
             ALTER TABLE custom_domains
             ADD CONSTRAINT fk_custom_domains_site_owner
             FOREIGN KEY (did, rkey)
-            REFERENCES sites(did, rkey)
+            REFERENCES site_cache(did, rkey)
             ON UPDATE CASCADE
             ON DELETE SET NULL
         `
