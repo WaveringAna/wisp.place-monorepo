@@ -288,7 +288,7 @@ export async function listAllKnownDids(): Promise<string[]> {
 	const dids = new Set<string>()
 
 	const sites = await db<Array<{ did: string }>>`
-    SELECT DISTINCT did FROM sites WHERE did IS NOT NULL AND did <> ''
+    SELECT DISTINCT did FROM site_cache WHERE did IS NOT NULL AND did <> ''
   `
 	for (const r of sites) dids.add(r.did)
 

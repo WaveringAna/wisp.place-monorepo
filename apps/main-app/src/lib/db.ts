@@ -81,18 +81,6 @@ await db`
     )
 `
 
-// Legacy sites table. Main-app now uses site_cache as the authoritative runtime projection.
-await db`
-    CREATE TABLE IF NOT EXISTS sites (
-        did TEXT NOT NULL,
-        rkey TEXT NOT NULL,
-        display_name TEXT,
-        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()),
-        updated_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()),
-        PRIMARY KEY (did, rkey)
-    )
-`
-
 // Site cache table - stores CIDs for cached sites (used by firehose/hosting services)
 await db`
     CREATE TABLE IF NOT EXISTS site_cache (

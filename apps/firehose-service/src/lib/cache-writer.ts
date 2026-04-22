@@ -16,12 +16,10 @@ import { createLogger } from '@wispplace/observability'
 import { safeFetchBlob, safeFetchJson } from '@wispplace/safe-fetch'
 import { publishCacheInvalidation } from './cache-invalidation'
 import {
-	deleteSite,
 	deleteSiteCache,
 	deleteSiteSettingsCache,
 	getSiteCache,
 	isSupporter,
-	upsertSite,
 	upsertSiteCache,
 	upsertSiteSettingsCache,
 } from './db'
@@ -826,7 +824,6 @@ export async function handleSiteCreateOrUpdate(
 	// Update DB with new CIDs
 	logger.debug(`About to upsert site cache for ${did}/${rkey}`)
 	await upsertSiteCache(did, rkey, recordCid, newFileCids)
-	await upsertSite(did, rkey, record.site)
 	logger.debug(`Updated site cache for ${did}/${rkey} with record CID ${recordCid}`)
 
 	// Backfill settings if a record exists for this rkey
@@ -864,7 +861,6 @@ export async function handleSiteDelete(did: string, rkey: string): Promise<void>
 
 	// Delete from DB
 	await deleteSiteCache(did, rkey)
-	await deleteSite(did, rkey)
 
 	// Notify hosting-service to invalidate its local caches
 	await publishCacheInvalidation(did, rkey, 'delete')

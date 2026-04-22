@@ -1,4 +1,4 @@
-import type { SiteCache, SiteRecord, SiteSettingsCache } from '@wispplace/database'
+import type { SiteCache, SiteSettingsCache } from '@wispplace/database'
 import { createLogger } from '@wispplace/observability'
 import postgres from 'postgres'
 import { config } from '../config'
@@ -41,28 +41,12 @@ export async function listAllSiteCaches(): Promise<SiteCache[]> {
   `
 }
 
-export async function listAllSites(): Promise<SiteRecord[]> {
-	return await sql<SiteRecord[]>`
-    SELECT did, rkey, display_name, created_at, updated_at
-    FROM sites
-    ORDER BY updated_at DESC
-  `
-}
-
 /**
  * List all known DIDs from all DID-bearing tables.
  * Missing tables are skipped to keep bootstrapping resilient.
  */
 export async function listAllKnownDids(): Promise<string[]> {
 	const sources: Array<{ name: string; fetch: () => Promise<Array<{ did: string }>> }> = [
-		{
-			name: 'sites',
-			fetch: () => sql<Array<{ did: string }>>`
-        SELECT DISTINCT did
-        FROM sites
-        WHERE did IS NOT NULL AND did <> ''
-      `,
-		},
 		{
 			name: 'site_cache',
 			fetch: () => sql<Array<{ did: string }>>`
@@ -218,21 +202,6 @@ export async function upsertSiteSettingsCache(
 
 export async function deleteSiteSettingsCache(did: string, rkey: string): Promise<void> {
 	await sql`DELETE FROM site_settings_cache WHERE did = ${did} AND rkey = ${rkey}`
-}
-
-export async function upsertSite(did: string, rkey: string, displayName: string): Promise<void> {
-	await sql`
-    INSERT INTO sites (did, rkey, display_name, created_at, updated_at)
-    VALUES (${did}, ${rkey}, ${displayName}, EXTRACT(EPOCH FROM NOW()), EXTRACT(EPOCH FROM NOW()))
-    ON CONFLICT (did, rkey)
-    DO UPDATE SET
-      display_name = EXCLUDED.display_name,
-      updated_at = EXTRACT(EPOCH FROM NOW())
-  `
-}
-
-export async function deleteSite(did: string, rkey: string): Promise<void> {
-	await sql`DELETE FROM sites WHERE did = ${did} AND rkey = ${rkey}`
 }
 
 export async function isSupporter(did: string): Promise<boolean> {

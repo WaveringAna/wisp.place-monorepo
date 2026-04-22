@@ -228,11 +228,6 @@ export const runDatabaseMigrations = async (db: SQL): Promise<void> => {
 				console.error('Failed to create idx_custom_domains_verified:', err)
 			}
 		}),
-		db`CREATE INDEX IF NOT EXISTS idx_sites_did ON sites(did)`.catch((err) => {
-			if (!hasAlreadyExists(err)) {
-				console.error('Failed to create idx_sites_did:', err)
-			}
-		}),
 		db`CREATE INDEX IF NOT EXISTS idx_site_cache_did ON site_cache(did)`.catch((err) => {
 			if (!hasAlreadyExists(err)) {
 				console.error('Failed to create idx_site_cache_did:', err)

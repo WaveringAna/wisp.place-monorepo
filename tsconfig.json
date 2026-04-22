@@ -103,7 +103,6 @@
 		"skipLibCheck": true, /* Skip type checking all .d.ts files. */
 		"allowImportingTsExtensions": true,
 		"noEmit": true,
-		"baseUrl": ".",
 		"paths": {
 			"@server": ["./apps/main-app/src/index.ts"],
 			"@server/*": ["./apps/main-app/src/*"],
@@ -111,5 +110,5 @@
 			"@wispplace/*": ["./packages/@wispplace/*/src"]
 		}
 	},
-	"exclude": ["docs", "node_modules"]
+	"exclude": ["docs", "node_modules", "apps/hosting-service/cache", "**/dist", "**/node_modules"]
 }

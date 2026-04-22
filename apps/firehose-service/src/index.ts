@@ -3,8 +3,8 @@
  *
  * Modes:
  * - Normal: Watch firehose for place.wisp.fs events
- * - Backfill: Process existing sites from database
- * - DB Fill Only: Collect DIDs and backfill sites table (skip S3 writes)
+ * - Backfill: Process existing sites discovered from known DIDs
+ * - DB Fill Only: Legacy mode; no-op now that site_cache is the canonical projection
  */
 
 import { serve } from '@hono/node-server'
@@ -14,7 +14,7 @@ import { Hono } from 'hono'
 import { config } from './config'
 import { closeCacheInvalidationPublisher } from './lib/cache-invalidation'
 import { fetchSiteRecord, handleSiteCreateOrUpdate, listSiteRecordsForDid } from './lib/cache-writer'
-import { closeDatabase, getSiteCache, listAllKnownDids, listAllSiteCaches, listAllSites, upsertSite } from './lib/db'
+import { closeDatabase, getSiteCache, listAllKnownDids } from './lib/db'
 import { getActiveService, getCurrentSeq, getFirehoseHealth, startFirehose, stopFirehose } from './lib/firehose'
 import { closeLeaderRedis, getLeaderInfo, releaseLeadership, runLeaderElection, saveCursor } from './lib/leader'
 import { startRevalidateWorker, stopRevalidateWorker } from './lib/revalidate-worker'
@@ -80,24 +80,25 @@ process.on('SIGTERM', () => shutdown('SIGTERM'))
 /**
  * Backfill phase 1+2:
  * - Collect all known DIDs from DB
- * - Backfill each DID's place.wisp.fs records into the sites table
+ * - Discover each DID's place.wisp.fs records directly from the PDS
  */
-async function backfillSitesTableFromKnownDids(): Promise<void> {
+async function collectSitesFromKnownDids(): Promise<Array<{ did: string; rkey: string }>> {
 	logger.info('Phase 1/3: Collecting known DIDs')
 	const dids = await listAllKnownDids()
 	logger.info(`Collected ${dids.length} known DIDs`)
 
 	if (dids.length === 0) {
-		logger.warn('No known DIDs found; skipping sites table backfill')
-		return
+		logger.warn('No known DIDs found; skipping site discovery')
+		return []
 	}
 
-	logger.info('Phase 2/3: Backfilling place.wisp.fs records into sites table')
+	logger.info('Phase 2/3: Discovering place.wisp.fs records from known DIDs')
 
 	let didsProcessed = 0
 	let didsFailed = 0
-	let sitesSynced = 0
+	let sitesDiscovered = 0
 	let sitesFailed = 0
+	const discoveredSites = new Map<string, { did: string; rkey: string }>()
 
 	const concurrency = config.backfillConcurrency
 
@@ -106,12 +107,10 @@ async function backfillSitesTableFromKnownDids(): Promise<void> {
 			const records = await listSiteRecordsForDid(did)
 			for (const row of records) {
 				try {
-					const siteName =
-						typeof row.record.site === 'string' && row.record.site.length > 0 ? row.record.site : row.rkey
-					await upsertSite(did, row.rkey, siteName)
-					sitesSynced++
+					discoveredSites.set(`${did}:${row.rkey}`, { did, rkey: row.rkey })
+					sitesDiscovered++
 				} catch (err) {
-					logger.error(`[Backfill:sites] Failed to upsert site ${did}/${row.rkey}`, err)
+					logger.error(`[Backfill:sites] Failed to register site ${did}/${row.rkey}`, err)
 					sitesFailed++
 				}
 			}
@@ -121,7 +120,7 @@ async function backfillSitesTableFromKnownDids(): Promise<void> {
 			didsFailed++
 		}
 		logger.info(
-			`[Backfill:sites] Progress ${didsProcessed + didsFailed}/${dids.length} DIDs (${sitesSynced} sites synced, ${sitesFailed} sites failed)`,
+			`[Backfill:sites] Progress ${didsProcessed + didsFailed}/${dids.length} DIDs (${sitesDiscovered} sites discovered, ${sitesFailed} sites failed)`,
 		)
 	}
 
@@ -138,13 +137,14 @@ async function backfillSitesTableFromKnownDids(): Promise<void> {
 	await Promise.all(inFlight)
 
 	logger.info(
-		`Phase 2/3 complete: ${didsProcessed} DIDs processed, ${didsFailed} DIDs failed, ${sitesSynced} sites synced, ${sitesFailed} sites failed`,
+		`Phase 2/3 complete: ${didsProcessed} DIDs processed, ${didsFailed} DIDs failed, ${discoveredSites.size} unique sites discovered, ${sitesFailed} sites failed`,
 	)
+	return [...discoveredSites.values()]
 }
 
 /**
  * Backfill phase 3:
- * - process sites from database and backfill blobs into S3
+ * - process discovered sites and backfill blobs into S3
  */
 async function runBackfill(): Promise<void> {
 	logger.info('Starting backfill mode')
@@ -159,24 +159,17 @@ async function runBackfill(): Promise<void> {
 		logger.info('Forcing full file download/write for all backfilled sites')
 	}
 
-	await backfillSitesTableFromKnownDids()
+	const sites = await collectSitesFromKnownDids()
 
 	if (config.isDbFillOnly) {
-		logger.info('DB fill only mode complete; skipping phase 3/3 S3 backfill')
+		logger.info('DB fill only mode enabled; skipping phase 3/3 cache backfill')
 		return
 	}
 
 	logger.info('Phase 3/3: Backfilling site blobs into S3')
 
-	let sites = await listAllSites()
-	if (sites.length === 0) {
-		const cachedSites = await listAllSiteCaches()
-		sites = cachedSites.map((site) => ({ did: site.did, rkey: site.rkey }))
-		logger.info('Sites table empty; falling back to site_cache entries')
-	}
-
 	const concurrency = config.backfillConcurrency
-	logger.info(`Found ${sites.length} sites in database (concurrency: ${concurrency})`)
+	logger.info(`Found ${sites.length} sites to process (concurrency: ${concurrency})`)
 
 	let processed = 0
 	let skipped = 0

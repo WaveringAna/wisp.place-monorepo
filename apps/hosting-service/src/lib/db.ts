@@ -70,10 +70,6 @@ export async function getCustomDomainByHash(hash: string): Promise<CustomDomainL
 	)
 }
 
-export async function upsertSite(did: string, rkey: string, displayName?: string) {
-	console.log('[DB] Read-only mode: skipping upsertSite', { did, rkey, displayName })
-}
-
 /**
  * Upsert site cache entry (used by on-demand caching when a site is completely missing)
  */
@@ -102,25 +98,6 @@ export async function upsertSiteCache(
 		const error = err instanceof Error ? err : new Error(String(err))
 		console.error('[DB] upsertSiteCache error:', { did, rkey, error: error.message })
 		throw error
-	}
-}
-
-export interface SiteRecord {
-	did: string
-	rkey: string
-	display_name?: string
-}
-
-export async function getAllSites(): Promise<SiteRecord[]> {
-	try {
-		const result = await sql<SiteRecord[]>`
-      SELECT did, rkey, display_name FROM sites
-      ORDER BY created_at DESC
-    `
-		return result
-	} catch (err) {
-		console.error('Failed to get all sites', err)
-		return []
 	}
 }
 
