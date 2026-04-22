@@ -20,6 +20,30 @@ export interface SpinnerLike {
 }
 
 export function createSpinner(text: string): SpinnerLike {
+	// when no tty is attached or WISPCTL_NO_PROGRESS is set, return a silent spinner
+	if (!process.stdout.isTTY || process.env.WISPCTL_NO_PROGRESS === '1') {
+		let currentText = text
+		return {
+			get text() {
+				return currentText
+			},
+			set text(newText: string) {
+				currentText = newText
+			},
+			start() {
+				return this
+			},
+			succeed(message?: string) {
+				console.log(`✓ ${message ?? currentText}`)
+				return this
+			},
+			fail(message?: string) {
+				console.error(`✗ ${message ?? currentText}`)
+				return this
+			},
+		}
+	}
+
 	const s = spinner()
 	let currentText = text
 	let started = false
