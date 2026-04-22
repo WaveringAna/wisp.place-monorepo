@@ -33,6 +33,7 @@
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
     "codegen": "./scripts/codegen.sh",
+    "download:aturi": "bun run scripts/download-place-wisp-fs.ts",
     "publish:cli": "cd cli && bun run build && npm publish && cd ../packages/create-wisp && npm publish"
   },
   "trustedDependencies": [

@@ -27,6 +27,8 @@ export const config = {
 	redisUrl: process.env.REDIS_URL,
 	revalidateStream: process.env.WISP_REVALIDATE_STREAM || 'wisp:revalidate',
 	revalidateGroup: process.env.WISP_REVALIDATE_GROUP || 'firehose-service',
+	cacheInvalidationStream: process.env.WISP_CACHE_INVALIDATION_STREAM || 'wisp:cache-invalidate-stream',
+	cacheInvalidationStreamMaxLen: parseInt(process.env.WISP_CACHE_INVALIDATION_STREAM_MAXLEN || '10000', 10),
 
 	// Leader election (for distributed HA deployments)
 	leaderElection: process.env.LEADER_ELECTION === 'true',

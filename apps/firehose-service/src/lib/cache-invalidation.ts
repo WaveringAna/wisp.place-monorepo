@@ -54,8 +54,24 @@ export async function publishCacheInvalidation(
 	if (!redis) return
 
 	try {
-		const message = JSON.stringify({ did, rkey, action, token })
-		logger.debug(`[CacheInvalidation] Publishing ${action} for ${did}/${rkey} to ${CHANNEL}`)
+		const streamId = await redis.xadd(
+			config.cacheInvalidationStream,
+			'MAXLEN',
+			'~',
+			config.cacheInvalidationStreamMaxLen.toString(),
+			'*',
+			'did',
+			did,
+			'rkey',
+			rkey,
+			'action',
+			action,
+			...(token ? (['token', token] as const) : []),
+			'ts',
+			Date.now().toString(),
+		)
+		const message = JSON.stringify({ did, rkey, action, token, streamId })
+		logger.debug(`[CacheInvalidation] Publishing ${action} for ${did}/${rkey} to ${CHANNEL} (stream ${streamId})`)
 		await redis.publish(CHANNEL, message)
 	} catch (err) {
 		logger.error('[CacheInvalidation] Failed to publish', err)
