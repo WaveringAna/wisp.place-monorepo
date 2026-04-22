@@ -142,8 +142,8 @@ async function deleteSiteWithSelection(
 	}
 }
 
-program.name('wisp-cli').description('CLI for wisp.place - deploy static sites to the AT Protocol').version('1.1.1')
-	.option('-q, --quiet', 'Suppress progress output (also set via WISPCTL_NO_PROGRESS=1)')
+program.name('wisp-cli').description('CLI for wisp.place - deploy static sites to the AT Protocol').version('1.1.2')
+	.option('-q, --quiet', 'Suppress progress output — useful for CI/agents (also set via WISPCTL_NO_PROGRESS=1)')
 
 // Deploy command (default)
 program
