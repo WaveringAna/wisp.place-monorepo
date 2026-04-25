@@ -31,6 +31,7 @@ export default defineConfig({
 						{ label: 'Self-Hosting', slug: 'deployment' },
 						{ label: 'Monitoring & Metrics', slug: 'monitoring' },
 						{ label: 'Redirects & Rewrites', slug: 'redirects' },
+						{ label: 'Blob Reuse & Framework Caveats', slug: 'guides/blob-reuse' },
 					],
 				},
 				{
