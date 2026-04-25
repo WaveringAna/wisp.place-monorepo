@@ -7,6 +7,8 @@ description: Command-line tool for deploying static sites to the AT Protocol
 
 The Wisp CLI is a command-line tool for deploying static websites directly to your AT Protocol account. Host your sites on wisp.place with full ownership and control, backed by the decentralized AT Protocol.
 
+**Jump to:** [Features](#features) · [Downloads](#downloads) · [CI/CD](#cicd-integration) · [Basic Usage](#basic-usage) · [Authentication](#authentication) · [File Processing](#file-processing) · [Incremental Updates](#incremental-updates) · [Limits](#limits) · [Command Reference](#command-reference) · [Development](#development)
+
 ## Features
 
 - **Deploy**: Push static sites directly from your terminal

@@ -7,7 +7,7 @@ Wisp.place splits into two microservices: the **firehose service** (write path) 
 
 ## Firehose Service
 
-The firehose service watches the AT Protocol Jetstream for `place.wisp.fs` and `place.wisp.settings` record changes. When a site is created or updated, it downloads all blobs from the user's PDS, decompresses gzipped content, rewrites HTML for subdirectory serving, writes processed files to S3 (or disk), then publishes a cache invalidation event to Redis.
+The firehose service watches the AT Protocol relay for `place.wisp.fs` and `place.wisp.settings` record changes. When a site is created or updated, it downloads all blobs from the user's PDS, rewrites HTML for subdirectory serving, writes processed files to S3 (or disk) — keeping gzipped content as-is and serving it with the appropriate `Content-Encoding` header — then publishes a cache invalidation event to Redis.
 
 It's write-only — it never serves requests to end users.
 

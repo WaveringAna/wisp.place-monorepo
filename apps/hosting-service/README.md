@@ -8,8 +8,7 @@ Minimal microservice for hosting static sites from the AT Protocol. Built with H
 - **Wisp.place Subdomains**: Serve registered `*.wisp.place` subdomains
 - **DNS Hash Routing**: Support DNS verification via `hash.dns.wisp.place`
 - **Direct File Serving**: Access sites via `sites.wisp.place/:identifier/:site/*` (no DB lookup)
-- **Firehose Worker**: Listens to AT Protocol firehose for new `place.wisp.fs` records
-- **Automatic Caching**: Downloads and caches sites locally on first access or firehose event
+- **Automatic Caching**: Downloads and caches sites locally on first access or via invalidation events from the firehose service
 - **SSRF Protection**: Hardened fetch with timeout, size limits, and private IP blocking
 
 ## Routes
@@ -59,7 +58,7 @@ bun run start
 - **Hono**: Minimal web framework
 - **Postgres**: Database for domain/site lookups
 - **AT Protocol**: Decentralized storage
-- **Jetstream**: Firehose consumer for real-time updates
+- **Redis**: Cache invalidation events from the firehose service
 - **Bun**: Runtime and file serving
 
 ## Cache Structure
