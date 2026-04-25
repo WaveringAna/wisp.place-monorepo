@@ -3,7 +3,7 @@ title: Grafana Setup Example
 description: Quick setup for Grafana Cloud monitoring
 ---
 
-Example setup for monitoring Wisp.place with Grafana Cloud.
+A step-by-step walkthrough for connecting Wisp to Grafana Cloud. If you already have a Grafana instance, you can skip to step 3.
 
 ## 1. Create Grafana Cloud Account
 

@@ -1,15 +1,24 @@
-# webhook-service
+# Wisp Webhook Service
 
-To install dependencies:
+Delivers HTTP webhook notifications when AT Protocol records change. Watches the firehose for `place.wisp.v2.wh` record creations/updates/deletions, then sends matching events to registered URLs.
+
+## Setup
 
 ```bash
 bun install
+bun run start
 ```
 
-To run:
+## Environment Variables
 
 ```bash
-bun run index.ts
+DATABASE_URL="postgres://user:password@localhost:5432/wisp"
+JETSTREAM_URL="wss://jetstream2.us-east.bsky.network/subscribe"
+HEALTH_PORT=3003
+DELIVERY_TIMEOUT_MS=10000
+DELIVERY_MAX_RETRIES=3
+REDIS_URL="redis://localhost:6379"
+WEBHOOK_EVENTS_CHANNEL="webhook:events"
 ```
 
-This project was created using `bun init` in bun v1.3.10. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.
+See the [webhook documentation](../../docs/src/content/docs/lexicons/place-wisp-wh.md) for the full record schema, payload format, and signature verification.

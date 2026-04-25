@@ -25,5 +25,25 @@ chmod +x wisp-cli
 
 Your site will be available at:
 ```
-https://sites.wisp.place/{your-did}/{site-name}
+https://sites.wisp.place/{your-handle}/{site-name}
+```
+
+Or map it to your own domain with a DNS TXT record.
+
+## How it works
+
+1. You upload static files (HTML, CSS, JS, images — anything a browser can serve)
+2. Files are compressed and stored as blobs in your AT Protocol repo as a `place.wisp.fs` record
+3. Hosting services watch the AT Protocol firehose and cache your site
+4. Visitors get your site served fast from cache, with automatic invalidation on updates
+
+Your PDS is the source of truth. Hosting services are read-only caches — they can always reconstruct your site from your repo.
+
+## Next steps
+
+- [CLI reference](/cli) — deploy, pull, and serve sites from the command line
+- [Architecture](/architecture) — how the firehose, hosting, and storage tiers fit together
+- [Self-hosting](/deployment) — run your own Wisp instance
+- [Redirects & rewrites](/redirects) — Netlify-style URL rules
+- [Lexicons](/lexicons) — the AT Protocol record types that power it all
 ```

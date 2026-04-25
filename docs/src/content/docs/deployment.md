@@ -66,6 +66,8 @@ Admin panel is at `https://yourdomain.com/admin`.
 
 ## Firehose Service
 
+The firehose service watches the AT Protocol Jetstream for site changes. When a record is created or updated, it downloads blobs from the PDS, processes them, writes to S3 or disk, and publishes a cache invalidation event so the hosting service picks up the changes.
+
 ```bash
 # Required
 DATABASE_URL="postgres://user:password@localhost:5432/wisp"
@@ -85,7 +87,7 @@ REDIS_URL="redis://localhost:6379"
 FIREHOSE_SERVICE="wss://bsky.network"
 FIREHOSE_MAX_CONCURRENCY=5
 
-HEALTH_PORT=3001
+HEALTH_PORT=3002
 
 # Fallback disk path if S3 is not configured
 CACHE_DIR="./cache/sites"
@@ -99,6 +101,8 @@ bun run start -- --backfill   # one-time bulk sync of all existing sites
 ```
 
 ## Hosting Service
+
+The hosting service is a read-only CDN built with Hono. It resolves sites from the request hostname, serves files from tiered storage, and falls back to fetching directly from the user's PDS on cache misses.
 
 ```bash
 # Required

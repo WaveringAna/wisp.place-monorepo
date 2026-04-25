@@ -148,7 +148,8 @@ Example `_redirects`:
 ## Limits
 
 - Max file size: 100MB (PDS limit)
-- Max files: 2000
+- Max total size: 300MB per site
+- Max files: 1000 per site
 
 ## Tech Stack
 

@@ -3,6 +3,8 @@ title: Monitoring & Metrics
 description: Grafana integration for logs and metrics
 ---
 
+Wisp ships with built-in support for shipping logs and metrics to Grafana (Cloud or self-hosted). Point it at your Loki and Prometheus endpoints and it handles the rest — no custom exporters to write.
+
 Set these environment variables and restart your services. Metrics and logs will flow to Grafana automatically.
 
 ```bash
