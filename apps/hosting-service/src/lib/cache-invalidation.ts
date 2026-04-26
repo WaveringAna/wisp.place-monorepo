@@ -305,6 +305,7 @@ async function applyCacheInvalidation(parsed: CacheInvalidationMessage, source: 
 
 	cache.delete('redirectRules', `${did}:${rkey}`)
 	cache.delete('settings', `${did}:${rkey}`)
+	cache.delete('siteCache', `${did}:${rkey}`)
 	cache.deletePrefix('siteFiles', `${did}:${rkey}:`)
 	resetSiteHtmlHotCacheWarmup(did, rkey)
 	advanceStreamCursor(streamId)

@@ -189,13 +189,20 @@ export async function getSiteSettingsCache(did: string, rkey: string): Promise<S
 }
 
 export async function getSiteCache(did: string, rkey: string): Promise<SiteCache | null> {
-	const result = await sql<SiteCache[]>`
-    SELECT did, rkey, record_cid, file_cids, cached_at, updated_at
-    FROM site_cache
-    WHERE did = ${did} AND rkey = ${rkey}
-    LIMIT 1
-  `
-	return result[0] || null
+	return cache.getOrFetch(
+		'siteCache',
+		`${did}:${rkey}`,
+		async () => {
+			const result = await sql<SiteCache[]>`
+        SELECT did, rkey, record_cid, file_cids, cached_at, updated_at
+        FROM site_cache
+        WHERE did = ${did} AND rkey = ${rkey}
+        LIMIT 1
+      `
+			return result[0] || null
+		},
+		{ cacheIf: (v) => v !== null },
+	)
 }
 
 export async function listSiteCachesForDid(did: string): Promise<SiteCache[]> {
