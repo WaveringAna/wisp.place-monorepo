@@ -1,7 +1,7 @@
 # Build from monorepo root: docker build -f apps/hosting-service/Dockerfile .
 
 # Stage 1: Compile to standalone binary
-FROM oven/bun:1-alpine AS builder
+FROM oven/bun:1.3.7-alpine AS builder
 
 WORKDIR /app
 
@@ -39,6 +39,6 @@ ENV CACHE_DIR=/cache/sites
 EXPOSE 3001
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:3001/health || exit 1
+  CMD wget --no-verbose --tries=1 --spider http://127.0.0.1:3001/health || exit 1
 
 CMD ["hosting"]

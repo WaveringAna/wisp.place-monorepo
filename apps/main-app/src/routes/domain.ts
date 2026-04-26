@@ -3,6 +3,7 @@ import { Agent } from '@atproto/api'
 import type { NodeOAuthClient } from '@atproto/oauth-client-node'
 import { createLogger } from '@wispplace/observability'
 import { Elysia } from 'elysia'
+import { publishDomainCacheInvalidation } from '../lib/cache-invalidation'
 import {
 	claimCustomDomain,
 	claimDomain,
@@ -140,6 +141,7 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 					} as any,
 					validate: false,
 				})
+				await publishDomainCacheInvalidation(domain, 'wisp')
 
 				return { success: true, domain }
 			} catch (err) {
@@ -188,6 +190,8 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 					} as any,
 					validate: false,
 				})
+				if (current) await publishDomainCacheInvalidation(current, 'wisp')
+				await publishDomainCacheInvalidation(domain, 'wisp')
 
 				return { success: true, domain }
 			} catch (err) {
@@ -218,6 +222,7 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				}
 
 				if (existing && existing.did === auth.did) {
+					await publishDomainCacheInvalidation(domainLower, 'custom', existing.id)
 					return {
 						success: true,
 						id: existing.id,
@@ -231,6 +236,7 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 
 				// Store in database only
 				await claimCustomDomain(auth.did, domainLower, hash)
+				await publishDomainCacheInvalidation(domainLower, 'custom', hash)
 
 				return {
 					success: true,
@@ -264,6 +270,7 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 
 				// Update verification status in database
 				await updateCustomDomainVerification(id, result.verified)
+				await publishDomainCacheInvalidation(domainInfo.domain, 'custom', id)
 
 				return {
 					success: true,
@@ -299,6 +306,7 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 
 				// Delete from database
 				await deleteCustomDomain(id)
+				await publishDomainCacheInvalidation(domainInfo.domain, 'custom', id)
 
 				return { success: true }
 			} catch (err) {
@@ -335,6 +343,7 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 
 				// Update wisp.place domain to point to this site
 				await updateWispDomainSite(domainLower, siteRkey)
+				await publishDomainCacheInvalidation(domainLower, 'wisp')
 
 				return { success: true }
 			} catch (err) {
@@ -366,6 +375,7 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 
 				// Delete from database
 				await deleteWispDomain(domainLower)
+				await publishDomainCacheInvalidation(domainLower, 'wisp')
 
 				// Delete from PDS
 				const agent = new Agent((url, init) => auth.session.fetchHandler(url, init))
@@ -414,6 +424,7 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 
 				// Update custom domain to point to this site
 				await updateCustomDomainRkey(id, siteRkey)
+				await publishDomainCacheInvalidation(domainInfo.domain, 'custom', id)
 
 				return { success: true }
 			} catch (err) {

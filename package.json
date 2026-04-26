@@ -32,6 +32,8 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
+    "e2e:harness": "docker compose -f docker-compose.e2e.yml up --build --abort-on-container-exit --exit-code-from e2e-runner e2e-runner",
+    "e2e:harness:down": "docker compose -f docker-compose.e2e.yml down -v --remove-orphans",
     "codegen": "./scripts/codegen.sh",
     "download:aturi": "bun run scripts/download-place-wisp-fs.ts",
     "publish:cli": "cd cli && bun run build && npm publish && cd ../packages/create-wisp && npm publish"

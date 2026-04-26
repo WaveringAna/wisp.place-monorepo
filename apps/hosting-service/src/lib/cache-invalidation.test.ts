@@ -87,6 +87,47 @@ describe('cache invalidation updating state', () => {
 		})
 	})
 
+	test('domain invalidation message parsing preserves domain keys', () => {
+		expect(
+			parseCacheInvalidationMessage(
+				JSON.stringify({
+					action: 'domain',
+					domain: 'example.wisp.place',
+					domainKind: 'wisp',
+					streamId: '1713811200000-6',
+				}),
+			),
+		).toEqual({
+			action: 'domain',
+			domain: 'example.wisp.place',
+			domainKind: 'wisp',
+			streamId: '1713811200000-6',
+		})
+	})
+
+	test('domain stream entry parsing reconstructs domain invalidation messages', () => {
+		expect(
+			parseCacheInvalidationStreamEntry('1713811200000-7', [
+				'action',
+				'domain',
+				'domain',
+				'example.com',
+				'domainKind',
+				'custom',
+				'customDomainId',
+				'abc123',
+				'ts',
+				'1713811200000',
+			]),
+		).toEqual({
+			action: 'domain',
+			domain: 'example.com',
+			domainKind: 'custom',
+			customDomainId: 'abc123',
+			streamId: '1713811200000-7',
+		})
+	})
+
 	test('stream ids sort by timestamp and sequence', () => {
 		expect(compareStreamIds('1713811200000-1', '1713811200000-2')).toBeLessThan(0)
 		expect(compareStreamIds('1713811200001-0', '1713811200000-999')).toBeGreaterThan(0)

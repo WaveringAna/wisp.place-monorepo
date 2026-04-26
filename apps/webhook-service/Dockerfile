@@ -1,7 +1,7 @@
 # Build from monorepo root: docker build -f apps/webhook-service/Dockerfile .
 
 # Stage 1: Install dependencies and compile binary
-FROM oven/bun:1-alpine AS builder
+FROM oven/bun:1.3.7-alpine AS builder
 
 WORKDIR /app
 

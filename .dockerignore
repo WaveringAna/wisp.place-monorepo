@@ -1,4 +1,5 @@
 node_modules
+**/node_modules
 .git
 .gitignore
 *.md
@@ -14,6 +15,9 @@ testDeploy
 .tangled
 .crush
 .claude
+.research
+binaries
+docs
 
 # Exclude cache directories
 **/cache

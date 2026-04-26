@@ -14,6 +14,7 @@ import { lookup } from 'mime-types'
 import { isSiteUpdating } from './cache-invalidation'
 import { cache } from './cache-manager'
 import { getSiteCache } from './db'
+import { triggerSiteHtmlHotCacheWarmup } from './html-prewarm'
 import { fetchAndCacheSite } from './on-demand-cache'
 import { generate404Page, generateDirectoryListing, siteUpdatingResponse } from './page-generators'
 import { loadRedirectRules, matchRedirectRule, parseCookies, parseQueryString } from './redirects'
@@ -330,6 +331,8 @@ export async function serveFromCache(
 			: new Response('Site is updating', { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' } })
 	}
 
+	triggerSiteHtmlHotCacheWarmup(did, rkey)
+
 	const trace = createTrace()
 
 	// Load settings for this site
@@ -645,6 +648,8 @@ export async function serveFromCacheWithRewrite(
 			? siteUpdatingResponse()
 			: new Response('Site is updating', { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' } })
 	}
+
+	triggerSiteHtmlHotCacheWarmup(did, rkey)
 
 	const trace = createTrace()
 

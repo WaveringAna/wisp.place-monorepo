@@ -15,6 +15,7 @@ import { dirname, resolve } from 'node:path'
 import type { StorageTier } from '@wispplace/tiered-storage'
 import Redis from 'ioredis'
 import { cache } from './cache-manager'
+import { resetSiteHtmlHotCacheWarmup } from './html-prewarm'
 import { hotTier, warmTier } from './storage'
 
 const CHANNEL = 'wisp:cache-invalidate'
@@ -26,12 +27,15 @@ const CURSOR_FILE =
 	resolve(process.env.CACHE_DIR || './cache/sites', '..', 'cache-invalidation.lastid')
 const STREAM_ID_PATTERN = /^\d+-\d+$/
 
-type CacheInvalidationAction = 'updating' | 'update' | 'delete' | 'settings'
+type CacheInvalidationAction = 'updating' | 'update' | 'delete' | 'settings' | 'domain'
 
 export interface CacheInvalidationMessage {
-	did: string
-	rkey: string
+	did?: string
+	rkey?: string
 	action: CacheInvalidationAction
+	domain?: string
+	domainKind?: 'wisp' | 'custom'
+	customDomainId?: string
 	token?: string
 	streamId?: string
 }
@@ -171,13 +175,31 @@ export function parseCacheInvalidationMessage(message: string): CacheInvalidatio
 	}
 
 	if (
-		typeof parsed.did !== 'string' ||
-		typeof parsed.rkey !== 'string' ||
-		(parsed.action !== 'updating' &&
-			parsed.action !== 'update' &&
-			parsed.action !== 'delete' &&
-			parsed.action !== 'settings')
+		parsed.action !== 'updating' &&
+		parsed.action !== 'update' &&
+		parsed.action !== 'delete' &&
+		parsed.action !== 'settings' &&
+		parsed.action !== 'domain'
 	) {
+		return null
+	}
+
+	if (parsed.action === 'domain') {
+		if (typeof parsed.domain !== 'string') return null
+		if (parsed.domainKind !== undefined && parsed.domainKind !== 'wisp' && parsed.domainKind !== 'custom') {
+			return null
+		}
+
+		return {
+			action: 'domain',
+			domain: parsed.domain,
+			domainKind: parsed.domainKind,
+			customDomainId: typeof parsed.customDomainId === 'string' ? parsed.customDomainId : undefined,
+			streamId: normalizeStreamId(parsed.streamId),
+		}
+	}
+
+	if (typeof parsed.did !== 'string' || typeof parsed.rkey !== 'string') {
 		return null
 	}
 
@@ -185,6 +207,9 @@ export function parseCacheInvalidationMessage(message: string): CacheInvalidatio
 		did: parsed.did,
 		rkey: parsed.rkey,
 		action: parsed.action,
+		domain: typeof parsed.domain === 'string' ? parsed.domain : undefined,
+		domainKind: parsed.domainKind === 'wisp' || parsed.domainKind === 'custom' ? parsed.domainKind : undefined,
+		customDomainId: typeof parsed.customDomainId === 'string' ? parsed.customDomainId : undefined,
 		token: typeof parsed.token === 'string' ? parsed.token : undefined,
 		streamId: normalizeStreamId(parsed.streamId),
 	}
@@ -202,6 +227,9 @@ export function parseCacheInvalidationStreamEntry(streamId: string, fields: stri
 			did: payload.did,
 			rkey: payload.rkey,
 			action: payload.action,
+			domain: payload.domain,
+			domainKind: payload.domainKind,
+			customDomainId: payload.customDomainId,
 			token: payload.token,
 			streamId,
 		}),
@@ -234,14 +262,26 @@ async function applyCacheInvalidation(parsed: CacheInvalidationMessage, source: 
 
 	if (shouldSkipReplayMessage(streamId)) {
 		console.log(
-			`[CacheInvalidation] Skipping duplicate ${action} for ${did}/${rkey} from ${source} (stream ${streamId})`,
+			`[CacheInvalidation] Skipping duplicate ${formatInvalidationTarget(parsed)} from ${source} (stream ${streamId})`,
 		)
 		return
 	}
 
 	console.log(
-		`[CacheInvalidation] Received ${action} for ${did}/${rkey} from ${source}${streamId ? ` (stream ${streamId})` : ''}`,
+		`[CacheInvalidation] Received ${formatInvalidationTarget(parsed)} from ${source}${streamId ? ` (stream ${streamId})` : ''}`,
 	)
+
+	if (action === 'domain') {
+		applyDomainCacheInvalidation(parsed)
+		advanceStreamCursor(streamId)
+		return
+	}
+
+	if (!did || !rkey) {
+		console.warn('[CacheInvalidation] Missing did/rkey for site invalidation', parsed)
+		advanceStreamCursor(streamId)
+		return
+	}
 
 	if (action === 'updating') {
 		markSiteUpdating(did, rkey, token)
@@ -266,7 +306,35 @@ async function applyCacheInvalidation(parsed: CacheInvalidationMessage, source: 
 	cache.delete('redirectRules', `${did}:${rkey}`)
 	cache.delete('settings', `${did}:${rkey}`)
 	cache.deletePrefix('siteFiles', `${did}:${rkey}:`)
+	resetSiteHtmlHotCacheWarmup(did, rkey)
 	advanceStreamCursor(streamId)
+}
+
+function formatInvalidationTarget(parsed: CacheInvalidationMessage): string {
+	if (parsed.action === 'domain') {
+		return `domain:${parsed.domainKind ?? 'any'}:${parsed.domain ?? '(missing)'}`
+	}
+
+	return `${parsed.action} for ${parsed.did}/${parsed.rkey}`
+}
+
+function applyDomainCacheInvalidation(parsed: CacheInvalidationMessage): void {
+	const domain = parsed.domain?.trim().toLowerCase()
+	if (!domain) return
+
+	if (parsed.domainKind !== 'custom') {
+		cache.delete('domains', domain)
+	}
+
+	if (parsed.domainKind !== 'wisp') {
+		cache.delete('customDomains', domain)
+		if (parsed.customDomainId) {
+			cache.delete('customDomains', parsed.customDomainId)
+			cache.delete('customDomains', `hash:${parsed.customDomainId}`)
+		}
+	}
+
+	console.log(`[CacheInvalidation] Cleared domain lookup cache for ${domain}`)
 }
 
 function enqueueCacheInvalidation(parsed: CacheInvalidationMessage, source: 'pubsub' | 'replay'): Promise<void> {

@@ -47,6 +47,8 @@ app.use('*', observabilityMiddleware('hosting-service'))
 // Error handler
 app.onError(observabilityErrorHandler('hosting-service'))
 
+app.get('/health', (c) => c.json({ status: 'ok' }))
+
 // Main site serving route
 app.get('/*', async (c) => {
 	const url = new URL(c.req.url)
