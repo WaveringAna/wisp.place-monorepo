@@ -178,6 +178,29 @@ async function listDirectoryEntries(
 	return Array.from(entries.entries()).map(([name, isDirectory]) => ({ name, isDirectory }))
 }
 
+async function hasFileForNonForcedRedirect(
+	did: string,
+	rkey: string,
+	filePath: string,
+	indexFiles: string[],
+	trace?: RequestTrace | null,
+): Promise<boolean> {
+	let checkPath: string = filePath || indexFiles[0] || 'index.html'
+	if (checkPath.endsWith('/')) {
+		checkPath += indexFiles[0] || 'index.html'
+	}
+
+	const normalizedCheckPath = checkPath.startsWith('/') ? checkPath.slice(1) : checkPath
+	const siteCache = await span(trace, 'db:siteCache:redirectCheck', () => getSiteCache(did, rkey))
+	if (siteCache) {
+		const fileCids = normalizeFileCids(siteCache.file_cids).value
+		return fileCids[normalizedCheckPath] !== undefined
+	}
+
+	const fileInStorage = await span(trace, `storage:${checkPath}`, () => getFileWithMetadata(did, rkey, checkPath))
+	return fileInStorage !== null
+}
+
 async function getFileForRequest(
 	did: string,
 	rkey: string,
@@ -361,16 +384,8 @@ export async function serveFromCache(
 
 			// If not forced, check if the requested file exists before redirecting
 			if (!rule.force) {
-				// Build the expected file path
-				let checkPath: string = filePath || indexFiles[0] || 'index.html'
-				if (checkPath.endsWith('/')) {
-					checkPath += indexFiles[0] || 'index.html'
-				}
-
-				const fileInStorage = await span(trace, `storage:${checkPath}`, () => getFileWithMetadata(did, rkey, checkPath))
-
 				// If file exists and redirect is not forced, serve the file normally
-				if (fileInStorage) {
+				if (await hasFileForNonForcedRedirect(did, rkey, filePath, indexFiles, trace)) {
 					const response = await serveFileInternal(did, rkey, filePath, settings, headers, trace)
 					logTrace(trace, filePath || '/', logger)
 					return response
@@ -679,16 +694,8 @@ export async function serveFromCacheWithRewrite(
 
 			// If not forced, check if the requested file exists before redirecting
 			if (!rule.force) {
-				// Build the expected file path
-				let checkPath: string = filePath || indexFiles[0] || 'index.html'
-				if (checkPath.endsWith('/')) {
-					checkPath += indexFiles[0] || 'index.html'
-				}
-
-				const fileInStorage = await span(trace, `storage:${checkPath}`, () => getFileWithMetadata(did, rkey, checkPath))
-
 				// If file exists and redirect is not forced, serve the file normally
-				if (fileInStorage) {
+				if (await hasFileForNonForcedRedirect(did, rkey, filePath, indexFiles, trace)) {
 					const response = await serveFileInternalWithRewrite(did, rkey, filePath, basePath, settings, headers, trace)
 					logTrace(trace, filePath || '/', logger)
 					return response
