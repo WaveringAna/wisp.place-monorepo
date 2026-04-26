@@ -104,6 +104,7 @@ describe('serveFileInternal directory-index fallback for extensioned paths', () 
 		storageGetWithMetadataKeys.length = 0
 		siteFileCids = null
 		cache.clear('redirectRules')
+		cache.clear('siteCache')
 		resetHtmlHotCacheWarmupForTests()
 	})
 
@@ -166,5 +167,24 @@ describe('serveFileInternal directory-index fallback for extensioned paths', () 
 		expect(response.status).toBe(200)
 		expect(await response.text()).toBe('direct markdown')
 		expect(storageGetWithMetadataKeys.filter((key) => key === `${DID}/${RKEY}/direct.md`)).toHaveLength(1)
+	})
+
+	test('skips manifest-absent storage probes before clean URL html fallback', async () => {
+		storeFile('modelapp.html', '<html>model app</html>')
+		siteFileCids = {
+			'modelapp.html': 'modelapp-cid',
+		}
+
+		const response = await serveFileInternal(DID, RKEY, 'modelapp', {
+			$type: 'place.wisp.settings',
+			directoryListing: false,
+			cleanUrls: true,
+		})
+
+		expect(response.status).toBe(200)
+		expect(await response.text()).toBe('<html>model app</html>')
+		expect(storageGetWithMetadataKeys).not.toContain(`${DID}/${RKEY}/modelapp`)
+		expect(storageGetWithMetadataKeys).not.toContain(`${DID}/${RKEY}/modelapp/index.html`)
+		expect(storageGetWithMetadataKeys).toContain(`${DID}/${RKEY}/modelapp.html`)
 	})
 })

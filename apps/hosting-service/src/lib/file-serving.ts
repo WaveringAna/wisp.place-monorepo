@@ -63,6 +63,14 @@ function buildStorageKey(did: string, rkey: string, filePath: string): string {
 	return `${did}/${rkey}/${normalized}`
 }
 
+function normalizeFilePath(filePath: string): string {
+	return filePath.startsWith('/') ? filePath.slice(1) : filePath
+}
+
+function manifestHasPath(fileCids: Record<string, string> | null, filePath: string): boolean {
+	return fileCids === null || fileCids[normalizeFilePath(filePath)] !== undefined
+}
+
 /**
  * Fetch a per-site fallback file (SPA, custom 404, auto-detected 404 pages),
  * caching null results so repeated 404 responses don't re-hit S3 for files
@@ -104,6 +112,16 @@ async function getFallbackFileForRequest(
 		cache.set('siteFiles', cacheKey, null)
 	}
 	return result
+}
+
+async function getExpectedFileCidsForSite(
+	did: string,
+	rkey: string,
+	trace?: RequestTrace | null,
+): Promise<Record<string, string> | null> {
+	const siteCache = await span(trace, 'db:siteCache', () => getSiteCache(did, rkey))
+	if (!siteCache) return null
+	return normalizeFileCids(siteCache.file_cids).value
 }
 
 function shouldServeUpdatingPage(requestHeaders?: Record<string, string>): boolean {
@@ -190,11 +208,9 @@ async function hasFileForNonForcedRedirect(
 		checkPath += indexFiles[0] || 'index.html'
 	}
 
-	const normalizedCheckPath = checkPath.startsWith('/') ? checkPath.slice(1) : checkPath
-	const siteCache = await span(trace, 'db:siteCache:redirectCheck', () => getSiteCache(did, rkey))
-	if (siteCache) {
-		const fileCids = normalizeFileCids(siteCache.file_cids).value
-		return fileCids[normalizedCheckPath] !== undefined
+	const fileCids = await getExpectedFileCidsForSite(did, rkey, trace)
+	if (fileCids !== null) {
+		return manifestHasPath(fileCids, checkPath)
 	}
 
 	const fileInStorage = await span(trace, `storage:${checkPath}`, () => getFileWithMetadata(did, rkey, checkPath))
@@ -446,13 +462,14 @@ export async function serveFileInternal(
 
 	const getExpectedFileCids = async (): Promise<Record<string, string> | null> => {
 		if (expectedFileCids !== undefined) return expectedFileCids
-		const siteCache = await span(trace, 'db:siteCache', () => getSiteCache(did, rkey))
-		if (!siteCache) {
-			expectedFileCids = null
-			return null
-		}
-		expectedFileCids = normalizeFileCids(siteCache.file_cids).value
+		expectedFileCids = await getExpectedFileCidsForSite(did, rkey, trace)
 		return expectedFileCids
+	}
+
+	const getExpectedFileWithMetadata = async (path: string): Promise<FileStorageResult | null> => {
+		const fileCids = await getExpectedFileCids()
+		if (!manifestHasPath(fileCids, path)) return null
+		return await span(trace, `storage:${path}`, () => getFileWithMetadata(did, rkey, path))
 	}
 
 	const markExpectedMiss = async (path: string) => {
@@ -485,9 +502,7 @@ export async function serveFileInternal(
 	if (!requestPath || !hasFileExtension(requestPath)) {
 		// For non-empty extensionless paths, try as a direct file first (e.g. binary downloads)
 		if (requestPath && !isDirectoryPathRequest) {
-			const directResult = await span(trace, `storage:${requestPath}`, () =>
-				getFileWithMetadata(did, rkey, requestPath),
-			)
+			const directResult = await getExpectedFileWithMetadata(requestPath)
 			if (directResult) {
 				return buildResponseFromStorageResult(directResult, requestPath, settings, requestHeaders)
 			}
@@ -496,7 +511,7 @@ export async function serveFileInternal(
 
 		for (const indexFile of indexFiles) {
 			const indexPath = requestPath ? `${requestPath}/${indexFile}` : indexFile
-			const result = await span(trace, `storage:${indexPath}`, () => getFileWithMetadata(did, rkey, indexPath))
+			const result = await getExpectedFileWithMetadata(indexPath)
 			if (result) {
 				return buildResponseFromStorageResult(result, indexPath, settings, requestHeaders)
 			}
@@ -531,7 +546,7 @@ export async function serveFileInternal(
 	const fileRequestPath: string = requestPath || indexFiles[0] || 'index.html'
 
 	// Retrieve from tiered storage
-	const result = await span(trace, `storage:${fileRequestPath}`, () => getFileWithMetadata(did, rkey, fileRequestPath))
+	const result = await getExpectedFileWithMetadata(fileRequestPath)
 
 	if (result) {
 		return buildResponseFromStorageResult(result, fileRequestPath, settings, requestHeaders)
@@ -542,7 +557,7 @@ export async function serveFileInternal(
 	// e.g. Astro emits `relay.md/index.html` for .md routes)
 	for (const indexFileName of indexFiles) {
 		const indexPath = fileRequestPath ? `${fileRequestPath}/${indexFileName}` : indexFileName
-		const indexResult = await span(trace, `storage:${indexPath}`, () => getFileWithMetadata(did, rkey, indexPath))
+		const indexResult = await getExpectedFileWithMetadata(indexPath)
 		if (indexResult) {
 			return buildResponseFromStorageResult(indexResult, indexPath, settings, requestHeaders)
 		}
@@ -552,7 +567,7 @@ export async function serveFileInternal(
 	// Try clean URLs: /about -> /about.html
 	if (settings?.cleanUrls && !hasFileExtension(fileRequestPath)) {
 		const htmlPath = `${fileRequestPath}.html`
-		const htmlResult = await span(trace, `storage:${htmlPath}`, () => getFileWithMetadata(did, rkey, htmlPath))
+		const htmlResult = await getExpectedFileWithMetadata(htmlPath)
 		if (htmlResult) {
 			return buildResponseFromStorageResult(htmlResult, htmlPath, settings, requestHeaders)
 		}
@@ -561,7 +576,7 @@ export async function serveFileInternal(
 		// Also try /about/index.html
 		for (const indexFileName of indexFiles) {
 			const indexPath = fileRequestPath ? `${fileRequestPath}/${indexFileName}` : indexFileName
-			const indexResult = await span(trace, `storage:${indexPath}`, () => getFileWithMetadata(did, rkey, indexPath))
+			const indexResult = await getExpectedFileWithMetadata(indexPath)
 			if (indexResult) {
 				return buildResponseFromStorageResult(indexResult, indexPath, settings, requestHeaders)
 			}
@@ -770,13 +785,15 @@ export async function serveFileInternalWithRewrite(
 
 	const getExpectedFileCids = async (): Promise<Record<string, string> | null> => {
 		if (expectedFileCids !== undefined) return expectedFileCids
-		const siteCache = await span(trace, 'db:siteCache', () => getSiteCache(did, rkey))
-		if (!siteCache) {
-			expectedFileCids = null
-			return null
-		}
-		expectedFileCids = normalizeFileCids(siteCache.file_cids).value
+		expectedFileCids = await getExpectedFileCidsForSite(did, rkey, trace)
 		return expectedFileCids
+	}
+
+	const getExpectedFileForRequest = async (path: string): Promise<FileForRequestResult | null> => {
+		const fileCids = await getExpectedFileCids()
+		const rewrittenPath = `.rewritten/${normalizeFilePath(path)}`
+		if (!manifestHasPath(fileCids, path) && !manifestHasPath(fileCids, rewrittenPath)) return null
+		return await span(trace, `storage:${path}`, () => getFileForRequest(did, rkey, path, true))
 	}
 
 	const markExpectedMiss = async (path: string) => {
@@ -827,9 +844,7 @@ export async function serveFileInternalWithRewrite(
 	if (!requestPath || !hasFileExtension(requestPath)) {
 		// For non-empty extensionless paths, try as a direct file first (e.g. binary downloads)
 		if (requestPath && !isDirectoryPathRequest) {
-			const directResult = await span(trace, `storage:${requestPath}`, () =>
-				getFileForRequest(did, rkey, requestPath, true),
-			)
+			const directResult = await getExpectedFileForRequest(requestPath)
 			if (directResult) {
 				return await buildResponse(directResult)
 			}
@@ -838,7 +853,7 @@ export async function serveFileInternalWithRewrite(
 
 		for (const indexFile of indexFiles) {
 			const indexPath = requestPath ? `${requestPath}/${indexFile}` : indexFile
-			const fileResult = await span(trace, `storage:${indexPath}`, () => getFileForRequest(did, rkey, indexPath, true))
+			const fileResult = await getExpectedFileForRequest(indexPath)
 			if (fileResult) {
 				return await buildResponse(fileResult)
 			}
@@ -872,9 +887,7 @@ export async function serveFileInternalWithRewrite(
 	// Try to serve as a file
 	const fileRequestPath: string = requestPath || indexFiles[0] || 'index.html'
 
-	const fileResult = await span(trace, `storage:${fileRequestPath}`, () =>
-		getFileForRequest(did, rkey, fileRequestPath, true),
-	)
+	const fileResult = await getExpectedFileForRequest(fileRequestPath)
 	if (fileResult) {
 		return await buildResponse(fileResult)
 	}
@@ -884,7 +897,7 @@ export async function serveFileInternalWithRewrite(
 	// e.g. Astro emits `relay.md/index.html` for .md routes)
 	for (const indexFileName of indexFiles) {
 		const indexPath = fileRequestPath ? `${fileRequestPath}/${indexFileName}` : indexFileName
-		const indexResult = await span(trace, `storage:${indexPath}`, () => getFileForRequest(did, rkey, indexPath, true))
+		const indexResult = await getExpectedFileForRequest(indexPath)
 		if (indexResult) {
 			return await buildResponse(indexResult)
 		}
@@ -894,7 +907,7 @@ export async function serveFileInternalWithRewrite(
 	// Try clean URLs: /about -> /about.html
 	if (settings?.cleanUrls && !hasFileExtension(fileRequestPath)) {
 		const htmlPath = `${fileRequestPath}.html`
-		const htmlResult = await span(trace, `storage:${htmlPath}`, () => getFileForRequest(did, rkey, htmlPath, true))
+		const htmlResult = await getExpectedFileForRequest(htmlPath)
 		if (htmlResult) {
 			return await buildResponse(htmlResult)
 		}
@@ -903,7 +916,7 @@ export async function serveFileInternalWithRewrite(
 		// Also try /about/index.html
 		for (const indexFileName of indexFiles) {
 			const indexPath = fileRequestPath ? `${fileRequestPath}/${indexFileName}` : indexFileName
-			const indexResult = await span(trace, `storage:${indexPath}`, () => getFileForRequest(did, rkey, indexPath, true))
+			const indexResult = await getExpectedFileForRequest(indexPath)
 			if (indexResult) {
 				return await buildResponse(indexResult)
 			}
