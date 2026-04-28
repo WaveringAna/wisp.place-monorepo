@@ -104,64 +104,9 @@ Webhooks are stored as `place.wisp.v2.wh` records in your PDS:
 | `secret` | string | Inline HMAC secret (stored plaintext in PDS) |
 | `enabled` | boolean | Set to `false` to pause delivery |
 
-## API Convenience Routes
+## API Reference
 
-The main app exposes API routes that wrap PDS record operations. All routes require the signed `did` cookie.
-
-### `GET /api/webhook`
-
-Lists all webhook records for the authenticated user.
-
-### `POST /api/webhook`
-
-Creates a new webhook record. Body:
-
-```json
-{
-  "scopeAturi": "at://did:plc:abc123/app.bsky.feed.post",
-  "url": "https://example.com/webhook",
-  "backlinks": false,
-  "events": ["create"],
-  "secretId": "my-secret",
-  "enabled": true
-}
-```
-
-### `DELETE /api/webhook/:rkey`
-
-Deletes a webhook record by its record key.
-
-### `GET /api/webhook/events`
-
-Returns the last 100 delivery events for the authenticated user.
-
-## Signing Secrets API
-
-Server-managed secrets are never stored in your PDS — the token is returned once at creation time and then only stored as a hash. Manage them via:
-
-### `GET /api/secret`
-
-Lists all secrets (names and metadata only — tokens are never returned after creation).
-
-### `POST /api/secret`
-
-Creates a new secret. Body: `{ "name": "my-secret" }`.
-
-Response includes `token` — **copy it now**, it will not be shown again.
-
-```json
-{ "success": true, "name": "my-secret", "token": "wsk_...", "createdAt": "..." }
-```
-
-### `POST /api/secret/:name/rotate`
-
-Generates a new token for an existing secret. The old token stops working immediately. Returns the new `token` once.
-
-### `DELETE /api/secret/:name`
-
-Deletes a secret. Any webhooks referencing this `secretId` will stop being signed.
-
-These routes are also available as XRPC procedures under `place.wisp.v2.secret.*` for programmatic access with a service JWT.
+Webhook and signing secret management is available via XRPC. See the [XRPC API reference](/reference/xrpc-api) for full input/output schemas, error codes, and auth requirements — including the `place.wisp.v2.secret.*` procedures for managing server-managed signing secrets.
 
 ## Self-Hosting
 
