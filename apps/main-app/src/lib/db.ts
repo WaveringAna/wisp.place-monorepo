@@ -526,10 +526,10 @@ export const listWebhookSecrets = async (
 }
 
 export const deleteWebhookSecret = async (did: string, name: string): Promise<boolean> => {
-	const result = await db`
-        DELETE FROM webhook_secrets WHERE did = ${did} AND name = ${name}
+	const rows = await db`
+        DELETE FROM webhook_secrets WHERE did = ${did} AND name = ${name} RETURNING name
     `
-	return (result as any).count > 0
+	return rows.length > 0
 }
 
 export const rotateWebhookSecret = async (

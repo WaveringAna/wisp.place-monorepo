@@ -65,9 +65,7 @@ export function useSecretData() {
 		})
 		const data = await res.json()
 		if (!res.ok) throw new Error(data.error || 'Failed to rotate secret')
-		setSecrets((prev) =>
-			prev.map((s) => (s.name === name ? { ...s, lastRotatedAt: data.rotatedAt } : s)),
-		)
+		setSecrets((prev) => prev.map((s) => (s.name === name ? { ...s, lastRotatedAt: data.rotatedAt } : s)))
 		return { token: data.token }
 	}, [])
 

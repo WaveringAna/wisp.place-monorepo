@@ -23,7 +23,10 @@ Enable **backlinks** to also fire when records in *any* repo reference your DID 
 
 **Events** can be filtered to `create`, `update`, `delete`, or any combination. Omit the filter to receive all three.
 
-**Secret** — if set, every delivery includes an `X-Webhook-Signature` header for verification.
+**Signing** — attach a signing secret to get an `X-Webhook-Signature` header on every delivery. Two options:
+
+- `secret` — embed a plaintext value directly in your PDS record. Simple, but the secret is stored in your public repo.
+- `secretId` — reference a server-managed secret by name (created via `place.wisp.v2.secret.create`). The token is never stored in your PDS record and can be rotated without updating the webhook. **Prefer this.**
 
 ## Payload
 
@@ -53,7 +56,7 @@ X-Webhook-Signature: sha256=<hex>   (only if secret is set)
 
 ## Verifying Signatures
 
-If you set a secret, verify the `X-Webhook-Signature` header using HMAC-SHA256:
+If a signing secret is set (via `secret` or `secretId`), every delivery includes an `X-Webhook-Signature: sha256=<hex>` header. Verify it using HMAC-SHA256 over the **raw request body**:
 
 ```typescript
 import { createHmac, timingSafeEqual } from 'crypto'
@@ -64,7 +67,7 @@ function verifySignature(body: string, secret: string, header: string): boolean 
 }
 ```
 
-Always use a timing-safe comparison. Compute the HMAC over the raw request body before parsing.
+Always use a timing-safe comparison. Compute the HMAC before parsing the body.
 
 ## Delivery
 
@@ -85,11 +88,21 @@ Webhooks are stored as `place.wisp.v2.wh` records in your PDS:
   },
   "url": "https://example.com/webhook",
   "events": ["create", "update"],
-  "secret": "your-hmac-secret",
+  "secretId": "my-secret",
   "enabled": true,
   "createdAt": "2024-01-15T10:30:00.000Z"
 }
 ```
+
+| Field | Type | Description |
+|---|---|---|
+| `scope.aturi` | string | AT-URI to watch |
+| `scope.backlinks` | boolean | Also fire when other repos reference this scope |
+| `url` | string | HTTPS endpoint to deliver to |
+| `events` | string[] | `create`, `update`, `delete` — omit for all three |
+| `secretId` | string | Name of a server-managed signing secret (preferred) |
+| `secret` | string | Inline HMAC secret (stored plaintext in PDS) |
+| `enabled` | boolean | Set to `false` to pause delivery |
 
 ## API Convenience Routes
 
@@ -101,7 +114,18 @@ Lists all webhook records for the authenticated user.
 
 ### `POST /api/webhook`
 
-Creates a new webhook record. Body matches the `place.wisp.v2.wh` record shape.
+Creates a new webhook record. Body:
+
+```json
+{
+  "scopeAturi": "at://did:plc:abc123/app.bsky.feed.post",
+  "url": "https://example.com/webhook",
+  "backlinks": false,
+  "events": ["create"],
+  "secretId": "my-secret",
+  "enabled": true
+}
+```
 
 ### `DELETE /api/webhook/:rkey`
 
@@ -111,21 +135,33 @@ Deletes a webhook record by its record key.
 
 Returns the last 100 delivery events for the authenticated user.
 
+## Signing Secrets API
+
+Server-managed secrets are never stored in your PDS — the token is returned once at creation time and then only stored as a hash. Manage them via:
+
+### `GET /api/secret`
+
+Lists all secrets (names and metadata only — tokens are never returned after creation).
+
+### `POST /api/secret`
+
+Creates a new secret. Body: `{ "name": "my-secret" }`.
+
+Response includes `token` — **copy it now**, it will not be shown again.
+
 ```json
-[
-  {
-    "id": "...",
-    "rkey": "abc123",
-    "url": "https://example.com/webhook",
-    "event_kind": "create",
-    "event_did": "did:plc:...",
-    "event_collection": "app.bsky.feed.post",
-    "event_rkey": "3kl2jd9s8f7g",
-    "status": "ok",
-    "delivered_at": "2024-01-15T10:30:00.000Z"
-  }
-]
+{ "success": true, "name": "my-secret", "token": "wsk_...", "createdAt": "..." }
 ```
+
+### `POST /api/secret/:name/rotate`
+
+Generates a new token for an existing secret. The old token stops working immediately. Returns the new `token` once.
+
+### `DELETE /api/secret/:name`
+
+Deletes a secret. Any webhooks referencing this `secretId` will stop being signed.
+
+These routes are also available as XRPC procedures under `place.wisp.v2.secret.*` for programmatic access with a service JWT.
 
 ## Self-Hosting
 

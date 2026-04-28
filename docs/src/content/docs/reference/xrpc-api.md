@@ -237,3 +237,91 @@ Deletes a site and detaches all mapped domains.
 ```
 
 **Errors:** `AuthenticationRequired`, `InvalidRequest`, `NotFound`
+
+---
+
+## Signing Secrets
+
+Server-managed HMAC signing secrets for webhooks. The token is returned **once** at creation time and never stored in plaintext — it cannot be retrieved again, only rotated.
+
+All four endpoints require authentication (`AuthenticationRequired` on failure).
+
+### `place.wisp.v2.secret.create` — procedure 🔒
+
+Creates a new signing secret scoped to the authenticated DID.
+
+**Input:**
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `name` | `string` (record-key) | ✅ | Unique per DID, `a-z0-9-` |
+
+**Response:**
+
+| Field | Type | Notes |
+|---|---|---|
+| `name` | `string` | |
+| `token` | `string` | `wsk_` prefixed — store this now, never shown again |
+| `createdAt` | `string` (datetime) | |
+
+**Errors:** `AuthenticationRequired`, `InvalidRequest`, `AlreadyExists`
+
+---
+
+### `place.wisp.v2.secret.list` — query 🔒
+
+Lists all secrets for the authenticated DID. Token values are never returned.
+
+**Response:**
+
+```json
+{
+  "secrets": [
+    {
+      "name": "my-secret",
+      "createdAt": "2024-01-15T10:30:00.000Z",
+      "lastRotatedAt": "2024-02-01T09:00:00.000Z"
+    }
+  ]
+}
+```
+
+**Errors:** `AuthenticationRequired`
+
+---
+
+### `place.wisp.v2.secret.rotate` — procedure 🔒
+
+Generates a new token for an existing secret. The old token is invalidated immediately.
+
+**Input:**
+
+| Field | Type | Required |
+|---|---|---|
+| `name` | `string` | ✅ |
+
+**Response:**
+
+| Field | Type | Notes |
+|---|---|---|
+| `name` | `string` | |
+| `token` | `string` | New token — store this now, never shown again |
+| `rotatedAt` | `string` (datetime) | |
+
+**Errors:** `AuthenticationRequired`, `NotFound`
+
+---
+
+### `place.wisp.v2.secret.delete` — procedure 🔒
+
+Deletes a signing secret. Any webhooks referencing this `secretId` will stop being signed.
+
+**Input:**
+
+| Field | Type | Required |
+|---|---|---|
+| `name` | `string` | ✅ |
+
+**Response:** `{}`
+
+**Errors:** `AuthenticationRequired`, `NotFound`

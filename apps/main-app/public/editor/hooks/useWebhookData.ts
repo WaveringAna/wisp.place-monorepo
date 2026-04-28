@@ -8,6 +8,7 @@ export interface WebhookRecord {
 	events: string[]
 	enabled: boolean
 	createdAt: string
+	secretId?: string
 }
 
 export interface WebhookEventLog {
@@ -38,15 +39,19 @@ export function useWebhookData() {
 			const data = await res.json()
 			if (data.success && data.records) {
 				setWebhooks(
-					data.records.map((r: any) => ({
-						rkey: r.uri.split('/').pop(),
-						scopeAturi: r.value?.scope?.aturi ?? '',
-						url: r.value?.url ?? '',
-						backlinks: r.value?.scope?.backlinks ?? false,
-						events: r.value?.events ?? [],
-						enabled: r.value?.enabled ?? true,
-						createdAt: r.value?.createdAt ?? '',
-					})),
+					data.records.map((r: { uri: string; value?: Record<string, unknown> }) => {
+						const scope = r.value?.scope as Record<string, unknown> | undefined
+						return {
+							rkey: r.uri.split('/').pop() ?? '',
+							scopeAturi: (scope?.aturi as string) ?? '',
+							url: (r.value?.url as string) ?? '',
+							backlinks: (scope?.backlinks as boolean) ?? false,
+							events: (r.value?.events as string[]) ?? [],
+							enabled: (r.value?.enabled as boolean) ?? true,
+							createdAt: (r.value?.createdAt as string) ?? '',
+							secretId: r.value?.secretId as string | undefined,
+						}
+					}),
 				)
 			}
 		} catch (err) {

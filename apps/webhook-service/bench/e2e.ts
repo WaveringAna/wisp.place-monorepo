@@ -19,10 +19,17 @@
 
 import { createHmac } from 'node:crypto'
 import type { Main as WhRecord } from '@wispplace/lexicons/types/place/wisp/v2/wh'
-import { JetstreamClient } from '../src/lib/jetstream'
-import { db, deleteWebhookRecord, findBacklinkWebhooks, findWebhooksForDid, getWebhookSecretToken, upsertWebhookRecord } from '../src/lib/db'
-import { matchWebhooks } from '../src/lib/matcher'
+import {
+	db,
+	deleteWebhookRecord,
+	findBacklinkWebhooks,
+	findWebhooksForDid,
+	getWebhookSecretToken,
+	upsertWebhookRecord,
+} from '../src/lib/db'
 import { deliverWebhook } from '../src/lib/delivery'
+import { JetstreamClient } from '../src/lib/jetstream'
+import { matchWebhooks } from '../src/lib/matcher'
 
 // ---------------------------------------------------------------------------
 // Config
@@ -95,7 +102,13 @@ async function createRecord(
 	return res.json() as Promise<{ uri: string; cid: string }>
 }
 
-async function deleteRecord(pdsUrl: string, jwt: string, repo: string, collection: string, rkey: string): Promise<void> {
+async function deleteRecord(
+	pdsUrl: string,
+	jwt: string,
+	repo: string,
+	collection: string,
+	rkey: string,
+): Promise<void> {
 	const res = await fetch(`${pdsUrl}/xrpc/com.atproto.repo.deleteRecord`, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${jwt}` },
@@ -122,7 +135,9 @@ const deliveryServer = Bun.serve({
 				const signature = req.headers.get('x-webhook-signature') ?? undefined
 				const body = JSON.parse(rawBody)
 				deliveries.push({ ts: Date.now(), body, signature, rawBody })
-				console.log(`  [delivery #${deliveries.length}] sig=${signature ?? 'none'} ${JSON.stringify(body).slice(0, 80)}`)
+				console.log(
+					`  [delivery #${deliveries.length}] sig=${signature ?? 'none'} ${JSON.stringify(body).slice(0, 80)}`,
+				)
 				if (deliveries.length >= expectedDeliveries) resolveDelivery?.()
 				return new Response('ok')
 			},
@@ -136,7 +151,10 @@ function waitForDeliveries(n: number): Promise<void> {
 	if (deliveries.length >= n) return Promise.resolve()
 	return new Promise<void>((resolve, reject) => {
 		resolveDelivery = resolve
-		setTimeout(() => reject(new Error(`Timed out waiting for ${n} deliveries (got ${deliveries.length})`)), EVENT_TIMEOUT_MS)
+		setTimeout(
+			() => reject(new Error(`Timed out waiting for ${n} deliveries (got ${deliveries.length})`)),
+			EVENT_TIMEOUT_MS,
+		)
 	})
 }
 
@@ -146,9 +164,15 @@ function waitForDeliveries(n: number): Promise<void> {
 
 const testDid: { value: string } = { value: '' }
 let resolveWhRegistered: (() => void) | null = null
-const whRegistered = new Promise<void>((resolve) => { resolveWhRegistered = resolve })
+const whRegistered = new Promise<void>((resolve) => {
+	resolveWhRegistered = resolve
+})
 
-async function handleEvent(event: { kind: string; did: string; commit?: { operation: string; collection: string; rkey: string; record?: unknown; cid?: string } }) {
+async function handleEvent(event: {
+	kind: string
+	did: string
+	commit?: { operation: string; collection: string; rkey: string; record?: unknown; cid?: string }
+}) {
 	if (event.kind !== 'commit' || !event.commit) return
 	const { did } = event
 	const { operation: op, collection, rkey, record, cid } = event.commit
@@ -177,7 +201,10 @@ async function handleEvent(event: { kind: string; did: string; commit?: { operat
 	const candidates = [...directCandidates]
 	for (const entry of backlinkCandidates) {
 		const k = `${entry.ownerDid}/${entry.rkey}`
-		if (!seen.has(k)) { seen.add(k); candidates.push(entry) }
+		if (!seen.has(k)) {
+			seen.add(k)
+			candidates.push(entry)
+		}
 	}
 
 	if (candidates.length === 0) return
@@ -248,31 +275,46 @@ async function run() {
 		console.log('--- step 1: create place.wisp.v2.wh ---')
 		const t0 = Date.now()
 		const whRkey = `bench-wh-${Date.now()}`
-		const { uri: whUri } = await createRecord(pdsUrl, session.accessJwt, session.did, 'place.wisp.v2.wh', {
-			$type: 'place.wisp.v2.wh',
-			scope: { $type: 'place.wisp.v2.wh#atUri', aturi: scopeAturi, backlinks: true },
-			url: deliveryUrl,
-			events: ['create'],
-			enabled: true,
-			createdAt: new Date().toISOString(),
-		}, whRkey)
+		const { uri: whUri } = await createRecord(
+			pdsUrl,
+			session.accessJwt,
+			session.did,
+			'place.wisp.v2.wh',
+			{
+				$type: 'place.wisp.v2.wh',
+				scope: { $type: 'place.wisp.v2.wh#atUri', aturi: scopeAturi, backlinks: true },
+				url: deliveryUrl,
+				events: ['create'],
+				enabled: true,
+				createdAt: new Date().toISOString(),
+			},
+			whRkey,
+		)
 		createdRecords.push({ collection: 'place.wisp.v2.wh', rkey: whRkey })
 		console.log(`  created ${whUri}`)
 
 		await Promise.race([
 			whRegistered,
-			new Promise((_, reject) => setTimeout(() => reject(new Error('Timed out waiting for wh to be registered in DB')), EVENT_TIMEOUT_MS)),
+			new Promise((_, reject) =>
+				setTimeout(() => reject(new Error('Timed out waiting for wh to be registered in DB')), EVENT_TIMEOUT_MS),
+			),
 		])
 		console.log(`  registered in DB in ${Date.now() - t0}ms\n`)
 
 		// 4. Create app.bsky.feed.post → direct match
 		console.log('--- step 2: create post (expect delivery #1 — direct match) ---')
 		const t1 = Date.now()
-		const { uri: postUri, cid: postCid } = await createRecord(pdsUrl, session.accessJwt, session.did, 'app.bsky.feed.post', {
-			$type: 'app.bsky.feed.post',
-			text: 'wisp webhook e2e test post',
-			createdAt: new Date().toISOString(),
-		})
+		const { uri: postUri, cid: postCid } = await createRecord(
+			pdsUrl,
+			session.accessJwt,
+			session.did,
+			'app.bsky.feed.post',
+			{
+				$type: 'app.bsky.feed.post',
+				text: 'wisp webhook e2e test post',
+				createdAt: new Date().toISOString(),
+			},
+		)
 		const postRkey = postUri.split('/').at(-1)!
 		createdRecords.push({ collection: 'app.bsky.feed.post', rkey: postRkey })
 		console.log(`  created ${postUri}`)
@@ -322,15 +364,25 @@ async function run() {
 		const beforeCount = deliveries.length
 		await deliverWebhook(
 			{ ownerDid: session.did, rkey: signedWhRkey, record: signedWh },
-			session.did, 'app.bsky.feed.post', 'test-rkey', 'create', undefined, { text: 'signed test' },
+			session.did,
+			'app.bsky.feed.post',
+			'test-rkey',
+			'create',
+			undefined,
+			{ text: 'signed test' },
 		)
 
 		// Wait for it
 		await new Promise<void>((resolve, reject) => {
-			const check = () => { if (deliveries.length > beforeCount) resolve() }
+			const check = () => {
+				if (deliveries.length > beforeCount) resolve()
+			}
 			check()
 			const iv = setInterval(check, 50)
-			setTimeout(() => { clearInterval(iv); reject(new Error('Timed out waiting for signed delivery')) }, EVENT_TIMEOUT_MS)
+			setTimeout(() => {
+				clearInterval(iv)
+				reject(new Error('Timed out waiting for signed delivery'))
+			}, EVENT_TIMEOUT_MS)
 		})
 
 		const signedDelivery = deliveries.at(-1)!
@@ -357,6 +409,7 @@ async function run() {
 		}
 		js.destroy()
 		deliveryServer.stop(true)
+		await db.close()
 	}
 }
 

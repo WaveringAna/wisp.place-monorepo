@@ -737,6 +737,12 @@ export const WebhooksTab = memo(function WebhooksTab({
 														backlinks
 													</Badge>
 												)}
+												{wh.secretId && (
+													<Badge variant="outline" className="text-[10px] gap-1">
+														<KeyRound className="w-2.5 h-2.5" />
+														{wh.secretId}
+													</Badge>
+												)}
 												{wh.events.length > 0 ? (
 													wh.events.map((e) => (
 														<Badge key={e} variant="outline" className="text-[10px]">
@@ -832,9 +838,7 @@ export const WebhooksTab = memo(function WebhooksTab({
 								</Button>
 							</div>
 
-							{secretError && (
-								<p className="text-xs text-destructive">{secretError}</p>
-							)}
+							{secretError && <p className="text-xs text-destructive">{secretError}</p>}
 
 							{/* Revealed token — show once */}
 							{revealedToken && (

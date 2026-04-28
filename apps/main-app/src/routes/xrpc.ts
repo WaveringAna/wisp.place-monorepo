@@ -808,69 +808,49 @@ export const xrpcRoutes = () => {
 		},
 	)
 
-	addProcedureWithAliases(
-		router,
-		withNsid(PlaceWispV2SecretCreate.mainSchema as any, XRPC_NSIDS.secretCreate),
-		[],
-		{
-			async handler({ input, request }) {
-				const auth = requireAuthenticated(authByRequest.get(request))
-				const name = input.name?.trim()
-				if (!name) invalidRequest('name is required')
-				try {
-					const { token, createdAt } = await createWebhookSecret(auth.did, name!)
-					return json({ name: name!, token, createdAt })
-				} catch {
-					return alreadyExists('a secret with that name already exists')
-				}
-			},
+	addProcedureWithAliases(router, withNsid(PlaceWispV2SecretCreate.mainSchema as any, XRPC_NSIDS.secretCreate), [], {
+		async handler({ input, request }) {
+			const auth = requireAuthenticated(authByRequest.get(request))
+			const name = input.name?.trim()
+			if (!name) invalidRequest('name is required')
+			try {
+				const { token, createdAt } = await createWebhookSecret(auth.did, name!)
+				return json({ name: name!, token, createdAt })
+			} catch {
+				return alreadyExists('a secret with that name already exists')
+			}
 		},
-	)
+	})
 
-	addQueryWithAliases(
-		router,
-		withNsid(PlaceWispV2SecretList.mainSchema as any, XRPC_NSIDS.secretList),
-		[],
-		{
-			async handler({ request }) {
-				const auth = requireAuthenticated(authByRequest.get(request))
-				const secrets = await listWebhookSecrets(auth.did)
-				return json({ secrets })
-			},
+	addQueryWithAliases(router, withNsid(PlaceWispV2SecretList.mainSchema as any, XRPC_NSIDS.secretList), [], {
+		async handler({ request }) {
+			const auth = requireAuthenticated(authByRequest.get(request))
+			const secrets = await listWebhookSecrets(auth.did)
+			return json({ secrets })
 		},
-	)
+	})
 
-	addProcedureWithAliases(
-		router,
-		withNsid(PlaceWispV2SecretDelete.mainSchema as any, XRPC_NSIDS.secretDelete),
-		[],
-		{
-			async handler({ input, request }) {
-				const auth = requireAuthenticated(authByRequest.get(request))
-				const name = input.name?.trim()
-				if (!name) invalidRequest('name is required')
-				const deleted = await deleteWebhookSecret(auth.did, name)
-				if (!deleted) notFound('secret not found')
-				return json({})
-			},
+	addProcedureWithAliases(router, withNsid(PlaceWispV2SecretDelete.mainSchema as any, XRPC_NSIDS.secretDelete), [], {
+		async handler({ input, request }) {
+			const auth = requireAuthenticated(authByRequest.get(request))
+			const name = input.name?.trim()
+			if (!name) invalidRequest('name is required')
+			const deleted = await deleteWebhookSecret(auth.did, name)
+			if (!deleted) notFound('secret not found')
+			return json({})
 		},
-	)
+	})
 
-	addProcedureWithAliases(
-		router,
-		withNsid(PlaceWispV2SecretRotate.mainSchema as any, XRPC_NSIDS.secretRotate),
-		[],
-		{
-			async handler({ input, request }) {
-				const auth = requireAuthenticated(authByRequest.get(request))
-				const name = input.name?.trim()
-				if (!name) invalidRequest('name is required')
-				const result = await rotateWebhookSecret(auth.did, name)
-				if (!result) notFound('secret not found')
-				return json({ name, token: result!.token, rotatedAt: result!.rotatedAt })
-			},
+	addProcedureWithAliases(router, withNsid(PlaceWispV2SecretRotate.mainSchema as any, XRPC_NSIDS.secretRotate), [], {
+		async handler({ input, request }) {
+			const auth = requireAuthenticated(authByRequest.get(request))
+			const name = input.name?.trim()
+			if (!name) invalidRequest('name is required')
+			const result = await rotateWebhookSecret(auth.did, name)
+			if (!result) notFound('secret not found')
+			return json({ name, token: result!.token, rotatedAt: result!.rotatedAt })
 		},
-	)
+	})
 
 	const schemaNsids = {
 		addSite: (PlaceWispV2DomainAddSite.mainSchema as any).nsid,

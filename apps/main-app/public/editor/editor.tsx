@@ -52,15 +52,8 @@ function Dashboard() {
 		createWebhook,
 		deleteWebhook,
 	} = useWebhookData()
-	const {
-		secrets,
-		secretsLoading,
-		isCreatingSecret,
-		fetchSecrets,
-		createSecret,
-		deleteSecret,
-		rotateSecret,
-	} = useSecretData()
+	const { secrets, secretsLoading, isCreatingSecret, fetchSecrets, createSecret, deleteSecret, rotateSecret } =
+		useSecretData()
 
 	const {
 		wispDomains,
