@@ -20,6 +20,7 @@ import { type ChangeEvent, type KeyboardEvent as ReactKeyboardEvent, useCallback
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { useDomainData } from './hooks/useDomainData'
+import { useSecretData } from './hooks/useSecretData'
 import { type SiteWithDomains, useSiteData } from './hooks/useSiteData'
 import { useUserInfo } from './hooks/useUserInfo'
 import { useWebhookData } from './hooks/useWebhookData'
@@ -51,6 +52,15 @@ function Dashboard() {
 		createWebhook,
 		deleteWebhook,
 	} = useWebhookData()
+	const {
+		secrets,
+		secretsLoading,
+		isCreatingSecret,
+		fetchSecrets,
+		createSecret,
+		deleteSecret,
+		rotateSecret,
+	} = useSecretData()
 
 	const {
 		wispDomains,
@@ -97,6 +107,7 @@ function Dashboard() {
 		fetchDomains()
 		fetchWebhooks()
 		fetchEventLogs()
+		fetchSecrets()
 	}, [])
 
 	// Redirect to home if not authenticated
@@ -534,9 +545,15 @@ function Dashboard() {
 									eventLogsLoading={eventLogsLoading}
 									isCreating={isCreating}
 									userDid={userInfo?.did}
+									secrets={secrets}
+									secretsLoading={secretsLoading}
+									isCreatingSecret={isCreatingSecret}
 									onCreateWebhook={createWebhook}
 									onDeleteWebhook={deleteWebhook}
 									onRefreshEvents={fetchEventLogs}
+									onCreateSecret={createSecret}
+									onDeleteSecret={deleteSecret}
+									onRotateSecret={rotateSecret}
 								/>
 							</TabsContent>
 

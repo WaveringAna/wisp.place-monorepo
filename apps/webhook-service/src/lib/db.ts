@@ -72,6 +72,17 @@ await db`
   ON webhook_event_logs (owner_did, delivered_at DESC)
 `
 
+await db`
+  CREATE TABLE IF NOT EXISTS webhook_secrets (
+    did TEXT NOT NULL,
+    name TEXT NOT NULL,
+    token TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_rotated_at TIMESTAMPTZ,
+    PRIMARY KEY (did, name)
+  )
+`
+
 /**
  * Find all webhook records whose scope AT-URI targets the given DID.
  * Matches exact DID scope (`at://did`) and collection/rkey sub-scopes (`at://did/...`).
@@ -309,6 +320,14 @@ export async function listAllKnownDids(): Promise<string[]> {
 	for (const r of webhookDids) dids.add(r.did)
 
 	return [...dids].sort()
+}
+
+/** Look up the token for a server-managed signing secret by owner DID + name. */
+export async function getWebhookSecretToken(ownerDid: string, name: string): Promise<string | null> {
+	const rows = await db<Array<{ token: string }>>`
+    SELECT token FROM webhook_secrets WHERE did = ${ownerDid} AND name = ${name} LIMIT 1
+  `
+	return rows[0]?.token ?? null
 }
 
 /** Close all database connections gracefully. */

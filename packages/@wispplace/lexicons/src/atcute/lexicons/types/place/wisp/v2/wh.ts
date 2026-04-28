@@ -43,7 +43,7 @@ const _mainSchema = /*#__PURE__*/ v.record(
       return atUriSchema;
     },
     /**
-     * Optional secret used to sign the webhook payload with HMAC-SHA256. The signature is included in the 'X-Webhook-Signature' header of the webhook request.
+     * Optional raw secret used to sign the webhook payload with HMAC-SHA256. Prefer secretId to avoid embedding plaintext values in PDS records.
      * @maxLength 256
      */
     secret: /*#__PURE__*/ v.optional(
@@ -51,6 +51,10 @@ const _mainSchema = /*#__PURE__*/ v.record(
         /*#__PURE__*/ v.stringLength(0, 256),
       ]),
     ),
+    /**
+     * Name of a server-managed signing secret created via place.wisp.v2.secret.create. Takes precedence over secret if both are present.
+     */
+    secretId: /*#__PURE__*/ v.optional(/*#__PURE__*/ v.recordKeyString()),
     /**
      * HTTPS endpoint to POST the webhook payload to.
      * @maxLength 2048

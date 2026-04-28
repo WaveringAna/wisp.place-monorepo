@@ -77,6 +77,7 @@ export function useWebhookData() {
 			backlinks: boolean
 			events: string[]
 			secret: string
+			secretId?: string
 			enabled: boolean
 		}) => {
 			setIsCreating(true)

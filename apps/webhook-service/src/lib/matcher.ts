@@ -43,48 +43,61 @@ function matchesGlob(pattern: string, value: string): boolean {
 
 /**
  * Recursively walk a parsed record object checking whether any string value
- * starts with `prefix` and has a collection segment matching `collectionRe`.
+ * starts with `prefix` and has a collection segment matching `collectionRe`,
+ * and optionally an rkey segment matching `rkey`.
  */
-function walkForReference(obj: unknown, prefix: string, collectionRe: RegExp | null, exact: string | null): boolean {
+function walkForReference(
+	obj: unknown,
+	prefix: string,
+	collectionRe: RegExp | null,
+	exact: string | null,
+	rkey: string | undefined,
+): boolean {
 	if (typeof obj === 'string') {
 		const idx = obj.indexOf(prefix)
 		if (idx === -1) return false
 		const rest = obj.slice(idx + prefix.length)
 		if (collectionRe === null && exact === null) return true // at://did — any reference
-		const end = rest.search(/[/"\\]/)
-		const col = end === -1 ? rest : rest.slice(0, end)
+		const slashIdx = rest.search(/[/"\\]/)
+		const col = slashIdx === -1 ? rest : rest.slice(0, slashIdx)
 		if (!col) return false
-		return exact !== null ? col === exact : collectionRe!.test(col)
+		const colMatches = exact !== null ? col === exact : collectionRe!.test(col)
+		if (!colMatches) return false
+		if (!rkey) return true
+		if (slashIdx === -1) return false
+		const afterSlash = rest.slice(slashIdx + 1)
+		const rkeyEnd = afterSlash.search(/[/"\\]/)
+		const rkeySegment = rkeyEnd === -1 ? afterSlash : afterSlash.slice(0, rkeyEnd)
+		return rkeySegment === rkey
 	}
 	if (Array.isArray(obj)) {
 		for (const v of obj) {
-			if (walkForReference(v, prefix, collectionRe, exact)) return true
+			if (walkForReference(v, prefix, collectionRe, exact, rkey)) return true
 		}
 		return false
 	}
 	if (obj !== null && typeof obj === 'object') {
 		for (const v of Object.values(obj)) {
-			if (walkForReference(v, prefix, collectionRe, exact)) return true
+			if (walkForReference(v, prefix, collectionRe, exact, rkey)) return true
 		}
 	}
 	return false
 }
 
 /**
- * Checks whether a record contains a reference to the given DID/collection.
+ * Checks whether a record contains a reference to the given DID/collection/rkey.
  * Uses a recursive walk and pre-compiled regex — no JSON.stringify.
  */
-function containsReference(record: unknown, did: string, collection?: string): boolean {
+function containsReference(record: unknown, did: string, collection?: string, rkey?: string): boolean {
 	const prefix = `at://${did}/`
 
 	if (!collection) {
-		// Any reference to this DID at all
-		return walkForReference(record, `at://${did}`, null, null)
+		return walkForReference(record, `at://${did}`, null, null, undefined)
 	}
 
 	const collectionRe = collection.includes('*') ? compileGlob(collection) : null
 	const exact = collectionRe ? null : collection
-	return walkForReference(record, prefix, collectionRe, exact)
+	return walkForReference(record, prefix, collectionRe, exact, rkey)
 }
 
 /**
@@ -138,8 +151,8 @@ export function matchWebhooks(
 			continue
 		}
 
-		if (backlinks && eventDid !== scope.did && eventRecord != null) {
-			if (containsReference(eventRecord, scope.did, scope.collection)) {
+		if (backlinks && eventRecord != null) {
+			if (containsReference(eventRecord, scope.did, scope.collection, scope.rkey)) {
 				matched.push(entry)
 			}
 		}

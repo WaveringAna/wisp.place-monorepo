@@ -8,6 +8,10 @@ export * as PlaceWispV2DomainDelete from "./types/place/wisp/v2/domain/delete.js
 export * as PlaceWispV2DomainGetList from "./types/place/wisp/v2/domain/getList.js";
 export * as PlaceWispV2DomainGetStatus from "./types/place/wisp/v2/domain/getStatus.js";
 export * as PlaceWispV2Domains from "./types/place/wisp/v2/domains.js";
+export * as PlaceWispV2SecretCreate from "./types/place/wisp/v2/secret/create.js";
+export * as PlaceWispV2SecretDelete from "./types/place/wisp/v2/secret/delete.js";
+export * as PlaceWispV2SecretList from "./types/place/wisp/v2/secret/list.js";
+export * as PlaceWispV2SecretRotate from "./types/place/wisp/v2/secret/rotate.js";
 export * as PlaceWispV2SiteDelete from "./types/place/wisp/v2/site/delete.js";
 export * as PlaceWispV2SiteGetDomains from "./types/place/wisp/v2/site/getDomains.js";
 export * as PlaceWispV2SiteGetList from "./types/place/wisp/v2/site/getList.js";

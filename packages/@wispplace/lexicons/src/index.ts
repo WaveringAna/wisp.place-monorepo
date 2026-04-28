@@ -16,6 +16,10 @@ import * as PlaceWispV2DomainClaim from './types/place/wisp/v2/domain/claim.js'
 import * as PlaceWispV2DomainDelete from './types/place/wisp/v2/domain/delete.js'
 import * as PlaceWispV2DomainGetList from './types/place/wisp/v2/domain/getList.js'
 import * as PlaceWispV2DomainGetStatus from './types/place/wisp/v2/domain/getStatus.js'
+import * as PlaceWispV2SecretCreate from './types/place/wisp/v2/secret/create.js'
+import * as PlaceWispV2SecretDelete from './types/place/wisp/v2/secret/delete.js'
+import * as PlaceWispV2SecretList from './types/place/wisp/v2/secret/list.js'
+import * as PlaceWispV2SecretRotate from './types/place/wisp/v2/secret/rotate.js'
 import * as PlaceWispV2SiteDelete from './types/place/wisp/v2/site/delete.js'
 import * as PlaceWispV2SiteGetDomains from './types/place/wisp/v2/site/getDomains.js'
 import * as PlaceWispV2SiteGetList from './types/place/wisp/v2/site/getList.js'
@@ -57,11 +61,13 @@ export class PlaceWispNS {
 export class PlaceWispV2NS {
   _server: Server
   domain: PlaceWispV2DomainNS
+  secret: PlaceWispV2SecretNS
   site: PlaceWispV2SiteNS
 
   constructor(server: Server) {
     this._server = server
     this.domain = new PlaceWispV2DomainNS(server)
+    this.secret = new PlaceWispV2SecretNS(server)
     this.site = new PlaceWispV2SiteNS(server)
   }
 }
@@ -142,6 +148,62 @@ export class PlaceWispV2DomainNS {
     >,
   ) {
     const nsid = 'place.wisp.v2.domain.getStatus' // @ts-ignore
+    return this._server.xrpc.method(nsid, cfg)
+  }
+}
+
+export class PlaceWispV2SecretNS {
+  _server: Server
+
+  constructor(server: Server) {
+    this._server = server
+  }
+
+  create<A extends Auth = void>(
+    cfg: MethodConfigOrHandler<
+      A,
+      PlaceWispV2SecretCreate.QueryParams,
+      PlaceWispV2SecretCreate.HandlerInput,
+      PlaceWispV2SecretCreate.HandlerOutput
+    >,
+  ) {
+    const nsid = 'place.wisp.v2.secret.create' // @ts-ignore
+    return this._server.xrpc.method(nsid, cfg)
+  }
+
+  delete<A extends Auth = void>(
+    cfg: MethodConfigOrHandler<
+      A,
+      PlaceWispV2SecretDelete.QueryParams,
+      PlaceWispV2SecretDelete.HandlerInput,
+      PlaceWispV2SecretDelete.HandlerOutput
+    >,
+  ) {
+    const nsid = 'place.wisp.v2.secret.delete' // @ts-ignore
+    return this._server.xrpc.method(nsid, cfg)
+  }
+
+  list<A extends Auth = void>(
+    cfg: MethodConfigOrHandler<
+      A,
+      PlaceWispV2SecretList.QueryParams,
+      PlaceWispV2SecretList.HandlerInput,
+      PlaceWispV2SecretList.HandlerOutput
+    >,
+  ) {
+    const nsid = 'place.wisp.v2.secret.list' // @ts-ignore
+    return this._server.xrpc.method(nsid, cfg)
+  }
+
+  rotate<A extends Auth = void>(
+    cfg: MethodConfigOrHandler<
+      A,
+      PlaceWispV2SecretRotate.QueryParams,
+      PlaceWispV2SecretRotate.HandlerInput,
+      PlaceWispV2SecretRotate.HandlerOutput
+    >,
+  ) {
+    const nsid = 'place.wisp.v2.secret.rotate' // @ts-ignore
     return this._server.xrpc.method(nsid, cfg)
   }
 }

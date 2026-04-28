@@ -21,8 +21,10 @@ export interface Main {
   url: string
   /** Which record events to trigger on. Defaults to all events if omitted. */
   events?: ('create' | 'update' | 'delete')[]
-  /** Optional secret used to sign the webhook payload with HMAC-SHA256. The signature is included in the 'X-Webhook-Signature' header of the webhook request. */
+  /** Optional raw secret used to sign the webhook payload with HMAC-SHA256. Prefer secretId to avoid embedding plaintext values in PDS records. */
   secret?: string
+  /** Name of a server-managed signing secret created via place.wisp.v2.secret.create. Takes precedence over secret if both are present. */
+  secretId?: string
   /** Whether the webhook is active. Defaults to true if omitted. */
   enabled?: boolean
   /** Timestamp of when the webhook was created. */

@@ -27,6 +27,7 @@ import { authRoutes } from './routes/auth'
 import { domainRoutes } from './routes/domain'
 import { siteRoutes } from './routes/site'
 import { userRoutes } from './routes/user'
+import { secretRoutes } from './routes/secret'
 import { webhookRoutes } from './routes/webhook'
 import { wispRoutes } from './routes/wisp'
 import { xrpcRoutes } from './routes/xrpc'
@@ -238,6 +239,7 @@ export const app = new Elysia({
 	.use(userRoutes(client, cookieSecret))
 	.use(siteRoutes(client, cookieSecret))
 	.use(webhookRoutes(client, cookieSecret))
+	.use(secretRoutes(client, cookieSecret))
 	.use(adminRoutes(cookieSecret))
 	.use(
 		await staticPlugin({

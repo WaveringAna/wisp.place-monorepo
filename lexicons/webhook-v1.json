@@ -41,7 +41,12 @@
                     "secret": {
                         "type": "string",
                         "maxLength": 256,
-                        "description": "Optional secret used to sign the webhook payload with HMAC-SHA256. The signature is included in the 'X-Webhook-Signature' header of the webhook request."
+                        "description": "Optional raw secret used to sign the webhook payload with HMAC-SHA256. Prefer secretId to avoid embedding plaintext values in PDS records."
+                    },
+                    "secretId": {
+                        "type": "string",
+                        "format": "record-key",
+                        "description": "Name of a server-managed signing secret created via place.wisp.v2.secret.create. Takes precedence over secret if both are present."
                     },
                     "enabled": {
                         "type": "boolean",

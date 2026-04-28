@@ -10,15 +10,19 @@ import {
 	ChevronDown,
 	ChevronsUpDown,
 	ChevronUp,
+	Copy,
 	ExternalLink,
+	KeyRound,
 	Loader2,
 	Plus,
 	RefreshCw,
+	RotateCcw,
 	Trash2,
 	Webhook,
 	X,
 } from 'lucide-react'
 import { type ChangeEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { SecretMeta } from '../hooks/useSecretData'
 import type { WebhookEventLog, WebhookRecord } from '../hooks/useWebhookData'
 
 const APPS = [
@@ -39,34 +43,41 @@ interface WebhooksTabProps {
 	eventLogsLoading: boolean
 	isCreating: boolean
 	userDid?: string
+	secrets: SecretMeta[]
+	secretsLoading: boolean
+	isCreatingSecret: boolean
 	onCreateWebhook: (data: {
 		scopeAturi: string
 		url: string
 		backlinks: boolean
 		events: string[]
 		secret: string
+		secretId?: string
 		enabled: boolean
 	}) => Promise<any>
 	onDeleteWebhook: (rkey: string) => Promise<void>
 	onRefreshEvents: () => Promise<void>
+	onCreateSecret: (name: string) => Promise<{ token: string }>
+	onDeleteSecret: (name: string) => Promise<void>
+	onRotateSecret: (name: string) => Promise<{ token: string }>
 }
 
 function buildScope(
-	userDid: string,
+	did: string,
 	selectedApp: AppId | null,
 	scopePath: string,
 	otherMode: OtherMode,
 	otherCollection: string,
 	otherRkey: string,
 ): string {
-	if (!userDid) return ''
+	if (!did) return ''
 	if (!selectedApp) return ''
 	if (selectedApp === 'other') {
-		if (otherMode === 'all') return `at://${userDid}`
-		if (otherMode === 'collection') return otherCollection ? `at://${userDid}/${otherCollection}` : ''
-		return otherCollection && otherRkey ? `at://${userDid}/${otherCollection}/${otherRkey}` : ''
+		if (otherMode === 'all') return `at://${did}`
+		if (otherMode === 'collection') return otherCollection ? `at://${did}/${otherCollection}` : ''
+		return otherCollection && otherRkey ? `at://${did}/${otherCollection}/${otherRkey}` : ''
 	}
-	return scopePath ? `at://${userDid}/${scopePath}` : `at://${userDid}`
+	return scopePath ? `at://${did}/${scopePath}` : `at://${did}`
 }
 
 function formatTimeAgo(dateStr: string): string {
@@ -87,9 +98,15 @@ export const WebhooksTab = memo(function WebhooksTab({
 	eventLogsLoading,
 	isCreating,
 	userDid = '',
+	secrets,
+	secretsLoading,
+	isCreatingSecret,
 	onCreateWebhook,
 	onDeleteWebhook,
 	onRefreshEvents,
+	onCreateSecret,
+	onDeleteSecret,
+	onRotateSecret,
 }: WebhooksTabProps) {
 	const [url, setUrl] = useState('')
 	const [selectedApp, setSelectedApp] = useState<AppId | null>(null)
@@ -97,6 +114,9 @@ export const WebhooksTab = memo(function WebhooksTab({
 	const [otherMode, setOtherMode] = useState<OtherMode>('all')
 	const [otherCollection, setOtherCollection] = useState('')
 	const [otherRkey, setOtherRkey] = useState('')
+	const [customDid, setCustomDid] = useState('')
+	const [useCustomDid, setUseCustomDid] = useState(false)
+	const [selectedSecretId, setSelectedSecretId] = useState('')
 	const [backlinks, setBacklinks] = useState(false)
 	const [eventCreate, setEventCreate] = useState(true)
 	const [eventUpdate, setEventUpdate] = useState(true)
@@ -108,6 +128,15 @@ export const WebhooksTab = memo(function WebhooksTab({
 	const [focusedWebhook, setFocusedWebhook] = useState(0)
 	const containerRef = useRef<HTMLDivElement>(null)
 	const itemRefs = useRef<(HTMLDivElement | null)[]>([])
+
+	// Secrets panel state
+	const [showSecretsPanel, setShowSecretsPanel] = useState(false)
+	const [newSecretName, setNewSecretName] = useState('')
+	const [secretError, setSecretError] = useState<string | null>(null)
+	const [revealedToken, setRevealedToken] = useState<{ name: string; token: string } | null>(null)
+	const [deletingSecret, setDeletingSecret] = useState<string | null>(null)
+	const [rotatingSecret, setRotatingSecret] = useState<string | null>(null)
+	const [copiedToken, setCopiedToken] = useState(false)
 
 	useEffect(() => {
 		const id = setInterval(onRefreshEvents, 60_000)
@@ -193,7 +222,8 @@ export const WebhooksTab = memo(function WebhooksTab({
 		setError(null)
 	}
 
-	const scopeAturi = buildScope(userDid, selectedApp, scopePath, otherMode, otherCollection, otherRkey)
+	const effectiveDid = useCustomDid && customDid.trim() ? customDid.trim() : userDid
+	const scopeAturi = buildScope(effectiveDid, selectedApp, scopePath, otherMode, otherCollection, otherRkey)
 
 	const handleCreate = async (e: React.FormEvent) => {
 		e.preventDefault()
@@ -221,6 +251,7 @@ export const WebhooksTab = memo(function WebhooksTab({
 				backlinks,
 				events: events.length === 3 ? [] : events,
 				secret: '',
+				secretId: selectedSecretId || undefined,
 				enabled: true,
 			})
 			setSuccess('Webhook created successfully')
@@ -230,6 +261,9 @@ export const WebhooksTab = memo(function WebhooksTab({
 			setOtherMode('all')
 			setOtherCollection('')
 			setOtherRkey('')
+			setCustomDid('')
+			setUseCustomDid(false)
+			setSelectedSecretId('')
 			setBacklinks(false)
 			setEventCreate(true)
 			setEventUpdate(true)
@@ -442,7 +476,7 @@ export const WebhooksTab = memo(function WebhooksTab({
 										</Label>
 										<div className="flex items-center gap-0 border border-border rounded-sm focus-within:border-accent transition-colors">
 											<span className="px-2.5 py-1.5 text-xs text-muted-foreground bg-muted/40 border-r border-border whitespace-nowrap select-none">
-												at://{userDid ? `${userDid.slice(0, 12)}...` : 'did'}/
+												at://{effectiveDid ? `${effectiveDid.slice(0, 16)}...` : 'did'}/
 											</span>
 											<input
 												id="wh-path"
@@ -522,6 +556,28 @@ export const WebhooksTab = memo(function WebhooksTab({
 									</p>
 								)}
 
+								{/* Custom DID override */}
+								<div className="space-y-1.5">
+									<div className="flex items-center gap-2">
+										<Checkbox
+											id="wh-custom-did"
+											checked={useCustomDid}
+											onCheckedChange={(v: boolean | 'indeterminate') => setUseCustomDid(!!v)}
+										/>
+										<Label htmlFor="wh-custom-did" className="cursor-pointer text-xs">
+											Custom scope DID (default: your DID)
+										</Label>
+									</div>
+									{useCustomDid && (
+										<Input
+											value={customDid}
+											onChange={(e: ChangeEvent<HTMLInputElement>) => setCustomDid(e.target.value)}
+											placeholder="did:plc:..."
+											className="h-8 text-xs font-mono"
+										/>
+									)}
+								</div>
+
 								{/* Options row */}
 								{selectedApp && (
 									<div className="flex flex-col sm:flex-row sm:items-start gap-4 pt-1">
@@ -561,6 +617,28 @@ export const WebhooksTab = memo(function WebhooksTab({
 										</div>
 									</div>
 								)}
+
+								{/* Signing secret */}
+								<div className="space-y-1.5">
+									<Label className="text-xs text-muted-foreground">Signing Secret (optional)</Label>
+									<select
+										value={selectedSecretId}
+										onChange={(e) => setSelectedSecretId(e.target.value)}
+										className="h-8 w-full text-xs font-mono bg-background border border-border rounded-sm px-2.5 outline-none focus:border-accent transition-colors"
+									>
+										<option value="">— none —</option>
+										{secrets.map((s) => (
+											<option key={s.name} value={s.name}>
+												{s.name}
+											</option>
+										))}
+									</select>
+									{secrets.length === 0 && (
+										<p className="text-[10px] text-muted-foreground">
+											No secrets yet — create one in the Secrets section below.
+										</p>
+									)}
+								</div>
 
 								{error && (
 									<div className="p-2.5 bg-destructive/10 border border-destructive/20 rounded-sm">
@@ -688,6 +766,174 @@ export const WebhooksTab = memo(function WebhooksTab({
 									</div>
 								)
 							})}
+						</div>
+					)}
+				</div>
+
+				{/* Signing Secrets */}
+				<div className="p-4 border-t border-border/30 space-y-3">
+					<div className="flex items-center justify-between">
+						<div className="flex items-center gap-2">
+							<KeyRound className="w-3.5 h-3.5 text-muted-foreground" />
+							<p className="text-xs uppercase tracking-wider text-muted-foreground">Signing Secrets</p>
+						</div>
+						<Button
+							variant="outline"
+							size="sm"
+							className="h-7 text-xs px-3"
+							onClick={() => {
+								setShowSecretsPanel((v) => !v)
+								setSecretError(null)
+								setRevealedToken(null)
+							}}
+						>
+							{showSecretsPanel ? (
+								<>
+									<ChevronUp className="w-3 h-3 mr-1.5" />
+									Hide
+								</>
+							) : (
+								<>
+									<ChevronDown className="w-3 h-3 mr-1.5" />
+									Manage
+								</>
+							)}
+						</Button>
+					</div>
+
+					{showSecretsPanel && (
+						<div className="space-y-3">
+							{/* Create new secret */}
+							<div className="flex gap-2">
+								<Input
+									value={newSecretName}
+									onChange={(e: ChangeEvent<HTMLInputElement>) => setNewSecretName(e.target.value)}
+									placeholder="secret name (e.g. my-server)"
+									className="h-8 text-xs font-mono flex-1"
+								/>
+								<Button
+									size="sm"
+									className="h-8 text-xs px-3 flex-shrink-0"
+									disabled={isCreatingSecret || !newSecretName.trim()}
+									onClick={async () => {
+										setSecretError(null)
+										setRevealedToken(null)
+										try {
+											const { token } = await onCreateSecret(newSecretName.trim())
+											setRevealedToken({ name: newSecretName.trim(), token })
+											setNewSecretName('')
+										} catch (err) {
+											setSecretError(err instanceof Error ? err.message : 'Failed to create secret')
+										}
+									}}
+								>
+									{isCreatingSecret ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3 mr-1" />}
+									Create
+								</Button>
+							</div>
+
+							{secretError && (
+								<p className="text-xs text-destructive">{secretError}</p>
+							)}
+
+							{/* Revealed token — show once */}
+							{revealedToken && (
+								<div className="p-3 bg-green-500/10 border border-green-500/20 rounded-sm space-y-2">
+									<p className="text-[10px] uppercase tracking-wider text-green-500">
+										New token for <strong>{revealedToken.name}</strong> — copy it now, it won't be shown again
+									</p>
+									<div className="flex items-center gap-2">
+										<code className="text-xs font-mono break-all flex-1 text-green-400">{revealedToken.token}</code>
+										<button
+											type="button"
+											onClick={() => {
+												navigator.clipboard.writeText(revealedToken.token)
+												setCopiedToken(true)
+												setTimeout(() => setCopiedToken(false), 2000)
+											}}
+											className="flex-shrink-0 text-green-400 hover:text-green-300"
+										>
+											{copiedToken ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+										</button>
+									</div>
+								</div>
+							)}
+
+							{/* Secret list */}
+							{secretsLoading ? (
+								<SkeletonShimmer className="h-8 w-full" />
+							) : secrets.length === 0 ? (
+								<p className="text-xs text-muted-foreground py-2 text-center">No secrets yet</p>
+							) : (
+								<div className="space-y-1">
+									{secrets.map((s) => (
+										<div
+											key={s.name}
+											className="flex items-center justify-between p-2.5 border border-border/30 rounded-sm"
+										>
+											<div className="space-y-0.5 min-w-0 flex-1">
+												<p className="text-xs font-mono font-medium">{s.name}</p>
+												<p className="text-[10px] text-muted-foreground">
+													Created {new Date(s.createdAt).toLocaleDateString()}
+													{s.lastRotatedAt && ` · rotated ${new Date(s.lastRotatedAt).toLocaleDateString()}`}
+												</p>
+											</div>
+											<div className="flex items-center gap-1 flex-shrink-0">
+												<Button
+													variant="ghost"
+													size="sm"
+													className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
+													disabled={rotatingSecret === s.name}
+													title="Rotate"
+													onClick={async () => {
+														setSecretError(null)
+														setRevealedToken(null)
+														setRotatingSecret(s.name)
+														try {
+															const { token } = await onRotateSecret(s.name)
+															setRevealedToken({ name: s.name, token })
+														} catch (err) {
+															setSecretError(err instanceof Error ? err.message : 'Failed to rotate secret')
+														} finally {
+															setRotatingSecret(null)
+														}
+													}}
+												>
+													{rotatingSecret === s.name ? (
+														<Loader2 className="w-3 h-3 animate-spin" />
+													) : (
+														<RotateCcw className="w-3 h-3" />
+													)}
+												</Button>
+												<Button
+													variant="ghost"
+													size="sm"
+													className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+													disabled={deletingSecret === s.name}
+													title="Delete"
+													onClick={async () => {
+														setSecretError(null)
+														setDeletingSecret(s.name)
+														try {
+															await onDeleteSecret(s.name)
+														} catch (err) {
+															setSecretError(err instanceof Error ? err.message : 'Failed to delete secret')
+														} finally {
+															setDeletingSecret(null)
+														}
+													}}
+												>
+													{deletingSecret === s.name ? (
+														<Loader2 className="w-3 h-3 animate-spin" />
+													) : (
+														<Trash2 className="w-3 h-3" />
+													)}
+												</Button>
+											</div>
+										</div>
+									))}
+								</div>
+							)}
 						</div>
 					)}
 				</div>

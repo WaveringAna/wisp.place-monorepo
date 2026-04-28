@@ -10,6 +10,10 @@ import {
 	PlaceWispV2DomainDelete,
 	PlaceWispV2DomainGetList,
 	PlaceWispV2DomainGetStatus,
+	PlaceWispV2SecretCreate,
+	PlaceWispV2SecretDelete,
+	PlaceWispV2SecretList,
+	PlaceWispV2SecretRotate,
 	PlaceWispV2SiteDelete,
 	PlaceWispV2SiteGetDomains,
 	PlaceWispV2SiteGetList,
@@ -20,7 +24,9 @@ import { Elysia } from 'elysia'
 import {
 	claimCustomDomain,
 	claimDomain,
+	createWebhookSecret,
 	deleteCustomDomain,
+	deleteWebhookSecret,
 	deleteWispDomain,
 	getAllWispDomains,
 	getCustomDomainInfo,
@@ -28,6 +34,8 @@ import {
 	getDomainsBySite,
 	getSitesByDid,
 	isDomainRegistered,
+	listWebhookSecrets,
+	rotateWebhookSecret,
 	updateCustomDomainRkey,
 	updateWispDomainSite,
 } from '../lib/db'
@@ -80,6 +88,10 @@ const XRPC_NSIDS = {
 	claim: 'place.wisp.v2.domain.claim',
 	delete: 'place.wisp.v2.domain.delete',
 	deleteSite: 'place.wisp.v2.site.delete',
+	secretCreate: 'place.wisp.v2.secret.create',
+	secretList: 'place.wisp.v2.secret.list',
+	secretDelete: 'place.wisp.v2.secret.delete',
+	secretRotate: 'place.wisp.v2.secret.rotate',
 } as const
 
 const toIsoFromEpoch = (epoch: unknown): string | undefined => {
@@ -176,6 +188,14 @@ const invalidRequest = (description: string): never => {
 	throw new XRPCError({
 		status: 400,
 		error: 'InvalidRequest',
+		description,
+	})
+}
+
+const alreadyExists = (description: string): never => {
+	throw new XRPCError({
+		status: 409,
+		error: 'AlreadyExists',
 		description,
 	})
 }
@@ -531,6 +551,10 @@ export const xrpcRoutes = () => {
 		XRPC_NSIDS.claim,
 		XRPC_NSIDS.delete,
 		XRPC_NSIDS.deleteSite,
+		XRPC_NSIDS.secretCreate,
+		XRPC_NSIDS.secretList,
+		XRPC_NSIDS.secretDelete,
+		XRPC_NSIDS.secretRotate,
 	]
 
 	addProcedureWithAliases(
@@ -780,6 +804,70 @@ export const xrpcRoutes = () => {
 				return deleteSiteForDid(did, {
 					siteRkey: input.siteRkey,
 				})
+			},
+		},
+	)
+
+	addProcedureWithAliases(
+		router,
+		withNsid(PlaceWispV2SecretCreate.mainSchema as any, XRPC_NSIDS.secretCreate),
+		[],
+		{
+			async handler({ input, request }) {
+				const auth = requireAuthenticated(authByRequest.get(request))
+				const name = input.name?.trim()
+				if (!name) invalidRequest('name is required')
+				try {
+					const { token, createdAt } = await createWebhookSecret(auth.did, name!)
+					return json({ name: name!, token, createdAt })
+				} catch {
+					return alreadyExists('a secret with that name already exists')
+				}
+			},
+		},
+	)
+
+	addQueryWithAliases(
+		router,
+		withNsid(PlaceWispV2SecretList.mainSchema as any, XRPC_NSIDS.secretList),
+		[],
+		{
+			async handler({ request }) {
+				const auth = requireAuthenticated(authByRequest.get(request))
+				const secrets = await listWebhookSecrets(auth.did)
+				return json({ secrets })
+			},
+		},
+	)
+
+	addProcedureWithAliases(
+		router,
+		withNsid(PlaceWispV2SecretDelete.mainSchema as any, XRPC_NSIDS.secretDelete),
+		[],
+		{
+			async handler({ input, request }) {
+				const auth = requireAuthenticated(authByRequest.get(request))
+				const name = input.name?.trim()
+				if (!name) invalidRequest('name is required')
+				const deleted = await deleteWebhookSecret(auth.did, name)
+				if (!deleted) notFound('secret not found')
+				return json({})
+			},
+		},
+	)
+
+	addProcedureWithAliases(
+		router,
+		withNsid(PlaceWispV2SecretRotate.mainSchema as any, XRPC_NSIDS.secretRotate),
+		[],
+		{
+			async handler({ input, request }) {
+				const auth = requireAuthenticated(authByRequest.get(request))
+				const name = input.name?.trim()
+				if (!name) invalidRequest('name is required')
+				const result = await rotateWebhookSecret(auth.did, name)
+				if (!result) notFound('secret not found')
+				return json({ name, token: result!.token, rotatedAt: result!.rotatedAt })
 			},
 		},
 	)

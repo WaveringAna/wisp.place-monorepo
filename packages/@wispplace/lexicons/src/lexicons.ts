@@ -667,6 +667,197 @@ export const schemaDict = {
       },
     },
   },
+  PlaceWispV2SecretCreate: {
+    lexicon: 1,
+    id: 'place.wisp.v2.secret.create',
+    defs: {
+      main: {
+        type: 'procedure',
+        description:
+          'Create a named webhook signing secret. The server generates a short random token returned once in the response. Reference the secret by name via secretId in place.wisp.v2.wh.',
+        input: {
+          encoding: 'application/json',
+          schema: {
+            type: 'object',
+            required: ['name'],
+            properties: {
+              name: {
+                type: 'string',
+                format: 'record-key',
+                description:
+                  'Unique name for this secret, scoped to the caller DID.',
+              },
+            },
+          },
+        },
+        output: {
+          encoding: 'application/json',
+          schema: {
+            type: 'object',
+            required: ['name', 'token', 'createdAt'],
+            properties: {
+              name: {
+                type: 'string',
+              },
+              token: {
+                type: 'string',
+                description:
+                  'The signing token. Only returned at creation time — store it now.',
+              },
+              createdAt: {
+                type: 'string',
+                format: 'datetime',
+              },
+            },
+          },
+        },
+        errors: [
+          {
+            name: 'AuthenticationRequired',
+          },
+          {
+            name: 'InvalidRequest',
+          },
+          {
+            name: 'AlreadyExists',
+          },
+        ],
+      },
+    },
+  },
+  PlaceWispV2SecretDelete: {
+    lexicon: 1,
+    id: 'place.wisp.v2.secret.delete',
+    defs: {
+      main: {
+        type: 'procedure',
+        description: 'Delete a webhook signing secret by name.',
+        input: {
+          encoding: 'application/json',
+          schema: {
+            type: 'object',
+            required: ['name'],
+            properties: {
+              name: {
+                type: 'string',
+                format: 'record-key',
+              },
+            },
+          },
+        },
+        errors: [
+          {
+            name: 'AuthenticationRequired',
+          },
+          {
+            name: 'NotFound',
+          },
+        ],
+      },
+    },
+  },
+  PlaceWispV2SecretList: {
+    lexicon: 1,
+    id: 'place.wisp.v2.secret.list',
+    defs: {
+      main: {
+        type: 'query',
+        description:
+          'List webhook signing secrets for the caller DID. Token values are never returned.',
+        output: {
+          encoding: 'application/json',
+          schema: {
+            type: 'object',
+            required: ['secrets'],
+            properties: {
+              secrets: {
+                type: 'array',
+                items: {
+                  type: 'ref',
+                  ref: 'lex:place.wisp.v2.secret.list#secretMeta',
+                },
+              },
+            },
+          },
+        },
+        errors: [
+          {
+            name: 'AuthenticationRequired',
+          },
+        ],
+      },
+      secretMeta: {
+        type: 'object',
+        required: ['name', 'createdAt'],
+        properties: {
+          name: {
+            type: 'string',
+          },
+          createdAt: {
+            type: 'string',
+            format: 'datetime',
+          },
+          lastRotatedAt: {
+            type: 'string',
+            format: 'datetime',
+          },
+        },
+      },
+    },
+  },
+  PlaceWispV2SecretRotate: {
+    lexicon: 1,
+    id: 'place.wisp.v2.secret.rotate',
+    defs: {
+      main: {
+        type: 'procedure',
+        description:
+          'Rotate a webhook signing secret, generating a new token. The old token stops working immediately. The new token is only returned in this response.',
+        input: {
+          encoding: 'application/json',
+          schema: {
+            type: 'object',
+            required: ['name'],
+            properties: {
+              name: {
+                type: 'string',
+                format: 'record-key',
+              },
+            },
+          },
+        },
+        output: {
+          encoding: 'application/json',
+          schema: {
+            type: 'object',
+            required: ['name', 'token', 'rotatedAt'],
+            properties: {
+              name: {
+                type: 'string',
+              },
+              token: {
+                type: 'string',
+                description:
+                  'The new signing token. Only returned here — store it now.',
+              },
+              rotatedAt: {
+                type: 'string',
+                format: 'datetime',
+              },
+            },
+          },
+        },
+        errors: [
+          {
+            name: 'AuthenticationRequired',
+          },
+          {
+            name: 'NotFound',
+          },
+        ],
+      },
+    },
+  },
   PlaceWispSettings: {
     lexicon: 1,
     id: 'place.wisp.settings',
@@ -1129,7 +1320,13 @@ export const schemaDict = {
               type: 'string',
               maxLength: 256,
               description:
-                "Optional secret used to sign the webhook payload with HMAC-SHA256. The signature is included in the 'X-Webhook-Signature' header of the webhook request.",
+                'Optional raw secret used to sign the webhook payload with HMAC-SHA256. Prefer secretId to avoid embedding plaintext values in PDS records.',
+            },
+            secretId: {
+              type: 'string',
+              format: 'record-key',
+              description:
+                'Name of a server-managed signing secret created via place.wisp.v2.secret.create. Takes precedence over secret if both are present.',
             },
             enabled: {
               type: 'boolean',
@@ -1203,6 +1400,10 @@ export const ids = {
   PlaceWispV2DomainGetStatus: 'place.wisp.v2.domain.getStatus',
   PlaceWispV2Domains: 'place.wisp.v2.domains',
   PlaceWispFs: 'place.wisp.fs',
+  PlaceWispV2SecretCreate: 'place.wisp.v2.secret.create',
+  PlaceWispV2SecretDelete: 'place.wisp.v2.secret.delete',
+  PlaceWispV2SecretList: 'place.wisp.v2.secret.list',
+  PlaceWispV2SecretRotate: 'place.wisp.v2.secret.rotate',
   PlaceWispSettings: 'place.wisp.settings',
   PlaceWispV2SiteDelete: 'place.wisp.v2.site.delete',
   PlaceWispV2SiteGetDomains: 'place.wisp.v2.site.getDomains',

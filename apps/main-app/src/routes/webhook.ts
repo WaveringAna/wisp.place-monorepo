@@ -37,7 +37,7 @@ export const webhookRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 						},
 						url: body.url,
 						...(body.events && body.events.length > 0 ? { events: body.events } : {}),
-						...(body.secret ? { secret: body.secret } : {}),
+						...(body.secretId ? { secretId: body.secretId } : body.secret ? { secret: body.secret } : {}),
 						enabled: body.enabled ?? true,
 						createdAt: new Date().toISOString(),
 					}
@@ -65,6 +65,7 @@ export const webhookRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 					backlinks: t.Optional(t.Boolean()),
 					events: t.Optional(t.Array(t.Union([t.Literal('create'), t.Literal('update'), t.Literal('delete')]))),
 					secret: t.Optional(t.String()),
+					secretId: t.Optional(t.String()),
 					enabled: t.Optional(t.Boolean()),
 				}),
 			},

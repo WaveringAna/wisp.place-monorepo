@@ -2,7 +2,7 @@ import { createHmac, randomUUID } from 'node:crypto'
 import { createLogger } from '@wispplace/observability'
 import { config } from '../config'
 import type { WebhookEntry } from './db'
-import { insertEventLog } from './db'
+import { getWebhookSecretToken, insertEventLog } from './db'
 import type { EventKind } from './matcher'
 import { publishWebhookEvent } from './redis'
 
@@ -76,7 +76,11 @@ export async function deliverWebhook(
 	}
 
 	const body = JSON.stringify(payload)
-	const signature = record.secret ? sign(record.secret, body) : undefined
+	let signingSecret: string | undefined = record.secret ?? undefined
+	if (!signingSecret && record.secretId) {
+		signingSecret = (await getWebhookSecretToken(ownerDid, record.secretId)) ?? undefined
+	}
+	const signature = signingSecret ? sign(signingSecret, body) : undefined
 
 	for (let attempt_n = 1; attempt_n <= config.deliveryMaxRetries; attempt_n++) {
 		try {

@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "bun --env-file=.env src/index.ts",
     "start": "bun src/index.ts",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "bench:e2e": "bun bench/e2e.ts"
   },
   "dependencies": {
     "@atproto/identity": "^0.4.10",

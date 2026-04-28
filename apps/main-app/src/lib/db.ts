@@ -120,6 +120,18 @@ await db`
     )
 `
 
+// Webhook signing secrets managed server-side; token never stored after creation
+await db`
+    CREATE TABLE IF NOT EXISTS webhook_secrets (
+        did TEXT NOT NULL,
+        name TEXT NOT NULL,
+        token TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        last_rotated_at TIMESTAMPTZ,
+        PRIMARY KEY (did, name)
+    )
+`
+
 await runDatabaseMigrations(db)
 
 export const getDomainByDid = async (did: string): Promise<string | null> => {
@@ -476,6 +488,70 @@ export const removeSupporter = async (did: string): Promise<void> => {
 export const getAllSupporters = async () => {
 	const rows = await db`SELECT * FROM supporter ORDER BY created_at ASC`
 	return rows
+}
+
+function generateSecretToken(): string {
+	const bytes = crypto.getRandomValues(new Uint8Array(24))
+	return `wsk_${Buffer.from(bytes).toString('base64url')}`
+}
+
+export const createWebhookSecret = async (did: string, name: string): Promise<{ token: string; createdAt: string }> => {
+	const token = generateSecretToken()
+	try {
+		const rows = await db`
+            INSERT INTO webhook_secrets (did, name, token, created_at)
+            VALUES (${did}, ${name}, ${token}, NOW())
+            RETURNING created_at
+        `
+		return { token, createdAt: new Date(rows[0].created_at).toISOString() }
+	} catch (_err) {
+		throw new Error('already_exists')
+	}
+}
+
+export const listWebhookSecrets = async (
+	did: string,
+): Promise<Array<{ name: string; createdAt: string; lastRotatedAt?: string }>> => {
+	const rows = await db<Array<{ name: string; created_at: string; last_rotated_at: string | null }>>`
+        SELECT name, created_at, last_rotated_at
+        FROM webhook_secrets
+        WHERE did = ${did}
+        ORDER BY created_at ASC
+    `
+	return rows.map((r) => ({
+		name: r.name,
+		createdAt: new Date(r.created_at).toISOString(),
+		lastRotatedAt: r.last_rotated_at ? new Date(r.last_rotated_at).toISOString() : undefined,
+	}))
+}
+
+export const deleteWebhookSecret = async (did: string, name: string): Promise<boolean> => {
+	const result = await db`
+        DELETE FROM webhook_secrets WHERE did = ${did} AND name = ${name}
+    `
+	return (result as any).count > 0
+}
+
+export const rotateWebhookSecret = async (
+	did: string,
+	name: string,
+): Promise<{ token: string; rotatedAt: string } | null> => {
+	const token = generateSecretToken()
+	const rows = await db`
+        UPDATE webhook_secrets
+        SET token = ${token}, last_rotated_at = NOW()
+        WHERE did = ${did} AND name = ${name}
+        RETURNING last_rotated_at
+    `
+	if (rows.length === 0) return null
+	return { token, rotatedAt: new Date(rows[0].last_rotated_at).toISOString() }
+}
+
+export const getWebhookSecretToken = async (did: string, name: string): Promise<string | null> => {
+	const rows = await db<Array<{ token: string }>>`
+        SELECT token FROM webhook_secrets WHERE did = ${did} AND name = ${name} LIMIT 1
+    `
+	return rows[0]?.token ?? null
 }
 
 /**
