@@ -17,6 +17,10 @@ The Wisp CLI is a command-line tool for deploying static websites directly to yo
 - **Authenticate** with app password or OAuth
 - **Incremental updates**: Only upload changed files
 
+## Recommended Install
+
+`npm install -g wispctl@latest`
+
 ## Downloads
 
 <div class="downloads">
@@ -64,6 +68,8 @@ df9660b27a9d6f8bcebcafab4622be88639d15dbe74649bdb16e5001d8abe041  wisp-cli-x86_6
 </code></pre>
 
 </div>
+
+note: the tool used to be named wisp-cli and downloadable binaries are kept this way to preseve compatibility with CI
 
 ## CI/CD Integration
 
@@ -128,7 +134,7 @@ curl -O https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-aarch64
 chmod +x wisp-cli-aarch64-darwin
 
 # Deploy your site
-./wisp-cli-aarch64-darwin deploy your-handle.bsky.social \
+wispctl deploy your-handle.bsky.social \
   --path ./dist \
   --site my-site
 ```
@@ -139,27 +145,27 @@ Your site will be available at: `https://sites.wisp.place/your-handle/my-site`
 
 ```bash
 # Claim a custom domain
-./wisp-cli domain claim your-handle.bsky.social --domain example.com
+wispctl domain claim your-handle.bsky.social --domain example.com
 
 # Claim a subdomain
-./wisp-cli domain claim-subdomain your-handle.bsky.social --subdomain alice
+wispctl domain claim-subdomain your-handle.bsky.social --subdomain alice
 
 # Check domain status
-./wisp-cli domain status your-handle.bsky.social --domain example.com
+wispctl domain status your-handle.bsky.social --domain example.com
 
 # Attach a site to a domain
-./wisp-cli domain add-site your-handle.bsky.social --domain example.com --site mysite
+wispctl domain add-site your-handle.bsky.social --domain example.com --site mysite
 
 # Delete a domain or site
-./wisp-cli domain delete your-handle.bsky.social --domain example.com
-./wisp-cli site delete your-handle.bsky.social --site mysite
+wispctl domain delete your-handle.bsky.social --domain example.com
+wispctl site delete your-handle.bsky.social --site mysite
 ```
 
 ### List Domains & Sites
 
 ```bash
-./wisp-cli list domains your-handle.bsky.social
-./wisp-cli list sites your-handle.bsky.social
+wispctl list domains your-handle.bsky.social
+wispctl list sites your-handle.bsky.social
 ```
 
 ### Options
@@ -167,7 +173,7 @@ Your site will be available at: `https://sites.wisp.place/your-handle/my-site`
 Use an alternate proxy service DID:
 
 ```bash
-./wisp-cli list domains your-handle.bsky.social --service did:web:example.com
+wispctl list domains your-handle.bsky.social --service did:web:example.com
 ```
 
 ### Pull a Site from PDS
@@ -176,12 +182,12 @@ Download a site from the PDS to your local machine:
 
 ```bash
 # Pull a site to a specific directory
-wisp-cli pull your-handle.bsky.social \
+wispctl pull your-handle.bsky.social \
   --site my-site \
   --path ./my-site
 
 # Pull to current directory
-wisp-cli pull your-handle.bsky.social \
+wispctl pull your-handle.bsky.social \
   --site my-site
 ```
 
@@ -191,21 +197,21 @@ Run a local server that monitors the firehose for real-time updates:
 
 ```bash
 # Serve on http://localhost:8080 (default)
-wisp-cli serve your-handle.bsky.social \
+wispctl serve your-handle.bsky.social \
   --site my-site
 
 # Serve on a custom port
-wisp-cli serve your-handle.bsky.social \
+wispctl serve your-handle.bsky.social \
   --site my-site \
   --port 3000
 
 # Enable SPA mode (serve index.html for all routes)
-wisp-cli serve your-handle.bsky.social \
+wispctl serve your-handle.bsky.social \
   --site my-site \
   --spa
 
 # Enable directory listing for paths without index files
-wisp-cli serve your-handle.bsky.social \
+wispctl serve your-handle.bsky.social \
   --site my-site \
   --directory
 ```
@@ -219,7 +225,7 @@ Downloads site, serves it, and watches firehose for live updates!
 The CLI uses OAuth by default, opening your browser for secure authentication:
 
 ```bash
-wisp-cli deploy your-handle.bsky.social --path ./dist --site my-site
+wispctl deploy your-handle.bsky.social --path ./dist --site my-site
 ```
 
 This creates a session stored locally (default: `/tmp/wisp-oauth-session.json`).
@@ -229,7 +235,7 @@ This creates a session stored locally (default: `/tmp/wisp-oauth-session.json`).
 For headless environments or CI/CD, use an app password:
 
 ```bash
-wisp-cli deploy your-handle.bsky.social \
+wispctl deploy your-handle.bsky.social \
   --path ./dist \
   --site my-site \
   --password YOUR_APP_PASSWORD
@@ -275,7 +281,7 @@ Options:
 ### Pull Command
 
 ```bash
-wisp-cli pull [OPTIONS] --site <SITE> <INPUT>
+wispctl pull [OPTIONS] --site <SITE> <INPUT>
 
 Arguments:
   <INPUT>  Handle or DID
@@ -289,7 +295,7 @@ Options:
 ### Serve Command
 
 ```bash
-wisp-cli serve [OPTIONS] --site <SITE> <INPUT>
+wispctl serve [OPTIONS] --site <SITE> <INPUT>
 
 Arguments:
   <INPUT>  Handle or DID
@@ -302,20 +308,6 @@ Options:
       --directory             Enable directory listing mode for paths without index files
   -h, --help                  Print help
 ```
-
-## Development
-
-The CLI is written in Rust using the Jacquard AT Protocol library. To build from source:
-
-```bash
-git clone https://tangled.org/@nekomimi.pet/wisp.place-monorepo
-cd cli
-cargo build --release
-```
-
-Built binaries are available in `target/release/`.
-
-## Related
 
 - [place.wisp.fs](/lexicons/place-wisp-fs) - Site manifest lexicon
 - [place.wisp.subfs](/lexicons/place-wisp-subfs) - Subtree records for large sites
