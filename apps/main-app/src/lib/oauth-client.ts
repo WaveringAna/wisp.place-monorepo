@@ -1,5 +1,6 @@
 import { JoseKey } from '@atproto/jwk-jose'
 import { type ClientMetadata, NodeOAuthClient, type RuntimeLock } from '@atproto/oauth-client-node'
+import { SQL } from 'bun'
 import { db } from './db'
 import { logger } from './logger'
 import { SlingshotHandleResolver } from './slingshot-handle-resolver'
@@ -16,9 +17,22 @@ const lockKey = (name: string): bigint => {
 	return view.getBigInt64(0, false) ^ LOCK_NAMESPACE
 }
 
+// Dedicated pool just for advisory locks. Each lock acquisition reserves a
+// connection for the full duration of fn() (which makes HTTP calls to the PDS),
+// so it must not share the main query pool — otherwise a slow PDS starves the
+// pool and inner stateStore/sessionStore queries deadlock waiting for slots.
+const LOCK_POOL_URL =
+	process.env.NODE_ENV === 'production'
+		? process.env.DATABASE_URL ||
+			(() => {
+				throw new Error('DATABASE_URL environment variable is required in production')
+			})()
+		: process.env.DATABASE_URL || 'postgres://postgres:postgres@localhost:5432/wisp'
+const lockDb = new SQL({ url: LOCK_POOL_URL, max: 4 })
+
 const requestPgLock: RuntimeLock = async (name, fn) => {
 	const key = lockKey(name)
-	const reserved = await db.reserve()
+	const reserved = await lockDb.reserve()
 	try {
 		await reserved`SET lock_timeout = '30s'`
 		await reserved`SELECT pg_advisory_lock(${key})`
