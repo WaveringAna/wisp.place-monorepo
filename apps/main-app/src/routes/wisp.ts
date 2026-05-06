@@ -19,6 +19,7 @@ import {
 	processUploadedFiles,
 	replaceDirectoryWithSubfs,
 	splitDirectoryIntoChunks,
+	toSubfsDirectory,
 	type UploadedFile,
 	updateFileBlobs,
 } from '@wispplace/fs-utils'
@@ -651,7 +652,7 @@ async function processUploadInBackground(
 									rkey: chunkRkey,
 									record: {
 										$type: 'place.wisp.subfs' as const,
-										root: chunk,
+										root: toSubfsDirectory(chunk),
 										fileCount: chunkFileCount,
 										createdAt: new Date().toISOString(),
 									},
@@ -682,7 +683,7 @@ async function processUploadInBackground(
 								rkey: parentRkey,
 								record: {
 									$type: 'place.wisp.subfs' as const,
-									root: parentDirectory,
+									root: toSubfsDirectory(parentDirectory),
 									fileCount: largestDir.fileCount,
 									createdAt: new Date().toISOString(),
 								},
@@ -699,7 +700,7 @@ async function processUploadInBackground(
 								rkey: subfsRkey,
 								record: {
 									$type: 'place.wisp.subfs' as const,
-									root: largestDir.directory,
+									root: toSubfsDirectory(largestDir.directory),
 									fileCount: largestDir.fileCount,
 									createdAt: new Date().toISOString(),
 								},
@@ -740,7 +741,7 @@ async function processUploadInBackground(
 							rkey: subfsRkey,
 							record: {
 								$type: 'place.wisp.subfs' as const,
-								root: chunkDirectory,
+								root: toSubfsDirectory(chunkDirectory),
 								fileCount: chunkFiles.length,
 								createdAt: new Date().toISOString(),
 							},

@@ -19,6 +19,7 @@ import {
 	processUploadedFiles,
 	replaceDirectoryWithSubfs,
 	splitDirectoryIntoChunks,
+	toSubfsDirectory,
 	type UploadedFile,
 	updateFileBlobs,
 } from '@wispplace/fs-utils'
@@ -284,10 +285,10 @@ async function processAndUploadFiles(
 async function createSubfsRecord(agent: Agent, did: string, directory: Directory, rkey: string): Promise<string> {
 	const record = {
 		$type: 'place.wisp.subfs' as const,
-		root: directory as any, // fs Directory and subfs Directory are compatible at runtime
+		root: toSubfsDirectory(directory),
 		fileCount: countFilesInDirectory(directory),
 		createdAt: new Date().toISOString(),
-	}
+	} satisfies SubfsRecord
 
 	await agent.com.atproto.repo.putRecord({
 		repo: did,

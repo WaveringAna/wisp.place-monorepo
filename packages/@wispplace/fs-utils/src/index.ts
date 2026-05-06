@@ -28,3 +28,4 @@ export type {
 	UploadedFile,
 } from './tree'
 export { collectFileCidsFromEntries, countFilesInDirectory, processUploadedFiles, updateFileBlobs } from './tree'
+export { toSubfsDirectory } from './types'

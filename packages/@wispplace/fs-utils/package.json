@@ -22,6 +22,10 @@
       "types": "./src/manifest.ts",
       "default": "./src/manifest.ts"
     },
+    "./types": {
+      "types": "./src/types.ts",
+      "default": "./src/types.ts"
+    },
     "./subfs-split": {
       "types": "./src/subfs-split.ts",
       "default": "./src/subfs-split.ts"

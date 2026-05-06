@@ -2,6 +2,21 @@
  * AT Protocol identity utilities for resolving handles and DIDs
  */
 
+const DEFAULT_HANDLE_RESOLVER_URL = 'https://slingshot.microcosm.blue/xrpc/com.atproto.identity.resolveHandle'
+const DEFAULT_PLC_DIRECTORY_URL = 'https://plc.directory'
+
+function getEnv(name: string): string | undefined {
+	return process.env[name] || (typeof Bun !== 'undefined' ? Bun.env[name] : undefined)
+}
+
+function getHandleResolverUrl(): string {
+	return getEnv('WISP_HANDLE_RESOLVER_URL') || DEFAULT_HANDLE_RESOLVER_URL
+}
+
+function getPlcDirectoryUrl(): string {
+	return (getEnv('WISP_PLC_DIRECTORY_URL') || DEFAULT_PLC_DIRECTORY_URL).replace(/\/+$/, '')
+}
+
 interface DidDocument {
 	service?: Array<{ id: string; serviceEndpoint?: string }>
 	alsoKnownAs?: string[]
@@ -30,7 +45,7 @@ export function didWebToHttps(did: string): string {
 /**
  * Resolve a handle or DID to a DID
  * If the identifier is already a DID, returns it as-is
- * If it's a handle, resolves it to a DID using the public API
+ * If it's a handle, resolves it to a DID using the configured identity resolver
  */
 export async function resolveDid(identifier: string): Promise<string | null> {
 	try {
@@ -39,8 +54,8 @@ export async function resolveDid(identifier: string): Promise<string | null> {
 			return identifier
 		}
 
-		// Otherwise, resolve the handle using the public API
-		const url = `https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle?handle=${encodeURIComponent(identifier)}`
+		// Otherwise, resolve the handle using the configured resolver
+		const url = `${getHandleResolverUrl()}?handle=${encodeURIComponent(identifier)}`
 		const response = await fetch(url)
 
 		if (!response.ok) {
@@ -62,7 +77,7 @@ export async function resolveDid(identifier: string): Promise<string | null> {
 export async function getDidDocument(did: string): Promise<DidDocument | null> {
 	try {
 		if (did.startsWith('did:plc:')) {
-			const res = await fetch(`https://plc.directory/${encodeURIComponent(did)}`)
+			const res = await fetch(`${getPlcDirectoryUrl()}/${encodeURIComponent(did)}`)
 			if (!res.ok) return null
 			return (await res.json()) as DidDocument
 		} else if (did.startsWith('did:web:')) {
