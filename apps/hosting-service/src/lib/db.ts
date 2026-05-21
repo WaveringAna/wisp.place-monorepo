@@ -72,12 +72,18 @@ export async function getCustomDomainByHash(hash: string): Promise<CustomDomainL
 
 /**
  * Upsert site cache entry (used by on-demand caching when a site is completely missing)
+ *
+ * The on-demand path only populates the local hot/warm tiers — it does NOT write
+ * the S3 cold tier — so it must mark the row cold_synced=false. That signals the
+ * firehose-service to do a full (re)download into S3 instead of trusting this
+ * optimistic ledger and skipping files it never actually wrote to S3.
  */
 export async function upsertSiteCache(
 	did: string,
 	rkey: string,
 	recordCid: string,
 	fileCids: Record<string, string>,
+	coldSynced = false,
 ): Promise<void> {
 	if (CACHE_ONLY) {
 		console.log('[DB] Cache-only mode: skipping upsertSiteCache', { did, rkey })
@@ -86,13 +92,14 @@ export async function upsertSiteCache(
 
 	try {
 		await sql`
-      INSERT INTO site_cache (did, rkey, record_cid, file_cids, cached_at, updated_at)
-      VALUES (${did}, ${rkey}, ${recordCid}, ${sql.json(fileCids ?? {})}, EXTRACT(EPOCH FROM NOW()), EXTRACT(EPOCH FROM NOW()))
+      INSERT INTO site_cache (did, rkey, record_cid, file_cids, cached_at, updated_at, cold_synced)
+      VALUES (${did}, ${rkey}, ${recordCid}, ${sql.json(fileCids ?? {})}, EXTRACT(EPOCH FROM NOW()), EXTRACT(EPOCH FROM NOW()), ${coldSynced})
       ON CONFLICT (did, rkey)
       DO UPDATE SET
         record_cid = EXCLUDED.record_cid,
         file_cids = EXCLUDED.file_cids,
-        updated_at = EXTRACT(EPOCH FROM NOW())
+        updated_at = EXTRACT(EPOCH FROM NOW()),
+        cold_synced = EXCLUDED.cold_synced
     `
 	} catch (err) {
 		const error = err instanceof Error ? err : new Error(String(err))

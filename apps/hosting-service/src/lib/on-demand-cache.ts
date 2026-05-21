@@ -92,7 +92,10 @@ export async function fetchAndCacheSite(did: string, rkey: string): Promise<bool
 }
 
 async function doFetchAndCache(did: string, rkey: string): Promise<boolean> {
-	const lockKey = `on-demand-cache:${did}:${rkey}`
+	// Unified per-site write-lock key, shared verbatim with the firehose-service
+	// (siteWriteLockKey) so on-demand fetches mutually exclude with firehose
+	// create/update/delete syncs and the revalidate worker.
+	const lockKey = `site-write:${did}:${rkey}`
 
 	// Try to acquire a distributed lock
 	const acquired = await tryAcquireLock(lockKey)
@@ -185,7 +188,9 @@ async function doFetchAndCache(did: string, rkey: string): Promise<boolean> {
 		}
 
 		logger.info('Downloaded files', { did, rkey, downloaded, failed })
-		await upsertSiteCache(did, rkey, recordCid, fileCids)
+		// cold_synced=false: we only populated hot/warm here, never S3. The firehose
+		// must treat S3 as not-yet-synced and do a full download (see revalidate below).
+		await upsertSiteCache(did, rkey, recordCid, fileCids, false)
 
 		// Enqueue revalidate so firehose-service backfills S3 (cold tier)
 		await enqueueRevalidate(did, rkey, `storage-miss:on-demand`)

@@ -90,6 +90,7 @@ await db`
         file_cids JSONB NOT NULL DEFAULT '{}',
         cached_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()),
         updated_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()),
+        cold_synced BOOLEAN NOT NULL DEFAULT true,
         PRIMARY KEY (did, rkey)
     )
 `

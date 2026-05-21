@@ -22,6 +22,7 @@ import {
 	isSupporter,
 	upsertSiteCache,
 	upsertSiteSettingsCache,
+	withSiteWriteLock,
 } from './db'
 import { deleteFile, listFiles, writeFile } from './storage'
 
@@ -592,9 +593,27 @@ async function downloadAndWriteBlob(did: string, rkey: string, file: FileInfo, p
 }
 
 /**
- * Handle a site create/update event
+ * Handle a site create/update event.
+ *
+ * Serialized per-site via the shared advisory lock so the firehose event loop,
+ * the revalidate worker, and the hosting-service on-demand path can never
+ * interleave their read-diff-write against S3 and the DB ledger for one site.
  */
 export async function handleSiteCreateOrUpdate(
+	did: string,
+	rkey: string,
+	record: WispFsRecord,
+	recordCid: string,
+	options?: {
+		forceRewriteHtml?: boolean
+		skipInvalidation?: boolean
+		forceDownload?: boolean
+	},
+): Promise<void> {
+	return withSiteWriteLock(did, rkey, () => handleSiteCreateOrUpdateLocked(did, rkey, record, recordCid, options))
+}
+
+async function handleSiteCreateOrUpdateLocked(
 	did: string,
 	rkey: string,
 	record: WispFsRecord,
@@ -659,6 +678,17 @@ export async function handleSiteCreateOrUpdate(
 		})
 	}
 
+	// The DB ledger (record_cid/file_cids) is only a trustworthy proxy for "this
+	// file is already in S3" when cold_synced is true. If a row exists but was
+	// written by the on-demand path (cold_synced=false), S3 was never populated,
+	// so an incremental diff would wrongly skip files. Force a full download in
+	// that case so S3 becomes the source of truth and the ledger is repaired.
+	const needsFullColdSync = !!existing && existing.cold_synced !== true
+	const effectiveForceDownload = forceDownload || needsFullColdSync
+	if (needsFullColdSync) {
+		logger.info(`Cold tier not yet synced for ${did}/${rkey}; forcing full download`, { did, rkey })
+	}
+
 	// Notify hosting-service that this site is about to be updated so it can
 	// show the "updating" page instead of serving stale or partially-updated files.
 	const invalidationToken = !options?.skipInvalidation ? crypto.randomUUID() : undefined
@@ -674,7 +704,7 @@ export async function handleSiteCreateOrUpdate(
 	// Find new or changed files
 	for (const file of newFiles) {
 		const shouldForceRewrite = forceRewriteHtml && isHtmlContent(file.path)
-		if (forceDownload || oldFileCids[file.path] !== file.cid || shouldForceRewrite) {
+		if (effectiveForceDownload || oldFileCids[file.path] !== file.cid || shouldForceRewrite) {
 			filesToDownload.push(file)
 		}
 	}
@@ -846,26 +876,31 @@ export async function handleSiteCreateOrUpdate(
 }
 
 /**
- * Handle a site delete event
+ * Handle a site delete event.
+ *
+ * Holds the same per-site write lock as create/update so a delete can't
+ * interleave with an in-flight sync (which would resurrect just-deleted files).
  */
 export async function handleSiteDelete(did: string, rkey: string): Promise<void> {
-	logger.info(`Deleting site ${did}/${rkey}`)
+	return withSiteWriteLock(did, rkey, async () => {
+		logger.info(`Deleting site ${did}/${rkey}`)
 
-	// List all files for this site and delete them
-	const prefix = `${did}/${rkey}/`
-	const keys = await listFiles(prefix)
+		// List all files for this site and delete them
+		const prefix = `${did}/${rkey}/`
+		const keys = await listFiles(prefix)
 
-	for (const key of keys) {
-		await deleteFile(key)
-	}
+		for (const key of keys) {
+			await deleteFile(key)
+		}
 
-	// Delete from DB
-	await deleteSiteCache(did, rkey)
+		// Delete from DB
+		await deleteSiteCache(did, rkey)
 
-	// Notify hosting-service to invalidate its local caches
-	await publishCacheInvalidation(did, rkey, 'delete')
+		// Notify hosting-service to invalidate its local caches
+		await publishCacheInvalidation(did, rkey, 'delete')
 
-	logger.info(`Deleted site ${did}/${rkey} (${keys.length} files)`)
+		logger.info(`Deleted site ${did}/${rkey} (${keys.length} files)`)
+	})
 }
 
 /**

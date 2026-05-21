@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type { SiteCache, SiteSettingsCache } from '@wispplace/database'
 import { createLogger } from '@wispplace/observability'
 import postgres from 'postgres'
@@ -11,11 +12,88 @@ const sql = postgres(config.databaseUrl, {
 	connect_timeout: 10,
 })
 
+/**
+ * Dedicated pool for advisory locks.
+ *
+ * A site-write lock is held for the entire duration of a site sync, which
+ * includes minutes of blob downloads. Holding those long-lived locks on the
+ * main query pool would starve ordinary queries (the connection-pooling
+ * starvation class of bug). Isolating them in their own small pool means a
+ * stuck/slow sync can only ever exhaust lock connections, never block reads.
+ */
+const lockSql = postgres(config.databaseUrl, {
+	max: 10,
+	idle_timeout: 30,
+	connect_timeout: 10,
+})
+
+/**
+ * Generate a numeric advisory-lock id from a string key.
+ *
+ * MUST stay byte-for-byte identical to the hosting-service implementation so the
+ * firehose, revalidate worker, and on-demand cache all contend for the SAME
+ * Postgres advisory lock when they target the same site key.
+ */
+function stringToLockId(key: string): bigint {
+	const hash = createHash('sha256').update(key).digest('hex')
+	const hashNum = BigInt(`0x${hash.substring(0, 16)}`)
+	return hashNum & 0x7fffffffffffffffn
+}
+
+/**
+ * The unified per-site write-lock key. Shared verbatim with the hosting-service
+ * on-demand path so all writers to a site's cache mutually exclude.
+ */
+export function siteWriteLockKey(did: string, rkey: string): string {
+	return `site-write:${did}:${rkey}`
+}
+
+/**
+ * Run `fn` while holding the per-site write lock, serializing all cache writers
+ * for `${did}/${rkey}` across drivers and instances.
+ *
+ * Uses a blocking acquire (firehose updates must not be dropped) bounded by
+ * lock_timeout so a stuck holder can't wedge the queue forever; on timeout it
+ * proceeds without the lock rather than losing the update.
+ */
+export async function withSiteWriteLock<T>(did: string, rkey: string, fn: () => Promise<T>): Promise<T> {
+	const lockId = Number(stringToLockId(siteWriteLockKey(did, rkey)))
+	const conn = await lockSql.reserve()
+	let held = false
+	try {
+		try {
+			await conn`SET lock_timeout = '120s'`
+			await conn`SELECT pg_advisory_lock(${lockId})`
+			held = true
+		} catch (err) {
+			logger.warn(`[DB] Could not acquire site-write lock for ${did}/${rkey}; proceeding without it`, {
+				did,
+				rkey,
+				error: err instanceof Error ? err.message : String(err),
+			})
+		}
+
+		if (!held) {
+			return await fn()
+		}
+
+		try {
+			return await fn()
+		} finally {
+			await conn`SELECT pg_advisory_unlock(${lockId})`.catch((err) => {
+				logger.error('[DB] Failed to release site-write lock', err, { did, rkey })
+			})
+		}
+	} finally {
+		conn.release()
+	}
+}
+
 // Read functions
 
 export async function getSiteCache(did: string, rkey: string): Promise<SiteCache | null> {
 	const result = await sql<SiteCache[]>`
-    SELECT did, rkey, record_cid, file_cids, cached_at, updated_at
+    SELECT did, rkey, record_cid, file_cids, cached_at, updated_at, cold_synced
     FROM site_cache
     WHERE did = ${did} AND rkey = ${rkey}
     LIMIT 1
@@ -113,17 +191,22 @@ export async function upsertSiteCache(
 	rkey: string,
 	recordCid: string,
 	fileCids: Record<string, string>,
+	// The firehose owns the S3 cold tier, so it always marks the row synced once
+	// it has finished writing files. Defaults to true to keep existing call sites
+	// (and the contract that this function is only called after S3 writes) intact.
+	coldSynced = true,
 ): Promise<void> {
 	logger.debug(`[DB] upsertSiteCache starting for ${did}/${rkey}`)
 	try {
 		await sql`
-      INSERT INTO site_cache (did, rkey, record_cid, file_cids, cached_at, updated_at)
-      VALUES (${did}, ${rkey}, ${recordCid}, ${sql.json(fileCids ?? {})}, EXTRACT(EPOCH FROM NOW()), EXTRACT(EPOCH FROM NOW()))
+      INSERT INTO site_cache (did, rkey, record_cid, file_cids, cached_at, updated_at, cold_synced)
+      VALUES (${did}, ${rkey}, ${recordCid}, ${sql.json(fileCids ?? {})}, EXTRACT(EPOCH FROM NOW()), EXTRACT(EPOCH FROM NOW()), ${coldSynced})
       ON CONFLICT (did, rkey)
       DO UPDATE SET
         record_cid = EXCLUDED.record_cid,
         file_cids = EXCLUDED.file_cids,
-        updated_at = EXTRACT(EPOCH FROM NOW())
+        updated_at = EXTRACT(EPOCH FROM NOW()),
+        cold_synced = EXCLUDED.cold_synced
     `
 		logger.debug(`[DB] upsertSiteCache completed for ${did}/${rkey}`)
 	} catch (err) {
@@ -210,7 +293,7 @@ export async function isSupporter(did: string): Promise<boolean> {
 }
 
 export async function closeDatabase(): Promise<void> {
-	await sql.end({ timeout: 5 })
+	await Promise.all([sql.end({ timeout: 5 }), lockSql.end({ timeout: 5 })])
 	logger.info('[DB] Database connections closed')
 }
 

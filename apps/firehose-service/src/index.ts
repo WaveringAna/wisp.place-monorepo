@@ -186,7 +186,13 @@ async function runBackfill(): Promise<void> {
 			}
 
 			const existingCache = await getSiteCache(site.did, site.rkey)
-			if (!forceRewriteHtml && !forceDownload && existingCache && result.cid === existingCache.record_cid) {
+			if (
+				!forceRewriteHtml &&
+				!forceDownload &&
+				existingCache &&
+				result.cid === existingCache.record_cid &&
+				existingCache.cold_synced === true
+			) {
 				logger.info(`Site already up to date: ${site.did}/${site.rkey}`)
 				skipped++
 				return

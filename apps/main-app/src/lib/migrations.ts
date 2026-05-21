@@ -72,6 +72,17 @@ export const runDatabaseMigrations = async (db: SQL): Promise<void> => {
 		{ silent: true },
 	)
 
+	// Existing rows are assumed already synced to S3 (firehose wrote them), so the
+	// column defaults to true to avoid a thundering-herd re-download on rollout.
+	// The on-demand path explicitly inserts cold_synced=false going forward.
+	await runMigration(
+		'add site_cache.cold_synced',
+		async () => {
+			await db`ALTER TABLE site_cache ADD COLUMN IF NOT EXISTS cold_synced BOOLEAN NOT NULL DEFAULT true`
+		},
+		{ silent: true },
+	)
+
 	// Remove the unique constraint on domains.did to allow multiple domains per user
 	await runMigration(
 		'drop legacy domains_did_key',

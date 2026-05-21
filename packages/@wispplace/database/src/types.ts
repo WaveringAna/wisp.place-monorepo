@@ -66,6 +66,12 @@ export interface SiteCache {
 	file_cids: Record<string, string> // path -> CID mapping
 	cached_at: number
 	updated_at: number
+	// True once the firehose-service has written every file to the S3 cold tier.
+	// The on-demand path (hosting-service) only populates local hot/warm tiers, so
+	// it writes this row with cold_synced=false to signal that S3 is NOT yet the
+	// source of truth and the firehose must do a full (re)download rather than
+	// trusting record_cid/file_cids as a proxy for "already in S3".
+	cold_synced?: boolean
 }
 
 /**
