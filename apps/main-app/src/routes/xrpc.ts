@@ -10,6 +10,7 @@ import {
 	PlaceWispV2DomainDelete,
 	PlaceWispV2DomainGetList,
 	PlaceWispV2DomainGetStatus,
+	PlaceWispV2DomainVerify,
 	PlaceWispV2SecretCreate,
 	PlaceWispV2SecretDelete,
 	PlaceWispV2SecretList,
@@ -20,7 +21,7 @@ import {
 } from '@wispplace/lexicons/atcute'
 import { createLogger } from '@wispplace/observability'
 import { Elysia } from 'elysia'
-
+import { publishDomainCacheInvalidation } from '../lib/cache-invalidation'
 import {
 	claimCustomDomain,
 	claimDomain,
@@ -37,8 +38,10 @@ import {
 	listWebhookSecrets,
 	rotateWebhookSecret,
 	updateCustomDomainRkey,
+	updateCustomDomainVerification,
 	updateWispDomainSite,
 } from '../lib/db'
+import { verifyCustomDomain } from '../lib/dns-verify'
 import { extractWispHandle, isValidHandle, normalizeDomain, toDomain, validateCustomDomain } from '../lib/domain-utils'
 
 const logger = createLogger('main-app')
@@ -87,6 +90,7 @@ const XRPC_NSIDS = {
 	claimSubdomain: 'place.wisp.v2.domain.claimSubdomain',
 	claim: 'place.wisp.v2.domain.claim',
 	delete: 'place.wisp.v2.domain.delete',
+	verify: 'place.wisp.v2.domain.verify',
 	deleteSite: 'place.wisp.v2.site.delete',
 	secretCreate: 'place.wisp.v2.secret.create',
 	secretList: 'place.wisp.v2.secret.list',
@@ -756,11 +760,11 @@ export const xrpcRoutes = () => {
 	})
 
 	addProcedureWithAliases(router, withNsid(PlaceWispV2DomainDelete.mainSchema as any, XRPC_NSIDS.delete), [], {
-		async handler({ params, request }) {
+		async handler({ input, request }) {
 			const auth = requireAuthenticated(authByRequest.get(request))
 			const did = auth.did as DidString
 
-			const domain = normalizeDomain(params.domain)
+			const domain = normalizeDomain(input.domain)
 			if (domain.length === 0) {
 				invalidDomain('domain is required')
 			}
@@ -788,6 +792,47 @@ export const xrpcRoutes = () => {
 			return json({
 				domain,
 				deleted: true,
+			})
+		},
+	})
+
+	addProcedureWithAliases(router, withNsid(PlaceWispV2DomainVerify.mainSchema as any, XRPC_NSIDS.verify), [], {
+		async handler({ input, request }) {
+			const auth = requireAuthenticated(authByRequest.get(request))
+			const did = auth.did as DidString
+
+			const domain = normalizeDomain(input.domain)
+			if (domain.length === 0) {
+				invalidDomain('domain is required')
+			}
+
+			// Only custom domains require DNS verification; wisp subdomains are
+			// implicitly verified, so there is nothing to check for those.
+			const registered = await isDomainRegistered(domain)
+			if (!registered.registered || registered.type !== 'custom') {
+				notFound()
+			}
+
+			const custom = await getCustomDomainInfo(domain)
+			if (!custom || custom.did !== did) {
+				notFound()
+			}
+
+			const id = custom.id as string
+			const result = await verifyCustomDomain(domain, did, id)
+
+			await updateCustomDomainVerification(id, result.verified)
+			await publishDomainCacheInvalidation(domain, 'custom', id)
+
+			return json({
+				domain,
+				kind: 'custom',
+				status: result.verified ? 'verified' : 'pendingVerification',
+				verified: result.verified,
+				error: result.verified ? undefined : result.error,
+				warning: result.warning,
+				txtFound: result.found?.txt?.join(', '),
+				cnameFound: result.found?.cname,
 			})
 		},
 	})
@@ -861,6 +906,7 @@ export const xrpcRoutes = () => {
 		claimSubdomain: (PlaceWispV2DomainClaimSubdomain.mainSchema as any).nsid,
 		claim: (PlaceWispV2DomainClaim.mainSchema as any).nsid,
 		delete: (PlaceWispV2DomainDelete.mainSchema as any).nsid,
+		verify: (PlaceWispV2DomainVerify.mainSchema as any).nsid,
 		deleteSite: (PlaceWispV2SiteDelete.mainSchema as any).nsid,
 	}
 	logger.info('[XRPC] Registered methods', {

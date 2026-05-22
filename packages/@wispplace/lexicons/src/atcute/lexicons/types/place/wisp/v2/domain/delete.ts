@@ -3,17 +3,20 @@ import * as v from "@atcute/lexicons/validations";
 import type {} from "@atcute/lexicons/ambient";
 
 const _mainSchema = /*#__PURE__*/ v.procedure("place.wisp.v2.domain.delete", {
-  params: /*#__PURE__*/ v.object({
-    /**
-     * Fully-qualified domain to delete (wisp subdomain or custom domain).
-     * @minLength 3
-     * @maxLength 253
-     */
-    domain: /*#__PURE__*/ v.constrain(/*#__PURE__*/ v.string(), [
-      /*#__PURE__*/ v.stringLength(3, 253),
-    ]),
-  }),
-  input: null,
+  params: null,
+  input: {
+    type: "lex",
+    schema: /*#__PURE__*/ v.object({
+      /**
+       * Fully-qualified domain to delete (wisp subdomain or custom domain).
+       * @minLength 3
+       * @maxLength 253
+       */
+      domain: /*#__PURE__*/ v.constrain(/*#__PURE__*/ v.string(), [
+        /*#__PURE__*/ v.stringLength(3, 253),
+      ]),
+    }),
+  },
   output: {
     type: "lex",
     schema: /*#__PURE__*/ v.object({
@@ -29,7 +32,8 @@ export interface mainSchema extends main$schematype {}
 
 export const mainSchema = _mainSchema as mainSchema;
 
-export interface $params extends v.InferInput<mainSchema["params"]> {}
+export interface $params {}
+export interface $input extends v.InferXRPCBodyInput<mainSchema["input"]> {}
 export interface $output extends v.InferXRPCBodyInput<mainSchema["output"]> {}
 
 declare module "@atcute/lexicons/ambient" {

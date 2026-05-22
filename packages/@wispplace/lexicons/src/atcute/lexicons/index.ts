@@ -7,6 +7,7 @@ export * as PlaceWispV2DomainClaimSubdomain from "./types/place/wisp/v2/domain/c
 export * as PlaceWispV2DomainDelete from "./types/place/wisp/v2/domain/delete.js";
 export * as PlaceWispV2DomainGetList from "./types/place/wisp/v2/domain/getList.js";
 export * as PlaceWispV2DomainGetStatus from "./types/place/wisp/v2/domain/getStatus.js";
+export * as PlaceWispV2DomainVerify from "./types/place/wisp/v2/domain/verify.js";
 export * as PlaceWispV2Domains from "./types/place/wisp/v2/domains.js";
 export * as PlaceWispV2SecretCreate from "./types/place/wisp/v2/secret/create.js";
 export * as PlaceWispV2SecretDelete from "./types/place/wisp/v2/secret/delete.js";

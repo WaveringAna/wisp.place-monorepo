@@ -10,6 +10,7 @@ import {
 	deleteDomain,
 	getDomainStatus,
 	mapDomainToSite,
+	verifyDomain,
 } from './commands/domain.ts'
 import { listDomains, listSites } from './commands/list.ts'
 import { pull } from './commands/pull.ts'
@@ -142,7 +143,10 @@ async function deleteSiteWithSelection(
 	}
 }
 
-program.name('wisp-cli').description('CLI for wisp.place - deploy static sites to the AT Protocol').version('1.1.2')
+program
+	.name('wisp-cli')
+	.description('CLI for wisp.place - deploy static sites to the AT Protocol')
+	.version('1.1.2')
 	.option('-q, --quiet', 'Suppress progress output — useful for CI/agents (also set via WISPCTL_NO_PROGRESS=1)')
 
 // Deploy command (default)
@@ -423,6 +427,24 @@ addXrpcAuthOptions(
 	}),
 )
 
+addXrpcAuthOptions(
+	domainCommand
+		.command('verify [handle]')
+		.description('Run DNS verification for a claimed custom domain')
+		.option('-d, --domain <domain>', 'Domain'),
+).action(
+	withExit(async (handle: string | undefined, options) => {
+		const domain =
+			options.domain ??
+			(await promptRequiredText('Domain', {
+				placeholder: 'example.com',
+				cancelMessage: 'Verify cancelled',
+				validate: (value) => (!value ? 'Domain is required' : undefined),
+			}))
+		await verifyDomain(handle, domain, options)
+	}),
+)
+
 const siteCommand = program.command('site').description('Manage sites with wisp XRPC').enablePositionalOptions()
 
 addXrpcAuthOptions(domainCommand).action(
@@ -435,6 +457,7 @@ addXrpcAuthOptions(domainCommand).action(
 				{ value: 'claim-subdomain', label: 'Claim wisp subdomain' },
 				{ value: 'status', label: 'Get domain status' },
 				{ value: 'add-site', label: 'Map domain to site' },
+				{ value: 'verify', label: 'Verify domain' },
 				{ value: 'delete', label: 'Delete domain' },
 			],
 			'Domain command cancelled',
@@ -482,6 +505,16 @@ addXrpcAuthOptions(domainCommand).action(
 				validate: (value) => (!value ? 'Site rkey is required' : undefined),
 			})
 			await mapDomainToSite(undefined, domain, site, options)
+			return
+		}
+
+		if (action === 'verify') {
+			const domain = await promptRequiredText('Domain', {
+				placeholder: 'example.com',
+				cancelMessage: 'Verify cancelled',
+				validate: (value) => (!value ? 'Domain is required' : undefined),
+			})
+			await verifyDomain(undefined, domain, options)
 			return
 		}
 

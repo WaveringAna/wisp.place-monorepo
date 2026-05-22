@@ -16,6 +16,7 @@ import * as PlaceWispV2DomainClaim from './types/place/wisp/v2/domain/claim.js'
 import * as PlaceWispV2DomainDelete from './types/place/wisp/v2/domain/delete.js'
 import * as PlaceWispV2DomainGetList from './types/place/wisp/v2/domain/getList.js'
 import * as PlaceWispV2DomainGetStatus from './types/place/wisp/v2/domain/getStatus.js'
+import * as PlaceWispV2DomainVerify from './types/place/wisp/v2/domain/verify.js'
 import * as PlaceWispV2SecretCreate from './types/place/wisp/v2/secret/create.js'
 import * as PlaceWispV2SecretDelete from './types/place/wisp/v2/secret/delete.js'
 import * as PlaceWispV2SecretList from './types/place/wisp/v2/secret/list.js'
@@ -148,6 +149,18 @@ export class PlaceWispV2DomainNS {
     >,
   ) {
     const nsid = 'place.wisp.v2.domain.getStatus' // @ts-ignore
+    return this._server.xrpc.method(nsid, cfg)
+  }
+
+  verify<A extends Auth = void>(
+    cfg: MethodConfigOrHandler<
+      A,
+      PlaceWispV2DomainVerify.QueryParams,
+      PlaceWispV2DomainVerify.HandlerInput,
+      PlaceWispV2DomainVerify.HandlerOutput
+    >,
+  ) {
+    const nsid = 'place.wisp.v2.domain.verify' // @ts-ignore
     return this._server.xrpc.method(nsid, cfg)
   }
 }

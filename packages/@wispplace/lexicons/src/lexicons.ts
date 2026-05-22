@@ -263,16 +263,19 @@ export const schemaDict = {
       main: {
         type: 'procedure',
         description: 'Delete a claimed domain owned by the authenticated DID.',
-        parameters: {
-          type: 'params',
-          required: ['domain'],
-          properties: {
-            domain: {
-              type: 'string',
-              description:
-                'Fully-qualified domain to delete (wisp subdomain or custom domain).',
-              minLength: 3,
-              maxLength: 253,
+        input: {
+          encoding: 'application/json',
+          schema: {
+            type: 'object',
+            required: ['domain'],
+            properties: {
+              domain: {
+                type: 'string',
+                description:
+                  'Fully-qualified domain to delete (wisp subdomain or custom domain).',
+                minLength: 3,
+                maxLength: 253,
+              },
             },
           },
         },
@@ -432,6 +435,87 @@ export const schemaDict = {
             },
           },
         },
+      },
+    },
+  },
+  PlaceWispV2DomainVerify: {
+    lexicon: 1,
+    id: 'place.wisp.v2.domain.verify',
+    defs: {
+      main: {
+        type: 'procedure',
+        description:
+          'Run DNS verification for a custom domain owned by the authenticated DID and update its verified status.',
+        input: {
+          encoding: 'application/json',
+          schema: {
+            type: 'object',
+            required: ['domain'],
+            properties: {
+              domain: {
+                type: 'string',
+                description:
+                  'Custom domain FQDN to verify (for example, example.com).',
+                minLength: 3,
+                maxLength: 253,
+              },
+            },
+          },
+        },
+        output: {
+          encoding: 'application/json',
+          schema: {
+            type: 'object',
+            required: ['domain', 'kind', 'status', 'verified'],
+            properties: {
+              domain: {
+                type: 'string',
+              },
+              kind: {
+                type: 'string',
+                enum: ['custom'],
+              },
+              status: {
+                type: 'string',
+                enum: ['pendingVerification', 'verified'],
+              },
+              verified: {
+                type: 'boolean',
+              },
+              error: {
+                type: 'string',
+                description:
+                  'Human-readable reason verification did not pass (when not verified).',
+              },
+              warning: {
+                type: 'string',
+                description:
+                  'Non-fatal advisory (for example, CNAME could not be confirmed due to flattening).',
+              },
+              txtFound: {
+                type: 'string',
+                description:
+                  'The TXT value observed during verification, if any.',
+              },
+              cnameFound: {
+                type: 'string',
+                description:
+                  'The CNAME target observed during verification, if any.',
+              },
+            },
+          },
+        },
+        errors: [
+          {
+            name: 'AuthenticationRequired',
+          },
+          {
+            name: 'InvalidDomain',
+          },
+          {
+            name: 'NotFound',
+          },
+        ],
       },
     },
   },
@@ -1398,6 +1482,7 @@ export const ids = {
   PlaceWispV2DomainDelete: 'place.wisp.v2.domain.delete',
   PlaceWispV2DomainGetList: 'place.wisp.v2.domain.getList',
   PlaceWispV2DomainGetStatus: 'place.wisp.v2.domain.getStatus',
+  PlaceWispV2DomainVerify: 'place.wisp.v2.domain.verify',
   PlaceWispV2Domains: 'place.wisp.v2.domains',
   PlaceWispFs: 'place.wisp.fs',
   PlaceWispV2SecretCreate: 'place.wisp.v2.secret.create',

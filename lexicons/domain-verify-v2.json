@@ -1,0 +1,69 @@
+{
+  "lexicon": 1,
+  "id": "place.wisp.v2.domain.verify",
+  "defs": {
+    "main": {
+      "type": "procedure",
+      "description": "Run DNS verification for a custom domain owned by the authenticated DID and update its verified status.",
+      "input": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["domain"],
+          "properties": {
+            "domain": {
+              "type": "string",
+              "description": "Custom domain FQDN to verify (for example, example.com).",
+              "minLength": 3,
+              "maxLength": 253
+            }
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["domain", "kind", "status", "verified"],
+          "properties": {
+            "domain": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": ["custom"]
+            },
+            "status": {
+              "type": "string",
+              "enum": ["pendingVerification", "verified"]
+            },
+            "verified": {
+              "type": "boolean"
+            },
+            "error": {
+              "type": "string",
+              "description": "Human-readable reason verification did not pass (when not verified)."
+            },
+            "warning": {
+              "type": "string",
+              "description": "Non-fatal advisory (for example, CNAME could not be confirmed due to flattening)."
+            },
+            "txtFound": {
+              "type": "string",
+              "description": "The TXT value observed during verification, if any."
+            },
+            "cnameFound": {
+              "type": "string",
+              "description": "The CNAME target observed during verification, if any."
+            }
+          }
+        }
+      },
+      "errors": [
+        { "name": "AuthenticationRequired" },
+        { "name": "InvalidDomain" },
+        { "name": "NotFound" }
+      ]
+    }
+  }
+}

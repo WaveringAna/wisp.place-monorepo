@@ -46,6 +46,10 @@
       "types": "./src/types/place/wisp/v2/domain/delete.ts",
       "default": "./src/types/place/wisp/v2/domain/delete.ts"
     },
+    "./types/place/wisp/v2/domain/verify": {
+      "types": "./src/types/place/wisp/v2/domain/verify.ts",
+      "default": "./src/types/place/wisp/v2/domain/verify.ts"
+    },
     "./types/place/wisp/v2/domain/getList": {
       "types": "./src/types/place/wisp/v2/domain/getList.ts",
       "default": "./src/types/place/wisp/v2/domain/getList.ts"

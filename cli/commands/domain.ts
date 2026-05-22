@@ -3,6 +3,7 @@ import type { OutputSchema as DomainClaimOutput } from '@wispplace/lexicons/type
 import type { OutputSchema as DomainClaimSubdomainOutput } from '@wispplace/lexicons/types/place/wisp/v2/domain/claimSubdomain'
 import type { OutputSchema as DomainDeleteOutput } from '@wispplace/lexicons/types/place/wisp/v2/domain/delete'
 import type { OutputSchema as DomainGetStatusOutput } from '@wispplace/lexicons/types/place/wisp/v2/domain/getStatus'
+import type { OutputSchema as DomainVerifyOutput } from '@wispplace/lexicons/types/place/wisp/v2/domain/verify'
 import type { OutputSchema as SiteDeleteOutput } from '@wispplace/lexicons/types/place/wisp/v2/site/delete'
 import { authenticateForXrpc, type XrpcCommandOptions } from '../lib/command-utils.ts'
 import { createSpinner, pc } from '../lib/progress.ts'
@@ -138,7 +139,7 @@ export async function deleteDomain(
 	const spinner = createSpinner(`Deleting ${domain}...`).start()
 	const data = await callWispXrpc<DomainDeleteOutput>(agent, 'place.wisp.v2.domain.delete', {
 		serviceDid,
-		params: { domain },
+		data: { domain },
 	})
 	spinner.succeed(`Deleted ${data.domain}`)
 
@@ -148,6 +149,36 @@ export async function deleteDomain(
 	}
 
 	console.log(`${pc.bold(data.domain)} deleted`)
+}
+
+export async function verifyDomain(
+	identifier: string | undefined,
+	domain: string,
+	options: DomainCommandOptions,
+): Promise<void> {
+	const { agent, serviceDid } = await authenticateForXrpc(identifier, options)
+
+	const spinner = createSpinner(`Verifying ${domain}...`).start()
+	const data = await callWispXrpc<DomainVerifyOutput>(agent, 'place.wisp.v2.domain.verify', {
+		serviceDid,
+		data: { domain },
+	})
+
+	if (data.verified) {
+		spinner.succeed(`Verified ${data.domain}`)
+	} else {
+		spinner.fail(`${data.domain} not verified${data.error ? `: ${data.error}` : ''}`)
+	}
+
+	if (options.json) {
+		console.log(JSON.stringify(data, null, 2))
+		return
+	}
+
+	console.log(`${pc.bold(data.domain)} ${data.verified ? pc.green('verified') : pc.yellow(data.status)}`)
+	if (data.warning) {
+		console.log(pc.yellow(`warning: ${data.warning}`))
+	}
 }
 
 export async function deleteSite(

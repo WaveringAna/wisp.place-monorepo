@@ -5,15 +5,18 @@
     "main": {
       "type": "procedure",
       "description": "Delete a claimed domain owned by the authenticated DID.",
-      "parameters": {
-        "type": "params",
-        "required": ["domain"],
-        "properties": {
-          "domain": {
-            "type": "string",
-            "description": "Fully-qualified domain to delete (wisp subdomain or custom domain).",
-            "minLength": 3,
-            "maxLength": 253
+      "input": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["domain"],
+          "properties": {
+            "domain": {
+              "type": "string",
+              "description": "Fully-qualified domain to delete (wisp subdomain or custom domain).",
+              "minLength": 3,
+              "maxLength": 253
+            }
           }
         }
       },
