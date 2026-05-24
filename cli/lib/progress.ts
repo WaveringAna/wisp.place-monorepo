@@ -20,8 +20,8 @@ export interface SpinnerLike {
 }
 
 export function createSpinner(text: string): SpinnerLike {
-	// when no tty is attached or WISPCTL_NO_PROGRESS is set, return a silent spinner
-	if (!process.stdout.isTTY || process.env.WISPCTL_NO_PROGRESS === '1') {
+	// when no tty is attached, or a headless env var is set, return a silent spinner
+	if (!process.stdout.isTTY || process.env.WISPCTL_NO_PROGRESS === '1' || process.env.CI === 'true') {
 		let currentText = text
 		return {
 			get text() {
