@@ -9,6 +9,8 @@ Wisp.place uses three custom AT Protocol lexicons to store site data in your PDS
 
 **[place.wisp.subfs](/lexicons/place-wisp-subfs)** — subtree records for splitting large sites across multiple records. Entries from subfs records are merged into the parent directory.
 
+**[place.wisp.settings](/lexicons/place-wisp-settings)** — per-site configuration: routing behavior, index files, directory listing, and custom HTTP headers.
+
 **[place.wisp.domain](/lexicons/place-wisp-domain)** — metadata record for claiming a wisp.place subdomain.
 
 **[place.wisp.v2.wh](/lexicons/place-wisp-wh)** — webhook record for receiving HTTP callbacks when AT Protocol records change.
