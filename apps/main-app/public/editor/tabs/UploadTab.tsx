@@ -1,4 +1,5 @@
 import { Button } from '@public/components/ui/button'
+import { Checkbox } from '@public/components/ui/checkbox'
 import { Input } from '@public/components/ui/input'
 import { Label } from '@public/components/ui/label'
 import { AlertCircle, CheckCircle2, ChevronDown, ChevronUp, Loader2, RefreshCw, Upload, XCircle } from 'lucide-react'
@@ -10,6 +11,20 @@ type FileStatus = 'pending' | 'checking' | 'uploading' | 'uploaded' | 'reused' |
 interface FileProgress {
 	name: string
 	status: FileStatus
+	error?: string
+}
+
+interface StandardSiteSummary {
+	enabled: boolean
+	detected: boolean
+	posts: number
+	score?: number
+	publicationUri?: string
+	documents?: {
+		createdOrUpdated: number
+		deleted: number
+		skipped: number
+	}
 	error?: string
 }
 
@@ -31,6 +46,8 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 	const [failedFiles, setFailedFiles] = useState<Array<{ name: string; index: number; error: string; size: number }>>(
 		[],
 	)
+	const [publishStandardSite, setPublishStandardSite] = useState(false)
+	const [standardSiteSummary, setStandardSiteSummary] = useState<StandardSiteSummary | null>(null)
 	const [uploadedCount, setUploadedCount] = useState(0)
 	const [fileProgressList, setFileProgressList] = useState<FileProgress[]>([])
 	const [showFileProgress, setShowFileProgress] = useState(false)
@@ -233,6 +250,8 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 				message = 'Creating manifest...'
 			} else if (progress.phase === 'finalizing') {
 				message = 'Finalizing upload...'
+			} else if (progress.phase === 'publishing_standard_site') {
+				message = 'Publishing standard.site records...'
 			}
 
 			setUploadProgress(message)
@@ -245,7 +264,9 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 			currentJobIdRef.current = null
 
 			const hasIssues =
-				(result.skippedFiles && result.skippedFiles.length > 0) || (result.failedFiles && result.failedFiles.length > 0)
+				(result.skippedFiles && result.skippedFiles.length > 0) ||
+				(result.failedFiles && result.failedFiles.length > 0) ||
+				!!result.standardSite?.error
 
 			// Update file progress list with failed files
 			if (result.failedFiles && result.failedFiles.length > 0) {
@@ -275,6 +296,7 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 			setSkippedFiles(result.skippedFiles || [])
 			setFailedFiles(result.failedFiles || [])
 			setUploadedCount(result.uploadedCount || result.fileCount || 0)
+			setStandardSiteSummary(result.standardSite || null)
 
 			// Debug: log failed files
 			console.log('Failed files:', result.failedFiles)
@@ -313,6 +335,7 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 				setFailedFiles([])
 				setUploadedCount(0)
 				setFileProgressList([])
+				setStandardSiteSummary(null)
 				setIsUploading(false)
 			}, resetDelay)
 		})
@@ -355,6 +378,7 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 		try {
 			const formData = new FormData()
 			formData.append('siteName', siteName)
+			formData.append('publishStandardSite', String(publishStandardSite))
 
 			if (selectedFiles) {
 				for (let i = 0; i < selectedFiles.length; i++) {
@@ -538,6 +562,21 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 					/>
 				</button>
 
+				<div className="flex items-start gap-2 border border-border/30 bg-muted/20 p-3">
+					<Checkbox
+						id="publish-standard-site"
+						checked={publishStandardSite}
+						onCheckedChange={(checked) => setPublishStandardSite(checked === true)}
+						disabled={isUploading}
+						className="mt-0.5"
+					/>
+					<div className="space-y-0.5">
+						<Label htmlFor="publish-standard-site" className="text-xs font-medium">
+							Auto-detect blog posts
+						</Label>
+					</div>
+				</div>
+
 				{/* Progress */}
 				{uploadProgress && (
 					<div className="space-y-2">
@@ -610,6 +649,53 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 										<div className="text-muted-foreground">…and {failedFiles.length - 10} more</div>
 									)}
 								</div>
+							</div>
+						)}
+
+						{standardSiteSummary && (
+							<div
+								className={`p-3 border text-xs space-y-1 ${
+									standardSiteSummary.error
+										? 'bg-red-500/10 border-red-500/20'
+										: standardSiteSummary.detected
+											? 'bg-green-500/10 border-green-500/20'
+											: 'bg-muted/40 border-border/30'
+								}`}
+							>
+								<div
+									className={`flex items-center gap-2 font-medium ${
+										standardSiteSummary.error
+											? 'text-red-400'
+											: standardSiteSummary.detected
+												? 'text-green-500'
+												: 'text-muted-foreground'
+									}`}
+								>
+									{standardSiteSummary.error ? (
+										<XCircle className="w-3 h-3 shrink-0" />
+									) : standardSiteSummary.detected ? (
+										<CheckCircle2 className="w-3 h-3 shrink-0" />
+									) : (
+										<AlertCircle className="w-3 h-3 shrink-0" />
+									)}
+									{standardSiteSummary.error
+										? 'standard.site publish failed'
+										: standardSiteSummary.detected
+											? `${standardSiteSummary.posts} blog post${standardSiteSummary.posts === 1 ? '' : 's'} published`
+											: 'No blog posts detected'}
+								</div>
+								{standardSiteSummary.documents && (
+									<p className="ml-5 text-muted-foreground">
+										{standardSiteSummary.documents.createdOrUpdated} document
+										{standardSiteSummary.documents.createdOrUpdated === 1 ? '' : 's'} written
+										{standardSiteSummary.documents.deleted > 0 &&
+											`, ${standardSiteSummary.documents.deleted} stale deleted`}
+									</p>
+								)}
+								{standardSiteSummary.publicationUri && (
+									<p className="ml-5 font-mono break-all text-muted-foreground">{standardSiteSummary.publicationUri}</p>
+								)}
+								{standardSiteSummary.error && <p className="ml-5 text-red-400">{standardSiteSummary.error}</p>}
 							</div>
 						)}
 

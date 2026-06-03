@@ -113,6 +113,7 @@
         "@wispplace/fs-utils": "workspace:*",
         "@wispplace/lexicons": "workspace:*",
         "@wispplace/observability": "workspace:*",
+        "@wispplace/standard-site": "workspace:*",
         "actor-typeahead": "^0.1.1",
         "atproto-ui": "^0.12.0",
         "bun-plugin-tailwind": "^0.1.2",
@@ -300,6 +301,10 @@
     },
     "packages/@wispplace/safe-fetch": {
       "name": "@wispplace/safe-fetch",
+      "version": "1.0.0",
+    },
+    "packages/@wispplace/standard-site": {
+      "name": "@wispplace/standard-site",
       "version": "1.0.0",
     },
     "packages/@wispplace/tiered-storage": {
@@ -1189,6 +1194,8 @@
     "@wispplace/page-generators": ["@wispplace/page-generators@workspace:packages/@wispplace/page-generators"],
 
     "@wispplace/safe-fetch": ["@wispplace/safe-fetch@workspace:packages/@wispplace/safe-fetch"],
+
+    "@wispplace/standard-site": ["@wispplace/standard-site@workspace:packages/@wispplace/standard-site"],
 
     "@wispplace/tiered-storage": ["@wispplace/tiered-storage@workspace:packages/@wispplace/tiered-storage"],
 

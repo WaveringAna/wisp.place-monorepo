@@ -27,6 +27,26 @@ import { getCachedSettings } from './utils'
 
 const logger = createLogger('file-serving')
 const STANDARD_CACHE_CONTROL = 'public, max-age=600'
+const IMMUTABLE_CACHE_CONTROL = 'public, max-age=31536000, immutable'
+const IMMUTABLE_EXTENSIONS = new Set([
+	'css',
+	'gif',
+	'ico',
+	'jpeg',
+	'jpg',
+	'js',
+	'json',
+	'map',
+	'mjs',
+	'otf',
+	'png',
+	'svg',
+	'ttf',
+	'wasm',
+	'webp',
+	'woff',
+	'woff2',
+])
 
 type FileStorageResult = StorageResult<Uint8Array>
 type FileForRequestResult = { result: FileStorageResult; filePath: string; wasRewritten: boolean }
@@ -39,6 +59,30 @@ type FileForRequestResult = { result: FileStorageResult; filePath: string; wasRe
 export function hasFileExtension(path: string): boolean {
 	const basename = path.split('/').pop() || ''
 	return /\.[a-zA-Z0-9]+$/.test(basename)
+}
+
+function getFinalExtension(path: string): string {
+	const basename = path.split('/').pop() || ''
+	const match = /\.([a-zA-Z0-9]+)$/.exec(basename)
+	return match?.[1]?.toLowerCase() ?? ''
+}
+
+function stripFinalExtension(path: string): string {
+	const basename = (path.split('/').pop() || '').replace(/\.map$/i, '')
+	return basename.replace(/\.[a-zA-Z0-9]+$/, '')
+}
+
+function hasFingerprintSuffix(path: string): boolean {
+	const stem = stripFinalExtension(path)
+	return /(?:^|[-.])[a-zA-Z0-9_-]{8,}$/.test(stem)
+}
+
+export function getCacheControlForPath(filePath: string): string {
+	if (IMMUTABLE_EXTENSIONS.has(getFinalExtension(filePath)) && hasFingerprintSuffix(filePath)) {
+		return IMMUTABLE_CACHE_CONTROL
+	}
+
+	return STANDARD_CACHE_CONTROL
 }
 
 /**
@@ -246,7 +290,7 @@ function buildResponseFromStorageResult(
 	const content = Buffer.from(result.data)
 	const meta = result.metadata.customMetadata as { encoding?: string; mimeType?: string } | undefined
 	const mimeType = meta?.mimeType || lookup(filePath) || 'application/octet-stream'
-	const cacheControl = STANDARD_CACHE_CONTROL
+	const cacheControl = getCacheControlForPath(filePath)
 	const etag = result.metadata.checksum ? `"${result.metadata.checksum}"` : undefined
 
 	// Handle conditional requests (If-None-Match → 304 Not Modified)
@@ -311,7 +355,7 @@ async function buildRewrittenHtmlResponse(
 		const content = Buffer.from(result.data)
 		const meta = result.metadata.customMetadata as { encoding?: string; mimeType?: string } | undefined
 		const mimeType = meta?.mimeType || lookup(filePath) || 'application/octet-stream'
-		const cacheControl = STANDARD_CACHE_CONTROL
+		const cacheControl = getCacheControlForPath(filePath)
 
 		const headers: Record<string, string> = {
 			'Content-Type': mimeType,

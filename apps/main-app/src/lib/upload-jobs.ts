@@ -11,7 +11,14 @@ export interface UploadProgress {
 	filesReused: number
 	currentFile?: string
 	currentFileStatus?: 'checking' | 'uploading' | 'uploaded' | 'reused' | 'failed'
-	phase: 'validating' | 'compressing' | 'uploading' | 'creating_manifest' | 'finalizing' | 'done'
+	phase:
+		| 'validating'
+		| 'compressing'
+		| 'uploading'
+		| 'creating_manifest'
+		| 'finalizing'
+		| 'publishing_standard_site'
+		| 'done'
 }
 
 export interface UploadJob {
@@ -30,6 +37,19 @@ export interface UploadJob {
 		failedFiles?: Array<{ name: string; index: number; error: string; size: number }>
 		uploadedCount?: number
 		hasFailures?: boolean
+		standardSite?: {
+			enabled: boolean
+			detected: boolean
+			posts: number
+			score?: number
+			publicationUri?: string
+			documents?: {
+				createdOrUpdated: number
+				deleted: number
+				skipped: number
+			}
+			error?: string
+		}
 	}
 	error?: string
 	createdAt: number

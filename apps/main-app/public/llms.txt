@@ -1,0 +1,646 @@
+# wisp.place
+
+wisp.place is a static site host for atproto. a site is stored in the user's repo as records and blobs:
+
+- file bytes are uploaded to the user's pds as blobs
+- `place.wisp.fs` is the main site manifest record
+- `place.wisp.subfs` records hold extra filesystem subtrees when a site is too large for one manifest
+- `place.wisp.settings` is optional per-site routing/header configuration
+- wisp's service xrpcs manage domains, site metadata, and webhook signing secrets
+
+public sites are served from:
+
+- `https://sites.wisp.place/{handle-or-did}/{site-rkey}`
+- claimed `*.wisp.place` subdomains
+- verified custom domains
+
+this guide assumes you already know atproto concepts like dids, pdss, records, blobs, at-uris, lexicons, service auth, and xrpc.
+
+## quick use with wispctl
+
+install:
+
+```bash
+npm install -g wispctl@latest
+```
+
+`wispctl` uses oauth by default. for ci/headless use, pass an app password with `--password`.
+
+global option:
+
+```bash
+wispctl --quiet ...
+```
+
+`--quiet` suppresses progress output and is useful for agents and ci.
+
+### deploy a site
+
+```bash
+wispctl deploy alice.example.com --path ./dist --site my-site
+```
+
+`deploy` is also the default command:
+
+```bash
+wispctl alice.example.com --path ./dist --site my-site
+```
+
+common deploy options:
+
+```bash
+wispctl deploy [handle] \
+  --path ./dist \
+  --site my-site \
+  --directory \
+  --spa \
+  --concurrency 3 \
+  --force-gzip \
+  --password "$APP_PASSWORD" \
+  --db ./state.sqlite \
+  --yes
+```
+
+deploy behavior:
+
+- `--path` is the local directory to publish.
+- `--site` is the `place.wisp.fs` record key and public site name. it defaults to the directory basename.
+- site names are lowercased and must fit atproto record-key-ish characters: `[a-zA-Z0-9._~:-]{1,512}`.
+- files are scanned recursively, excluding defaults plus `.wispignore`.
+- files are usually gzip-compressed when useful, uploaded as `application/octet-stream`, and served later with the original `mimeType`.
+- unchanged files reuse existing blob refs by cid.
+- large manifests are split into `place.wisp.subfs` records automatically.
+- `--directory` writes `place.wisp.settings` with directory listing enabled.
+- `--spa` writes `place.wisp.settings` with `spaMode: "index.html"`.
+
+after deploy, the site is available at:
+
+```text
+https://sites.wisp.place/{handle-or-did}/{site}
+```
+
+### pull a site
+
+```bash
+wispctl pull alice.example.com --site my-site --path ./my-site
+```
+
+pull reads the `place.wisp.fs` record, expands any `place.wisp.subfs` records, fetches blobs with `com.atproto.sync.getBlob`, decodes/decompresses as needed, and writes local files.
+
+### serve locally
+
+```bash
+wispctl serve alice.example.com --site my-site --path .wisp-serve --port 8080
+```
+
+optional routing modes:
+
+```bash
+wispctl serve alice.example.com --site my-site --spa index.html
+wispctl serve alice.example.com --site my-site --directory-listing
+```
+
+serve downloads/caches the site locally, serves it over http, and watches the firehose for `place.wisp.fs` and `place.wisp.settings` changes.
+
+### domains
+
+claim a custom domain:
+
+```bash
+wispctl domain claim alice.example.com --domain example.com --site my-site
+```
+
+claim a wisp subdomain:
+
+```bash
+wispctl domain claim-subdomain alice.example.com --subdomain alice --site my-site
+```
+
+check status:
+
+```bash
+wispctl domain status alice.example.com --domain example.com
+```
+
+map a domain to a site:
+
+```bash
+wispctl domain add-site alice.example.com --domain example.com --site my-site
+```
+
+run custom-domain dns verification:
+
+```bash
+wispctl domain verify alice.example.com --domain example.com
+```
+
+delete a domain:
+
+```bash
+wispctl domain delete alice.example.com --domain example.com
+```
+
+notes:
+
+- `domain` also has alias `domains`.
+- `claim-subdomain` takes only the label, for example `alice`, not `alice.wisp.place`.
+- custom domain claim returns dns instructions:
+  - txt name: `_wisp.{domain}`
+  - txt value: caller did
+  - cname target: `{challengeId}.dns.wisp.place`
+- wisp subdomains are verified immediately.
+- custom domains must pass dns verification.
+
+### list and delete sites
+
+```bash
+wispctl list domains alice.example.com
+wispctl list sites alice.example.com
+wispctl site delete alice.example.com --site my-site --yes
+```
+
+most domain/list/site commands support:
+
+```bash
+--json                 # raw json output
+--password <password>  # app password
+--db <path>            # oauth session db
+--service <did:...>    # service did, default did:web:wisp.place
+```
+
+`site delete` removes wisp service metadata and unmaps domains. it should not be interpreted as deleting every blob from the user's pds.
+
+### login/logout
+
+```bash
+wispctl login alice.example.com
+wispctl logout
+wispctl logout --all
+```
+
+`login` stores an oauth session for the current directory. `logout` clears the current directory session or all sessions.
+
+## how records model a site
+
+a wisp site is a virtual filesystem tree.
+
+`place.wisp.fs` is the root manifest:
+
+- one record equals one site
+- collection: `place.wisp.fs`
+- record key: the site name, for example `my-site`
+- required `site` field should match the record key
+- required `root` field is a directory node
+- file nodes point at pds blobs
+- subfs nodes point at `place.wisp.subfs` records by at-uri
+
+`place.wisp.subfs` is a subtree:
+
+- collection: `place.wisp.subfs`
+- no `site` field
+- stores a directory root
+- can reference other subfs records
+- used to keep large sites under record size limits
+
+`place.wisp.settings` configures serving behavior:
+
+- collection: `place.wisp.settings`
+- record key: same as the site rkey
+- optional. if absent, wisp uses default static file behavior
+
+file content handling:
+
+- blob bytes may be gzip-compressed when `encoding: "gzip"`
+- blob bytes may be base64 text when `base64: true`
+- when both are present, decode base64 first, then gunzip
+- serve the response using the node's `mimeType` when present
+
+subfs expansion:
+
+- in `place.wisp.fs#subfs`, `flat` defaults to true
+- `flat: true` means merge the referenced subfs root entries into the parent directory
+- `flat: false` means place the referenced entries in a directory named after the entry
+- in `place.wisp.subfs#subfs`, there is no `flat`; nested subfs references are treated as merged subtrees
+
+## typescript interfaces
+
+these are the practical shapes agents usually need.
+
+```ts
+// place.wisp.fs
+interface FsMain {
+  $type: 'place.wisp.fs'
+  site: string
+  root: FsDirectory
+  fileCount?: number
+  createdAt: string
+}
+
+interface FsFile {
+  $type?: 'place.wisp.fs#file'
+  type: 'file'
+  blob: BlobRef
+  encoding?: 'gzip'
+  mimeType?: string
+  base64?: boolean
+}
+
+interface FsDirectory {
+  $type?: 'place.wisp.fs#directory'
+  type: 'directory'
+  entries: FsEntry[]
+}
+
+interface FsEntry {
+  $type?: 'place.wisp.fs#entry'
+  name: string
+  node: FsFile | FsDirectory | FsSubfs | { $type: string }
+}
+
+interface FsSubfs {
+  $type?: 'place.wisp.fs#subfs'
+  type: 'subfs'
+  subject: string // at-uri to place.wisp.subfs
+  flat?: boolean
+}
+```
+
+```ts
+// place.wisp.subfs
+interface SubfsMain {
+  $type: 'place.wisp.subfs'
+  root: SubfsDirectory
+  fileCount?: number
+  createdAt: string
+}
+
+interface SubfsFile {
+  $type?: 'place.wisp.subfs#file'
+  type: 'file'
+  blob: BlobRef
+  encoding?: 'gzip'
+  mimeType?: string
+  base64?: boolean
+}
+
+interface SubfsDirectory {
+  $type?: 'place.wisp.subfs#directory'
+  type: 'directory'
+  entries: SubfsEntry[]
+}
+
+interface SubfsEntry {
+  $type?: 'place.wisp.subfs#entry'
+  name: string
+  node: SubfsFile | SubfsDirectory | SubfsSubfs | { $type: string }
+}
+
+interface SubfsSubfs {
+  $type?: 'place.wisp.subfs#subfs'
+  type: 'subfs'
+  subject: string // at-uri to another place.wisp.subfs
+}
+```
+
+```ts
+// place.wisp.settings
+interface SettingsMain {
+  $type: 'place.wisp.settings'
+  directoryListing?: boolean
+  spaMode?: string
+  custom404?: string
+  indexFiles?: string[]
+  cleanUrls?: boolean
+  headers?: CustomHeader[]
+}
+
+interface CustomHeader {
+  $type?: 'place.wisp.settings#customHeader'
+  name: string
+  value: string
+  path?: string
+}
+```
+
+## raw lexicons
+
+### place.wisp.fs
+
+```json
+{
+  "lexicon": 1,
+  "id": "place.wisp.fs",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "Virtual filesystem manifest for a Wisp site",
+      "record": {
+        "type": "object",
+        "required": ["site", "root", "createdAt"],
+        "properties": {
+          "site": { "type": "string" },
+          "root": { "type": "ref", "ref": "#directory" },
+          "fileCount": { "type": "integer", "minimum": 0, "maximum": 1000 },
+          "createdAt": { "type": "string", "format": "datetime" }
+        }
+      }
+    },
+    "file": {
+      "type": "object",
+      "required": ["type", "blob"],
+      "properties": {
+        "type": { "type": "string", "const": "file" },
+        "blob": { "type": "blob", "accept": ["*/*"], "maxSize": 1000000000, "description": "Content blob ref" },
+        "encoding": { "type": "string", "enum": ["gzip"], "description": "Content encoding (e.g., gzip for compressed files)" },
+        "mimeType": { "type": "string", "description": "Original MIME type before compression" },
+        "base64": { "type": "boolean", "description": "True if blob content is base64-encoded (used to bypass PDS content sniffing)" }
+      }
+    },
+    "directory": {
+      "type": "object",
+      "required": ["type", "entries"],
+      "properties": {
+        "type": { "type": "string", "const": "directory" },
+        "entries": { "type": "array", "maxLength": 500, "items": { "type": "ref", "ref": "#entry" } }
+      }
+    },
+    "entry": {
+      "type": "object",
+      "required": ["name", "node"],
+      "properties": {
+        "name": { "type": "string", "maxLength": 255 },
+        "node": { "type": "union", "refs": ["#file", "#directory", "#subfs"] }
+      }
+    },
+    "subfs": {
+      "type": "object",
+      "required": ["type", "subject"],
+      "properties": {
+        "type": { "type": "string", "const": "subfs" },
+        "subject": { "type": "string", "format": "at-uri", "description": "AT-URI pointing to a place.wisp.subfs record containing this subtree." },
+        "flat": { "type": "boolean", "description": "If true (default), the subfs record's root entries are merged (flattened) into the parent directory, replacing the subfs entry. If false, the subfs entries are placed in a subdirectory with the subfs entry's name. Flat merging is useful for splitting large directories across multiple records while maintaining a flat structure." }
+      }
+    }
+  }
+}
+```
+
+### place.wisp.subfs
+
+```json
+{
+  "lexicon": 1,
+  "id": "place.wisp.subfs",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "Virtual filesystem subtree referenced by place.wisp.fs records. When a subfs entry is expanded, its root entries are merged (flattened) into the parent directory, allowing large directories to be split across multiple records while maintaining a flat structure.",
+      "record": {
+        "type": "object",
+        "required": ["root", "createdAt"],
+        "properties": {
+          "root": { "type": "ref", "ref": "#directory" },
+          "fileCount": { "type": "integer", "minimum": 0, "maximum": 1000 },
+          "createdAt": { "type": "string", "format": "datetime" }
+        }
+      }
+    },
+    "file": {
+      "type": "object",
+      "required": ["type", "blob"],
+      "properties": {
+        "type": { "type": "string", "const": "file" },
+        "blob": { "type": "blob", "accept": ["*/*"], "maxSize": 1000000000, "description": "Content blob ref" },
+        "encoding": { "type": "string", "enum": ["gzip"], "description": "Content encoding (e.g., gzip for compressed files)" },
+        "mimeType": { "type": "string", "description": "Original MIME type before compression" },
+        "base64": { "type": "boolean", "description": "True if blob content is base64-encoded (used to bypass PDS content sniffing)" }
+      }
+    },
+    "directory": {
+      "type": "object",
+      "required": ["type", "entries"],
+      "properties": {
+        "type": { "type": "string", "const": "directory" },
+        "entries": { "type": "array", "maxLength": 500, "items": { "type": "ref", "ref": "#entry" } }
+      }
+    },
+    "entry": {
+      "type": "object",
+      "required": ["name", "node"],
+      "properties": {
+        "name": { "type": "string", "maxLength": 255 },
+        "node": { "type": "union", "refs": ["#file", "#directory", "#subfs"] }
+      }
+    },
+    "subfs": {
+      "type": "object",
+      "required": ["type", "subject"],
+      "properties": {
+        "type": { "type": "string", "const": "subfs" },
+        "subject": { "type": "string", "format": "at-uri", "description": "AT-URI pointing to another place.wisp.subfs record for nested subtrees. When expanded, the referenced record's root entries are merged (flattened) into the parent directory, allowing recursive splitting of large directory structures." }
+      }
+    }
+  }
+}
+```
+
+### place.wisp.settings
+
+```json
+{
+  "lexicon": 1,
+  "id": "place.wisp.settings",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "Configuration settings for a static site hosted on wisp.place",
+      "key": "any",
+      "record": {
+        "type": "object",
+        "properties": {
+          "directoryListing": { "type": "boolean", "description": "Enable directory listing mode for paths that resolve to directories without an index file. Incompatible with spaMode.", "default": false },
+          "spaMode": { "type": "string", "description": "File to serve for all routes (e.g., 'index.html'). When set, enables SPA mode where all non-file requests are routed to this file. Incompatible with directoryListing and custom404.", "maxLength": 500 },
+          "custom404": { "type": "string", "description": "Custom 404 error page file path. Incompatible with directoryListing and spaMode.", "maxLength": 500 },
+          "indexFiles": { "type": "array", "description": "Ordered list of files to try when serving a directory. Defaults to ['index.html'] if not specified.", "items": { "type": "string", "maxLength": 255 }, "maxLength": 10 },
+          "cleanUrls": { "type": "boolean", "description": "Enable clean URL routing. When enabled, '/about' will attempt to serve '/about.html' or '/about/index.html' automatically.", "default": false },
+          "headers": { "type": "array", "description": "Custom HTTP headers to set on responses", "items": { "type": "ref", "ref": "#customHeader" }, "maxLength": 50 }
+        }
+      }
+    },
+    "customHeader": {
+      "type": "object",
+      "description": "Custom HTTP header configuration",
+      "required": ["name", "value"],
+      "properties": {
+        "name": { "type": "string", "description": "HTTP header name (e.g., 'Cache-Control', 'X-Frame-Options')", "maxLength": 100 },
+        "value": { "type": "string", "description": "HTTP header value", "maxLength": 1000 },
+        "path": { "type": "string", "description": "Optional glob pattern to apply this header to specific paths (e.g., '*.html', '/assets/*'). If not specified, applies to all paths.", "maxLength": 500 }
+      }
+    }
+  }
+}
+```
+
+## settings behavior
+
+`directoryListing`: if a url resolves to a directory with no index file, wisp renders a generated directory listing instead of 404.
+
+`spaMode`: path to a fallback file, usually `index.html`, used for single page app routing when a request does not match a file.
+
+`custom404`: path to a file used as the 404 response body.
+
+`indexFiles`: ordered filenames to try for directory requests. default behavior is `["index.html"]`.
+
+`cleanUrls`: lets paths like `/about` try `/about.html` and `/about/index.html`.
+
+`headers`: custom response headers. if `path` is omitted, the header applies globally. if `path` is present, it is a glob such as `*.html` or `/assets/*`.
+
+`directoryListing`, `spaMode`, and `custom404` are intended as mutually exclusive fallback modes.
+
+## service xrpc endpoints
+
+wisp serves service xrpcs at:
+
+```text
+https://wisp.place/xrpc/{nsid}
+```
+
+authenticated endpoints require a service-auth jwt in:
+
+```http
+Authorization: Bearer <token>
+```
+
+the token must be scoped to the called nsid via the `lxm` claim. `place.wisp.v2.domain.getStatus` and `place.wisp.v2.site.getDomains` are public; `getStatus` returns more ownership-sensitive information when authenticated.
+
+the server accepts canonical nsids plus some aliases:
+
+- `place.wisp.v2.domain.add-site`, `place.wisp.v2.domain.addsite`
+- `place.wisp.v2.domain.claim-subdomain`, `place.wisp.v2.domain.claimsubdomain`
+- `place.wisp.v2.domain.get-list`, `place.wisp.v2.domain.getlist`
+- `place.wisp.v2.domain.get-status`, `place.wisp.v2.domain.getstatus`
+- `place.wisp.v2.site.delete-site`, `place.wisp.v2.site.deletesite`
+- `place.wisp.v2.site.get-domains`, `place.wisp.v2.site.getdomains`
+- `place.wisp.v2.site.get-list`, `place.wisp.v2.site.getlist`
+
+### domain xrpcs
+
+`place.wisp.v2.domain.getStatus` query, public/optional auth:
+
+- params: `{ domain: string }`
+- output: `{ domain, status, kind?, verified?, siteRkey?, lastCheckedAt?, lastError? }`
+- `status`: `unclaimed | pendingVerification | verified | alreadyClaimed`
+- `kind`: `wisp | custom`
+
+`place.wisp.v2.domain.getList` query, auth required:
+
+- output: `{ domains: DomainSummary[] }`
+- `DomainSummary`: `{ domain, kind, status, verified, siteRkey?, lastCheckedAt? }`
+- errors: `AuthenticationRequired`, `InvalidRequest`
+
+`place.wisp.v2.domain.claimSubdomain` procedure, auth required:
+
+- input: `{ handle: string, siteRkey?: string }`
+- `handle` is only the `*.wisp.place` label
+- output: `{ domain, kind: "wisp", status: "verified" | "alreadyClaimed", siteRkey? }`
+- errors: `AuthenticationRequired`, `InvalidDomain`, `AlreadyClaimed`, `DomainLimitReached`, `RateLimitExceeded`
+
+`place.wisp.v2.domain.claim` procedure, auth required:
+
+- input: `{ domain: string, siteRkey?: string }`
+- custom domains only
+- output: `{ domain, kind: "custom", status, challengeId?, txtName?, txtValue?, cnameTarget?, siteRkey? }`
+- `status`: `alreadyClaimed | pendingVerification | verified`
+- errors: `AuthenticationRequired`, `InvalidDomain`, `AlreadyClaimed`, `DomainLimitReached`, `RateLimitExceeded`
+
+`place.wisp.v2.domain.addSite` procedure, auth required:
+
+- input: `{ domain: string, siteRkey: string }`
+- caller must own both the domain and site
+- output: `{ domain, kind, status, siteRkey, mapped: true }`
+- errors: `AuthenticationRequired`, `InvalidDomain`, `InvalidRequest`, `NotFound`
+
+`place.wisp.v2.domain.verify` procedure, auth required:
+
+- input: `{ domain: string }`
+- custom domains only
+- output: `{ domain, kind: "custom", status, verified, error?, warning?, txtFound?, cnameFound? }`
+- errors: `AuthenticationRequired`, `InvalidDomain`, `NotFound`
+
+`place.wisp.v2.domain.delete` procedure, auth required:
+
+- input: `{ domain: string }`
+- output: `{ domain, deleted: true }`
+- errors: `AuthenticationRequired`, `InvalidDomain`, `NotFound`
+
+### site xrpcs
+
+`place.wisp.v2.site.getList` query, auth required:
+
+- output: `{ sites: SiteSummary[] }`
+- `SiteSummary`: `{ siteRkey, displayName?, createdAt?, updatedAt?, domains }`
+- `domains`: `{ domain, kind, status, verified }[]`
+- errors: `AuthenticationRequired`
+
+`place.wisp.v2.site.getDomains` query, public:
+
+- params: `{ did: string, rkey: string }`
+- output: `{ domains: SiteDomain[] }`
+- `SiteDomain`: `{ domain, kind, status, verified }`
+
+`place.wisp.v2.site.delete` procedure, auth required:
+
+- input: `{ siteRkey: string }`
+- output: `{ siteRkey, deleted: true, unmappedDomains }`
+- `unmappedDomains`: `{ domain, kind, status }[]`
+- errors: `AuthenticationRequired`, `InvalidRequest`, `NotFound`
+
+### signing secret xrpcs
+
+these manage server-side webhook signing secrets. tokens are returned only on create/rotate, never on list.
+
+`place.wisp.v2.secret.create` procedure, auth required:
+
+- input: `{ name: string }`
+- output: `{ name, token, createdAt }`
+- errors: `AuthenticationRequired`, `InvalidRequest`, `AlreadyExists`
+
+`place.wisp.v2.secret.list` query, auth required:
+
+- output: `{ secrets: { name, createdAt, lastRotatedAt? }[] }`
+- errors: `AuthenticationRequired`
+
+`place.wisp.v2.secret.rotate` procedure, auth required:
+
+- input: `{ name: string }`
+- output: `{ name, token, rotatedAt }`
+- errors: `AuthenticationRequired`, `NotFound`
+
+`place.wisp.v2.secret.delete` procedure, auth required:
+
+- input: `{ name: string }`
+- output: empty object/response
+- errors: `AuthenticationRequired`, `NotFound`
+
+## atproto calls an agent may use directly
+
+to publish without `wispctl`, an atproto-aware agent generally does this:
+
+1. upload processed file bytes with `com.atproto.repo.uploadBlob`
+2. build a `place.wisp.fs` tree containing blob refs
+3. if needed, create `place.wisp.subfs` records and reference them from the fs tree
+4. write the main record with `com.atproto.repo.putRecord`, collection `place.wisp.fs`, rkey = site name
+5. optionally write `place.wisp.settings`, same rkey as the site
+6. optionally call wisp service xrpcs to claim/map domains
+
+to read a site:
+
+1. fetch `place.wisp.fs` with `com.atproto.repo.getRecord`
+2. recursively fetch any referenced `place.wisp.subfs` records
+3. expand the virtual filesystem
+4. fetch blobs with `com.atproto.sync.getBlob`
+5. decode base64 if `base64: true`
+6. gunzip if `encoding: "gzip"`
+7. serve/write bytes using `mimeType`
+
+important: the public hosting/caching service observes repo changes asynchronously. a freshly written record may take a moment to be reflected at the public url.
