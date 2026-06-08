@@ -7,6 +7,7 @@ export {
 	normalizeSitePath,
 	stripUploadRoot,
 } from './detection'
+export { buildStandardDocumentUri, injectStandardSiteDocumentLink } from './injection'
 export { documentRkeyForPath, publishStandardSite } from './publication'
 export type {
 	BlobObject,

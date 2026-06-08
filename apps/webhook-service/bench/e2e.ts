@@ -315,7 +315,7 @@ async function run() {
 				createdAt: new Date().toISOString(),
 			},
 		)
-		const postRkey = postUri.split('/').at(-1)!
+		const postRkey = postUri.split('/').pop()!
 		createdRecords.push({ collection: 'app.bsky.feed.post', rkey: postRkey })
 		console.log(`  created ${postUri}`)
 
@@ -330,7 +330,7 @@ async function run() {
 			subject: { uri: postUri, cid: postCid },
 			createdAt: new Date().toISOString(),
 		})
-		const likeRkey = likeUri.split('/').at(-1)!
+		const likeRkey = likeUri.split('/').pop()!
 		createdRecords.push({ collection: 'app.bsky.feed.like', rkey: likeRkey })
 		console.log(`  created ${likeUri}`)
 
@@ -385,7 +385,7 @@ async function run() {
 			}, EVENT_TIMEOUT_MS)
 		})
 
-		const signedDelivery = deliveries.at(-1)!
+		const signedDelivery = deliveries[deliveries.length - 1]!
 		if (!signedDelivery.signature) throw new Error('Expected X-Webhook-Signature header but got none')
 
 		const expected = `sha256=${createHmac('sha256', secretToken).update(signedDelivery.rawBody).digest('hex')}`

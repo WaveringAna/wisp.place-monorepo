@@ -48,6 +48,7 @@ export interface UploadJob {
 				deleted: number
 				skipped: number
 			}
+			linksInjected?: number
 			error?: string
 		}
 	}

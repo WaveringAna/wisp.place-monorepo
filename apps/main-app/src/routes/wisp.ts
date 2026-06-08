@@ -28,8 +28,12 @@ import type { Directory } from '@wispplace/lexicons/types/place/wisp/fs'
 import { createLogger } from '@wispplace/observability'
 import {
 	buildPublicationWellKnownFile,
+	buildStandardDocumentUri,
 	buildWispSiteUrl,
+	type DetectedStandardSitePost,
 	detectStandardSite,
+	injectStandardSiteDocumentLink,
+	normalizeSitePath,
 	publishStandardSite,
 	type RepoAgent,
 	type StaticSiteFile,
@@ -94,6 +98,113 @@ function inferSharedUploadRoot(files: File[]): string | undefined {
 
 function withUploadRoot(path: string, uploadRoot: string | undefined): string {
 	return uploadRoot ? `${uploadRoot}/${path}` : `./${path}`
+}
+
+function isHtmlPath(path: string): boolean {
+	return /\.html?$/i.test(path)
+}
+
+function htmlCandidatesForPost(post: DetectedStandardSitePost): string[] {
+	const candidates: string[] = []
+	const filePath = normalizeSitePath(post.filePath)
+
+	if (isHtmlPath(filePath)) {
+		candidates.push(filePath)
+	}
+
+	const routePath = post.path.replace(/^\/+/, '').replace(/\/+$/, '')
+	if (routePath.length === 0) {
+		candidates.push('index.html')
+	} else {
+		candidates.push(`${routePath}/index.html`, `${routePath}.html`)
+	}
+
+	return [...new Set(candidates.map(normalizeSitePath))]
+}
+
+function decodeStaticSiteFileContent(content: StaticSiteFile['content']): string | undefined {
+	if (typeof content === 'string') return content
+	if (content instanceof ArrayBuffer) return new TextDecoder().decode(content)
+	if (ArrayBuffer.isView(content)) return new TextDecoder().decode(content)
+	return undefined
+}
+
+function hasSharedPathRoot(paths: string[]): boolean {
+	const pathsWithSegments = paths.filter((path) => path.includes('/'))
+	if (pathsWithSegments.length === 0 || pathsWithSegments.length !== paths.length) return false
+
+	const firstSegment = pathsWithSegments[0]?.split('/')[0]
+	if (!firstSegment) return false
+
+	return pathsWithSegments.every((path) => path.split('/')[0] === firstSegment)
+}
+
+function normalizeUploadLookupPath(path: string, shouldStripRoot: boolean): string {
+	return shouldStripRoot ? stripUploadRoot(path) : normalizeSitePath(path)
+}
+
+function injectStandardSiteLinksIntoUploadBuffers(options: {
+	did: string
+	posts: DetectedStandardSitePost[]
+	uploadedFiles: UploadedFile[]
+	standardSiteFiles: StaticSiteFile[]
+}): number {
+	const uploadedFileIndexes = new Map<string, number>()
+	const standardSiteFileIndexes = new Map<string, number>()
+	const shouldStripRoot = hasSharedPathRoot(options.uploadedFiles.map((file) => normalizeSitePath(file.name)))
+
+	options.uploadedFiles.forEach((file, index) => {
+		uploadedFileIndexes.set(normalizeUploadLookupPath(file.name, shouldStripRoot), index)
+	})
+	options.standardSiteFiles.forEach((file, index) => {
+		standardSiteFileIndexes.set(normalizeUploadLookupPath(file.path, shouldStripRoot), index)
+	})
+
+	let injected = 0
+	const touchedFiles = new Set<string>()
+
+	for (const post of options.posts) {
+		const htmlPath = htmlCandidatesForPost(post).find((candidate) => uploadedFileIndexes.has(candidate))
+		if (!htmlPath || touchedFiles.has(htmlPath)) continue
+
+		const uploadIndex = uploadedFileIndexes.get(htmlPath)
+		const staticIndex = standardSiteFileIndexes.get(htmlPath)
+		if (uploadIndex === undefined || staticIndex === undefined) continue
+
+		const uploadFile = options.uploadedFiles[uploadIndex]
+		const staticFile = options.standardSiteFiles[staticIndex]
+		if (!uploadFile || !staticFile || !isHtmlPath(normalizeUploadLookupPath(uploadFile.name, shouldStripRoot))) continue
+
+		const html = decodeStaticSiteFileContent(staticFile.content)
+		if (!html) continue
+
+		const documentUri = buildStandardDocumentUri(options.did, post.path)
+		const result = injectStandardSiteDocumentLink(html, documentUri)
+		if (!result.changed) continue
+
+		const rewrittenContent = Buffer.from(result.html)
+		const originalMimeType = uploadFile.originalMimeType || uploadFile.mimeType
+		const normalizedPath = stripUploadRoot(uploadFile.name)
+		const shouldCompress = shouldCompressFile(originalMimeType, normalizedPath)
+		const finalContent = shouldCompress ? compressFile(rewrittenContent) : rewrittenContent
+
+		options.uploadedFiles[uploadIndex] = {
+			...uploadFile,
+			content: finalContent,
+			size: finalContent.length,
+			compressed: shouldCompress,
+			originalMimeType,
+		}
+		options.standardSiteFiles[staticIndex] = {
+			...staticFile,
+			content: rewrittenContent,
+			size: rewrittenContent.length,
+		}
+		touchedFiles.add(htmlPath)
+		injected++
+	}
+
+	return injected
 }
 
 async function processUploadInBackground(
@@ -311,10 +422,20 @@ async function processUploadInBackground(
 			}
 
 			if (detected.detected) {
+				const linksInjected = injectStandardSiteLinksIntoUploadBuffers({
+					did,
+					posts: detected.posts,
+					uploadedFiles,
+					standardSiteFiles,
+				})
 				const uploadRoot = inferSharedUploadRoot(fileArray)
 				const wellKnown = buildPublicationWellKnownFile(did, siteName)
 				const wellKnownContent = Buffer.from(String(wellKnown.content))
 				const wellKnownPath = withUploadRoot(wellKnown.path, uploadRoot)
+				standardSiteSummary = {
+					...standardSiteSummary,
+					linksInjected,
+				}
 
 				uploadedFiles.push({
 					name: wellKnownPath,
@@ -910,13 +1031,15 @@ async function processUploadInBackground(
 
 		// First attempt: no base64 encoding
 		let record: Awaited<ReturnType<typeof agent.com.atproto.repo.putRecord>>
+		let manifestBlobs = uploadedBlobs
 		try {
 			record = await buildManifestAndPut(uploadedBlobs)
 		} catch (err: any) {
 			if (err?.status !== 500) throw err
 
 			// On 500, retry with base64 encoding for compressed text files.
-			// Re-read from the original File objects to avoid holding duplicate buffers in memory.
+			// Use the upload buffers because standard.site verification links may
+			// have already rewritten HTML before compression.
 			logger.warn('Manifest put returned 500 — retrying with base64-encoded text files', err)
 			console.warn('[Upload] Manifest put failed with 500, retrying with base64 encoding for text files...')
 
@@ -924,16 +1047,7 @@ async function processUploadInBackground(
 			for (const uploadedFile of validUploadedFiles) {
 				if (!uploadedFile.compressed || !isTextMimeType(uploadedFile.mimeType)) continue
 
-				// Find the original File object to re-read content without holding extra buffers
-				const originalFile = fileArray.find((f) => {
-					if (!f) return false
-					const wp = 'webkitRelativePath' in f ? String(f.webkitRelativePath) : ''
-					return (wp || f.name) === uploadedFile.name
-				})
-				if (!originalFile) continue
-
-				const originalContent = Buffer.from(await originalFile.arrayBuffer())
-				const base64Content = Buffer.from(compressFile(originalContent).toString('base64'), 'binary')
+				const base64Content = Buffer.from(uploadedFile.content.toString('base64'), 'binary')
 				const uploadResult = await uploadBlobWithRetry(
 					agent,
 					base64Content,
@@ -957,6 +1071,7 @@ async function processUploadInBackground(
 				}
 			}
 
+			manifestBlobs = base64Blobs
 			record = await buildManifestAndPut(base64Blobs)
 		}
 
@@ -964,13 +1079,13 @@ async function processUploadInBackground(
 			updateJobProgress(jobId, { phase: 'publishing_standard_site' })
 			try {
 				const siteUrl = buildWispSiteUrl(did, siteName)
-				const blobReferences: UploadedBlobReference[] = uploadedBlobs.map((blob) => ({
+				const blobReferences: UploadedBlobReference[] = manifestBlobs.map((blob) => ({
 					path: blob.filePath,
 					blob: blob.result.blobRef,
 					mimeType: blob.returnedMimeType,
 					size: blob.result.blobRef.size,
 				}))
-				const successfulPaths = new Set(uploadedBlobs.map((blob) => stripUploadRoot(blob.filePath)))
+				const successfulPaths = new Set(manifestBlobs.map((blob) => stripUploadRoot(blob.filePath)))
 				const successfulStandardSiteFiles = standardSiteFiles.filter((file) =>
 					successfulPaths.has(stripUploadRoot(file.path)),
 				)
@@ -986,6 +1101,7 @@ async function processUploadInBackground(
 					detected: detected.detected,
 					posts: detected.posts.length,
 					score: detected.score,
+					linksInjected: standardSiteSummary?.linksInjected,
 				}
 
 				if (detected.detected) {
@@ -1012,6 +1128,7 @@ async function processUploadInBackground(
 					detected: standardSiteSummary?.detected ?? false,
 					posts: standardSiteSummary?.posts ?? 0,
 					score: standardSiteSummary?.score,
+					linksInjected: standardSiteSummary?.linksInjected,
 					error,
 				}
 				logger.error(`[StandardSite] Failed to publish records for ${did}/${siteName}`, err)

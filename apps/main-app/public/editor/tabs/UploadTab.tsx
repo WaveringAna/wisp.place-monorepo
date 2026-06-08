@@ -25,6 +25,7 @@ interface StandardSiteSummary {
 		deleted: number
 		skipped: number
 	}
+	linksInjected?: number
 	error?: string
 }
 
@@ -571,9 +572,24 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 						className="mt-0.5"
 					/>
 					<div className="space-y-0.5">
-						<Label htmlFor="publish-standard-site" className="text-xs font-medium">
-							Auto-detect blog posts
-						</Label>
+						<div className="flex items-center gap-1.5">
+							<Label htmlFor="publish-standard-site" className="text-xs font-medium">
+								Auto-detect blog posts
+							</Label>
+							<span className="group relative inline-flex">
+								<button
+									type="button"
+									aria-label="auto-detect blog posts info"
+									className="inline-flex h-4 min-w-4 items-center justify-center border border-border/50 bg-transparent px-1 text-[10px] leading-none text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+								>
+									(i)
+								</button>
+								<span className="pointer-events-none absolute bottom-full left-0 z-20 mb-2 w-72 max-w-[calc(100vw-3rem)] border border-border bg-popover p-2 text-xs leading-5 text-popover-foreground opacity-0 shadow-md transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
+									Creates standard.site publication and document records. Detects Astro, Hugo, 11ty, Next.js, Gatsby,
+									SvelteKit, Jekyll, Zola, HTML article metadata, JSON-LD, and Markdown/MDX frontmatter.
+								</span>
+							</span>
+						</div>
 					</div>
 				</div>
 
@@ -690,6 +706,10 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 										{standardSiteSummary.documents.createdOrUpdated === 1 ? '' : 's'} written
 										{standardSiteSummary.documents.deleted > 0 &&
 											`, ${standardSiteSummary.documents.deleted} stale deleted`}
+										{standardSiteSummary.linksInjected !== undefined &&
+											`, ${standardSiteSummary.linksInjected} link${
+												standardSiteSummary.linksInjected === 1 ? '' : 's'
+											} injected`}
 									</p>
 								)}
 								{standardSiteSummary.publicationUri && (

@@ -47,7 +47,7 @@ async function fetchWhRecordsForDid(did: string): Promise<Array<{ rkey: string; 
 		cursor = data.cursor
 
 		for (const r of data.records) {
-			const rkey = r.uri.split('/').at(-1)
+			const rkey = r.uri.split('/').pop()
 			if (!rkey) continue
 			if (!r.value.scope?.aturi || !r.value.url) continue
 			results.push({ rkey, record: r.value })
