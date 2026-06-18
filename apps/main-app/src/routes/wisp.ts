@@ -28,12 +28,8 @@ import type { Directory } from '@wispplace/lexicons/types/place/wisp/fs'
 import { createLogger } from '@wispplace/observability'
 import {
 	buildPublicationWellKnownFile,
-	buildStandardDocumentUri,
 	buildWispSiteUrl,
-	type DetectedStandardSitePost,
 	detectStandardSite,
-	injectStandardSiteDocumentLink,
-	normalizeSitePath,
 	publishStandardSite,
 	type RepoAgent,
 	type StaticSiteFile,
@@ -42,6 +38,7 @@ import {
 } from '@wispplace/standard-site'
 import { Elysia } from 'elysia'
 import { createIgnoreMatcher, parseWispignore, shouldIgnore } from '../lib/ignore-patterns'
+import { injectStandardSiteLinksIntoUploadBuffers } from '../lib/standard-site-upload'
 import {
 	addJobListener,
 	completeUploadJob,
@@ -98,113 +95,6 @@ function inferSharedUploadRoot(files: File[]): string | undefined {
 
 function withUploadRoot(path: string, uploadRoot: string | undefined): string {
 	return uploadRoot ? `${uploadRoot}/${path}` : `./${path}`
-}
-
-function isHtmlPath(path: string): boolean {
-	return /\.html?$/i.test(path)
-}
-
-function htmlCandidatesForPost(post: DetectedStandardSitePost): string[] {
-	const candidates: string[] = []
-	const filePath = normalizeSitePath(post.filePath)
-
-	if (isHtmlPath(filePath)) {
-		candidates.push(filePath)
-	}
-
-	const routePath = post.path.replace(/^\/+/, '').replace(/\/+$/, '')
-	if (routePath.length === 0) {
-		candidates.push('index.html')
-	} else {
-		candidates.push(`${routePath}/index.html`, `${routePath}.html`)
-	}
-
-	return [...new Set(candidates.map(normalizeSitePath))]
-}
-
-function decodeStaticSiteFileContent(content: StaticSiteFile['content']): string | undefined {
-	if (typeof content === 'string') return content
-	if (content instanceof ArrayBuffer) return new TextDecoder().decode(content)
-	if (ArrayBuffer.isView(content)) return new TextDecoder().decode(content)
-	return undefined
-}
-
-function hasSharedPathRoot(paths: string[]): boolean {
-	const pathsWithSegments = paths.filter((path) => path.includes('/'))
-	if (pathsWithSegments.length === 0 || pathsWithSegments.length !== paths.length) return false
-
-	const firstSegment = pathsWithSegments[0]?.split('/')[0]
-	if (!firstSegment) return false
-
-	return pathsWithSegments.every((path) => path.split('/')[0] === firstSegment)
-}
-
-function normalizeUploadLookupPath(path: string, shouldStripRoot: boolean): string {
-	return shouldStripRoot ? stripUploadRoot(path) : normalizeSitePath(path)
-}
-
-function injectStandardSiteLinksIntoUploadBuffers(options: {
-	did: string
-	posts: DetectedStandardSitePost[]
-	uploadedFiles: UploadedFile[]
-	standardSiteFiles: StaticSiteFile[]
-}): number {
-	const uploadedFileIndexes = new Map<string, number>()
-	const standardSiteFileIndexes = new Map<string, number>()
-	const shouldStripRoot = hasSharedPathRoot(options.uploadedFiles.map((file) => normalizeSitePath(file.name)))
-
-	options.uploadedFiles.forEach((file, index) => {
-		uploadedFileIndexes.set(normalizeUploadLookupPath(file.name, shouldStripRoot), index)
-	})
-	options.standardSiteFiles.forEach((file, index) => {
-		standardSiteFileIndexes.set(normalizeUploadLookupPath(file.path, shouldStripRoot), index)
-	})
-
-	let injected = 0
-	const touchedFiles = new Set<string>()
-
-	for (const post of options.posts) {
-		const htmlPath = htmlCandidatesForPost(post).find((candidate) => uploadedFileIndexes.has(candidate))
-		if (!htmlPath || touchedFiles.has(htmlPath)) continue
-
-		const uploadIndex = uploadedFileIndexes.get(htmlPath)
-		const staticIndex = standardSiteFileIndexes.get(htmlPath)
-		if (uploadIndex === undefined || staticIndex === undefined) continue
-
-		const uploadFile = options.uploadedFiles[uploadIndex]
-		const staticFile = options.standardSiteFiles[staticIndex]
-		if (!uploadFile || !staticFile || !isHtmlPath(normalizeUploadLookupPath(uploadFile.name, shouldStripRoot))) continue
-
-		const html = decodeStaticSiteFileContent(staticFile.content)
-		if (!html) continue
-
-		const documentUri = buildStandardDocumentUri(options.did, post.path)
-		const result = injectStandardSiteDocumentLink(html, documentUri)
-		if (!result.changed) continue
-
-		const rewrittenContent = Buffer.from(result.html)
-		const originalMimeType = uploadFile.originalMimeType || uploadFile.mimeType
-		const normalizedPath = stripUploadRoot(uploadFile.name)
-		const shouldCompress = shouldCompressFile(originalMimeType, normalizedPath)
-		const finalContent = shouldCompress ? compressFile(rewrittenContent) : rewrittenContent
-
-		options.uploadedFiles[uploadIndex] = {
-			...uploadFile,
-			content: finalContent,
-			size: finalContent.length,
-			compressed: shouldCompress,
-			originalMimeType,
-		}
-		options.standardSiteFiles[staticIndex] = {
-			...staticFile,
-			content: rewrittenContent,
-			size: rewrittenContent.length,
-		}
-		touchedFiles.add(htmlPath)
-		injected++
-	}
-
-	return injected
 }
 
 async function processUploadInBackground(
@@ -422,36 +312,56 @@ async function processUploadInBackground(
 			}
 
 			if (detected.detected) {
-				const linksInjected = injectStandardSiteLinksIntoUploadBuffers({
-					did,
-					posts: detected.posts,
-					uploadedFiles,
-					standardSiteFiles,
-				})
-				const uploadRoot = inferSharedUploadRoot(fileArray)
-				const wellKnown = buildPublicationWellKnownFile(did, siteName)
-				const wellKnownContent = Buffer.from(String(wellKnown.content))
-				const wellKnownPath = withUploadRoot(wellKnown.path, uploadRoot)
-				standardSiteSummary = {
-					...standardSiteSummary,
-					linksInjected,
+				try {
+					updateJobProgress(jobId, { phase: 'publishing_standard_site' })
+					const prepublished = await publishStandardSite({
+						agent: agent as unknown as RepoAgent,
+						did,
+						siteRkey: siteName,
+						detection: detected,
+					})
+					const linksInjected = injectStandardSiteLinksIntoUploadBuffers({
+						did,
+						posts: detected.posts,
+						uploadedFiles,
+						standardSiteFiles,
+					})
+					const uploadRoot = inferSharedUploadRoot(fileArray)
+					const wellKnown = buildPublicationWellKnownFile(did, siteName)
+					const wellKnownContent = Buffer.from(String(wellKnown.content))
+					const wellKnownPath = withUploadRoot(wellKnown.path, uploadRoot)
+					standardSiteSummary = {
+						...standardSiteSummary,
+						publicationUri: prepublished.publication.uri,
+						documents: prepublished.documents,
+						linksInjected,
+					}
+
+					uploadedFiles.push({
+						name: wellKnownPath,
+						content: wellKnownContent,
+						mimeType: wellKnown.mimeType ?? 'text/plain;charset=utf-8',
+						size: wellKnownContent.length,
+						originalMimeType: wellKnown.mimeType ?? 'text/plain;charset=utf-8',
+					})
+					standardSiteFiles.push({
+						...wellKnown,
+						path: wellKnownPath,
+						content: wellKnownContent,
+						size: wellKnownContent.length,
+					})
+
+					logger.info(
+						`[StandardSite] Prepublished ${prepublished.documents.createdOrUpdated} documents for ${did}/${siteName}`,
+					)
+				} catch (err) {
+					const error = err instanceof Error ? err.message : 'Failed to prepublish standard.site records'
+					standardSiteSummary = {
+						...standardSiteSummary,
+						error,
+					}
+					logger.error(`[StandardSite] Failed to prepublish records for ${did}/${siteName}`, err)
 				}
-
-				uploadedFiles.push({
-					name: wellKnownPath,
-					content: wellKnownContent,
-					mimeType: wellKnown.mimeType ?? 'text/plain;charset=utf-8',
-					size: wellKnownContent.length,
-					originalMimeType: wellKnown.mimeType ?? 'text/plain;charset=utf-8',
-				})
-				standardSiteFiles.push({
-					...wellKnown,
-					path: wellKnownPath,
-					content: wellKnownContent,
-					size: wellKnownContent.length,
-				})
-
-				logger.info(`[StandardSite] Detected ${detected.posts.length} posts for ${did}/${siteName}`)
 			} else {
 				logger.info(`[StandardSite] No blog posts detected for ${did}/${siteName}`)
 			}
