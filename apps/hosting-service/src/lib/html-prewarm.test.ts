@@ -83,7 +83,7 @@ describe('HTML prewarm', () => {
 		expect(promotedKeys).toHaveLength(2)
 	})
 
-	test('site with no cached keys is not permanently marked warm', async () => {
+	test('site with no cached keys is marked warm after a successful empty scan', async () => {
 		triggerSiteHtmlHotCacheWarmup(DID, RKEY)
 		await waitForSiteHtmlHotCacheWarmupForTests(DID, RKEY)
 		expect(promotedKeys).toHaveLength(0)
@@ -92,6 +92,6 @@ describe('HTML prewarm', () => {
 
 		triggerSiteHtmlHotCacheWarmup(DID, RKEY)
 		await waitForSiteHtmlHotCacheWarmupForTests(DID, RKEY)
-		expect(promotedKeys).toHaveLength(1)
+		expect(promotedKeys).toHaveLength(0)
 	})
 })
