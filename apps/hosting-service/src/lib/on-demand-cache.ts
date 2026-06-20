@@ -140,6 +140,9 @@ async function doFetchAndCache(did: string, rkey: string): Promise<boolean> {
 		// Expand subfs nodes
 		const expandedRoot = await expandSubfsNodes(record.root, pdsEndpoint)
 
+		// Validate untrusted manifest paths before collecting file names for storage keys.
+		validateEntryNames(expandedRoot.entries)
+
 		// Validate limits
 		const fileCount = countFilesInDirectory(expandedRoot)
 		if (fileCount > MAX_FILE_COUNT) {
@@ -203,6 +206,32 @@ async function doFetchAndCache(did: string, rkey: string): Promise<boolean> {
 	} finally {
 		await releaseLock(lockKey)
 	}
+}
+
+function validateEntryNames(entries: Entry[], pathPrefix: string = ''): void {
+	for (const entry of entries) {
+		if (!isSafeEntryName(entry.name)) {
+			const entryPath = pathPrefix ? `${pathPrefix}/${entry.name}` : entry.name
+			throw new Error(`Unsafe filesystem entry name: ${entryPath}`)
+		}
+
+		const node = entry.node
+		if ('type' in node && node.type === 'directory' && 'entries' in node) {
+			const currentPath = pathPrefix ? `${pathPrefix}/${entry.name}` : entry.name
+			validateEntryNames(node.entries, currentPath)
+		}
+	}
+}
+
+function isSafeEntryName(name: string): boolean {
+	return (
+		name !== '' &&
+		name !== '.' &&
+		name !== '..' &&
+		!name.includes('/') &&
+		!name.includes('\\') &&
+		!name.includes('\0')
+	)
 }
 
 function calculateTotalBlobSize(directory: Directory): number {
