@@ -5,14 +5,17 @@ import { join } from 'node:path'
 import { DiskStorageTier } from '../src/tiers/DiskStorageTier.js'
 
 const testDir = './test-disk-cache'
+const traversalTarget = './outside-disk-storage-tier-test.txt'
 
 describe('DiskStorageTier - Recursive Directory Support', () => {
 	beforeEach(async () => {
 		await rm(testDir, { recursive: true, force: true })
+		await rm(traversalTarget, { force: true })
 	})
 
 	afterAll(async () => {
 		await rm(testDir, { recursive: true, force: true })
+		await rm(traversalTarget, { force: true })
 	})
 
 	describe('Nested Directory Creation', () => {
@@ -61,6 +64,25 @@ describe('DiskStorageTier - Recursive Directory Support', () => {
 			expect(await tier.exists('site:a/images/logo.png')).toBe(true)
 			expect(await tier.exists('site:a/css/style.css')).toBe(true)
 			expect(await tier.exists('site:b/index.html')).toBe(true)
+		})
+	})
+
+	describe('Path containment', () => {
+		test('should reject keys that resolve outside the configured directory', async () => {
+			const tier = new DiskStorageTier({ directory: testDir })
+			const data = new TextEncoder().encode('evil')
+			const metadata = {
+				key: 'did:plc:attacker/site/../../../outside-disk-storage-tier-test.txt',
+				size: data.byteLength,
+				createdAt: new Date(),
+				lastAccessed: new Date(),
+				accessCount: 0,
+				compressed: false,
+				checksum: 'evil',
+			}
+
+			await expect(tier.set(metadata.key, data, metadata)).rejects.toThrow(/outside configured directory/)
+			expect(existsSync(traversalTarget)).toBe(false)
 		})
 	})
 

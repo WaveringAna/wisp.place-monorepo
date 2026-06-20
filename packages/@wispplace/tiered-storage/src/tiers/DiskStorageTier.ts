@@ -1,6 +1,6 @@
 import { createReadStream, createWriteStream, existsSync } from 'node:fs'
 import { mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { dirname, join, relative, resolve, sep } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import type { StorageMetadata, StorageTier, TierGetResult, TierStats, TierStreamResult } from '../types/index.js'
 import { encodeKey } from '../utils/path-encoding.js'
@@ -618,7 +618,15 @@ export class DiskStorageTier implements StorageTier {
 	 */
 	private getFilePath(key: string): string {
 		const encoded = encodeKey(key, this.encodeColons)
-		return join(this.config.directory, encoded)
+		const baseDir = resolve(this.config.directory)
+		const filePath = resolve(baseDir, encoded)
+		const relativePath = relative(baseDir, filePath)
+
+		if (relativePath === '' || relativePath === '..' || relativePath.startsWith(`..${sep}`)) {
+			throw new Error(`Storage key resolves outside configured directory: ${key}`)
+		}
+
+		return filePath
 	}
 
 	/**
