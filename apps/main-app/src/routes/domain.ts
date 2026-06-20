@@ -264,6 +264,11 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 					throw new Error('Domain not found')
 				}
 
+				if (domainInfo.did !== auth.did) {
+					set.status = 403
+					throw new Error('Unauthorized: You do not own this domain')
+				}
+
 				// Verify DNS records (TXT + CNAME)
 				logger.debug(`[Domain] Verifying custom domain: ${domainInfo.domain}`)
 				const result = await verifyCustomDomain(domainInfo.domain, auth.did, id)
