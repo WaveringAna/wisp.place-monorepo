@@ -54,10 +54,9 @@ export function triggerSiteHtmlHotCacheWarmup(did: string, rkey: string): void {
 				const latestGeneration = prewarmGeneration.get(siteKey) ?? 0
 				if (latestGeneration !== generation) return
 
-				// When the site doesn't exist yet, avoid permanently marking it as warmed.
-				if (scannedKeys > 0) {
-					warmedSites.add(siteKey)
-				}
+				// Remember successful scans even when there are no matching keys so repeated
+				// requests for the same missing/empty prefix cannot force repeated storage scans.
+				warmedSites.add(siteKey)
 
 				logger.debug(`HTML prewarm finished for ${did}/${rkey}`, {
 					scannedKeys,

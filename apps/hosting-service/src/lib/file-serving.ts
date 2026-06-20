@@ -414,9 +414,14 @@ export async function serveFromCache(
 			: new Response('Site is updating', { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' } })
 	}
 
-	triggerSiteHtmlHotCacheWarmup(did, rkey)
-
 	const trace = createTrace()
+
+	// Only prewarm sites that are known to exist. Public routes can otherwise
+	// choose arbitrary site keys and force expensive storage-wide list operations.
+	const siteFileCids = await getExpectedFileCidsForSite(did, rkey, trace)
+	if (siteFileCids !== null) {
+		triggerSiteHtmlHotCacheWarmup(did, rkey)
+	}
 
 	// Load settings for this site
 	const settings = await span(trace, 'db:settings', () => getCachedSettings(did, rkey))
@@ -723,9 +728,14 @@ export async function serveFromCacheWithRewrite(
 			: new Response('Site is updating', { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' } })
 	}
 
-	triggerSiteHtmlHotCacheWarmup(did, rkey)
-
 	const trace = createTrace()
+
+	// Only prewarm sites that are known to exist. Public routes can otherwise
+	// choose arbitrary site keys and force expensive storage-wide list operations.
+	const siteFileCids = await getExpectedFileCidsForSite(did, rkey, trace)
+	if (siteFileCids !== null) {
+		triggerSiteHtmlHotCacheWarmup(did, rkey)
+	}
 
 	// Load settings for this site
 	const settings = await span(trace, 'db:settings', () => getCachedSettings(did, rkey))
