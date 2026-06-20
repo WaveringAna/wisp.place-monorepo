@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test } from 'bun:test'
 import {
 	clearSiteUpdating,
 	compareStreamIds,
+	getUpdatingSiteCountForTests,
 	isSiteUpdating,
 	markSiteUpdating,
 	parseCacheInvalidationMessage,
@@ -37,6 +38,38 @@ describe('cache invalidation updating state', () => {
 
 		expect(clearSiteUpdating(DID, RKEY)).toBe(true)
 		expect(isSiteUpdating(DID, RKEY)).toBe(false)
+	})
+
+	test('marking a new site prunes expired updating entries that were never requested', () => {
+		const originalNow = Date.now
+		let now = 1_000_000
+		Date.now = () => now
+
+		try {
+			markSiteUpdating(DID, 'expired-a')
+			markSiteUpdating(DID, 'expired-b')
+
+			now += 10 * 60 * 1000 + 1
+			markSiteUpdating(DID, 'active')
+
+			expect(getUpdatingSiteCountForTests()).toBe(1)
+			expect(isSiteUpdating(DID, 'active')).toBe(true)
+			expect(isSiteUpdating(DID, 'expired-a')).toBe(false)
+			expect(isSiteUpdating(DID, 'expired-b')).toBe(false)
+		} finally {
+			Date.now = originalNow
+		}
+	})
+
+	test('updating state is capped even when entries have not expired', () => {
+		for (let i = 0; i < 10_005; i++) {
+			markSiteUpdating(DID, `site-${i}`)
+		}
+
+		expect(getUpdatingSiteCountForTests()).toBe(10_000)
+		expect(isSiteUpdating(DID, 'site-0')).toBe(false)
+		expect(isSiteUpdating(DID, 'site-5')).toBe(true)
+		expect(isSiteUpdating(DID, 'site-10004')).toBe(true)
 	})
 
 	test('message parsing preserves token', () => {

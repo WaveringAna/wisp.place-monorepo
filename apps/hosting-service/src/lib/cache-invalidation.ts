@@ -44,7 +44,24 @@ export interface CacheInvalidationMessage {
 // Maps `${did}/${rkey}` → current update token and timestamp.
 // Used to show an "updating" page instead of serving stale files.
 const UPDATING_TTL_MS = 10 * 60 * 1000 // 10 minutes safety timeout
+const MAX_UPDATING_SITES = parsePositiveInt(process.env.WISP_MAX_UPDATING_SITES, 10_000)
 const updatingSites = new Map<string, { since: number; token?: string }>()
+
+function pruneExpiredUpdatingSites(now = Date.now()): void {
+	for (const [key, state] of updatingSites) {
+		if (now - state.since > UPDATING_TTL_MS) {
+			updatingSites.delete(key)
+		}
+	}
+}
+
+function enforceUpdatingSitesLimit(): void {
+	while (updatingSites.size > MAX_UPDATING_SITES) {
+		const oldestKey = updatingSites.keys().next().value
+		if (oldestKey === undefined) return
+		updatingSites.delete(oldestKey)
+	}
+}
 
 export function isSiteUpdating(did: string, rkey: string): boolean {
 	const key = `${did}/${rkey}`
@@ -59,7 +76,13 @@ export function isSiteUpdating(did: string, rkey: string): boolean {
 }
 
 export function markSiteUpdating(did: string, rkey: string, token?: string): void {
-	updatingSites.set(`${did}/${rkey}`, { since: Date.now(), token })
+	const now = Date.now()
+	const key = `${did}/${rkey}`
+	pruneExpiredUpdatingSites(now)
+	// Refresh insertion order so the cap evicts the oldest active update.
+	updatingSites.delete(key)
+	updatingSites.set(key, { since: now, token })
+	enforceUpdatingSitesLimit()
 }
 
 export function clearSiteUpdating(did: string, rkey: string, token?: string): boolean {
@@ -79,6 +102,10 @@ export function clearSiteUpdating(did: string, rkey: string, token?: string): bo
 
 export function resetUpdatingSitesForTests(): void {
 	updatingSites.clear()
+}
+
+export function getUpdatingSiteCountForTests(): number {
+	return updatingSites.size
 }
 
 let subscriber: Redis | null = null
