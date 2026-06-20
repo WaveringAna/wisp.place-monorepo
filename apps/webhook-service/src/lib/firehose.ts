@@ -12,6 +12,7 @@ import {
 import { deliverWebhook } from './delivery'
 import { JetstreamClient, type JetstreamEvent } from './jetstream'
 import { matchWebhooks } from './matcher'
+import { assertSafeWebhookUrlSyntax } from './webhook-url'
 import { getCached, invalidate, setCached } from './registry'
 
 const logger = createLogger('webhook-service:firehose')
@@ -172,6 +173,12 @@ async function handleWhRecord(op: string, did: string, rkey: string, record: unk
 		const wh = record as WhRecord
 		if (!wh.scope?.aturi || !wh.url) {
 			logger.error(`[wh] Skipping ${did}/${rkey} — invalid record`, { record })
+			return
+		}
+		try {
+			assertSafeWebhookUrlSyntax(wh.url)
+		} catch (err) {
+			logger.error(`[wh] Skipping ${did}/${rkey} — unsafe webhook URL`, { err })
 			return
 		}
 		logger.info(`[wh] scope=${wh.scope.aturi} url=${wh.url} enabled=${wh.enabled ?? true}`)
