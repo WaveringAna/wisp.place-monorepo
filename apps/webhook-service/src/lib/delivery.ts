@@ -5,6 +5,7 @@ import type { WebhookEntry } from './db'
 import { getWebhookSecretToken, insertEventLog } from './db'
 import type { EventKind } from './matcher'
 import { publishWebhookEvent } from './redis'
+import { assertSafeWebhookUrl } from './webhook-url'
 
 const logger = createLogger('webhook-service:delivery')
 
@@ -36,10 +37,13 @@ async function attempt(url: string, body: string, signature?: string): Promise<v
 	}
 	if (signature) headers['X-Webhook-Signature'] = signature
 
+	await assertSafeWebhookUrl(url)
+
 	const res = await fetch(url, {
 		method: 'POST',
 		headers,
 		body,
+		redirect: 'error',
 		signal: AbortSignal.timeout(config.deliveryTimeoutMs),
 	})
 
