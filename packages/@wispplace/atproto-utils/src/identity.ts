@@ -22,6 +22,15 @@ interface DidDocument {
 	alsoKnownAs?: string[]
 }
 
+function normalizeHandle(handle: string): string {
+	return handle.trim().toLowerCase()
+}
+
+function didDocumentIncludesHandle(doc: DidDocument, handle: string): boolean {
+	const expectedAlsoKnownAs = `at://${normalizeHandle(handle)}`
+	return (doc.alsoKnownAs || []).some((aka) => aka.toLowerCase() === expectedAlsoKnownAs)
+}
+
 /**
  * Convert a did:web to an HTTPS URL for fetching the DID document
  */
@@ -64,6 +73,12 @@ export async function resolveDid(identifier: string): Promise<string | null> {
 		}
 
 		const data = (await response.json()) as { did: string }
+		const doc = await getDidDocument(data.did)
+		if (!doc || !didDocumentIncludesHandle(doc, identifier)) {
+			console.error('Resolved DID does not match handle', identifier, data.did)
+			return null
+		}
+
 		return data.did
 	} catch (err) {
 		console.error('Failed to resolve identifier', identifier, err)
