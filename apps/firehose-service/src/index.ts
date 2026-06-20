@@ -16,7 +16,7 @@ import { closeCacheInvalidationPublisher } from './lib/cache-invalidation'
 import { fetchSiteRecord, handleSiteCreateOrUpdate, listSiteRecordsForDid } from './lib/cache-writer'
 import { closeDatabase, getSiteCache, listAllKnownDids } from './lib/db'
 import { getActiveService, getCurrentSeq, getFirehoseHealth, startFirehose, stopFirehose } from './lib/firehose'
-import { closeLeaderRedis, getLeaderInfo, releaseLeadership, runLeaderElection, saveCursor } from './lib/leader'
+import { closeLeaderRedis, getLeaderInfo, runLeaderElection, saveCursor } from './lib/leader'
 import { startRevalidateWorker, stopRevalidateWorker } from './lib/revalidate-worker'
 import { storage } from './lib/storage'
 
@@ -264,10 +264,10 @@ async function main() {
 
 		// Run election loop (non-blocking)
 		runLeaderElection(
-			(cursor) =>
+			(cursor, stepDown) =>
 				startFirehose(cursor, () => {
 					logger.warn('Firehose failed 3 times, stepping down from leadership')
-					releaseLeadership().finally(() => leaderAbortController?.abort())
+					stepDown()
 				}),
 			() => stopFirehose(),
 			leaderAbortController.signal,
