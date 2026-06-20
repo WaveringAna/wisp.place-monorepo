@@ -120,7 +120,7 @@ function sleep(ms: number): Promise<void> {
  * aborted via the signal.
  */
 export async function runLeaderElection(
-	onBecomeLeader: (cursor: number | undefined) => void,
+	onBecomeLeader: (cursor: number | undefined, stepDown: () => void) => void,
 	onLoseLeadership: () => void,
 	signal: AbortSignal,
 	initialService: string,
@@ -135,6 +135,17 @@ export async function runLeaderElection(
 	const clearRenewal = () => {
 		if (renewalTimer) clearTimeout(renewalTimer)
 		renewalTimer = null
+	}
+
+	const stepDown = () => {
+		if (!isLeader) return
+
+		logger.warn('[Leader] Stepping down voluntarily')
+		clearRenewal()
+		isLeader = false
+		renewalFailures = 0
+		onLoseLeadership()
+		releaseLeadership().catch((err) => logger.warn('[Leader] Failed to release leadership while stepping down', err))
 	}
 
 	signal.addEventListener('abort', () => {
@@ -189,7 +200,7 @@ export async function runLeaderElection(
 			renewalFailures = 0
 			const cursor = await readCursor(initialService)
 			logger.info(`[Leader] Won leadership, cursor for ${initialService}: ${cursor ?? 'none (starting from head)'}`)
-			onBecomeLeader(cursor)
+			onBecomeLeader(cursor, stepDown)
 			scheduleRenew()
 		}
 
