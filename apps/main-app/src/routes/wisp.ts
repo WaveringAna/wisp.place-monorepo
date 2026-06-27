@@ -28,7 +28,6 @@ import type { Directory } from '@wispplace/lexicons/types/place/wisp/fs'
 import { createLogger } from '@wispplace/observability'
 import {
 	buildPublicationWellKnownFile,
-	buildWispSiteUrl,
 	detectStandardSite,
 	publishStandardSite,
 	type RepoAgent,
@@ -38,6 +37,7 @@ import {
 } from '@wispplace/standard-site'
 import { Elysia } from 'elysia'
 import { createIgnoreMatcher, parseWispignore, shouldIgnore } from '../lib/ignore-patterns'
+import { resolveStandardSitePublicationUrl } from '../lib/standard-site-publication-url'
 import { injectStandardSiteLinksIntoUploadBuffers } from '../lib/standard-site-upload'
 import {
 	addJobListener,
@@ -297,7 +297,7 @@ async function processUploadInBackground(
 		}
 
 		if (publishStandardSiteRecords) {
-			const siteUrl = buildWispSiteUrl(did, siteName)
+			const siteUrl = await resolveStandardSitePublicationUrl(did, siteName)
 			const detected = detectStandardSite({
 				siteUrl,
 				siteName,
@@ -988,7 +988,7 @@ async function processUploadInBackground(
 		if (publishStandardSiteRecords) {
 			updateJobProgress(jobId, { phase: 'publishing_standard_site' })
 			try {
-				const siteUrl = buildWispSiteUrl(did, siteName)
+				const siteUrl = await resolveStandardSitePublicationUrl(did, siteName)
 				const blobReferences: UploadedBlobReference[] = manifestBlobs.map((blob) => ({
 					path: blob.filePath,
 					blob: blob.result.blobRef,

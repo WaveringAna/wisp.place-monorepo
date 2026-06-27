@@ -4,6 +4,10 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test'
 type FakeEntry = { data: Uint8Array; mimeType?: string; encoding?: string; checksum?: string }
 const storageData = new Map<string, FakeEntry>()
 const storageGetWithMetadataKeys: string[] = []
+const safeFetchCalls: Array<{
+	url: string
+	options?: RequestInit & { maxSize?: number; timeout?: number; retry?: boolean }
+}> = []
 let siteFileCids: Record<string, string> | null = null
 
 const fakeStorage = {
@@ -83,6 +87,17 @@ mock.module('./utils', () => ({
 mock.module('./on-demand-cache', () => ({
 	fetchAndCacheSite: async () => false,
 }))
+mock.module('@wispplace/safe-fetch', () => ({
+	safeFetch: async (url: string, options?: RequestInit & { maxSize?: number; timeout?: number; retry?: boolean }) => {
+		safeFetchCalls.push({ url, options })
+		return new Response(JSON.stringify({ subject: 'acct:ana@example.com' }), {
+			status: 200,
+			headers: {
+				'Content-Type': 'application/jrd+json',
+			},
+		})
+	},
+}))
 
 const { cache } = await import('./cache-manager')
 const { resetHtmlHotCacheWarmupForTests } = await import('./html-prewarm')
@@ -102,6 +117,7 @@ describe('serveFileInternal directory-index fallback for extensioned paths', () 
 	beforeEach(() => {
 		storageData.clear()
 		storageGetWithMetadataKeys.length = 0
+		safeFetchCalls.length = 0
 		siteFileCids = null
 		cache.clear('redirectRules')
 		cache.clear('siteCache')
@@ -216,5 +232,32 @@ describe('serveFileInternal directory-index fallback for extensioned paths', () 
 		expect(response.status).toBe(304)
 		expect(response.headers.get('ETag')).toBe('"test-checksum"')
 		expect(response.headers.get('Cache-Control')).toBe('public, max-age=31536000, immutable')
+	})
+
+	test('proxies absolute 200 rewrite targets with inline query placeholders', async () => {
+		storeFile(
+			'_redirects',
+			'/.well-known/webfinger?resource=:resource https://webfinger.madoka-winter.workers.dev/?resource=:resource 200',
+			'text/plain',
+		)
+
+		const response = await serveFromCache(
+			DID,
+			RKEY,
+			'.well-known/webfinger',
+			'https://madoka.example/.well-known/webfinger?resource=acct:ana@example.com',
+			{ accept: 'application/jrd+json' },
+		)
+
+		expect(response.status).toBe(200)
+		expect(response.headers.get('Content-Type')).toContain('application/jrd+json')
+		expect(await response.json()).toEqual({ subject: 'acct:ana@example.com' })
+		expect(safeFetchCalls).toHaveLength(1)
+		expect(safeFetchCalls[0]?.url).toBe(
+			'https://webfinger.madoka-winter.workers.dev/?resource=acct%3Aana%40example.com',
+		)
+		expect(storageGetWithMetadataKeys).not.toContain(
+			`${DID}/${RKEY}/https://webfinger.madoka-winter.workers.dev/?resource=acct%3Aana%40example.com`,
+		)
 	})
 })

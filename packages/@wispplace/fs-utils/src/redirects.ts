@@ -78,6 +78,23 @@ function parseRedirectLine(line: string): RedirectRule | null {
 	let force = false
 	const conditions: NonNullable<RedirectRule['conditions']> = {}
 	const queryParams: Record<string, string> = {}
+	const queryStart = from.indexOf('?')
+
+	if (queryStart !== -1) {
+		const queryString = from.slice(queryStart + 1)
+		for (const segment of queryString.split('&')) {
+			if (!segment) continue
+
+			const splitIndex = segment.indexOf('=')
+			if (splitIndex === -1) continue
+
+			const key = segment.slice(0, splitIndex)
+			const value = segment.slice(splitIndex + 1)
+			if (key && value) {
+				queryParams[decodeURIComponent(key)] = decodeURIComponent(value)
+			}
+		}
+	}
 
 	// Parse query parameters that come before the destination path
 	while (idx < parts.length) {

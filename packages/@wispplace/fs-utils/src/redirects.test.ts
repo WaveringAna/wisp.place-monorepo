@@ -126,6 +126,18 @@ describe('matchRedirectRule', () => {
 		expect(match?.targetPath).toContain('/blog/my-post')
 	})
 
+	it('should match inline query parameter placeholders', () => {
+		const rules = parseRedirectsFile(
+			'/.well-known/webfinger?resource=:resource https://webfinger.example.com/?resource=:resource 200',
+		)
+		const match = matchRedirectRule('/.well-known/webfinger', rules, {
+			queryParams: { resource: 'acct:ana@example.com' },
+		})
+
+		expect(match?.status).toBe(200)
+		expect(match?.targetPath).toBe('https://webfinger.example.com/?resource=acct%3Aana%40example.com')
+	})
+
 	it('should not match when query params are missing', () => {
 		const rules = parseRedirectsFile('/store id=:id /blog/:id 301')
 		const match = matchRedirectRule('/store', rules, {
