@@ -6,7 +6,7 @@ when:
       - main
   - event:
       - manual
-engine: nixery
+engine: microvm
 clone:
   skip: false
   depth: 1
