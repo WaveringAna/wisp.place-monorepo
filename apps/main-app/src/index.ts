@@ -7,8 +7,8 @@ import { BASE_HOST } from '@wispplace/constants'
 import { createLogger, initializeGrafanaExporters, logCollector } from '@wispplace/observability'
 import { observabilityMiddleware } from '@wispplace/observability/middleware/elysia'
 import type { Context } from 'elysia'
-import { Elysia } from 'elysia'
-import { promptAdminSetup } from './lib/admin-auth'
+import { Elysia, t } from 'elysia'
+import { promptAdminSetup, requireAdmin } from './lib/admin-auth'
 import { csrfProtection } from './lib/csrf'
 import { closeDatabase, getCookieSecret } from './lib/db'
 import { DNSVerificationWorker } from './lib/dns-verification-worker'
@@ -25,9 +25,9 @@ import type { Config } from './lib/types'
 import { adminRoutes } from './routes/admin'
 import { authRoutes } from './routes/auth'
 import { domainRoutes } from './routes/domain'
+import { secretRoutes } from './routes/secret'
 import { siteRoutes } from './routes/site'
 import { userRoutes } from './routes/user'
-import { secretRoutes } from './routes/secret'
 import { webhookRoutes } from './routes/webhook'
 import { wispRoutes } from './routes/wisp'
 import { xrpcRoutes } from './routes/xrpc'
@@ -426,20 +426,29 @@ export const app = new Elysia({
 	.get('/api/admin/test', () => {
 		return { message: 'Admin routes test works!' }
 	})
-	.post('/api/admin/verify-dns', async () => {
-		try {
-			await dnsVerifier.trigger()
-			return {
-				success: true,
-				message: 'DNS verification triggered',
+	.post(
+		'/api/admin/verify-dns',
+		async ({ cookie, set }) => {
+			const authError = requireAdmin({ cookie, set })
+			if (authError) return authError
+
+			try {
+				await dnsVerifier.trigger()
+				return {
+					success: true,
+					message: 'DNS verification triggered',
+				}
+			} catch (error) {
+				return {
+					success: false,
+					error: error instanceof Error ? error.message : String(error),
+				}
 			}
-		} catch (error) {
-			return {
-				success: false,
-				error: error instanceof Error ? error.message : String(error),
-			}
-		}
-	})
+		},
+		{
+			cookie: t.Cookie({ admin_session: t.Optional(t.String()) }, { secrets: cookieSecret, sign: ['admin_session'] }),
+		},
+	)
 	.get('/.well-known/atproto-did', ({ set }) => {
 		// Return plain text DID for AT Protocol domain verification
 		set.headers['Content-Type'] = 'text/plain'
