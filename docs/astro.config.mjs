@@ -22,7 +22,7 @@ export default defineConfig({
 				},
 				{
 					label: 'Lexicons',
-					autogenerate: { directory: 'lexicons' },
+					items: [{ autogenerate: { directory: 'lexicons' } }],
 				},
 				{
 					label: 'Guides',

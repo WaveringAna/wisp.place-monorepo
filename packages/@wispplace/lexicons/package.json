@@ -96,7 +96,7 @@
   },
   "devDependencies": {
     "@atcute/lex-cli": "^2.5.3",
-    "@atproto/lex-cli": "^0.9.7",
+    "@atproto/lex-cli": "^0.10.6",
     "multiformats": "^13.4.1"
   }
 }
