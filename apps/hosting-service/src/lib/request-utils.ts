@@ -4,6 +4,12 @@
 
 import type { Record as WispSettings } from '@wispplace/lexicons/types/place/wisp/settings'
 
+const SHARED_ORIGIN_BLOCKED_HEADERS = new Set(['service-worker-allowed'])
+
+interface CustomHeaderOptions {
+	sharedOrigin?: boolean
+}
+
 /**
  * Default index file names to check for directory requests
  * Will be checked in order until one is found
@@ -39,10 +45,19 @@ export function matchGlob(path: string, pattern: string): boolean {
 /**
  * Apply custom headers from settings to response headers
  */
-export function applyCustomHeaders(headers: Record<string, string>, filePath: string, settings: WispSettings | null) {
+export function applyCustomHeaders(
+	headers: Record<string, string>,
+	filePath: string,
+	settings: WispSettings | null,
+	options: CustomHeaderOptions = {},
+) {
 	if (!settings?.headers || settings.headers.length === 0) return
 
 	for (const customHeader of settings.headers) {
+		if (options.sharedOrigin && SHARED_ORIGIN_BLOCKED_HEADERS.has(customHeader.name.trim().toLowerCase())) {
+			continue
+		}
+
 		// If path glob is specified, check if it matches
 		if (customHeader.path) {
 			if (!matchGlob(filePath, customHeader.path)) {

@@ -338,6 +338,7 @@ function buildResponseFromStorageResult(
 	filePath: string,
 	settings: WispSettings | null,
 	requestHeaders?: Record<string, string>,
+	sharedOrigin = false,
 ): Response {
 	const content = Buffer.from(result.data)
 	const meta = result.metadata.customMetadata as { encoding?: string; mimeType?: string } | undefined
@@ -381,18 +382,18 @@ function buildResponseFromStorageResult(
 		if (!clientAcceptsGzip || !shouldServeCompressed) {
 			if (hasGzipMagic) {
 				const decompressed = gunzipSync(content)
-				applyCustomHeaders(headers, filePath, settings)
+				applyCustomHeaders(headers, filePath, settings, { sharedOrigin })
 				return new Response(decompressed, { headers })
 			}
 			logger.warn(`File marked as gzipped but lacks magic bytes, serving as-is`, { filePath })
-			applyCustomHeaders(headers, filePath, settings)
+			applyCustomHeaders(headers, filePath, settings, { sharedOrigin })
 			return new Response(content, { headers })
 		}
 
 		headers['Content-Encoding'] = 'gzip'
 	}
 
-	applyCustomHeaders(headers, filePath, settings)
+	applyCustomHeaders(headers, filePath, settings, { sharedOrigin })
 	return new Response(content, { headers })
 }
 
@@ -402,6 +403,7 @@ async function buildRewrittenHtmlResponse(
 	basePath: string,
 	settings: WispSettings | null,
 	requestHeaders?: Record<string, string>,
+	sharedOrigin = false,
 ): Promise<Response> {
 	try {
 		const content = Buffer.from(result.data)
@@ -422,7 +424,7 @@ async function buildRewrittenHtmlResponse(
 				decoded = gunzipSync(content)
 			} else {
 				logger.warn(`File marked as gzipped but lacks magic bytes, serving original`, { filePath })
-				applyCustomHeaders(headers, filePath, settings)
+				applyCustomHeaders(headers, filePath, settings, { sharedOrigin })
 				return new Response(content, { headers })
 			}
 		} else if (hasGzipMagic && shouldCompressMimeType(mimeType)) {
@@ -442,11 +444,11 @@ async function buildRewrittenHtmlResponse(
 			headers['Content-Encoding'] = 'gzip'
 		}
 
-		applyCustomHeaders(headers, filePath, settings)
+		applyCustomHeaders(headers, filePath, settings, { sharedOrigin })
 		return new Response(output, { headers })
 	} catch (err) {
 		logger.warn('Failed to rewrite HTML on demand, serving original', { filePath, error: err })
-		return buildResponseFromStorageResult(result, filePath, settings, requestHeaders)
+		return buildResponseFromStorageResult(result, filePath, settings, requestHeaders, sharedOrigin)
 	}
 }
 
@@ -946,10 +948,11 @@ export async function serveFileInternalWithRewrite(
 				basePath,
 				settings,
 				requestHeaders,
+				true,
 			)
 		}
 
-		return buildResponseFromStorageResult(fileResult.result, fileResult.filePath, settings, requestHeaders)
+		return buildResponseFromStorageResult(fileResult.result, fileResult.filePath, settings, requestHeaders, true)
 	}
 
 	// Normalize the request path (keep empty for root, remove trailing slash for others)
