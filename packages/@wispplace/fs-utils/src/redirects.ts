@@ -193,6 +193,10 @@ function convertPathToRegex(pattern: string): { pattern: RegExp; params: string[
 	let regexStr = '^'
 
 	const pathPart = pattern.split('?')[0] || pattern
+	const splatCount = (pathPart.match(/\*/g) || []).length
+	if (splatCount > 1 || (splatCount === 1 && !pathPart.endsWith('*'))) {
+		throw new Error('Redirect splats must appear at most once and at the end of the path')
+	}
 
 	let escaped = pathPart.replace(/[.+^${}()|[\]\\]/g, '\\$&')
 

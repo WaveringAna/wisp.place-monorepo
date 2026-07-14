@@ -51,6 +51,18 @@ describe('parseRedirectsFile', () => {
 		expect(rules[0]?.to).toBe('/blog/:splat')
 	})
 
+	it('should reject splats that can cause regex backtracking', () => {
+		const content = `
+/safe/* /target/:splat
+/nested/*/suffix /target
+/*/*/*/*/*/*/*/*/x /target
+`
+		const rules = parseRedirectsFile(content)
+
+		expect(rules).toHaveLength(1)
+		expect(rules[0]?.from).toBe('/safe/*')
+	})
+
 	it('should parse placeholder redirects', () => {
 		const content = `/blog/:year/:month/:day /posts/:year-:month-:day`
 		const rules = parseRedirectsFile(content)
