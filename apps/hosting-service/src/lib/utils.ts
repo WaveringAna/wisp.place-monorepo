@@ -1,8 +1,10 @@
 import { didWebToHttps, extractBlobCid, getPdsForDid, resolveDid } from '@wispplace/atproto-utils'
 import { sanitizePath } from '@wispplace/fs-utils'
+import { parseLexiconJson } from '@wispplace/lexicons/public-json'
 import type { Directory, Entry } from '@wispplace/lexicons/types/place/wisp/fs'
 import type { Record as WispSettings } from '@wispplace/lexicons/types/place/wisp/settings'
 import type { Record as SubfsRecord } from '@wispplace/lexicons/types/place/wisp/subfs'
+import { validateRecord as validateSubfsRecord } from '@wispplace/lexicons/types/place/wisp/subfs'
 import { safeFetchJson } from '@wispplace/safe-fetch'
 import { getSiteSettingsCache } from './db'
 
@@ -61,7 +63,13 @@ async function fetchSubfsRecord(uri: string, pdsEndpoint: string): Promise<Subfs
 			return null
 		}
 
-		return response.value as SubfsRecord
+		const record = parseLexiconJson<SubfsRecord>(response.value)
+		if (!validateSubfsRecord(record).success) {
+			console.error('Invalid subfs record:', uri)
+			return null
+		}
+
+		return record
 	} catch (err) {
 		console.error('Failed to fetch subfs record:', uri, err)
 		return null
