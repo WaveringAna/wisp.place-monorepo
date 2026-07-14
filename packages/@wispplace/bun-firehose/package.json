@@ -24,7 +24,7 @@
     }
   },
   "dependencies": {
-    "@atproto/identity": "^0.4.10",
+    "@atproto/identity": "^0.5.6",
     "@atproto/lex-cbor": "^0.0.9",
     "@atproto/lex-data": "^0.0.9",
     "@atproto/repo": "^0.8.12",
