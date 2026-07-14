@@ -25,6 +25,7 @@ export const CACHE_TTL_MS = 5 * 60 * 1000 // 5 minutes
 export const FETCH_TIMEOUT_MS = 30000 // 30 seconds
 export const MAX_JSON_SIZE = 10 * 1024 * 1024 // 10MB
 export const MAX_BLOB_SIZE = MAX_FILE_SIZE // Use file size limit
+export const MAX_DECOMPRESSED_BLOB_SIZE = MAX_FILE_SIZE
 
 // Directory limits (AT Protocol lexicon constraints)
 export const MAX_ENTRIES_PER_DIRECTORY = 500

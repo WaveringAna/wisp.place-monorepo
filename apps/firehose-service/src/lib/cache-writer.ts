@@ -3,10 +3,15 @@
  * Handles incremental updates by comparing CIDs
  */
 
-import { gunzipSync } from 'node:zlib'
 import { extractBlobCid, getPdsForDid } from '@wispplace/atproto-utils'
-import { shouldCompressMimeType } from '@wispplace/atproto-utils/compression'
-import { MAX_BLOB_SIZE, MAX_FILE_COUNT, MAX_SITE_SIZE, MAX_SITE_SIZE_SUPPORTER } from '@wispplace/constants'
+import { decompressFile, shouldCompressMimeType } from '@wispplace/atproto-utils/compression'
+import {
+	MAX_BLOB_SIZE,
+	MAX_DECOMPRESSED_BLOB_SIZE,
+	MAX_FILE_COUNT,
+	MAX_SITE_SIZE,
+	MAX_SITE_SIZE_SUPPORTER,
+} from '@wispplace/constants'
 import { collectFileCidsFromEntries, countFilesInDirectory, normalizeFileCids } from '@wispplace/fs-utils'
 import { isHtmlContent, rewriteHtmlPaths } from '@wispplace/fs-utils/html-rewriter'
 import type { Directory, Entry, File, Record as WispFsRecord } from '@wispplace/lexicons/types/place/wisp/fs'
@@ -518,7 +523,7 @@ async function downloadAndWriteBlob(did: string, rkey: string, file: FileInfo, p
 		content[1] === 0x8b
 	) {
 		try {
-			content = gunzipSync(content)
+			content = decompressFile(content, MAX_DECOMPRESSED_BLOB_SIZE)
 			encoding = undefined
 		} catch (error) {
 			logger.error(`Failed to decompress ${file.path}, storing gzipped`, error)
@@ -529,7 +534,7 @@ async function downloadAndWriteBlob(did: string, rkey: string, file: FileInfo, p
 		if (decoded && decoded.length >= 2 && decoded[0] === 0x1f && decoded[1] === 0x8b) {
 			logger.warn(`Decoded base64+gzip fallback for ${file.path}`)
 			try {
-				content = gunzipSync(decoded)
+				content = decompressFile(decoded, MAX_DECOMPRESSED_BLOB_SIZE)
 				encoding = undefined
 			} catch (error) {
 				logger.error(`Failed to decompress base64+gzip fallback for ${file.path}, storing gzipped`, error)
@@ -567,7 +572,7 @@ async function downloadAndWriteBlob(did: string, rkey: string, file: FileInfo, p
 			let rewriteSource = content
 			if (encoding === 'gzip' && content.length >= 2 && content[0] === 0x1f && content[1] === 0x8b) {
 				try {
-					rewriteSource = gunzipSync(content)
+					rewriteSource = decompressFile(content, MAX_DECOMPRESSED_BLOB_SIZE)
 				} catch (error) {
 					logger.error(`Failed to decompress ${file.path} for rewrite, using raw content`, error)
 				}
