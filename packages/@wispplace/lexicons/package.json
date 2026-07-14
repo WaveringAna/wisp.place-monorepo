@@ -91,8 +91,8 @@
   },
   "dependencies": {
     "@atcute/lexicons": "^1.2.9",
-    "@atproto/lexicon": "^0.6.1",
-    "@atproto/xrpc-server": "^0.9.6"
+    "@atproto/lexicon": "^0.7.7",
+    "@atproto/xrpc-server": "^0.11.9"
   },
   "devDependencies": {
     "@atcute/lex-cli": "^2.5.3",

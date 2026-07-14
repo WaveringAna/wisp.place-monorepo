@@ -24,13 +24,13 @@
     }
   },
   "dependencies": {
-    "@atproto/api": "^0.18.17",
+    "@atproto/api": "^0.20.28",
     "@wispplace/lexicons": "workspace:*",
     "mime-types": "^3.0.2",
     "multiformats": "^13.3.1"
   },
   "devDependencies": {
-    "@atproto/lexicon": "^0.6.1",
+    "@atproto/lexicon": "^0.7.7",
     "@types/mime-types": "^3.0.1"
   }
 }
