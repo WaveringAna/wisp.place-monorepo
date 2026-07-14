@@ -78,6 +78,10 @@
       "types": "./src/lexicons.ts",
       "default": "./src/lexicons.ts"
     },
+    "./public-json": {
+      "types": "./src/public-json.ts",
+      "default": "./src/public-json.ts"
+    },
     "./util": {
       "types": "./src/util.ts",
       "default": "./src/util.ts"

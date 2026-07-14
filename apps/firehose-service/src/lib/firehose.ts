@@ -7,6 +7,7 @@ import { IdResolver } from '@atproto/identity'
 import { Firehose } from '@atproto/sync'
 import { BunFirehose, type CommitEvt, type Event, isBun } from '@wispplace/bun-firehose'
 import type { Record as WispSettings } from '@wispplace/lexicons/types/place/wisp/settings'
+import { validateRecord as validateSettingsRecord } from '@wispplace/lexicons/types/place/wisp/settings'
 import { createLogger } from '@wispplace/observability'
 import { config } from '../config'
 import {
@@ -168,9 +169,11 @@ async function handleEvent(evt: Event | CommitEvt): Promise<void> {
 				try {
 					if (commitEvt.event === 'delete') {
 						await handleSettingsDelete(did, rkey)
-					} else if (record) {
+					} else if (record && validateSettingsRecord(record).success) {
 						const cidStr = cid?.toString() || ''
 						await handleSettingsUpdate(did, rkey, record as WispSettings, cidStr)
+					} else {
+						logger.warn(`[place.wisp.settings] Skipping invalid record`, { did, rkey })
 					}
 				} catch (err) {
 					logger.error(`[place.wisp.settings] Error handling event`, err, { did, rkey, event: commitEvt.event })

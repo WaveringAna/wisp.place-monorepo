@@ -9,9 +9,13 @@ import { shouldCompressMimeType } from '@wispplace/atproto-utils/compression'
 import { MAX_BLOB_SIZE, MAX_FILE_COUNT, MAX_SITE_SIZE, MAX_SITE_SIZE_SUPPORTER } from '@wispplace/constants'
 import { collectFileCidsFromEntries, countFilesInDirectory, normalizeFileCids } from '@wispplace/fs-utils'
 import { isHtmlContent, rewriteHtmlPaths } from '@wispplace/fs-utils/html-rewriter'
+import { parseLexiconJson } from '@wispplace/lexicons/public-json'
 import type { Directory, Entry, File, Record as WispFsRecord } from '@wispplace/lexicons/types/place/wisp/fs'
+import { validateRecord as validateFsRecord } from '@wispplace/lexicons/types/place/wisp/fs'
 import type { Record as WispSettings } from '@wispplace/lexicons/types/place/wisp/settings'
+import { validateRecord as validateSettingsRecord } from '@wispplace/lexicons/types/place/wisp/settings'
 import type { Record as SubfsRecord } from '@wispplace/lexicons/types/place/wisp/subfs'
+import { validateRecord as validateSubfsRecord } from '@wispplace/lexicons/types/place/wisp/subfs'
 import { createLogger } from '@wispplace/observability'
 import { safeFetchBlob, safeFetchJson } from '@wispplace/safe-fetch'
 import { publishCacheInvalidation } from './cache-invalidation'
@@ -103,8 +107,15 @@ export async function fetchSiteRecord(
 		const url = `${pdsEndpoint}/xrpc/com.atproto.repo.getRecord?repo=${encodeURIComponent(did)}&collection=place.wisp.fs&rkey=${encodeURIComponent(rkey)}`
 		const data = await safeFetchJson(url)
 
+		const record = parseLexiconJson<WispFsRecord>(data.value)
+		const validation = validateFsRecord(record)
+		if (!validation.success) {
+			logger.warn('Rejected invalid site record', { did, rkey, error: validation.error?.message })
+			return null
+		}
+
 		return {
-			record: data.value as WispFsRecord,
+			record,
 			cid: data.cid || '',
 		}
 	} catch (err) {
@@ -150,8 +161,15 @@ export async function listSiteRecordsForDid(
 		const pageRecords = Array.isArray(data.records) ? data.records : []
 		for (const row of pageRecords) {
 			const uri = row.uri
-			const record = row.value as WispFsRecord | undefined
-			if (!uri || !record || record.$type !== 'place.wisp.fs') continue
+			if (!uri || !row.value) continue
+
+			let record: WispFsRecord
+			try {
+				record = parseLexiconJson<WispFsRecord>(row.value)
+			} catch {
+				continue
+			}
+			if (!validateFsRecord(record).success) continue
 
 			const uriParts = uri.split('/')
 			const rkey = uriParts[uriParts.length - 1]
@@ -190,8 +208,15 @@ export async function fetchSettingsRecord(
 		const url = `${endpoint}/xrpc/com.atproto.repo.getRecord?repo=${encodeURIComponent(did)}&collection=place.wisp.settings&rkey=${encodeURIComponent(rkey)}`
 		const data = await safeFetchJson(url)
 
+		const record = parseLexiconJson<WispSettings>(data.value)
+		const validation = validateSettingsRecord(record)
+		if (!validation.success) {
+			logger.warn('Rejected invalid settings record', { did, rkey, error: validation.error?.message })
+			return null
+		}
+
 		return {
-			record: data.value as WispSettings,
+			record,
 			cid: data.cid || '',
 		}
 	} catch (err) {
@@ -220,7 +245,8 @@ async function fetchSubfsRecord(uri: string, pdsEndpoint: string): Promise<Subfs
 		const url = `${pdsEndpoint}/xrpc/com.atproto.repo.getRecord?repo=${encodeURIComponent(did)}&collection=${encodeURIComponent(collection)}&rkey=${encodeURIComponent(rkey)}`
 		const response = await safeFetchJson(url)
 
-		return (response?.value as SubfsRecord) || null
+		const record = response?.value ? parseLexiconJson<SubfsRecord>(response.value) : undefined
+		return record && validateSubfsRecord(record).success ? record : null
 	} catch {
 		return null
 	}

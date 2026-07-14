@@ -14,7 +14,9 @@ import { extractBlobCid, getPdsForDid } from '@wispplace/atproto-utils'
 import { shouldCompressMimeType } from '@wispplace/atproto-utils/compression'
 import { MAX_BLOB_SIZE, MAX_FILE_COUNT, MAX_SITE_SIZE, MAX_SITE_SIZE_SUPPORTER } from '@wispplace/constants'
 import { collectFileCidsFromEntries, countFilesInDirectory } from '@wispplace/fs-utils'
+import { parseLexiconJson } from '@wispplace/lexicons/public-json'
 import type { Directory, Entry, File, Record as WispFsRecord } from '@wispplace/lexicons/types/place/wisp/fs'
+import { validateRecord as validateFsRecord } from '@wispplace/lexicons/types/place/wisp/fs'
 import { createLogger } from '@wispplace/observability'
 import { safeFetchBlob, safeFetchJson } from '@wispplace/safe-fetch'
 import { isSupporter, releaseLock, tryAcquireLock, upsertSiteCache } from './db'
@@ -129,11 +131,12 @@ async function doFetchAndCache(did: string, rkey: string): Promise<boolean> {
 			return false
 		}
 
-		const record = data.value as WispFsRecord
+		const record = parseLexiconJson<WispFsRecord>(data.value)
 		const recordCid = data.cid || ''
 
-		if (!record?.root?.entries) {
-			logger.error('Invalid record structure', undefined, { did, rkey })
+		const validation = validateFsRecord(record)
+		if (!validation.success) {
+			logger.error('Invalid site record', undefined, { did, rkey, error: validation.error?.message })
 			return false
 		}
 
@@ -225,12 +228,7 @@ function validateEntryNames(entries: Entry[], pathPrefix: string = ''): void {
 
 function isSafeEntryName(name: string): boolean {
 	return (
-		name !== '' &&
-		name !== '.' &&
-		name !== '..' &&
-		!name.includes('/') &&
-		!name.includes('\\') &&
-		!name.includes('\0')
+		name !== '' && name !== '.' && name !== '..' && !name.includes('/') && !name.includes('\\') && !name.includes('\0')
 	)
 }
 
