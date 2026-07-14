@@ -9,10 +9,15 @@
  * so the firehose-service backfills S3 (cold tier).
  */
 
-import { gunzipSync } from 'node:zlib'
 import { extractBlobCid, getPdsForDid } from '@wispplace/atproto-utils'
-import { shouldCompressMimeType } from '@wispplace/atproto-utils/compression'
-import { MAX_BLOB_SIZE, MAX_FILE_COUNT, MAX_SITE_SIZE, MAX_SITE_SIZE_SUPPORTER } from '@wispplace/constants'
+import { decompressFile, shouldCompressMimeType } from '@wispplace/atproto-utils/compression'
+import {
+	MAX_BLOB_SIZE,
+	MAX_DECOMPRESSED_BLOB_SIZE,
+	MAX_FILE_COUNT,
+	MAX_SITE_SIZE,
+	MAX_SITE_SIZE_SUPPORTER,
+} from '@wispplace/constants'
 import { collectFileCidsFromEntries, countFilesInDirectory } from '@wispplace/fs-utils'
 import type { Directory, Entry, File, Record as WispFsRecord } from '@wispplace/lexicons/types/place/wisp/fs'
 import { createLogger } from '@wispplace/observability'
@@ -225,12 +230,7 @@ function validateEntryNames(entries: Entry[], pathPrefix: string = ''): void {
 
 function isSafeEntryName(name: string): boolean {
 	return (
-		name !== '' &&
-		name !== '.' &&
-		name !== '..' &&
-		!name.includes('/') &&
-		!name.includes('\\') &&
-		!name.includes('\0')
+		name !== '' && name !== '.' && name !== '..' && !name.includes('/') && !name.includes('\\') && !name.includes('\0')
 	)
 }
 
@@ -311,7 +311,7 @@ async function downloadAndWriteBlob(did: string, rkey: string, file: FileInfo, p
 		content[1] === 0x8b
 	) {
 		try {
-			content = gunzipSync(content)
+			content = decompressFile(content, MAX_DECOMPRESSED_BLOB_SIZE)
 			encoding = undefined
 		} catch (error) {
 			logger.warn(`Failed to decompress ${file.path}, storing gzipped`, { did, rkey, error })
@@ -322,7 +322,7 @@ async function downloadAndWriteBlob(did: string, rkey: string, file: FileInfo, p
 		if (decoded && decoded.length >= 2 && decoded[0] === 0x1f && decoded[1] === 0x8b) {
 			logger.warn(`Decoded base64+gzip fallback for ${file.path}`, { did, rkey })
 			try {
-				content = gunzipSync(decoded)
+				content = decompressFile(decoded, MAX_DECOMPRESSED_BLOB_SIZE)
 				encoding = undefined
 			} catch (error) {
 				logger.warn(`Failed to decompress base64+gzip fallback for ${file.path}, storing gzipped`, { did, rkey, error })

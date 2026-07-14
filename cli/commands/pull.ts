@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { gunzipSync } from 'node:zlib'
 import { extractBlobCid, getPdsForDid, resolveDid } from '@wispplace/atproto-utils'
+import { decompressFile } from '@wispplace/atproto-utils/compression'
+import { MAX_DECOMPRESSED_BLOB_SIZE } from '@wispplace/constants'
 import { sanitizePath } from '@wispplace/fs-utils'
 import type { Directory, Entry, File, Record as FsRecord } from '@wispplace/lexicons/types/place/wisp/fs'
 import type { Record as SubfsRecord } from '@wispplace/lexicons/types/place/wisp/subfs'
@@ -225,7 +226,7 @@ async function downloadBlob(pdsEndpoint: string, did: string, file: FileToDownlo
 	// Decompress gzip
 	if (file.encoding === 'gzip' && content.length >= 2 && content[0] === 0x1f && content[1] === 0x8b) {
 		try {
-			content = gunzipSync(content)
+			content = decompressFile(content, MAX_DECOMPRESSED_BLOB_SIZE)
 		} catch {
 			// Keep original content if decompression fails
 		}

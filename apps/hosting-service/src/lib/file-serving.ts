@@ -3,8 +3,9 @@
  * Handles file retrieval, caching, redirects, and HTML rewriting
  */
 
-import { gunzipSync, gzipSync } from 'node:zlib'
-import { shouldCompressMimeType } from '@wispplace/atproto-utils/compression'
+import { gzipSync } from 'node:zlib'
+import { decompressFile, shouldCompressMimeType } from '@wispplace/atproto-utils/compression'
+import { MAX_DECOMPRESSED_BLOB_SIZE } from '@wispplace/constants'
 import { normalizeFileCids } from '@wispplace/fs-utils'
 import { isHtmlContent, rewriteHtmlPaths } from '@wispplace/fs-utils/html-rewriter'
 import type { Record as WispSettings } from '@wispplace/lexicons/types/place/wisp/settings'
@@ -380,7 +381,7 @@ function buildResponseFromStorageResult(
 
 		if (!clientAcceptsGzip || !shouldServeCompressed) {
 			if (hasGzipMagic) {
-				const decompressed = gunzipSync(content)
+				const decompressed = decompressFile(content, MAX_DECOMPRESSED_BLOB_SIZE)
 				applyCustomHeaders(headers, filePath, settings)
 				return new Response(decompressed, { headers })
 			}
@@ -419,7 +420,7 @@ async function buildRewrittenHtmlResponse(
 		let decoded = content
 		if (meta?.encoding === 'gzip') {
 			if (hasGzipMagic) {
-				decoded = gunzipSync(content)
+				decoded = decompressFile(content, MAX_DECOMPRESSED_BLOB_SIZE)
 			} else {
 				logger.warn(`File marked as gzipped but lacks magic bytes, serving original`, { filePath })
 				applyCustomHeaders(headers, filePath, settings)
@@ -427,7 +428,7 @@ async function buildRewrittenHtmlResponse(
 			}
 		} else if (hasGzipMagic && shouldCompressMimeType(mimeType)) {
 			// Heuristic: treat as gzipped text content even if encoding metadata is missing
-			decoded = gunzipSync(content)
+			decoded = decompressFile(content, MAX_DECOMPRESSED_BLOB_SIZE)
 		}
 
 		const htmlString = new TextDecoder().decode(decoded)

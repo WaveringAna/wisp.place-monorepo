@@ -1,4 +1,4 @@
-import { gzipSync } from 'node:zlib'
+import { gunzipSync, gzipSync } from 'node:zlib'
 import { charsets } from 'mime-types'
 
 /**
@@ -101,4 +101,16 @@ export function compressFile(content: Buffer): Buffer {
 	return gzipSync(content, {
 		level: 9,
 	})
+}
+
+/**
+ * Decompress gzip content without allowing an attacker-controlled blob to grow
+ * beyond the caller's accepted file-size limit.
+ */
+export function decompressFile(content: Uint8Array, maxOutputLength: number): Buffer<ArrayBuffer> {
+	if (!Number.isSafeInteger(maxOutputLength) || maxOutputLength <= 0) {
+		throw new Error('maxOutputLength must be a positive safe integer')
+	}
+
+	return Buffer.from(gunzipSync(content, { maxOutputLength }))
 }
