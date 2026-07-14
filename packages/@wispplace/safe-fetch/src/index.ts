@@ -17,7 +17,7 @@ const BLOCKED_IP_RANGES = [
 
 const BLOCKED_HOSTS = ['localhost', 'metadata.google.internal', '169.254.169.254']
 
-const FETCH_TIMEOUT = 120000 // 120 seconds
+export const DEFAULT_FETCH_TIMEOUT_MS = 30000 // 30 seconds for control-plane requests
 const FETCH_TIMEOUT_BLOB = 120000 // 2 minutes for blob downloads
 const MAX_RESPONSE_SIZE = 10 * 1024 * 1024 // 10MB
 const MAX_JSON_SIZE = 1024 * 1024 // 1MB
@@ -136,8 +136,8 @@ export async function safeFetch(
 	url: string,
 	options?: RequestInit & { maxSize?: number; timeout?: number; retry?: boolean },
 ): Promise<Response> {
-	const shouldRetry = options?.retry !== false // Default to true
-	const timeoutMs = options?.timeout ?? FETCH_TIMEOUT
+	const shouldRetry = options?.retry === true // Retries must be explicitly enabled by background callers
+	const timeoutMs = options?.timeout ?? DEFAULT_FETCH_TIMEOUT_MS
 	const maxSize = options?.maxSize ?? MAX_RESPONSE_SIZE
 
 	// Parse and validate URL (done once, outside retry loop)
