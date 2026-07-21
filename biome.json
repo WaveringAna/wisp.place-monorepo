@@ -1,5 +1,5 @@
 {
-	"$schema": "https://biomejs.dev/schemas/2.4.6/schema.json",
+	"$schema": "https://biomejs.dev/schemas/2.5.3/schema.json",
 	"vcs": {
 		"enabled": true,
 		"clientKind": "git",
@@ -7,15 +7,11 @@
 	},
 	"files": {
 		"ignoreUnknown": true,
-		"includes": ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx"]
+		"includes": ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "!packages/@wispplace/lexicons"]
 	},
 	"overrides": [
 		{
 			"includes": ["**/public/admin/admin.tsx"],
-			"linter": { "enabled": false }
-		},
-		{
-			"includes": ["packages/@wispplace/lexicons/**"],
 			"linter": { "enabled": false }
 		}
 	],
@@ -27,7 +23,7 @@
 	"linter": {
 		"enabled": true,
 		"rules": {
-			"recommended": true,
+			"preset": "recommended",
 			"suspicious": {
 				"noExplicitAny": "off"
 			},

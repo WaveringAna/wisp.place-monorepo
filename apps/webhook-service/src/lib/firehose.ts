@@ -12,8 +12,8 @@ import {
 import { deliverWebhook } from './delivery'
 import { JetstreamClient, type JetstreamEvent } from './jetstream'
 import { matchWebhooks } from './matcher'
-import { assertSafeWebhookUrlSyntax } from './webhook-url'
 import { getCached, invalidate, setCached } from './registry'
+import { assertSafeWebhookUrlSyntax } from './webhook-url'
 
 const logger = createLogger('webhook-service:firehose')
 

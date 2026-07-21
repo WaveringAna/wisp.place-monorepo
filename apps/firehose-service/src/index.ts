@@ -16,7 +16,7 @@ import { closeCacheInvalidationPublisher } from './lib/cache-invalidation'
 import { fetchSiteRecord, handleSiteCreateOrUpdate, listSiteRecordsForDid } from './lib/cache-writer'
 import { closeDatabase, getSiteCache, listAllKnownDids } from './lib/db'
 import { getActiveService, getCurrentSeq, getFirehoseHealth, startFirehose, stopFirehose } from './lib/firehose'
-import { closeLeaderRedis, getLeaderInfo, runLeaderElection, saveCursor } from './lib/leader'
+import { closeLeaderRedis, getLeaderInfo, releaseLeadership, runLeaderElection, saveCursor } from './lib/leader'
 import { startRevalidateWorker, stopRevalidateWorker } from './lib/revalidate-worker'
 import { storage } from './lib/storage'
 

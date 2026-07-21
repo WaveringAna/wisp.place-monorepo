@@ -9,7 +9,7 @@ import { safeFetchJson } from '@wispplace/safe-fetch'
 import { getSiteSettingsCache } from './db'
 
 // Re-export shared utilities for local usage and tests
-export { extractBlobCid, sanitizePath, resolveDid, getPdsForDid, didWebToHttps }
+export { didWebToHttps, extractBlobCid, getPdsForDid, resolveDid, sanitizePath }
 
 /**
  * Extract all subfs URIs from a directory tree with their mount paths
