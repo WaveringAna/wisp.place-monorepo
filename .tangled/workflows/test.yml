@@ -5,12 +5,10 @@ when:
 engine: microvm
 
 dependencies:
-  nixpkgs:
-    - git
-    - gcc
-    - glibc
-  github:NixOS/nixpkgs/nixpkgs-unstable:
-    - bun
+  - git
+  - gcc
+  - glibc
+  - github:NixOS/nixpkgs/nixpkgs-unstable#bun
 
 steps:
   - name: install dependencies

@@ -12,13 +12,11 @@ clone:
   depth: 1
   submodules: true
 dependencies:
-  nixpkgs:
-    - git
-    - nodejs
-    - gcc
-    - glibc
-  github:NixOS/nixpkgs/nixpkgs-unstable:
-    - bun
+  - git
+  - nodejs
+  - gcc
+  - glibc
+  - github:NixOS/nixpkgs/nixpkgs-unstable#bun
 environment:
   WISP_HANDLE: wisp.place
   SITE_PATH: docs/dist
