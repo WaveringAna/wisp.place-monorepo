@@ -41,7 +41,7 @@
   },
   "dependencies": {
     "@atproto/api": "^0.20.28",
-    "@wispplace/atproto-utils": "workspace:*",
-    "@wispplace/lexicons": "workspace:*"
+    "@wispplace/atproto-utils": "file:../atproto-utils",
+    "@wispplace/lexicons": "file:../lexicons"
   }
 }

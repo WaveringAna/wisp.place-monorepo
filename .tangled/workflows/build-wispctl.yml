@@ -1,0 +1,32 @@
+when:
+  - event: ["push", "manual"]
+    branch: main
+  - event: ["pull_request"]
+    branch: main
+
+engine: microvm
+image: nixos
+
+# Let spindle substitute Nix paths from the same public cache that end users use.
+caches:
+  https://wispplace.cachix.org: "wispplace.cachix.org-1:v+eZmUCZ9UGLyOCK4IFZvZKMCGCnBPOKDM+Q7II1Jmw="
+
+dependencies:
+  - cachix
+  - git
+
+steps:
+  - name: build and check wispctl
+    command: |
+      nix flake check --accept-flake-config
+      nix build --accept-flake-config .#default
+
+  - name: push wispctl to Cachix
+    command: |
+      if [ "${TANGLED_PIPELINE_KIND:-}" = "push" ] && [ "${TANGLED_REF_NAME:-}" = "main" ]; then
+        test -n "${CACHIX_AUTH_TOKEN:-}" || {
+          echo "CACHIX_AUTH_TOKEN is required for main-branch cache publishing" >&2
+          exit 1
+        }
+        cachix push wispplace ./result
+      fi

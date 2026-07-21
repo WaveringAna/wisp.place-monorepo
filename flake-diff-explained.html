@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>wispctl flake diff, explained</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b1020;
+      --panel: #121a2d;
+      --panel-2: #18233b;
+      --text: #edf2ff;
+      --muted: #aab7d4;
+      --line: #2d3b5d;
+      --blue: #8db4ff;
+      --cyan: #73e1d1;
+      --amber: #ffd18a;
+      --pink: #ff9db4;
+      --shadow: 0 18px 50px rgba(0, 0, 0, .24);
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at 8% 0%, rgba(91, 126, 220, .22), transparent 32rem),
+        radial-gradient(circle at 92% 12%, rgba(83, 205, 187, .12), transparent 28rem),
+        var(--bg);
+      color: var(--text);
+      font: 16px/1.65 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    a { color: var(--blue); }
+    .wrap { width: min(1120px, calc(100% - 40px)); margin: 0 auto; }
+    header { padding: 76px 0 42px; }
+    .eyebrow { color: var(--cyan); font-size: .78rem; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
+    h1, h2, h3 { line-height: 1.2; letter-spacing: -.025em; }
+    h1 { max-width: 780px; margin: 14px 0 18px; font-size: clamp(2.5rem, 6vw, 5.2rem); }
+    h2 { margin: 0 0 14px; font-size: clamp(1.55rem, 3vw, 2.2rem); }
+    h3 { margin: 0 0 8px; font-size: 1.1rem; }
+    .lede { max-width: 760px; color: var(--muted); font-size: 1.15rem; }
+    .pill-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 26px; }
+    .pill { border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; color: var(--muted); background: rgba(18, 26, 45, .72); }
+    main { padding-bottom: 76px; }
+    section { margin: 34px 0; }
+    .panel { border: 1px solid var(--line); border-radius: 22px; padding: 28px; background: rgba(18, 26, 45, .88); box-shadow: var(--shadow); }
+    .grid { display: grid; gap: 16px; }
+    .grid.three { grid-template-columns: repeat(3, 1fr); }
+    .grid.two { grid-template-columns: repeat(2, 1fr); }
+    .card { min-height: 150px; border: 1px solid var(--line); border-radius: 16px; padding: 20px; background: rgba(24, 35, 59, .7); }
+    .card .icon { color: var(--cyan); font-size: 1.45rem; }
+    .card p, .panel p, li { color: var(--muted); }
+    .card p { margin-bottom: 0; }
+    .callout { border-left: 4px solid var(--amber); background: rgba(255, 209, 138, .08); border-radius: 0 14px 14px 0; padding: 16px 18px; }
+    .callout strong { color: var(--amber); }
+    .good { border-left-color: var(--cyan); background: rgba(115, 225, 209, .08); }
+    .good strong { color: var(--cyan); }
+    .warning { border-left-color: var(--pink); background: rgba(255, 157, 180, .08); }
+    .warning strong { color: var(--pink); }
+    .flow { display: grid; grid-template-columns: repeat(5, 1fr); align-items: stretch; gap: 10px; margin-top: 22px; }
+    .step { position: relative; border: 1px solid var(--line); border-radius: 14px; padding: 17px 14px; background: var(--panel-2); }
+    .step:not(:last-child)::after { content: "→"; position: absolute; top: 50%; right: -18px; transform: translateY(-50%); color: var(--blue); font-size: 1.3rem; z-index: 1; }
+    .step b { display: block; color: var(--blue); font-size: .82rem; letter-spacing: .08em; text-transform: uppercase; }
+    .step span { display: block; margin-top: 8px; color: var(--muted); font-size: .92rem; line-height: 1.4; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 14px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: var(--blue); font-size: .78rem; letter-spacing: .08em; text-transform: uppercase; }
+    td { color: var(--muted); }
+    td:first-child { color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .9rem; white-space: nowrap; }
+    code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    code { color: var(--cyan); }
+    pre { overflow-x: auto; margin: 14px 0 0; padding: 18px; border: 1px solid var(--line); border-radius: 14px; background: #0a0f1c; color: #d9e4ff; font-size: .88rem; line-height: 1.55; }
+    .code-label { margin-top: 18px; color: var(--muted); font-size: .78rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+    .two-col { display: grid; grid-template-columns: 1.05fr .95fr; gap: 22px; align-items: start; }
+    ul { padding-left: 22px; }
+    li + li { margin-top: 7px; }
+    details { border-top: 1px solid var(--line); padding: 15px 0; }
+    details:last-child { border-bottom: 1px solid var(--line); }
+    summary { cursor: pointer; color: var(--text); font-weight: 700; }
+    summary::marker { color: var(--cyan); }
+    footer { padding: 30px 0 52px; border-top: 1px solid var(--line); color: var(--muted); font-size: .9rem; }
+    .small { color: var(--muted); font-size: .9rem; }
+    @media (max-width: 820px) {
+      .grid.three, .grid.two, .two-col { grid-template-columns: 1fr; }
+      .flow { grid-template-columns: 1fr; }
+      .step:not(:last-child)::after { content: "↓"; top: auto; right: auto; bottom: -21px; left: 50%; transform: translateX(-50%); }
+      td:first-child { white-space: normal; }
+    }
+  </style>
+</head>
+<body>
+  <header class="wrap">
+    <div class="eyebrow">wisp.place · packaging change</div>
+    <h1>the flake diff, in plain english</h1>
+    <p class="lede">This change replaces the old Rust-oriented Nix packaging with a reproducible Bun build for <code>wispctl</code>, then gives Nix a normal package, an executable app, and a path to cached binaries.</p>
+    <div class="pill-row">
+      <span class="pill">package: wispctl 1.1.3</span>
+      <span class="pill">builder: bun2nix</span>
+      <span class="pill">cache: wispplace.cachix.org</span>
+      <span class="pill">verified: nix flake check</span>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="panel">
+      <h2>the short version</h2>
+      <div class="grid three">
+        <article class="card">
+          <div class="icon">01</div>
+          <h3>build the thing that actually exists</h3>
+          <p>The repository CLI is Bun/TypeScript, so the flake now uses <code>bun2nix</code> instead of trying to compile a Rust binary that is no longer the CLI implementation.</p>
+        </article>
+        <article class="card">
+          <div class="icon">02</div>
+          <h3>make the monorepo installable</h3>
+          <p>The CLI gets its own lockfile and generated dependency expression. Workspace links become local <code>file:</code> links for the isolated Nix build.</p>
+        </article>
+        <article class="card">
+          <div class="icon">03</div>
+          <h3>let users download results</h3>
+          <p>The flake advertises the <code>wispplace</code> Cachix cache. CI still needs to build and push the derivation before users can substitute it.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>before → after</h2>
+      <div class="flow">
+        <div class="step"><b>before</b><span>Rust toolchain, cargo-zigbuild, Zig, and hand-written target packages</span></div>
+        <div class="step"><b>source</b><span>Bun/TypeScript CLI in <code>cli/index.ts</code></span></div>
+        <div class="step"><b>deps</b><span>Frozen Bun lockfile plus bun2nix’s fixed dependency cache</span></div>
+        <div class="step"><b>output</b><span>Compiled executable at <code>$out/bin/wispctl</code></span></div>
+        <div class="step"><b>delivery</b><span>Nix package/app outputs, optionally substituted from Cachix</span></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>what changed in <code>flake.nix</code></h2>
+      <div class="two-col">
+        <div>
+          <h3>inputs</h3>
+          <p>The flake now brings in:</p>
+          <ul>
+            <li><code>nixpkgs</code> for the platform packages and standard Nix build environment.</li>
+            <li><code>flake-utils</code> to expose the same outputs for each default system.</li>
+            <li><code>bun2nix</code> to turn the Bun lockfile into fixed-output Nix dependencies.</li>
+          </ul>
+          <h3>the derivation</h3>
+          <p><code>wispctl</code> is built with <code>bun2nix.mkDerivation</code>. The source is the repository root, while <code>bunRoot = "cli"</code> tells the dependency hooks where the CLI manifest lives.</p>
+          <p>The root manifest and lockfile are renamed during <code>postPatch</code>. That prevents Bun from treating the entire monorepo as the install root while the standalone CLI lockfile is being used.</p>
+        </div>
+        <div>
+          <div class="code-label">important build settings</div>
+          <pre><code>bunInstallFlags = [
+  "--frozen-lockfile"
+  "--offline"
+  "--linker=hoisted"
+  "--backend=copyfile"
+];
+
+bunRoot = "cli";
+
+bun build ./cli/index.ts \
+  --outfile wispctl \
+  --compile --minify \
+  --sourcemap --bytecode</code></pre>
+          <p class="small">The build is offline and frozen: it must use the dependency data already captured in <code>cli/bun.lock</code> and <code>cli/bun.nix</code>.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>the outputs users can consume</h2>
+      <div class="grid three">
+        <article class="card">
+          <h3><code>packages.default</code></h3>
+          <p>The installable Nix package. Build it with <code>nix build .#default</code>; the binary ends up at <code>result/bin/wispctl</code>.</p>
+        </article>
+        <article class="card">
+          <h3><code>apps.default</code></h3>
+          <p>The runnable flake app. Invoke it with <code>nix run . -- --help</code> or from a remote flake reference.</p>
+        </article>
+        <article class="card">
+          <h3><code>devShells.default</code></h3>
+          <p>A small development environment containing Bun and bun2nix for working on the packaging setup.</p>
+        </article>
+      </div>
+      <div class="callout good" style="margin-top: 20px"><strong>metadata:</strong> the <code>meta</code> blocks describe the package and identify <code>wispctl</code> as its main program. They do not contain binaries, secrets, or cache data.</div>
+    </section>
+
+    <section class="panel">
+      <h2>why the dependency files are large</h2>
+      <p>These generated files are the reproducibility layer, not hand-written application logic:</p>
+      <table>
+        <thead><tr><th>file</th><th>purpose</th><th>why it changed</th></tr></thead>
+        <tbody>
+          <tr><td>cli/bun.lock</td><td>Standalone Bun lockfile for the CLI and its local packages.</td><td>The root workspace lockfile is not a convenient install root for the isolated Nix build.</td></tr>
+          <tr><td>cli/bun.nix</td><td>Hashes and store paths generated from the CLI lockfile.</td><td><code>fetchBunDeps</code> needs this to install with <code>--offline</code>.</td></tr>
+          <tr><td>bun.nix</td><td>Generated dependency expression for the full root workspace.</td><td>Created while making the monorepo dependency graph reproducible; the flake’s final CLI derivation uses <code>cli/bun.nix</code>.</td></tr>
+          <tr><td>flake.lock</td><td>Pins nixpkgs, flake-utils, bun2nix, and their transitive inputs.</td><td>A flake import should resolve the same Nix inputs over time.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="panel">
+      <h2>why package manifests changed</h2>
+      <div class="two-col">
+        <div>
+          <h3>unpinned Bun type packages</h3>
+          <p>References such as <code>"latest"</code> became explicit ranges such as <code>"^1.3.14"</code>. This lets the lockfile describe a stable dependency graph instead of asking a sandboxed build to resolve a moving tag.</p>
+        </div>
+        <div>
+          <h3>workspace links → local files</h3>
+          <p>The CLI and a few local packages use paths such as <code>file:../packages/@wispplace/lexicons</code>. That is intentional for this standalone build: the package source is present in the flake source tree, so Bun can resolve it without a live workspace install.</p>
+        </div>
+      </div>
+      <div class="callout warning" style="margin-top: 20px"><strong>scope note:</strong> the old flake exposed explicit Linux and macOS target packages based on Rust cross-compilation. The new flake exposes the native package for each system evaluated by <code>eachDefaultSystem</code>; separate CI builds are needed if you want every platform’s binary pre-populated in Cachix.</div>
+    </section>
+
+    <section class="panel">
+      <h2>how Cachix fits in</h2>
+      <div class="two-col">
+        <div>
+          <h3>what is already configured</h3>
+          <ul>
+            <li>Substituter: <code>https://wispplace.cachix.org</code></li>
+            <li>Public signing key: committed in <code>flake.nix</code></li>
+            <li>Cache name: <code>wispplace</code></li>
+          </ul>
+          <p>That tells Nix where it may download a matching store path from.</p>
+        </div>
+        <div>
+          <h3>what still has to happen</h3>
+          <ol>
+            <li>Add a Tangled spindle workflow at <code>.tangled/workflows/build-wispctl.yml</code>.</li>
+            <li>Configure the repository’s <code>CACHIX_AUTH_TOKEN</code> pipeline secret.</li>
+            <li>Let the workflow run <code>nix build .#default</code> and push <code>./result</code> to Cachix.</li>
+            <li>Run <code>nix build .#default</code> on each desired platform.</li>
+          </ol>
+          <p>Until CI pushes a result, users can still build locally; the cache cannot substitute an artifact that has never been uploaded.</p>
+        </div>
+      </div>
+      <div class="code-label">user command, after the cache has been populated</div>
+      <pre><code>nix run --accept-flake-config \
+  'git+ssh://git@knot.gaze.systems/nekomimi.pet/wisp.place-monorepo'</code></pre>
+      <p class="small">Nix asks users to explicitly trust flake-provided substituter settings. That is a security feature, not a build failure.</p>
+    </section>
+
+    <section class="panel">
+      <h2>verification completed</h2>
+      <details open>
+        <summary><code>nix build .#default</code></summary>
+        <p>Passed. The compiled result was produced at <code>result/bin/wispctl</code>.</p>
+      </details>
+      <details>
+        <summary><code>./result/bin/wispctl --help</code> and <code>--version</code></summary>
+        <p>Passed. The binary reports the CLI commands and version <code>1.1.3</code>.</p>
+      </details>
+      <details>
+        <summary><code>nix flake check</code></summary>
+        <p>Passed for the local <code>x86_64-linux</code> system. Nix reports that incompatible systems were omitted from this local check; it does not mean their binaries have been built or cached.</p>
+      </details>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap">generated as a self-contained explanation of the current working-tree packaging diff · no external assets required</div>
+  </footer>
+</body>
+</html>

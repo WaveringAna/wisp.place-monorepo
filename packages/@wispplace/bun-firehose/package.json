@@ -32,6 +32,6 @@
     "multiformats": "^13.4.2"
   },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "^1.3.14"
   }
 }
