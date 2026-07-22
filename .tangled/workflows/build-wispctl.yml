@@ -9,7 +9,7 @@ image: nixos
 
 # Let spindle substitute Nix paths from the same public cache that end users use.
 caches:
-  https://wispplace.cachix.org: "wispplace.cachix.org-1:v+eZmUCZ9UGLyOCK4IFZvZKMCGCnBPOKDM+Q7II1Jmw="
+  https://wispplace.cachix.org: "wispplace.cachix.org-1:v+eZmUCZ9UGLyOCK4lFZvZKMCGCnBPOKDM+Q7ll1Jmw="
 
 dependencies:
   - cachix

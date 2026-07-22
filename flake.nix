@@ -6,7 +6,7 @@
       "https://wispplace.cachix.org"
     ];
     extra-trusted-public-keys = [
-      "wispplace.cachix.org-1:v+eZmUCZ9UGLyOCK4IFZvZKMCGCnBPOKDM+Q7II1Jmw="
+      "wispplace.cachix.org-1:v+eZmUCZ9UGLyOCK4lFZvZKMCGCnBPOKDM+Q7ll1Jmw="
     ];
   };
 
