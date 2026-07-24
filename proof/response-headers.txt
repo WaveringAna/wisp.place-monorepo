@@ -1,0 +1,12 @@
+=== response headers on a private site (share link) ===
+HTTP/1.1 200 OK
+Cache-Control: no-store, no-cache, must-revalidate, private
+Pragma: no-cache
+Referrer-Policy: no-referrer
+Content-Type: text/html
+X-Robots-Tag: noindex, nofollow, noarchive, nosnippet
+Content-Length: 606
+
+=== response headers on a PUBLIC site for comparison ===
+HTTP/1.1 404 Not Found
+Cache-Control: public, max-age=600
