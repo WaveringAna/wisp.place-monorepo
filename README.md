@@ -1,4 +1,4 @@
-# Wisp.place ^.^
+# wisp.place ^.^
 
 Decentralized static site hosting on the AT Protocol. [https://wisp.place](https://wisp.place)
 
@@ -101,7 +101,7 @@ node dist/index.js
 
 ### File Filtering and `.wispignore`
 
-Wisp automatically excludes common files that shouldn't be uploaded to your site (like `.git`, `node_modules`, `.env` files, etc.). You can customize this behavior by creating a `.wispignore` file in your site root.
+wisp automatically excludes common files that shouldn't be uploaded to your site (like `.git`, `node_modules`, `.env` files, etc.). You can customize this behavior by creating a `.wispignore` file in your site root.
 
 The `.wispignore` file uses the same syntax as `.gitignore`:
 ```
