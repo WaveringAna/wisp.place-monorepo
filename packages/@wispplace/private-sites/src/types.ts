@@ -59,6 +59,11 @@ export type AccessPrincipal =
 	| { kind: 'owner'; did: string }
 	/** Bearer share-link credential (v1: query parameter). Treat as a secret. */
 	| { kind: 'shareToken'; token: string }
+	/**
+	 * A share-backed site session that already passed share validation at exchange time and
+	 * is re-checked for revocation and expiry on every request by the session lookup.
+	 */
+	| { kind: 'sessionShare' }
 	/** No credential presented. */
 	| { kind: 'anonymous' }
 

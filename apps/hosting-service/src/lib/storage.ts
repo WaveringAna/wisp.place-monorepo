@@ -393,10 +393,15 @@ export const storage = initializeStorage()
 function initializePrivateStorage(): TieredStorage<Uint8Array> {
 	let coldTier: StorageTier
 
-	if (S3_BUCKET) {
+	// Private content lives in its own bucket/prefix by default so it cannot inherit a
+	// public-read policy from the public site bucket. Must match main-app's writer config.
+	const PRIVATE_BUCKET = process.env.PRIVATE_S3_BUCKET || S3_BUCKET
+	const PRIVATE_PREFIX = process.env.PRIVATE_S3_PREFIX || 'private-sites/'
+
+	if (PRIVATE_BUCKET) {
 		coldTier = new ReadOnlyS3Tier(
 			new S3StorageTier({
-				bucket: S3_BUCKET,
+				bucket: PRIVATE_BUCKET,
 				region: S3_REGION,
 				endpoint: S3_ENDPOINT,
 				forcePathStyle: S3_FORCE_PATH_STYLE,
@@ -404,7 +409,7 @@ function initializePrivateStorage(): TieredStorage<Uint8Array> {
 					AWS_ACCESS_KEY_ID && AWS_SECRET_ACCESS_KEY
 						? { accessKeyId: AWS_ACCESS_KEY_ID, secretAccessKey: AWS_SECRET_ACCESS_KEY }
 						: undefined,
-				prefix: S3_PREFIX,
+				prefix: PRIVATE_PREFIX,
 			}),
 		)
 	} else {

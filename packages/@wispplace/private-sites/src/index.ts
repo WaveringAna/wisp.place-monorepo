@@ -2,7 +2,22 @@ export type { EvaluateAccessInput } from './access-policy'
 export { denialStatus, evaluateAccess, isExpired } from './access-policy'
 export type { ResolveExpiryOptions } from './expiry'
 export { InvalidExpiryError, resolveExpiry } from './expiry'
-export { parseCookieHeader, readSessionDid, SESSION_COOKIE_NAME, unsignCookieValue } from './session-cookie'
+export type { GeneratedSecret, GrantKind, PrivateSessionRecord } from './grant'
+export {
+	buildSessionCookie,
+	clearSessionCookie,
+	generateHandoffSecret,
+	generateSessionSecret,
+	hashSecret,
+	OWNER_HANDOFF_TTL_SECONDS,
+	PRIVATE_GRANT_QUERY_PARAM,
+	PRIVATE_SESSION_COOKIE,
+	PRIVATE_SESSION_TTL_MINUTES,
+	privateSiteHostname,
+	secretsMatch,
+	siteIdFromHostname,
+} from './grant'
+export { parseCookieHeader } from './session-cookie'
 export {
 	buildPrivateStorageKey,
 	generateSiteId,

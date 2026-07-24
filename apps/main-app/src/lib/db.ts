@@ -180,6 +180,37 @@ await db`
     )
 `
 
+// Per-site private sessions. A URL credential (share token or one-time owner handoff) is
+// exchanged once for a host-only cookie scoped to that site's own origin, so subresources
+// stay authorized without the credential travelling in query strings. Rows exist so that
+// revoking a share or deleting a site immediately kills live sessions.
+await db`
+    CREATE TABLE IF NOT EXISTS private_site_sessions (
+        session_id TEXT PRIMARY KEY,
+        secret_hash TEXT NOT NULL,
+        site_id TEXT NOT NULL REFERENCES private_sites(site_id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        owner_did TEXT,
+        share_id TEXT REFERENCES private_site_shares(share_id) ON DELETE CASCADE,
+        expires_at TIMESTAMPTZ NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+`
+
+// Single-use, very short-lived tokens that hand an authenticated owner from main-app over
+// to their site's own origin. Consumed on first use.
+await db`
+    CREATE TABLE IF NOT EXISTS private_site_handoffs (
+        handoff_id TEXT PRIMARY KEY,
+        secret_hash TEXT NOT NULL,
+        site_id TEXT NOT NULL REFERENCES private_sites(site_id) ON DELETE CASCADE,
+        owner_did TEXT NOT NULL,
+        expires_at TIMESTAMPTZ NOT NULL,
+        consumed_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+`
+
 await runDatabaseMigrations(db)
 
 export const getDomainByDid = async (did: string): Promise<string | null> => {

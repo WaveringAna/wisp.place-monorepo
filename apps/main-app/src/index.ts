@@ -19,6 +19,7 @@ import {
 	getOAuthClient,
 	rotateKeysIfNeeded,
 } from './lib/oauth-client'
+import { startPrivateSiteReaper } from './lib/private-site-reaper'
 import { closeRedisClient, getRedisClient } from './lib/redis'
 import { ensureServiceIdentityKeypair } from './lib/service-identity'
 import type { Config } from './lib/types'
@@ -90,6 +91,10 @@ runMaintenance()
 
 // Schedule maintenance to run every hour
 setInterval(runMaintenance, 60 * 60 * 1000)
+
+// Expired private sites must actually have their bytes deleted, not merely become
+// unreachable, so a periodic sweep removes them from storage and the database.
+startPrivateSiteReaper()
 
 // Start DNS verification worker (runs every 10 minutes)
 // Can be disabled via DISABLE_DNS_WORKER=true environment variable

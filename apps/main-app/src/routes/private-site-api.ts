@@ -13,17 +13,18 @@ import type { NodeOAuthClient } from '@atproto/oauth-client-node'
 import { createLogger } from '@wispplace/observability'
 import { InvalidExpiryError, isExpired } from '@wispplace/private-sites'
 import { Elysia } from 'elysia'
-import { listShares } from '../lib/private-sites-db'
+import { createOwnerHandoff, listShares } from '../lib/private-sites-db'
 import {
 	createSiteShare,
 	deleteOwnedPrivateSite,
 	listOwnedPrivateSites,
 	listSiteShares,
 	PrivateSiteError,
+	requireOwnedSite,
 	revokeSiteShare,
 } from '../lib/private-sites-service'
 import { requireAuth } from '../lib/wisp-auth'
-import { privateShareUrl, privateSiteUrl } from './xrpc-private-site'
+import { privateOwnerUrl, privateShareUrl, privateSiteUrl } from './xrpc-private-site'
 
 const logger = createLogger('main-app')
 
@@ -84,6 +85,24 @@ export const privateSiteApiRoutes = (client: NodeOAuthClient, cookieSecret: stri
 				return { sites: withShares }
 			} catch (err) {
 				logger.error('[PrivateSite] List error', err)
+				return errorResponse(err, set)
+			}
+		})
+		/**
+		 * POST /api/user/private-sites/:siteId/open
+		 *
+		 * Mints a single-use, short-lived handoff token and returns the URL that exchanges it
+		 * for a session on the site's own origin. The account session cookie is host-only to
+		 * main-app and is deliberately not accepted by the private hosts, so ownership is
+		 * proven here once and handed over explicitly.
+		 */
+		.post('/:siteId/open', async ({ params, auth, set }) => {
+			try {
+				const site = await requireOwnedSite(params.siteId, auth.did)
+				const handoff = await createOwnerHandoff(site.siteId, auth.did)
+				return { success: true, url: privateOwnerUrl(site.siteId, handoff) }
+			} catch (err) {
+				logger.error('[PrivateSite] Owner open error', err)
 				return errorResponse(err, set)
 			}
 		})

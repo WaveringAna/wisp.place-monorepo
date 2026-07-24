@@ -9,7 +9,14 @@
  * `evaluateAccess` in `@wispplace/private-sites`.
  */
 
-import { generateShareToken, generateSiteId, type PrivateSite, type PrivateSiteShare } from '@wispplace/private-sites'
+import {
+	generateHandoffSecret,
+	generateShareToken,
+	generateSiteId,
+	OWNER_HANDOFF_TTL_SECONDS,
+	type PrivateSite,
+	type PrivateSiteShare,
+} from '@wispplace/private-sites'
 import { db } from './db'
 
 interface PrivateSiteRow {
@@ -190,4 +197,29 @@ export const listExpiredPrivateSites = async (limit = 100): Promise<PrivateSite[
         LIMIT ${limit}
     `
 	return rows.map(mapSite)
+}
+
+/**
+ * Mint a single-use, short-lived token that hands an authenticated owner over to their
+ * site's own origin.
+ *
+ * The owner's account session lives on main-app's host and is deliberately not readable by
+ * the private site origins, so ownership is proven once here and exchanged there for a
+ * site-scoped session.
+ */
+export const createOwnerHandoff = async (siteId: string, ownerDid: string): Promise<string> => {
+	const secret = generateHandoffSecret()
+	const expiresAt = new Date(Date.now() + OWNER_HANDOFF_TTL_SECONDS * 1000)
+
+	await db`
+        INSERT INTO private_site_handoffs (handoff_id, secret_hash, site_id, owner_did, expires_at)
+        VALUES (${generateSiteId()}, ${secret.hash}, ${siteId}, ${ownerDid}, ${expiresAt})
+    `
+
+	return secret.value
+}
+
+/** Remove consumed and expired handoff tokens. */
+export const pruneHandoffs = async (): Promise<void> => {
+	await db`DELETE FROM private_site_handoffs WHERE expires_at < NOW() OR consumed_at IS NOT NULL`
 }

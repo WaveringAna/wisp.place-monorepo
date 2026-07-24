@@ -272,5 +272,20 @@ export const runDatabaseMigrations = async (db: SQL): Promise<void> => {
 				}
 			},
 		),
+		db`CREATE INDEX IF NOT EXISTS idx_private_sessions_secret ON private_site_sessions(secret_hash)`.catch((err) => {
+			if (!hasAlreadyExists(err)) {
+				console.error('Failed to create idx_private_sessions_secret:', err)
+			}
+		}),
+		db`CREATE INDEX IF NOT EXISTS idx_private_sessions_expires ON private_site_sessions(expires_at)`.catch((err) => {
+			if (!hasAlreadyExists(err)) {
+				console.error('Failed to create idx_private_sessions_expires:', err)
+			}
+		}),
+		db`CREATE INDEX IF NOT EXISTS idx_private_handoffs_secret ON private_site_handoffs(secret_hash)`.catch((err) => {
+			if (!hasAlreadyExists(err)) {
+				console.error('Failed to create idx_private_handoffs_secret:', err)
+			}
+		}),
 	])
 }

@@ -6,6 +6,7 @@
 import { sanitizePath } from '@wispplace/fs-utils'
 import { createLogger } from '@wispplace/observability'
 import { observabilityErrorHandler, observabilityMiddleware } from '@wispplace/observability/middleware/hono'
+import { siteIdFromHostname } from '@wispplace/private-sites'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { cache } from './lib/cache-manager'
@@ -27,10 +28,11 @@ async function resolveDidCached(identifier: string): Promise<string | null> {
 const BASE_HOST_ENV = process.env.BASE_HOST || 'wisp.place'
 const BASE_HOST = BASE_HOST_ENV.split(':')[0] || BASE_HOST_ENV
 
-// Dedicated host for private sites. It is kept separate from the public site hosts on
-// purpose: those serve arbitrary user-uploaded JavaScript on a shared origin, so serving
-// private content there would let one user's site read another's private response
-// same-origin using the ambient account session.
+// Private sites are served from per-site origins beneath this host, i.e.
+// `<siteId>.priv.<base host>`. Each site gets its own origin so that one tenant's
+// JavaScript cannot read another tenant's content same-origin, and so a site session
+// cookie is never sent to a different site. Requires a wildcard DNS record and
+// certificate for `*.priv.<base host>`.
 const PRIVATE_HOST = (process.env.PRIVATE_HOST || `priv.${BASE_HOST}`).split(':')[0] || `priv.${BASE_HOST}`
 
 const app = new Hono()
@@ -69,23 +71,17 @@ app.get('/*', async (c) => {
 
 	logger.debug(`Request: host=${hostname} hostnameWithoutPort=${hostnameWithoutPort} path=${path}`, { BASE_HOST })
 
-	// Private sites are served only from the dedicated private host, and this check runs
-	// before any public routing so a private id can never fall through to public serving.
+	// Private sites resolve from the hostname, not the path, so each site is its own
+	// origin. This runs before any public routing so private content can never fall
+	// through to a public serving path.
+	const privateSiteId = siteIdFromHostname(hostnameWithoutPort, PRIVATE_HOST)
+	if (privateSiteId !== null) {
+		return servePrivateSite(c.req.raw, privateSiteId, sanitizePath(rawPath))
+	}
+
+	// The bare private host serves nothing; sites live only on their own subdomains.
 	if (hostnameWithoutPort === PRIVATE_HOST) {
-		const sanitizedFullPath = sanitizePath(rawPath)
-		const parts = sanitizedFullPath.split('/')
-		const siteId = parts[0]
-
-		if (!siteId) {
-			return privateNotFound()
-		}
-
-		// Redirect the site root to a trailing slash so relative asset paths resolve.
-		if (parts.length === 1 && !url.pathname.endsWith('/')) {
-			return c.redirect(`${url.pathname}/${url.search}`, 301)
-		}
-
-		return servePrivateSite(c.req.raw, siteId, parts.slice(1).join('/'))
+		return privateNotFound()
 	}
 
 	// Check if this is sites.wisp.place subdomain (strip port for comparison)

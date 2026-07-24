@@ -6,7 +6,7 @@
  * link was used without recording the credential itself.
  */
 
-import type { PrivateSite, PrivateSiteShare } from '@wispplace/private-sites'
+import type { GrantKind, PrivateSessionRecord, PrivateSite, PrivateSiteShare } from '@wispplace/private-sites'
 import postgres from 'postgres'
 
 const sql = postgres(process.env.DATABASE_URL || 'postgres://postgres:postgres@localhost:5432/wisp', {
@@ -101,4 +101,79 @@ export async function touchShare(shareId: string): Promise<void> {
 	} catch {
 		// intentionally ignored
 	}
+}
+
+interface SessionRow {
+	session_id: string
+	site_id: string
+	kind: string
+	owner_did: string | null
+	share_id: string | null
+	expires_at: Date
+	created_at: Date
+}
+
+/**
+ * Look up a live per-site session by its secret hash.
+ *
+ * Joins the owning share so a revoked or expired share invalidates any session it issued,
+ * rather than the session outliving the grant it came from.
+ */
+export async function findLiveSession(secretHash: string): Promise<PrivateSessionRecord | null> {
+	const rows = await sql<SessionRow[]>`
+    SELECT s.session_id, s.site_id, s.kind, s.owner_did, s.share_id, s.expires_at, s.created_at
+    FROM private_site_sessions s
+    LEFT JOIN private_site_shares sh ON sh.share_id = s.share_id
+    WHERE s.secret_hash = ${secretHash}
+      AND s.expires_at > NOW()
+      AND (
+        s.share_id IS NULL
+        OR (sh.revoked_at IS NULL AND (sh.expires_at IS NULL OR sh.expires_at > NOW()))
+      )
+    LIMIT 1
+  `
+	const row = rows[0]
+	if (!row) return null
+	return {
+		sessionId: row.session_id,
+		siteId: row.site_id,
+		kind: row.kind as GrantKind,
+		ownerDid: row.owner_did,
+		shareId: row.share_id,
+		expiresAt: row.expires_at,
+		createdAt: row.created_at,
+	}
+}
+
+/** Persist a newly exchanged session. */
+export async function createSession(input: {
+	sessionId: string
+	secretHash: string
+	siteId: string
+	kind: GrantKind
+	ownerDid: string | null
+	shareId: string | null
+	expiresAt: Date
+}): Promise<void> {
+	await sql`
+    INSERT INTO private_site_sessions (session_id, secret_hash, site_id, kind, owner_did, share_id, expires_at)
+    VALUES (${input.sessionId}, ${input.secretHash}, ${input.siteId}, ${input.kind}, ${input.ownerDid}, ${input.shareId}, ${input.expiresAt})
+  `
+}
+
+/**
+ * Consume a one-time owner handoff token.
+ *
+ * The update is conditional and returns the row, so a concurrent second use cannot also
+ * succeed: whichever statement wins marks it consumed and the other matches nothing.
+ */
+export async function consumeHandoff(secretHash: string): Promise<{ siteId: string; ownerDid: string } | null> {
+	const rows = await sql<Array<{ site_id: string; owner_did: string }>>`
+    UPDATE private_site_handoffs
+    SET consumed_at = NOW()
+    WHERE secret_hash = ${secretHash} AND consumed_at IS NULL AND expires_at > NOW()
+    RETURNING site_id, owner_did
+  `
+	const row = rows[0]
+	return row ? { siteId: row.site_id, ownerDid: row.owner_did } : null
 }

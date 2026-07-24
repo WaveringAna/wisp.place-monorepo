@@ -252,6 +252,25 @@ export const SitesTab = memo(function SitesTab({
 		[clearJustCreated],
 	)
 
+	/**
+	 * Open a private site as its owner.
+	 *
+	 * The account session is host-only to this origin, so the private host cannot see it.
+	 * Mint a single-use handoff token and follow the URL that exchanges it for a
+	 * site-scoped session.
+	 */
+	const openPrivateSite = useCallback(async (siteId: string) => {
+		try {
+			const response = await fetch(`/api/user/private-sites/${siteId}/open`, { method: 'POST' })
+			const data = await response.json()
+			if (!data.success) throw new Error(data.error || 'Failed to open private site')
+			window.open(data.url, '_blank', 'noopener')
+		} catch (err) {
+			console.error('Open private site error:', err)
+			alert(`Failed to open private site: ${err instanceof Error ? err.message : 'Unknown error'}`)
+		}
+	}, [])
+
 	const copyToClipboard = useCallback(async (text: string) => {
 		try {
 			await navigator.clipboard.writeText(text)
@@ -337,11 +356,17 @@ export const SitesTab = memo(function SitesTab({
 				case 'o':
 					if (isExpanded && currentSite) {
 						e.preventDefault()
-						window.open(getSiteUrl(currentSite), '_blank')
+						if (currentSite.isPrivate) {
+							void openPrivateSite(currentSite.siteId ?? currentSite.rkey)
+						} else {
+							window.open(getSiteUrl(currentSite), '_blank')
+						}
 					}
 					break
 				case 'c':
-					if (isExpanded && currentSite) {
+					// Configure opens a place.wisp.settings workflow, which private sites do
+					// not have. The button is hidden for them, so the shortcut is too.
+					if (isExpanded && currentSite && !currentSite.isPrivate) {
 						e.preventDefault()
 						onConfigureSite(currentSite)
 					}
@@ -357,7 +382,7 @@ export const SitesTab = memo(function SitesTab({
 
 		window.addEventListener('keydown', handleKeyDown)
 		return () => window.removeEventListener('keydown', handleKeyDown)
-	}, [sites, focusedIndex, expandedSiteKey, toggleExpanded, getSiteUrl, onConfigureSite, onDeleteSite])
+	}, [sites, focusedIndex, expandedSiteKey, toggleExpanded, getSiteUrl, onConfigureSite, onDeleteSite, openPrivateSite])
 
 	// Loading state
 	if (sitesLoading) {
@@ -504,15 +529,14 @@ export const SitesTab = memo(function SitesTab({
 											{/* Private URL + stats */}
 											<div>
 												<p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">PRIVATE URL:</p>
-												<a
-													href={site.privateUrl}
-													target="_blank"
-													rel="noopener noreferrer"
-													className="text-sm text-accent hover:text-accent/80 flex items-center gap-2"
+												<button
+													type="button"
+													onClick={() => void openPrivateSite(site.siteId ?? site.rkey)}
+													className="text-sm text-accent hover:text-accent/80 flex items-center gap-2 text-left"
 												>
 													<Lock className="w-3 h-3" />
 													{site.privateUrl}
-												</a>
+												</button>
 												<p className="text-xs text-muted-foreground mt-2">
 													{site.fileCount} files · {formatBytes(site.totalBytes)} ·{' '}
 													{formatExpiry(site.expiresAt, site.expired)}
@@ -592,7 +616,11 @@ export const SitesTab = memo(function SitesTab({
 												variant="outline"
 												size="sm"
 												className="font-mono text-xs"
-												onClick={() => window.open(getSiteUrl(site), '_blank')}
+												onClick={() =>
+													site.isPrivate
+														? void openPrivateSite(site.siteId ?? site.rkey)
+														: window.open(getSiteUrl(site), '_blank')
+												}
 											>
 												<ExternalLink className="w-3 h-3 mr-2" />
 												Open

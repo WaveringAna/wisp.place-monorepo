@@ -264,6 +264,12 @@ const prepareXrpcRequest = async (request: Request, parsedBody: unknown): Promis
 		return request
 	}
 
+	// Never reconstruct a multipart body. The boundary-delimited stream cannot survive a
+	// parse/re-serialize round trip, so it is passed through untouched.
+	if ((request.headers.get('content-type') ?? '').toLowerCase().includes('multipart/form-data')) {
+		return request
+	}
+
 	const headers = new Headers(request.headers)
 	headers.delete('content-length')
 
@@ -1031,15 +1037,24 @@ export const xrpcRoutes = () => {
 		}
 	}
 
+	// `parse: 'none'` keeps Elysia from consuming the request body before the handler runs.
+	// Multipart uploads need the raw boundary-delimited stream: once parsed, the body is
+	// gone, and re-serializing the parsed object as JSON under a multipart content-type
+	// yields a request with no final boundary. JSON methods parse their own body inside the
+	// XRPC router, so nothing else depends on Elysia parsing here.
 	return new Elysia()
-		.all('/xrpc/:nsid', ({ body, request }) => handleXrpcRequest(request, body))
-		.all('/xrpc/:nsid/', async ({ body, request }) => {
-			const url = new URL(request.url)
-			if (url.pathname.endsWith('/') && url.pathname.length > '/xrpc/'.length) {
-				url.pathname = url.pathname.slice(0, -1)
-			}
+		.all('/xrpc/:nsid', ({ body, request }) => handleXrpcRequest(request, body), { parse: 'none' })
+		.all(
+			'/xrpc/:nsid/',
+			async ({ body, request }) => {
+				const url = new URL(request.url)
+				if (url.pathname.endsWith('/') && url.pathname.length > '/xrpc/'.length) {
+					url.pathname = url.pathname.slice(0, -1)
+				}
 
-			const rewritten = new Request(url.toString(), request)
-			return handleXrpcRequest(rewritten, body)
-		})
+				const rewritten = new Request(url.toString(), request)
+				return handleXrpcRequest(rewritten, body)
+			},
+			{ parse: 'none' },
+		)
 }

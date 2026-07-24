@@ -13,11 +13,41 @@ import { DiskStorageTier, S3StorageTier, TieredStorage } from '@wispplace/tiered
 
 const logger = createLogger('main-app')
 
-const S3_BUCKET = process.env.S3_BUCKET || ''
-const S3_REGION = process.env.S3_REGION || 'us-east-1'
-const S3_ENDPOINT = process.env.S3_ENDPOINT
+// Private content must not share a bucket with public site content unless an operator has
+// explicitly accepted that. The public bucket may carry an anonymous-read policy, which
+// would expose `<prefix>private/<siteId>/<path>` directly and bypass all application
+// authorization. Configure a separate block-public-access bucket via
+// PRIVATE_S3_BUCKET / PRIVATE_S3_PREFIX.
+const PUBLIC_S3_BUCKET = process.env.S3_BUCKET || ''
+const S3_BUCKET = process.env.PRIVATE_S3_BUCKET || PUBLIC_S3_BUCKET
+const S3_REGION = process.env.PRIVATE_S3_REGION || process.env.S3_REGION || 'us-east-1'
+const S3_ENDPOINT = process.env.PRIVATE_S3_ENDPOINT || process.env.S3_ENDPOINT
 const S3_FORCE_PATH_STYLE = process.env.S3_FORCE_PATH_STYLE !== 'false'
-const S3_PREFIX = process.env.S3_PREFIX || 'sites/'
+const S3_PREFIX = process.env.PRIVATE_S3_PREFIX || 'private-sites/'
+
+/**
+ * Refuse to start when private content would land in the public bucket without an explicit
+ * operator acknowledgement. Failing loudly at boot is preferable to silently writing
+ * private bytes into a possibly world-readable bucket.
+ */
+const assertPrivateBucketIsolated = (): void => {
+	if (!S3_BUCKET) return
+	const sharesPublicBucket = Boolean(PUBLIC_S3_BUCKET) && S3_BUCKET === PUBLIC_S3_BUCKET
+	if (!sharesPublicBucket) return
+	if (process.env.PRIVATE_ALLOW_SHARED_BUCKET === 'true') {
+		logger.warn(
+			'[PrivateStorage] Private content shares the public bucket. Ensure the prefix denies anonymous access.',
+			{ bucket: S3_BUCKET, prefix: S3_PREFIX },
+		)
+		return
+	}
+	throw new Error(
+		'Private sites would write into the public S3 bucket. Set PRIVATE_S3_BUCKET to a bucket with public access blocked, ' +
+			'or set PRIVATE_ALLOW_SHARED_BUCKET=true after confirming the private prefix denies anonymous reads.',
+	)
+}
+
+assertPrivateBucketIsolated()
 const AWS_ACCESS_KEY_ID = process.env.AWS_ACCESS_KEY_ID
 const AWS_SECRET_ACCESS_KEY = process.env.AWS_SECRET_ACCESS_KEY
 
