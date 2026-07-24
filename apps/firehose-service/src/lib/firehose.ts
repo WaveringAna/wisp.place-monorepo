@@ -18,7 +18,7 @@ import {
 	handleSiteDelete,
 } from './cache-writer'
 
-const idResolver = new IdResolver()
+const idResolver = new IdResolver({ plcUrl: config.plcDirectoryUrl })
 const logger = createLogger('firehose-service')
 
 // Track firehose health

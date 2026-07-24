@@ -38,11 +38,17 @@ Your site appears at `https://sites.wisp.place/{your-did}/{site-name}` or your c
 ## Development
 
 ```bash
-# Backend
 # bun install will install packages across the monorepo
 bun install
+
+# PostgreSQL, Redis, MinIO, local PLC, and seeded reference PDS
+bun run dev:infra
+
+# Backend
 bun run dev
 ```
+
+The local PDS provides `alice.test` and `bob.test` without production credentials. See the [local development network guide](./docs/src/content/docs/local-development.md) for service commands, credentials, and the reserved `*.localhost` Wisp hostnames.
 .env file for local dev
 
 ```env

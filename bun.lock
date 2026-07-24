@@ -299,6 +299,10 @@
       "name": "@wispplace/page-generators",
       "version": "1.0.0",
     },
+    "packages/@wispplace/private-sites": {
+      "name": "@wispplace/private-sites",
+      "version": "1.0.0",
+    },
     "packages/@wispplace/safe-fetch": {
       "name": "@wispplace/safe-fetch",
       "version": "1.0.0",
@@ -1005,6 +1009,8 @@
     "@wispplace/observability": ["@wispplace/observability@workspace:packages/@wispplace/observability"],
 
     "@wispplace/page-generators": ["@wispplace/page-generators@workspace:packages/@wispplace/page-generators"],
+
+    "@wispplace/private-sites": ["@wispplace/private-sites@workspace:packages/@wispplace/private-sites"],
 
     "@wispplace/safe-fetch": ["@wispplace/safe-fetch@workspace:packages/@wispplace/safe-fetch"],
 

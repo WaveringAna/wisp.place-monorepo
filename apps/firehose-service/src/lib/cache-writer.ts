@@ -34,6 +34,28 @@ const logger = createLogger('firehose-service')
 const BLOB_500_BACKOFF_MS = Number.parseInt(process.env.BLOB_500_BACKOFF_MS || `${10 * 60 * 1000}`, 10)
 const blob500BackoffUntil = new Map<string, number>()
 
+const pdsFetchRewrite = (() => {
+	const rewriteFrom = process.env.PDS_FETCH_REWRITE_FROM
+	const rewriteTo = process.env.PDS_FETCH_REWRITE_TO
+	if (!rewriteFrom && !rewriteTo) return undefined
+	if (!rewriteFrom || !rewriteTo) {
+		throw new Error('PDS_FETCH_REWRITE_FROM and PDS_FETCH_REWRITE_TO must be set together')
+	}
+	if (process.env.LOCAL_DEV !== 'true') {
+		throw new Error('PDS fetch rewriting requires LOCAL_DEV=true')
+	}
+	return { from: new URL(rewriteFrom), to: new URL(rewriteTo) }
+})()
+
+function rewritePdsEndpoint(endpoint: string): string {
+	if (!pdsFetchRewrite) return endpoint
+	const original = new URL(endpoint)
+	if (original.origin !== pdsFetchRewrite.from.origin) return endpoint
+	return new URL(`${original.pathname}${original.search}${original.hash}`, pdsFetchRewrite.to)
+		.toString()
+		.replace(/\/$/, '')
+}
+
 class Blob500BackoffError extends Error {
 	constructor(
 		public readonly blobKey: string,
@@ -98,7 +120,8 @@ export async function fetchSiteRecord(
 	rkey: string,
 ): Promise<{ record: WispFsRecord; cid: string } | null> {
 	try {
-		const pdsEndpoint = await getPdsForDid(did)
+		const resolvedPdsEndpoint = await getPdsForDid(did)
+		const pdsEndpoint = resolvedPdsEndpoint ? rewritePdsEndpoint(resolvedPdsEndpoint) : null
 		if (!pdsEndpoint) {
 			logger.error('Failed to get PDS endpoint for DID', undefined, { did, rkey })
 			return null
@@ -135,7 +158,8 @@ export async function fetchSiteRecord(
 export async function listSiteRecordsForDid(
 	did: string,
 ): Promise<Array<{ rkey: string; record: WispFsRecord; cid: string }>> {
-	const pdsEndpoint = await getPdsForDid(did)
+	const resolvedPdsEndpoint = await getPdsForDid(did)
+	const pdsEndpoint = resolvedPdsEndpoint ? rewritePdsEndpoint(resolvedPdsEndpoint) : null
 	if (!pdsEndpoint) {
 		logger.error('Failed to get PDS endpoint for DID (listRecords)', undefined, { did })
 		return []
@@ -199,7 +223,8 @@ export async function fetchSettingsRecord(
 	pdsEndpoint?: string,
 ): Promise<{ record: WispSettings; cid: string } | null> {
 	try {
-		const endpoint = pdsEndpoint ?? (await getPdsForDid(did))
+		const resolvedEndpoint = pdsEndpoint ?? (await getPdsForDid(did))
+		const endpoint = resolvedEndpoint ? rewritePdsEndpoint(resolvedEndpoint) : null
 		if (!endpoint) {
 			logger.error('Failed to get PDS endpoint for DID (settings)', undefined, { did, rkey })
 			return null
@@ -664,7 +689,8 @@ async function handleSiteCreateOrUpdateLocked(
 	}
 
 	// Get PDS endpoint
-	const pdsEndpoint = await getPdsForDid(did)
+	const resolvedPdsEndpoint = await getPdsForDid(did)
+	const pdsEndpoint = resolvedPdsEndpoint ? rewritePdsEndpoint(resolvedPdsEndpoint) : null
 	if (!pdsEndpoint) {
 		logger.error('Could not resolve PDS', undefined, { did })
 		return

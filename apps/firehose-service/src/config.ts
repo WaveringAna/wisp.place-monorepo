@@ -10,6 +10,7 @@ export const config = {
 	firehoseService: process.env.FIREHOSE_SERVICE || 'wss://bsky.network',
 	firehoseServiceSecondary: process.env.FIREHOSE_SERVICE_SECONDARY || undefined,
 	firehoseMaxConcurrency: parseInt(process.env.FIREHOSE_MAX_CONCURRENCY || '5', 10),
+	plcDirectoryUrl: process.env.WISP_PLC_DIRECTORY_URL,
 
 	// S3 storage (write destination)
 	s3Bucket: process.env.S3_BUCKET || '',
