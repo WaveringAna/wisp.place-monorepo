@@ -382,6 +382,55 @@ function initializeStorage(): TieredStorage<Uint8Array> {
 export const storage = initializeStorage()
 
 /**
+ * Cold-only storage used exclusively for private site content.
+ *
+ * The public `storage` instance promotes eagerly: a read from cold writes the bytes into
+ * the shared warm (disk) and hot (memory) tiers. Private content must not land in those
+ * shared caches, because they outlive the authorization decision that produced the read
+ * and are not scoped per-viewer. Serving private files through a cold-only instance keeps
+ * every read authorized at request time.
+ */
+function initializePrivateStorage(): TieredStorage<Uint8Array> {
+	let coldTier: StorageTier
+
+	if (S3_BUCKET) {
+		coldTier = new ReadOnlyS3Tier(
+			new S3StorageTier({
+				bucket: S3_BUCKET,
+				region: S3_REGION,
+				endpoint: S3_ENDPOINT,
+				forcePathStyle: S3_FORCE_PATH_STYLE,
+				credentials:
+					AWS_ACCESS_KEY_ID && AWS_SECRET_ACCESS_KEY
+						? { accessKeyId: AWS_ACCESS_KEY_ID, secretAccessKey: AWS_SECRET_ACCESS_KEY }
+						: undefined,
+				prefix: S3_PREFIX,
+			}),
+		)
+	} else {
+		coldTier = new DiskStorageTier({
+			directory: CACHE_DIR,
+			maxSizeBytes: WARM_CACHE_SIZE,
+			evictionPolicy: WARM_EVICTION_POLICY,
+			encodeColons: false,
+		})
+	}
+
+	return new TieredStorage<Uint8Array>({
+		tiers: { cold: coldTier },
+		compression: false,
+		// No promotion: there are no upper tiers to promote into.
+		promotionStrategy: 'lazy',
+		serialization: {
+			serialize: identitySerialize,
+			deserialize: identityDeserialize,
+		},
+	})
+}
+
+export const privateStorage = initializePrivateStorage()
+
+/**
  * Get storage configuration summary for logging
  */
 export function getStorageConfig() {

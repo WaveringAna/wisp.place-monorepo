@@ -1,0 +1,104 @@
+/**
+ * Read-only private-site queries for the hosting service.
+ *
+ * The hosting service never creates or mutates private sites; main-app owns writes. The
+ * one exception is the best-effort `last_used_at` audit touch, which records that a share
+ * link was used without recording the credential itself.
+ */
+
+import type { PrivateSite, PrivateSiteShare } from '@wispplace/private-sites'
+import postgres from 'postgres'
+
+const sql = postgres(process.env.DATABASE_URL || 'postgres://postgres:postgres@localhost:5432/wisp', {
+	max: 5,
+	idle_timeout: 20,
+})
+
+interface PrivateSiteRow {
+	site_id: string
+	owner_did: string
+	name: string
+	file_count: number
+	total_bytes: string | number
+	expires_at: Date | null
+	created_at: Date
+	updated_at: Date
+}
+
+interface PrivateShareRow {
+	share_id: string
+	site_id: string
+	token_hash: string
+	token_prefix: string
+	label: string | null
+	expires_at: Date | null
+	revoked_at: Date | null
+	created_at: Date
+	last_used_at: Date | null
+}
+
+const mapSite = (row: PrivateSiteRow): PrivateSite => ({
+	siteId: row.site_id,
+	ownerDid: row.owner_did,
+	name: row.name,
+	fileCount: Number(row.file_count),
+	totalBytes: Number(row.total_bytes),
+	expiresAt: row.expires_at,
+	createdAt: row.created_at,
+	updatedAt: row.updated_at,
+})
+
+const mapShare = (row: PrivateShareRow): PrivateSiteShare => ({
+	shareId: row.share_id,
+	siteId: row.site_id,
+	tokenHash: row.token_hash,
+	tokenPrefix: row.token_prefix,
+	label: row.label,
+	expiresAt: row.expires_at,
+	revokedAt: row.revoked_at,
+	createdAt: row.created_at,
+	lastUsedAt: row.last_used_at,
+})
+
+/**
+ * Private site lookup.
+ *
+ * Deliberately NOT routed through the shared request cache used for public domain
+ * lookups: a cached negative or stale row could keep a revoked or deleted private site
+ * reachable, and private authorization state must be read fresh.
+ */
+export async function getPrivateSite(siteId: string): Promise<PrivateSite | null> {
+	const rows = await sql<PrivateSiteRow[]>`
+    SELECT site_id, owner_did, name, file_count, total_bytes, expires_at, created_at, updated_at
+    FROM private_sites WHERE site_id = ${siteId} LIMIT 1
+  `
+	return rows[0] ? mapSite(rows[0]) : null
+}
+
+/** Candidate shares for a presented token hash. The authoritative check is timing-safe. */
+export async function findSharesByTokenHash(siteId: string, tokenHash: string): Promise<PrivateSiteShare[]> {
+	const rows = await sql<PrivateShareRow[]>`
+    SELECT share_id, site_id, token_hash, token_prefix, label, expires_at, revoked_at, created_at, last_used_at
+    FROM private_site_shares WHERE site_id = ${siteId} AND token_hash = ${tokenHash}
+  `
+	return rows.map(mapShare)
+}
+
+/** File metadata for a private site, used to resolve index files and content types. */
+export async function listPrivateSiteFiles(
+	siteId: string,
+): Promise<Array<{ path: string; size: number; mimeType: string | null }>> {
+	const rows = await sql<Array<{ path: string; size: string | number; mime_type: string | null }>>`
+    SELECT path, size, mime_type FROM private_site_files WHERE site_id = ${siteId}
+  `
+	return rows.map((r) => ({ path: r.path, size: Number(r.size), mimeType: r.mime_type }))
+}
+
+/** Best-effort audit touch. Never fails a request that has already been authorized. */
+export async function touchShare(shareId: string): Promise<void> {
+	try {
+		await sql`UPDATE private_site_shares SET last_used_at = NOW() WHERE share_id = ${shareId}`
+	} catch {
+		// intentionally ignored
+	}
+}

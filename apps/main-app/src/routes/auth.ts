@@ -2,6 +2,7 @@ import type { NodeOAuthClient } from '@atproto/oauth-client-node'
 import { createLogger } from '@wispplace/observability'
 import { Elysia, t } from 'elysia'
 import { getDomainByDid, getSitesByDid } from '../lib/db'
+import { sessionCookieDomain } from '../lib/session-cookie-domain'
 import { authenticateRequest } from '../lib/wisp-auth'
 
 const logger = createLogger('main-app')
@@ -95,6 +96,11 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 					secure: process.env.NODE_ENV === 'production',
 					sameSite: 'lax',
 					maxAge: 30 * 24 * 60 * 60, // 30 days
+					// Scoped to the registrable domain so the private-site host
+					// (priv.<base host>) receives it and can authorize the owner. The cookie
+					// stays httpOnly, so user-uploaded scripts on sibling hosts cannot read
+					// it, and the hosting service only honours it on the private host.
+					domain: sessionCookieDomain(),
 				})
 
 				// Check if user has any cached sites or a claimed domain

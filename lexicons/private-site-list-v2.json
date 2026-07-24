@@ -1,0 +1,38 @@
+{
+  "lexicon": 1,
+  "id": "place.wisp.v2.privateSite.list",
+  "defs": {
+    "main": {
+      "type": "query",
+      "description": "List private sites owned by the authenticated account. Only ever returns the caller's own sites.",
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["sites"],
+          "properties": {
+            "sites": {
+              "type": "array",
+              "items": { "type": "ref", "ref": "#privateSiteSummary" }
+            }
+          }
+        }
+      },
+      "errors": [{ "name": "AuthenticationRequired" }]
+    },
+    "privateSiteSummary": {
+      "type": "object",
+      "required": ["siteId", "name", "fileCount", "totalBytes", "createdAt", "shareCount", "expired"],
+      "properties": {
+        "siteId": { "type": "string", "format": "record-key" },
+        "name": { "type": "string" },
+        "fileCount": { "type": "integer" },
+        "totalBytes": { "type": "integer" },
+        "expiresAt": { "type": "string", "format": "datetime" },
+        "createdAt": { "type": "string", "format": "datetime" },
+        "shareCount": { "type": "integer", "description": "Number of share links that currently grant access." },
+        "expired": { "type": "boolean" }
+      }
+    }
+  }
+}

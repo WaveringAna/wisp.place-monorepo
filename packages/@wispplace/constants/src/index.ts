@@ -32,6 +32,16 @@ export const MAX_ENTRIES_PER_DIRECTORY = 500
 // Compression settings
 export const GZIP_COMPRESSION_LEVEL = 9
 
+// Private sites (v1)
+// Expiry contract: omitted -> default, 0 -> never expires, n -> now + n minutes.
+export const DEFAULT_PRIVATE_SITE_EXPIRY_MINUTES = 7 * 24 * 60 // 7 days
+export const MAX_PRIVATE_SITE_EXPIRY_MINUTES = 365 * 24 * 60 // 1 year
+export const MAX_PRIVATE_SITE_SIZE = 100 * 1024 * 1024 // 100MB
+export const MAX_PRIVATE_SITE_FILE_COUNT = 500
+// Query parameter carrying the share-link credential. Treat its value as a secret:
+// never log it, never echo it back, and strip it before logging any URL.
+export const PRIVATE_SHARE_QUERY_PARAM = 'k'
+
 // Default ignore patterns for file uploads
 export const DEFAULT_IGNORE_PATTERNS: string[] = [
 	'.git',

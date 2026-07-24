@@ -751,6 +751,414 @@ export const schemaDict = {
       },
     },
   },
+  PlaceWispV2PrivateSiteCreateShare: {
+    lexicon: 1,
+    id: 'place.wisp.v2.privateSite.createShare',
+    defs: {
+      main: {
+        type: 'procedure',
+        description:
+          "Create a share link for an owned private site. The returned token is the access credential and is shown exactly once; only its hash is stored. A share can never outlive its site, so its expiry is clamped to the site's expiry.",
+        input: {
+          encoding: 'application/json',
+          schema: {
+            type: 'object',
+            required: ['siteId'],
+            properties: {
+              siteId: {
+                type: 'string',
+                format: 'record-key',
+              },
+              label: {
+                type: 'string',
+                maxLength: 128,
+                description: 'Optional human label for this link.',
+              },
+              expiryMinutes: {
+                type: 'integer',
+                minimum: 0,
+                description:
+                  'Minutes until this link expires. Omit for the configured default; 0 for no expiry of its own.',
+              },
+            },
+          },
+        },
+        output: {
+          encoding: 'application/json',
+          schema: {
+            type: 'object',
+            required: ['shareId', 'siteId', 'url', 'createdAt'],
+            properties: {
+              shareId: {
+                type: 'string',
+              },
+              siteId: {
+                type: 'string',
+                format: 'record-key',
+              },
+              url: {
+                type: 'string',
+                description:
+                  'Full shareable URL including the credential. Treat as a secret; it is not retrievable later.',
+              },
+              expiresAt: {
+                type: 'string',
+                format: 'datetime',
+              },
+              createdAt: {
+                type: 'string',
+                format: 'datetime',
+              },
+            },
+          },
+        },
+        errors: [
+          {
+            name: 'AuthenticationRequired',
+          },
+          {
+            name: 'InvalidRequest',
+          },
+          {
+            name: 'NotFound',
+          },
+        ],
+      },
+    },
+  },
+  PlaceWispV2PrivateSiteCreate: {
+    lexicon: 1,
+    id: 'place.wisp.v2.privateSite.create',
+    defs: {
+      main: {
+        type: 'procedure',
+        description:
+          "Create a private site from an uploaded archive. Private sites are stored only by the wisp hosting service and are never written to the owner's PDS, because atproto repo records and blobs are publicly readable and broadcast over the firehose. Access is granted to the owner's authenticated account and to any share links they create.",
+        input: {
+          encoding: 'multipart/form-data',
+        },
+        output: {
+          encoding: 'application/json',
+          schema: {
+            type: 'object',
+            required: [
+              'siteId',
+              'name',
+              'fileCount',
+              'totalBytes',
+              'createdAt',
+              'url',
+            ],
+            properties: {
+              siteId: {
+                type: 'string',
+                format: 'record-key',
+                description:
+                  'Stable identifier for this private site. Record-key syntax so it can become a permissioned-space key in v2.',
+              },
+              name: {
+                type: 'string',
+                description: 'Display name. Not an identifier.',
+              },
+              fileCount: {
+                type: 'integer',
+              },
+              totalBytes: {
+                type: 'integer',
+              },
+              expiresAt: {
+                type: 'string',
+                format: 'datetime',
+                description: 'Absent when the site never expires.',
+              },
+              createdAt: {
+                type: 'string',
+                format: 'datetime',
+              },
+              url: {
+                type: 'string',
+                description:
+                  'Owner-facing URL. Requires an authenticated session.',
+              },
+            },
+          },
+        },
+        errors: [
+          {
+            name: 'AuthenticationRequired',
+          },
+          {
+            name: 'InvalidRequest',
+          },
+          {
+            name: 'PayloadTooLarge',
+          },
+        ],
+      },
+    },
+  },
+  PlaceWispV2PrivateSiteDelete: {
+    lexicon: 1,
+    id: 'place.wisp.v2.privateSite.delete',
+    defs: {
+      main: {
+        type: 'procedure',
+        description:
+          'Delete an owned private site, its stored files, and all of its share links.',
+        input: {
+          encoding: 'application/json',
+          schema: {
+            type: 'object',
+            required: ['siteId'],
+            properties: {
+              siteId: {
+                type: 'string',
+                format: 'record-key',
+              },
+            },
+          },
+        },
+        output: {
+          encoding: 'application/json',
+          schema: {
+            type: 'object',
+            required: ['siteId', 'deleted'],
+            properties: {
+              siteId: {
+                type: 'string',
+                format: 'record-key',
+              },
+              deleted: {
+                type: 'boolean',
+                const: true,
+              },
+            },
+          },
+        },
+        errors: [
+          {
+            name: 'AuthenticationRequired',
+          },
+          {
+            name: 'InvalidRequest',
+          },
+          {
+            name: 'NotFound',
+          },
+        ],
+      },
+    },
+  },
+  PlaceWispV2PrivateSiteListShares: {
+    lexicon: 1,
+    id: 'place.wisp.v2.privateSite.listShares',
+    defs: {
+      main: {
+        type: 'query',
+        description:
+          'List share links for an owned private site. Never returns share tokens, only their non-secret display prefix.',
+        parameters: {
+          type: 'params',
+          required: ['siteId'],
+          properties: {
+            siteId: {
+              type: 'string',
+              format: 'record-key',
+            },
+          },
+        },
+        output: {
+          encoding: 'application/json',
+          schema: {
+            type: 'object',
+            required: ['shares'],
+            properties: {
+              shares: {
+                type: 'array',
+                items: {
+                  type: 'ref',
+                  ref: 'lex:place.wisp.v2.privateSite.listShares#share',
+                },
+              },
+            },
+          },
+        },
+        errors: [
+          {
+            name: 'AuthenticationRequired',
+          },
+          {
+            name: 'NotFound',
+          },
+        ],
+      },
+      share: {
+        type: 'object',
+        required: ['shareId', 'tokenPrefix', 'createdAt', 'status'],
+        properties: {
+          shareId: {
+            type: 'string',
+          },
+          tokenPrefix: {
+            type: 'string',
+            description:
+              'Non-secret leading fragment, for identification only.',
+          },
+          label: {
+            type: 'string',
+          },
+          expiresAt: {
+            type: 'string',
+            format: 'datetime',
+          },
+          revokedAt: {
+            type: 'string',
+            format: 'datetime',
+          },
+          createdAt: {
+            type: 'string',
+            format: 'datetime',
+          },
+          lastUsedAt: {
+            type: 'string',
+            format: 'datetime',
+          },
+          status: {
+            type: 'string',
+            enum: ['active', 'expired', 'revoked'],
+          },
+        },
+      },
+    },
+  },
+  PlaceWispV2PrivateSiteList: {
+    lexicon: 1,
+    id: 'place.wisp.v2.privateSite.list',
+    defs: {
+      main: {
+        type: 'query',
+        description:
+          "List private sites owned by the authenticated account. Only ever returns the caller's own sites.",
+        output: {
+          encoding: 'application/json',
+          schema: {
+            type: 'object',
+            required: ['sites'],
+            properties: {
+              sites: {
+                type: 'array',
+                items: {
+                  type: 'ref',
+                  ref: 'lex:place.wisp.v2.privateSite.list#privateSiteSummary',
+                },
+              },
+            },
+          },
+        },
+        errors: [
+          {
+            name: 'AuthenticationRequired',
+          },
+        ],
+      },
+      privateSiteSummary: {
+        type: 'object',
+        required: [
+          'siteId',
+          'name',
+          'fileCount',
+          'totalBytes',
+          'createdAt',
+          'shareCount',
+          'expired',
+        ],
+        properties: {
+          siteId: {
+            type: 'string',
+            format: 'record-key',
+          },
+          name: {
+            type: 'string',
+          },
+          fileCount: {
+            type: 'integer',
+          },
+          totalBytes: {
+            type: 'integer',
+          },
+          expiresAt: {
+            type: 'string',
+            format: 'datetime',
+          },
+          createdAt: {
+            type: 'string',
+            format: 'datetime',
+          },
+          shareCount: {
+            type: 'integer',
+            description: 'Number of share links that currently grant access.',
+          },
+          expired: {
+            type: 'boolean',
+          },
+        },
+      },
+    },
+  },
+  PlaceWispV2PrivateSiteRevokeShare: {
+    lexicon: 1,
+    id: 'place.wisp.v2.privateSite.revokeShare',
+    defs: {
+      main: {
+        type: 'procedure',
+        description:
+          'Revoke a share link. Revocation takes effect immediately and is permanent.',
+        input: {
+          encoding: 'application/json',
+          schema: {
+            type: 'object',
+            required: ['siteId', 'shareId'],
+            properties: {
+              siteId: {
+                type: 'string',
+                format: 'record-key',
+              },
+              shareId: {
+                type: 'string',
+              },
+            },
+          },
+        },
+        output: {
+          encoding: 'application/json',
+          schema: {
+            type: 'object',
+            required: ['shareId', 'revoked'],
+            properties: {
+              shareId: {
+                type: 'string',
+              },
+              revoked: {
+                type: 'boolean',
+                const: true,
+              },
+            },
+          },
+        },
+        errors: [
+          {
+            name: 'AuthenticationRequired',
+          },
+          {
+            name: 'InvalidRequest',
+          },
+          {
+            name: 'NotFound',
+          },
+        ],
+      },
+    },
+  },
   PlaceWispV2SecretCreate: {
     lexicon: 1,
     id: 'place.wisp.v2.secret.create',
@@ -1485,6 +1893,12 @@ export const ids = {
   PlaceWispV2DomainVerify: 'place.wisp.v2.domain.verify',
   PlaceWispV2Domains: 'place.wisp.v2.domains',
   PlaceWispFs: 'place.wisp.fs',
+  PlaceWispV2PrivateSiteCreateShare: 'place.wisp.v2.privateSite.createShare',
+  PlaceWispV2PrivateSiteCreate: 'place.wisp.v2.privateSite.create',
+  PlaceWispV2PrivateSiteDelete: 'place.wisp.v2.privateSite.delete',
+  PlaceWispV2PrivateSiteListShares: 'place.wisp.v2.privateSite.listShares',
+  PlaceWispV2PrivateSiteList: 'place.wisp.v2.privateSite.list',
+  PlaceWispV2PrivateSiteRevokeShare: 'place.wisp.v2.privateSite.revokeShare',
   PlaceWispV2SecretCreate: 'place.wisp.v2.secret.create',
   PlaceWispV2SecretDelete: 'place.wisp.v2.secret.delete',
   PlaceWispV2SecretList: 'place.wisp.v2.secret.list',

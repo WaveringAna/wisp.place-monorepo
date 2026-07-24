@@ -3,12 +3,12 @@
  */
 import { type ValidationResult, BlobRef } from '@atproto/lexicon'
 import { CID } from 'multiformats/cid'
-import { validate as _validate } from '../../../../../lexicons'
+import { validate as _validate } from '../../../../../lexicons.js'
 import {
   type $Typed,
   is$typed as _is$typed,
   type OmitKey,
-} from '../../../../../util'
+} from '../../../../../util.js'
 
 const is$typed = _is$typed,
   validate = _validate
@@ -46,10 +46,7 @@ export interface HandlerError {
   status: number
   message?: string
   error?:
-    | 'AuthenticationRequired'
-    | 'InvalidDomain'
-    | 'InvalidRequest'
-    | 'NotFound'
+    'AuthenticationRequired' | 'InvalidDomain' | 'InvalidRequest' | 'NotFound'
 }
 
 export type HandlerOutput = HandlerError | HandlerSuccess

@@ -133,6 +133,53 @@ await db`
     )
 `
 
+// Private sites (v1). Deliberately NOT written to any PDS: atproto blobs and repo
+// records are publicly readable and broadcast over the firehose, so private content is
+// held only in wisp's own storage until permissioned data (atproto proposal 0016) ships.
+// See docs/private-sites-v2-migration.md.
+await db`
+    CREATE TABLE IF NOT EXISTS private_sites (
+        site_id TEXT PRIMARY KEY,
+        owner_did TEXT NOT NULL,
+        name TEXT NOT NULL,
+        file_count INTEGER NOT NULL DEFAULT 0,
+        total_bytes BIGINT NOT NULL DEFAULT 0,
+        expires_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+`
+
+// Per-file content metadata. Retained so that a future migration can re-upload each file
+// as a permissioned blob and reconcile it by path and digest.
+await db`
+    CREATE TABLE IF NOT EXISTS private_site_files (
+        site_id TEXT NOT NULL REFERENCES private_sites(site_id) ON DELETE CASCADE,
+        path TEXT NOT NULL,
+        size BIGINT NOT NULL,
+        mime_type TEXT,
+        sha256 TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (site_id, path)
+    )
+`
+
+// Share-link grants. `token_hash` is a sha256 digest; the token itself is returned once at
+// creation and never persisted. `token_prefix` is a short non-secret display fragment.
+await db`
+    CREATE TABLE IF NOT EXISTS private_site_shares (
+        share_id TEXT PRIMARY KEY,
+        site_id TEXT NOT NULL REFERENCES private_sites(site_id) ON DELETE CASCADE,
+        token_hash TEXT NOT NULL,
+        token_prefix TEXT NOT NULL,
+        label TEXT,
+        expires_at TIMESTAMPTZ,
+        revoked_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        last_used_at TIMESTAMPTZ
+    )
+`
+
 await runDatabaseMigrations(db)
 
 export const getDomainByDid = async (did: string): Promise<string | null> => {

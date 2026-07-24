@@ -43,6 +43,7 @@ import {
 } from '../lib/db'
 import { verifyCustomDomain } from '../lib/dns-verify'
 import { extractWispHandle, isValidHandle, normalizeDomain, toDomain, validateCustomDomain } from '../lib/domain-utils'
+import { registerPrivateSiteMethods } from './xrpc-private-site'
 
 const logger = createLogger('main-app')
 const isLocalDev = Bun.env.LOCAL_DEV === 'true'
@@ -96,6 +97,12 @@ const XRPC_NSIDS = {
 	secretList: 'place.wisp.v2.secret.list',
 	secretDelete: 'place.wisp.v2.secret.delete',
 	secretRotate: 'place.wisp.v2.secret.rotate',
+	privateSiteCreate: 'place.wisp.v2.privateSite.create',
+	privateSiteList: 'place.wisp.v2.privateSite.list',
+	privateSiteDelete: 'place.wisp.v2.privateSite.delete',
+	privateSiteCreateShare: 'place.wisp.v2.privateSite.createShare',
+	privateSiteListShares: 'place.wisp.v2.privateSite.listShares',
+	privateSiteRevokeShare: 'place.wisp.v2.privateSite.revokeShare',
 } as const
 
 const toIsoFromEpoch = (epoch: unknown): string | undefined => {
@@ -559,7 +566,20 @@ export const xrpcRoutes = () => {
 		XRPC_NSIDS.secretList,
 		XRPC_NSIDS.secretDelete,
 		XRPC_NSIDS.secretRotate,
+		XRPC_NSIDS.privateSiteCreate,
+		XRPC_NSIDS.privateSiteList,
+		XRPC_NSIDS.privateSiteDelete,
+		XRPC_NSIDS.privateSiteCreateShare,
+		XRPC_NSIDS.privateSiteListShares,
+		XRPC_NSIDS.privateSiteRevokeShare,
 	]
+
+	// Private sites are owner-scoped and never touch the PDS; their handlers live in their
+	// own module but share this router's service-auth identity.
+	registerPrivateSiteMethods({
+		router,
+		requireDid: (request) => requireAuthenticated(authByRequest.get(request)).did,
+	})
 
 	addProcedureWithAliases(
 		router,

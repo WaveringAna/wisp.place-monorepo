@@ -11,6 +11,7 @@ import { cors } from 'hono/cors'
 import { cache } from './lib/cache-manager'
 import { getCustomDomain, getCustomDomainByHash, getWispDomain } from './lib/db'
 import { serveFromCache, serveFromCacheWithRewrite } from './lib/file-serving'
+import { privateNotFound, servePrivateSite } from './lib/private-serving'
 import { extractHeaders, isValidRkey } from './lib/request-utils'
 import { resolveDid } from './lib/utils'
 
@@ -26,9 +27,17 @@ async function resolveDidCached(identifier: string): Promise<string | null> {
 const BASE_HOST_ENV = process.env.BASE_HOST || 'wisp.place'
 const BASE_HOST = BASE_HOST_ENV.split(':')[0] || BASE_HOST_ENV
 
+// Dedicated host for private sites. It is kept separate from the public site hosts on
+// purpose: those serve arbitrary user-uploaded JavaScript on a shared origin, so serving
+// private content there would let one user's site read another's private response
+// same-origin using the ambient account session.
+const PRIVATE_HOST = (process.env.PRIVATE_HOST || `priv.${BASE_HOST}`).split(':')[0] || `priv.${BASE_HOST}`
+
 const app = new Hono()
 
-// Add CORS middleware - allow all origins for static site hosting
+// Add CORS middleware - allow all origins for static site hosting.
+// `credentials: false` is load-bearing for private sites: it stops a page on another
+// origin from reading a private response with the visitor's ambient session cookie.
 app.use(
 	'*',
 	cors({
@@ -59,6 +68,25 @@ app.get('/*', async (c) => {
 	const path = hasTrailingSlash ? `${sanitizePath(rawPath)}/` : sanitizePath(rawPath)
 
 	logger.debug(`Request: host=${hostname} hostnameWithoutPort=${hostnameWithoutPort} path=${path}`, { BASE_HOST })
+
+	// Private sites are served only from the dedicated private host, and this check runs
+	// before any public routing so a private id can never fall through to public serving.
+	if (hostnameWithoutPort === PRIVATE_HOST) {
+		const sanitizedFullPath = sanitizePath(rawPath)
+		const parts = sanitizedFullPath.split('/')
+		const siteId = parts[0]
+
+		if (!siteId) {
+			return privateNotFound()
+		}
+
+		// Redirect the site root to a trailing slash so relative asset paths resolve.
+		if (parts.length === 1 && !url.pathname.endsWith('/')) {
+			return c.redirect(`${url.pathname}/${url.search}`, 301)
+		}
+
+		return servePrivateSite(c.req.raw, siteId, parts.slice(1).join('/'))
+	}
 
 	// Check if this is sites.wisp.place subdomain (strip port for comparison)
 	if (hostnameWithoutPort === `sites.${BASE_HOST}`) {

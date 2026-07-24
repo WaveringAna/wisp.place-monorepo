@@ -13,6 +13,14 @@ import {
 	verifyDomain,
 } from './commands/domain.ts'
 import { listDomains, listSites } from './commands/list.ts'
+import {
+	privateDelete,
+	privateDeploy,
+	privateList,
+	privateRevoke,
+	privateShare,
+	privateShares,
+} from './commands/private.ts'
 import { pull } from './commands/pull.ts'
 import { serve } from './commands/serve.ts'
 import { authenticate, authenticateOAuth, clearDirSession, clearSessions, hasDirSession } from './lib/auth.ts'
@@ -557,6 +565,72 @@ addXrpcAuthOptions(
 ).action(
 	withExit(async (handle: string | undefined, options) => {
 		await deleteSiteWithSelection(handle, options)
+	}),
+)
+
+const privateCommand = program
+	.command('private')
+	.description('Manage private sites (never published to your PDS)')
+	.enablePositionalOptions()
+
+addXrpcAuthOptions(
+	privateCommand
+		.command('deploy [handle]')
+		.description('Upload a directory as a private site')
+		.option('-p, --path <dir>', 'Directory to upload', '.')
+		.option('-n, --name <name>', 'Display name for the private site')
+		.option('-e, --expiry <minutes>', 'Minutes until the site expires. Omit for the server default, 0 to never expire'),
+).action(
+	withExit(async (handle: string | undefined, options) => {
+		const { agent } = await authenticateForXrpc(handle, options)
+		await privateDeploy(agent, options)
+	}),
+)
+
+addXrpcAuthOptions(privateCommand.command('list [handle]').description('List your private sites')).action(
+	withExit(async (handle: string | undefined, options) => {
+		const { agent } = await authenticateForXrpc(handle, options)
+		await privateList(agent, options)
+	}),
+)
+
+addXrpcAuthOptions(
+	privateCommand.command('delete <siteId> [handle]').description('Delete a private site and all of its share links'),
+).action(
+	withExit(async (siteId: string, handle: string | undefined, options) => {
+		const { agent } = await authenticateForXrpc(handle, options)
+		await privateDelete(agent, siteId, options)
+	}),
+)
+
+addXrpcAuthOptions(
+	privateCommand
+		.command('share <siteId> [handle]')
+		.description('Create a shareable link for a private site')
+		.option('-l, --label <label>', 'Label to identify this link')
+		.option('-e, --expiry <minutes>', 'Minutes until the link expires. Omit for the server default, 0 for none'),
+).action(
+	withExit(async (siteId: string, handle: string | undefined, options) => {
+		const { agent } = await authenticateForXrpc(handle, options)
+		await privateShare(agent, siteId, options)
+	}),
+)
+
+addXrpcAuthOptions(
+	privateCommand.command('shares <siteId> [handle]').description('List share links for a private site'),
+).action(
+	withExit(async (siteId: string, handle: string | undefined, options) => {
+		const { agent } = await authenticateForXrpc(handle, options)
+		await privateShares(agent, siteId, options)
+	}),
+)
+
+addXrpcAuthOptions(
+	privateCommand.command('revoke <siteId> <shareId> [handle]').description('Revoke a share link immediately'),
+).action(
+	withExit(async (siteId: string, shareId: string, handle: string | undefined, options) => {
+		const { agent } = await authenticateForXrpc(handle, options)
+		await privateRevoke(agent, siteId, shareId, options)
 	}),
 )
 

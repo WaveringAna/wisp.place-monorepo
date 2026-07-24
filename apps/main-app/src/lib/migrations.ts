@@ -249,5 +249,28 @@ export const runDatabaseMigrations = async (db: SQL): Promise<void> => {
 				console.error('Failed to create idx_site_cache_updated:', err)
 			}
 		}),
+		db`CREATE INDEX IF NOT EXISTS idx_private_sites_owner ON private_sites(owner_did)`.catch((err) => {
+			if (!hasAlreadyExists(err)) {
+				console.error('Failed to create idx_private_sites_owner:', err)
+			}
+		}),
+		db`CREATE INDEX IF NOT EXISTS idx_private_sites_expires_at ON private_sites(expires_at)`.catch((err) => {
+			if (!hasAlreadyExists(err)) {
+				console.error('Failed to create idx_private_sites_expires_at:', err)
+			}
+		}),
+		db`CREATE INDEX IF NOT EXISTS idx_private_site_shares_site ON private_site_shares(site_id)`.catch((err) => {
+			if (!hasAlreadyExists(err)) {
+				console.error('Failed to create idx_private_site_shares_site:', err)
+			}
+		}),
+		// Share lookup is by token hash on every request to a shared private site.
+		db`CREATE INDEX IF NOT EXISTS idx_private_site_shares_token_hash ON private_site_shares(token_hash)`.catch(
+			(err) => {
+				if (!hasAlreadyExists(err)) {
+					console.error('Failed to create idx_private_site_shares_token_hash:', err)
+				}
+			},
+		),
 	])
 }
