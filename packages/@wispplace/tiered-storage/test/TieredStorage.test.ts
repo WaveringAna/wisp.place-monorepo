@@ -1,18 +1,22 @@
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
-import { rm } from 'node:fs/promises'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { TieredStorage } from '../src/TieredStorage.js'
 import { DiskStorageTier } from '../src/tiers/DiskStorageTier.js'
 import { MemoryStorageTier } from '../src/tiers/MemoryStorageTier.js'
 
-const testDir = './test-cache'
+const testDirs: string[] = []
+let testDir: string
 
 describe('TieredStorage', () => {
 	beforeEach(async () => {
-		await rm(testDir, { recursive: true, force: true })
+		testDir = await mkdtemp(join(tmpdir(), 'tiered-storage-'))
+		testDirs.push(testDir)
 	})
 
 	afterAll(async () => {
-		await rm(testDir, { recursive: true, force: true })
+		await Promise.all(testDirs.map((dir) => rm(dir, { recursive: true, force: true })))
 	})
 
 	describe('Basic Operations', () => {

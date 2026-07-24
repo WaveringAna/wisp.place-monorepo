@@ -1,20 +1,24 @@
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
-import { rm } from 'node:fs/promises'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { TieredStorage } from '../src/TieredStorage.js'
 import { DiskStorageTier } from '../src/tiers/DiskStorageTier.js'
 import { MemoryStorageTier } from '../src/tiers/MemoryStorageTier.js'
 
-const testDir = './test-streaming-cache'
+const testDirs: string[] = []
+let testDir: string
 
 describe('Streaming Operations', () => {
 	beforeEach(async () => {
-		await rm(testDir, { recursive: true, force: true })
+		testDir = await mkdtemp(join(tmpdir(), 'tiered-storage-streaming-'))
+		testDirs.push(testDir)
 	})
 
 	afterAll(async () => {
-		await rm(testDir, { recursive: true, force: true })
+		await Promise.all(testDirs.map((dir) => rm(dir, { recursive: true, force: true })))
 	})
 
 	/**
