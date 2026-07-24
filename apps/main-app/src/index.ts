@@ -25,6 +25,7 @@ import type { Config } from './lib/types'
 import { adminRoutes } from './routes/admin'
 import { authRoutes } from './routes/auth'
 import { domainRoutes } from './routes/domain'
+import { privateSiteApiRoutes } from './routes/private-site-api'
 import { secretRoutes } from './routes/secret'
 import { siteRoutes } from './routes/site'
 import { userRoutes } from './routes/user'
@@ -238,6 +239,7 @@ export const app = new Elysia({
 	.use(domainRoutes(client, cookieSecret))
 	.use(userRoutes(client, cookieSecret))
 	.use(siteRoutes(client, cookieSecret))
+	.use(privateSiteApiRoutes(client, cookieSecret))
 	.use(webhookRoutes(client, cookieSecret))
 	.use(secretRoutes(client, cookieSecret))
 	.use(adminRoutes(cookieSecret))

@@ -408,12 +408,18 @@ function initializePrivateStorage(): TieredStorage<Uint8Array> {
 			}),
 		)
 	} else {
-		coldTier = new DiskStorageTier({
-			directory: CACHE_DIR,
-			maxSizeBytes: WARM_CACHE_SIZE,
-			evictionPolicy: WARM_EVICTION_POLICY,
-			encodeColons: false,
-		})
+		// Disk-only mode. Reuse the public warm DiskStorageTier instance rather than
+		// constructing a second one over the same directory: two tiers with independent
+		// eviction and index state managing the same files race each other.
+		// Private keys are namespaced under `private/`, so sharing the instance is safe.
+		coldTier =
+			warmTier ??
+			new DiskStorageTier({
+				directory: CACHE_DIR,
+				maxSizeBytes: WARM_CACHE_SIZE,
+				evictionPolicy: WARM_EVICTION_POLICY,
+				encodeColons: false,
+			})
 	}
 
 	return new TieredStorage<Uint8Array>({
