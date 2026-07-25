@@ -1,0 +1,13 @@
+anonymous GET on a private host, existing vs non-existent site
+=============================================================
+
+existing:      mellow-ocelot-seahorse-9131.priv.wisp.localhost:3001/   -> 404, 1127 bytes
+non-existent:  absent-nonsense-wombat-0000.priv.wisp.localhost:3001/   -> 404, 1127 bytes
+
+with the site-id form field normalised away:
+  sha256(existing)      = 8460ca1763f6c94fab7e814bf5cb3b1ad4421b0c8a6c020d972d64e6b4b5bc30
+  sha256(non-existent)  = 8460ca1763f6c94fab7e814bf5cb3b1ad4421b0c8a6c020d972d64e6b4b5bc30
+  identical             = True
+
+the sign-in page a stranger sees cannot be used to discover whether a private site
+exists: same status, same length, same bytes.
