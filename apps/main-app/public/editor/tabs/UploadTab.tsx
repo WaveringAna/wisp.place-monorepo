@@ -37,9 +37,11 @@ interface UploadTabProps {
 
 export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUploadComplete }: UploadTabProps) {
 	// Upload state
-	const [siteMode, setSiteMode] = useState<'existing' | 'new'>('existing')
+	const [siteMode, setSiteMode] = useState<'existing' | 'new' | 'private'>('existing')
 	const [selectedSiteRkey, setSelectedSiteRkey] = useState<string>('')
 	const [newSiteName, setNewSiteName] = useState('')
+	const [privateExpiryMode, setPrivateExpiryMode] = useState<'default' | 'never' | 'custom'>('default')
+	const [privateExpiryMinutes, setPrivateExpiryMinutes] = useState('')
 	const [selectedFiles, setSelectedFiles] = useState<FileList | null>(null)
 	const [isUploading, setIsUploading] = useState(false)
 	const [uploadProgress, setUploadProgress] = useState('')
@@ -53,6 +55,7 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 	const [fileProgressList, setFileProgressList] = useState<FileProgress[]>([])
 	const [showFileProgress, setShowFileProgress] = useState(false)
 	const [isDragging, setIsDragging] = useState(false)
+	const publicSites = sites.filter((site) => !site.isPrivate)
 
 	// Ref for the drop zone
 	const dropZoneRef = useRef<HTMLButtonElement>(null)
@@ -63,10 +66,10 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 
 	// Auto-switch to 'new' mode if no sites exist
 	useEffect(() => {
-		if (!sitesLoading && sites.length === 0 && siteMode === 'existing') {
+		if (!sitesLoading && publicSites.length === 0 && siteMode === 'existing') {
 			setSiteMode('new')
 		}
-	}, [sites, sitesLoading, siteMode])
+	}, [publicSites.length, sitesLoading, siteMode])
 
 	// Cleanup SSE connection on unmount
 	useEffect(() => {
@@ -366,10 +369,14 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 	}
 
 	const handleUpload = async () => {
-		const siteName = siteMode === 'existing' ? selectedSiteRkey : newSiteName
+		const siteName = siteMode === 'existing' ? selectedSiteRkey : newSiteName.trim()
 
 		if (!siteName) {
 			alert(siteMode === 'existing' ? 'Please select a site' : 'Please enter a site name')
+			return
+		}
+		if (siteMode === 'private' && (!selectedFiles || selectedFiles.length === 0)) {
+			alert('Please choose at least one file for the private site')
 			return
 		}
 
@@ -378,13 +385,52 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 
 		try {
 			const formData = new FormData()
-			formData.append('siteName', siteName)
-			formData.append('publishStandardSite', String(publishStandardSite))
+			formData.append(siteMode === 'private' ? 'name' : 'siteName', siteName)
+			if (siteMode !== 'private') {
+				formData.append('publishStandardSite', String(publishStandardSite))
+			}
+			if (siteMode === 'private') {
+				if (privateExpiryMode === 'never') {
+					formData.append('expiryMinutes', '0')
+				} else if (privateExpiryMode === 'custom') {
+					const expiryMinutes = Number(privateExpiryMinutes)
+					if (!Number.isInteger(expiryMinutes) || expiryMinutes < 1) {
+						throw new Error('Expiry must be a positive whole number of minutes')
+					}
+					formData.append('expiryMinutes', String(expiryMinutes))
+				}
+			}
 
 			if (selectedFiles) {
 				for (let i = 0; i < selectedFiles.length; i++) {
-					formData.append('files', selectedFiles[i])
+					const file = selectedFiles[i]
+					const path = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
+					formData.append('files', file, path)
 				}
+			}
+
+			if (siteMode === 'private') {
+				setUploadProgress('Uploading privately...')
+				const response = await fetch('/api/user/private-sites', {
+					method: 'POST',
+					body: formData,
+				})
+				const data = await response.json()
+				if (!response.ok || !data.success) {
+					throw new Error(data.error || 'Private upload failed')
+				}
+
+				setUploadProgress('Private site created!')
+				setNewSiteName('')
+				setSelectedFiles(null)
+				setPrivateExpiryMode('default')
+				setPrivateExpiryMinutes('')
+				await onUploadComplete()
+				setTimeout(() => {
+					setUploadProgress('')
+					setIsUploading(false)
+				}, 1500)
+				return
 			}
 
 			// If no files, handle synchronously (old behavior)
@@ -444,7 +490,9 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 			{/* Header */}
 			<div className="p-4 pb-3 border-b border-border/30 flex-shrink-0">
 				<p className="text-sm font-semibold">Upload Site</p>
-				<p className="text-xs text-muted-foreground mt-0.5">100MB per file · 300MB total</p>
+				<p className="text-xs text-muted-foreground mt-0.5">
+					{siteMode === 'private' ? '100MB total · stored privately by wisp' : '100MB per file · 300MB total'}
+				</p>
 			</div>
 
 			{/* Content */}
@@ -469,7 +517,18 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 						onClick={() => setSiteMode('new')}
 						disabled={isUploading}
 					>
-						Create new
+						Create public
+					</button>
+					<button
+						aria-label="Choose private upload"
+						className={`flex-1 py-2 text-sm border-l border-border/30 transition-colors ${
+							siteMode === 'private' ? 'bg-accent/20 text-foreground' : 'text-muted-foreground hover:bg-muted/30'
+						}`}
+						type="button"
+						onClick={() => setSiteMode('private')}
+						disabled={isUploading}
+					>
+						Upload privately
 					</button>
 				</div>
 
@@ -480,9 +539,9 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 							<Loader2 className="w-3 h-3 animate-spin" />
 							Loading sites...
 						</div>
-					) : sites.length === 0 ? (
+					) : publicSites.length === 0 ? (
 						<p className="text-xs text-muted-foreground p-3 border border-dashed border-border/50">
-							No sites yet — switch to "Create new" above.
+							No public sites yet — switch to "Create public" above.
 						</p>
 					) : (
 						<div className="space-y-1">
@@ -497,7 +556,7 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 								disabled={isUploading}
 							>
 								<option value="">Select a site...</option>
-								{sites.map((site) => (
+								{publicSites.map((site) => (
 									<option key={site.rkey} value={site.rkey}>
 										{site.display_name || site.rkey}
 									</option>
@@ -508,7 +567,7 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 				) : (
 					<div className="space-y-1">
 						<Label htmlFor="new-site-name" className="text-xs">
-							Site name
+							{siteMode === 'private' ? 'Private site name' : 'Site name'}
 						</Label>
 						<Input
 							id="new-site-name"
@@ -518,6 +577,42 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 							disabled={isUploading}
 							className="h-9"
 						/>
+					</div>
+				)}
+
+				{siteMode === 'private' && (
+					<div className="space-y-1">
+						<Label htmlFor="private-expiry" className="text-xs">
+							Expiry
+						</Label>
+						<select
+							id="private-expiry"
+							className="flex h-9 w-full border border-input bg-background px-3 py-1 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+							value={privateExpiryMode}
+							onChange={(event) => setPrivateExpiryMode(event.target.value as 'default' | 'never' | 'custom')}
+							disabled={isUploading}
+						>
+							<option value="default">Default (7 days)</option>
+							<option value="never">Never expires</option>
+							<option value="custom">Custom minutes</option>
+						</select>
+						{privateExpiryMode === 'custom' && (
+							<Input
+								aria-label="Private site expiry in minutes"
+								type="number"
+								min={1}
+								max={525600}
+								step={1}
+								placeholder="minutes"
+								value={privateExpiryMinutes}
+								onChange={(event: ChangeEvent<HTMLInputElement>) => setPrivateExpiryMinutes(event.target.value)}
+								disabled={isUploading}
+								className="h-9"
+							/>
+						)}
+						<p className="text-[11px] text-muted-foreground">
+							Private files stay off your PDS and never enter the firehose.
+						</p>
 					</div>
 				)}
 
@@ -563,35 +658,37 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 					/>
 				</button>
 
-				<div className="flex items-start gap-2 border border-border/30 bg-muted/20 p-3">
-					<Checkbox
-						id="publish-standard-site"
-						checked={publishStandardSite}
-						onCheckedChange={(checked) => setPublishStandardSite(checked === true)}
-						disabled={isUploading}
-						className="mt-0.5"
-					/>
-					<div className="space-y-0.5">
-						<div className="flex items-center gap-1.5">
-							<Label htmlFor="publish-standard-site" className="text-xs font-medium">
-								Auto-detect blog posts
-							</Label>
-							<span className="group relative inline-flex">
-								<button
-									type="button"
-									aria-label="auto-detect blog posts info"
-									className="inline-flex h-4 min-w-4 items-center justify-center border border-border/50 bg-transparent px-1 text-[10px] leading-none text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-								>
-									(i)
-								</button>
-								<span className="pointer-events-none absolute bottom-full left-0 z-20 mb-2 w-72 max-w-[calc(100vw-3rem)] border border-border bg-popover p-2 text-xs leading-5 text-popover-foreground opacity-0 shadow-md transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
-									Creates standard.site publication and document records. Detects Astro, Hugo, 11ty, Next.js, Gatsby,
-									SvelteKit, Jekyll, Zola, HTML article metadata, JSON-LD, and Markdown/MDX frontmatter.
+				{siteMode !== 'private' && (
+					<div className="flex items-start gap-2 border border-border/30 bg-muted/20 p-3">
+						<Checkbox
+							id="publish-standard-site"
+							checked={publishStandardSite}
+							onCheckedChange={(checked) => setPublishStandardSite(checked === true)}
+							disabled={isUploading}
+							className="mt-0.5"
+						/>
+						<div className="space-y-0.5">
+							<div className="flex items-center gap-1.5">
+								<Label htmlFor="publish-standard-site" className="text-xs font-medium">
+									Auto-detect blog posts
+								</Label>
+								<span className="group relative inline-flex">
+									<button
+										type="button"
+										aria-label="auto-detect blog posts info"
+										className="inline-flex h-4 min-w-4 items-center justify-center border border-border/50 bg-transparent px-1 text-[10px] leading-none text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+									>
+										(i)
+									</button>
+									<span className="pointer-events-none absolute bottom-full left-0 z-20 mb-2 w-72 max-w-[calc(100vw-3rem)] border border-border bg-popover p-2 text-xs leading-5 text-popover-foreground opacity-0 shadow-md transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
+										Creates standard.site publication and document records. Detects Astro, Hugo, 11ty, Next.js, Gatsby,
+										SvelteKit, Jekyll, Zola, HTML article metadata, JSON-LD, and Markdown/MDX frontmatter.
+									</span>
 								</span>
-							</span>
+							</div>
 						</div>
 					</div>
-				</div>
+				)}
 
 				{/* Progress */}
 				{uploadProgress && (
@@ -748,7 +845,8 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 					disabled={
 						(siteMode === 'existing' ? !selectedSiteRkey : !newSiteName) ||
 						isUploading ||
-						(siteMode === 'existing' && (!selectedFiles || selectedFiles.length === 0))
+						((siteMode === 'existing' || siteMode === 'private') && (!selectedFiles || selectedFiles.length === 0)) ||
+						(siteMode === 'private' && privateExpiryMode === 'custom' && !privateExpiryMinutes)
 					}
 				>
 					{isUploading ? (
@@ -758,6 +856,8 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 						</>
 					) : siteMode === 'existing' ? (
 						'Update Site'
+					) : siteMode === 'private' ? (
+						'Upload privately'
 					) : selectedFiles && selectedFiles.length > 0 ? (
 						'Upload & Deploy'
 					) : (

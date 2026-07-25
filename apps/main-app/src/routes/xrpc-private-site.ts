@@ -10,7 +10,7 @@
  */
 
 import { json, XRPCError, type XRPCRouter } from '@atcute/xrpc-server'
-import { MAX_PRIVATE_SITE_FILE_COUNT, MAX_PRIVATE_SITE_SIZE, PRIVATE_SHARE_QUERY_PARAM } from '@wispplace/constants'
+import { PRIVATE_SHARE_QUERY_PARAM } from '@wispplace/constants'
 import {
 	PlaceWispV2PrivateSiteCreate,
 	PlaceWispV2PrivateSiteCreateShare,
@@ -21,6 +21,7 @@ import {
 } from '@wispplace/lexicons/atcute'
 import { InvalidExpiryError, isExpired, privateGrantUrlFor } from '@wispplace/private-sites'
 import { privateSiteUrl, shortShareUrl } from '../lib/private-site-origin'
+import { PrivateSiteUploadError, readPrivateSiteUpload } from '../lib/private-site-upload'
 import { listShares } from '../lib/private-sites-db'
 import {
 	createSiteShare,
@@ -31,7 +32,6 @@ import {
 	PrivateSiteError,
 	requireOwnedSite,
 	revokeSiteShare,
-	type UploadedPrivateFile,
 } from '../lib/private-sites-service'
 
 /**
@@ -65,77 +65,20 @@ const toXrpcError = (err: unknown): never => {
 	if (err instanceof InvalidExpiryError) {
 		throw new XRPCError({ status: 400, error: 'InvalidRequest', description: err.message })
 	}
-	throw err
-}
-
-const parseExpiryMinutes = (raw: unknown): number | null | undefined => {
-	if (raw === undefined || raw === null || raw === '') return undefined
-	const value = typeof raw === 'number' ? raw : Number(raw)
-	if (!Number.isFinite(value)) {
-		throw new XRPCError({ status: 400, error: 'InvalidRequest', description: 'expiryMinutes must be a number' })
+	if (err instanceof PrivateSiteUploadError) {
+		throw new XRPCError({
+			status: err.status,
+			error: err.status === 413 ? 'PayloadTooLarge' : 'InvalidRequest',
+			description: err.message,
+		})
 	}
-	return value
+	throw err
 }
 
 const shareStatus = (share: { revokedAt: Date | null; expiresAt: Date | null }, now: Date): string => {
 	if (share.revokedAt !== null) return 'revoked'
 	if (isExpired(share.expiresAt, now)) return 'expired'
 	return 'active'
-}
-
-/**
- * Read a multipart upload into memory.
- *
- * Enforces the file-count and total-size ceilings while reading so an oversized upload is
- * rejected rather than buffered in full.
- */
-const readMultipart = async (
-	request: Request,
-): Promise<{ name: string; expiryMinutes: number | null | undefined; files: UploadedPrivateFile[] }> => {
-	let form: FormData
-	try {
-		form = await request.formData()
-	} catch {
-		throw new XRPCError({ status: 400, error: 'InvalidRequest', description: 'expected multipart/form-data body' })
-	}
-
-	const name = String(form.get('name') ?? '').trim()
-	const expiryMinutes = parseExpiryMinutes(form.get('expiryMinutes'))
-
-	const files: UploadedPrivateFile[] = []
-	let total = 0
-
-	for (const [field, value] of form.entries()) {
-		if (field !== 'files' && field !== 'file') continue
-		if (typeof value === 'string') continue
-		const file = value as File
-
-		if (files.length >= MAX_PRIVATE_SITE_FILE_COUNT) {
-			throw new XRPCError({
-				status: 413,
-				error: 'PayloadTooLarge',
-				description: `at most ${MAX_PRIVATE_SITE_FILE_COUNT} files are allowed`,
-			})
-		}
-
-		total += file.size
-		if (total > MAX_PRIVATE_SITE_SIZE) {
-			throw new XRPCError({
-				status: 413,
-				error: 'PayloadTooLarge',
-				description: `private sites are limited to ${MAX_PRIVATE_SITE_SIZE} bytes`,
-			})
-		}
-
-		files.push({
-			// `webkitRelativePath` preserves directory structure when a folder is uploaded.
-			path: (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name,
-			bytes: new Uint8Array(await file.arrayBuffer()),
-			mimeType: file.type || null,
-		})
-	}
-
-	return { name, expiryMinutes, files }
 }
 
 export interface PrivateSiteXrpcDeps {
@@ -150,7 +93,7 @@ export const registerPrivateSiteMethods = ({ router, requireDid }: PrivateSiteXr
 			async handler({ request }: any) {
 				const did = requireDid(request)
 				try {
-					const { name, expiryMinutes, files } = await readMultipart(request)
+					const { name, expiryMinutes, files } = await readPrivateSiteUpload(request)
 					const site = await ingestPrivateSite({ ownerDid: did, name, expiryMinutes, files })
 
 					return json({

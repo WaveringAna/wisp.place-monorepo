@@ -14,10 +14,12 @@ import { createLogger } from '@wispplace/observability'
 import { InvalidExpiryError, isExpired } from '@wispplace/private-sites'
 import { Elysia } from 'elysia'
 import { privateSiteUrl, shortShareUrl } from '../lib/private-site-origin'
+import { PrivateSiteUploadError, readPrivateSiteUpload } from '../lib/private-site-upload'
 import { createOwnerHandoff, listShares } from '../lib/private-sites-db'
 import {
 	createSiteShare,
 	deleteOwnedPrivateSite,
+	ingestPrivateSite,
 	listOwnedPrivateSites,
 	listSiteShares,
 	PrivateSiteError,
@@ -45,6 +47,10 @@ const errorResponse = (err: unknown, set: { status?: number | string }) => {
 	}
 	if (err instanceof InvalidExpiryError) {
 		set.status = 400
+		return { success: false, error: err.message }
+	}
+	if (err instanceof PrivateSiteUploadError) {
+		set.status = err.status
 		return { success: false, error: err.message }
 	}
 	set.status = 500
@@ -92,6 +98,37 @@ export const privateSiteApiRoutes = (client: NodeOAuthClient, cookieSecret: stri
 				return errorResponse(err, set)
 			}
 		})
+		/**
+		 * POST /api/user/private-sites
+		 *
+		 * Cookie-authenticated equivalent of place.wisp.v2.privateSite.create for the editor.
+		 * The upload is ingested directly into private storage and never reaches the PDS.
+		 */
+		.post(
+			'/',
+			async ({ request, auth, set }) => {
+				try {
+					const { name, expiryMinutes, files } = await readPrivateSiteUpload(request)
+					const site = await ingestPrivateSite({ ownerDid: auth.did, name, expiryMinutes, files })
+
+					return {
+						success: true,
+						siteId: site.siteId,
+						name: site.name,
+						fileCount: site.fileCount,
+						totalBytes: site.totalBytes,
+						expiresAt: site.expiresAt ? site.expiresAt.toISOString() : null,
+						createdAt: site.createdAt.toISOString(),
+						url: privateSiteUrl(site.siteId),
+					}
+				} catch (err) {
+					logger.error('[PrivateSite] Create error', err)
+					return errorResponse(err, set)
+				}
+			},
+			// Multipart parsing is shared with XRPC, so keep Elysia from consuming the body first.
+			{ parse: 'none' },
+		)
 		/**
 		 * POST /api/user/private-sites/:siteId/open
 		 *
