@@ -608,7 +608,11 @@ addXrpcAuthOptions(
 		.command('share <siteId> [handle]')
 		.description('Create a shareable link for a private site')
 		.option('-l, --label <label>', 'Label to identify this link')
-		.option('-e, --expiry <minutes>', 'Minutes until the link expires. Omit for the server default, 0 for none'),
+		.option('-e, --expiry <minutes>', 'Minutes until the link expires. Omit for the server default, 0 for none')
+		.option(
+			'-t, --to <did>',
+			'Restrict the link to one account. They sign in to open it; the link alone grants nothing',
+		),
 ).action(
 	withExit(async (siteId: string, handle: string | undefined, options) => {
 		const { agent } = await authenticateForXrpc(handle, options)

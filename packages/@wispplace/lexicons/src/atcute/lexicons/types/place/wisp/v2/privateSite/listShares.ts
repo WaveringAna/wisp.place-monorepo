@@ -22,6 +22,10 @@ const _shareSchema = /*#__PURE__*/ v.object({
   $type: /*#__PURE__*/ v.optional(
     /*#__PURE__*/ v.literal("place.wisp.v2.privateSite.listShares#share"),
   ),
+  /**
+   * Set when this link is restricted to a single account.
+   */
+  audienceDid: /*#__PURE__*/ v.optional(/*#__PURE__*/ v.didString()),
   createdAt: /*#__PURE__*/ v.datetimeString(),
   expiresAt: /*#__PURE__*/ v.optional(/*#__PURE__*/ v.datetimeString()),
   label: /*#__PURE__*/ v.optional(/*#__PURE__*/ v.string()),

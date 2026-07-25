@@ -10,12 +10,7 @@
  */
 
 import { json, XRPCError, type XRPCRouter } from '@atcute/xrpc-server'
-import {
-	BASE_HOST,
-	MAX_PRIVATE_SITE_FILE_COUNT,
-	MAX_PRIVATE_SITE_SIZE,
-	PRIVATE_SHARE_QUERY_PARAM,
-} from '@wispplace/constants'
+import { MAX_PRIVATE_SITE_FILE_COUNT, MAX_PRIVATE_SITE_SIZE, PRIVATE_SHARE_QUERY_PARAM } from '@wispplace/constants'
 import {
 	PlaceWispV2PrivateSiteCreate,
 	PlaceWispV2PrivateSiteCreateShare,
@@ -24,7 +19,8 @@ import {
 	PlaceWispV2PrivateSiteListShares,
 	PlaceWispV2PrivateSiteRevokeShare,
 } from '@wispplace/lexicons/atcute'
-import { InvalidExpiryError, isExpired, PRIVATE_GRANT_QUERY_PARAM, privateSiteHostname } from '@wispplace/private-sites'
+import { InvalidExpiryError, isExpired, privateGrantUrlFor } from '@wispplace/private-sites'
+import { privateSiteUrl, shortShareUrl } from '../lib/private-site-origin'
 import { listShares } from '../lib/private-sites-db'
 import {
 	createSiteShare,
@@ -39,19 +35,6 @@ import {
 } from '../lib/private-sites-service'
 
 /**
- * Base hostname under which each private site gets its own origin.
- *
- * Sites are served from `<siteId>.<privateHost>` rather than a shared path namespace, so
- * one tenant's JavaScript cannot read another tenant's content same-origin.
- */
-export const privateHost = (): string => process.env.PRIVATE_HOST || `priv.${BASE_HOST}`
-
-const scheme = (): string => (process.env.NODE_ENV === 'production' ? 'https' : 'http')
-
-/** Per-site origin URL. Opening it without a credential yields a 404. */
-export const privateSiteUrl = (siteId: string): string => `${scheme()}://${privateSiteHostname(siteId, privateHost())}/`
-
-/**
  * Share URL. Contains the credential, so it is returned once and never logged.
  *
  * The credential is exchanged for a site-scoped session cookie on first load and stripped
@@ -60,9 +43,14 @@ export const privateSiteUrl = (siteId: string): string => `${scheme()}://${priva
 export const privateShareUrl = (siteId: string, token: string): string =>
 	`${privateSiteUrl(siteId)}?${PRIVATE_SHARE_QUERY_PARAM}=${encodeURIComponent(token)}`
 
-/** One-time owner entry URL, carrying a handoff token for the site's own origin. */
+/**
+ * One-time entry URL carrying a handoff token for the site's own origin.
+ *
+ * Used both for an owner crossing from main-app and for a DID-scoped share redeemed
+ * through the identity bounce.
+ */
 export const privateOwnerUrl = (siteId: string, handoff: string): string =>
-	`${privateSiteUrl(siteId)}?${PRIVATE_GRANT_QUERY_PARAM}=${encodeURIComponent(handoff)}`
+	privateGrantUrlFor(privateSiteUrl(siteId), handoff)
 
 const toXrpcError = (err: unknown): never => {
 	if (err instanceof PrivateSiteError) {
@@ -236,6 +224,7 @@ export const registerPrivateSiteMethods = ({ router, requireDid }: PrivateSiteXr
 						ownerDid: did,
 						label: input.label ?? null,
 						expiryMinutes: input.expiryMinutes,
+						audienceDid: input.audienceDid ?? null,
 					})
 
 					// The URL embeds the credential. It is returned exactly once and is never
@@ -243,7 +232,8 @@ export const registerPrivateSiteMethods = ({ router, requireDid }: PrivateSiteXr
 					return json({
 						shareId: share.shareId,
 						siteId: share.siteId,
-						url: privateShareUrl(share.siteId, token),
+						url: shortShareUrl(token),
+						directUrl: privateShareUrl(share.siteId, token),
 						expiresAt: share.expiresAt ? share.expiresAt.toISOString() : undefined,
 						createdAt: share.createdAt.toISOString(),
 					})

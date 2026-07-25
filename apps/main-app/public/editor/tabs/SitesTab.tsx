@@ -74,7 +74,10 @@ interface PrivateSharePanelProps {
 	justCreatedUrl: string | null
 	copied: boolean
 	onLoad: (siteId: string) => void
-	onCreate: (siteId: string, options?: { label?: string; expiryMinutes?: number }) => Promise<string | null>
+	onCreate: (
+		siteId: string,
+		options?: { label?: string; expiryMinutes?: number; audienceDid?: string },
+	) => Promise<string | null>
 	onRevoke: (siteId: string, shareId: string) => Promise<boolean>
 	onCopy: (text: string) => void
 }
@@ -93,18 +96,64 @@ const PrivateSharePanel = memo(function PrivateSharePanel({
 }: PrivateSharePanelProps) {
 	const [label, setLabel] = useState('')
 	const [creating, setCreating] = useState(false)
+	const [handle, setHandle] = useState('')
+	/**
+	 * Resolution of the typed handle.
+	 *
+	 * A scoped link is only as good as the DID behind it, so the handle is resolved before
+	 * the link is created and the resolved DID is what gets sent. Typing a handle that does
+	 * not resolve disables creation rather than silently making a bearer link.
+	 */
+	const [resolved, setResolved] = useState<{ handle: string; did: string } | null>(null)
+	const [resolving, setResolving] = useState(false)
+
+	// Debounced so a lookup does not fire on every keystroke, and stale responses are
+	// discarded rather than overwriting a newer one.
+	useEffect(() => {
+		const query = handle.trim().replace(/^@/, '')
+		if (!query) {
+			setResolved(null)
+			setResolving(false)
+			return
+		}
+		let cancelled = false
+		setResolving(true)
+		const timer = setTimeout(async () => {
+			try {
+				const res = await fetch(`/api/user/private-sites/resolve-handle?handle=${encodeURIComponent(query)}`)
+				const data = await res.json()
+				if (cancelled) return
+				setResolved(data.found ? { handle: data.handle, did: data.did } : null)
+			} catch {
+				if (!cancelled) setResolved(null)
+			} finally {
+				if (!cancelled) setResolving(false)
+			}
+		}, 350)
+		return () => {
+			cancelled = true
+			clearTimeout(timer)
+		}
+	}, [handle])
 
 	// Shares are fetched lazily, only when a private site is actually expanded.
 	useEffect(() => {
 		if (siteId) onLoad(siteId)
 	}, [siteId, onLoad])
 
+	const scopeReady = handle.trim().length === 0 || resolved !== null
+
 	const handleCreate = useCallback(async () => {
 		setCreating(true)
-		await onCreate(siteId, label.trim() ? { label: label.trim() } : {})
+		await onCreate(siteId, {
+			...(label.trim() ? { label: label.trim() } : {}),
+			...(resolved ? { audienceDid: resolved.did } : {}),
+		})
 		setLabel('')
+		setHandle('')
+		setResolved(null)
 		setCreating(false)
-	}, [siteId, label, onCreate])
+	}, [siteId, label, resolved, onCreate])
 
 	return (
 		<div>
@@ -128,18 +177,60 @@ const PrivateSharePanel = memo(function PrivateSharePanel({
 				</div>
 			)}
 
-			<div className="flex items-center gap-2 mb-3">
+			<div className="space-y-1.5 mb-3">
+				<div className="flex items-center gap-2">
+					<input
+						type="text"
+						value={label}
+						onChange={(e) => setLabel(e.target.value)}
+						placeholder="label (optional)"
+						className="flex-1 text-xs bg-background/50 border border-border/50 px-2 py-1.5 font-mono outline-none focus:border-accent"
+					/>
+					<Button
+						variant="outline"
+						size="sm"
+						className="font-mono text-xs"
+						disabled={creating || !scopeReady}
+						onClick={handleCreate}
+					>
+						<Link2 className="w-3 h-3 mr-2" />
+						{creating ? 'Creating...' : 'New link'}
+					</Button>
+				</div>
+
+				{/* Leaving this empty makes a bearer link, which is what someone without an
+				    atproto account needs. Filling it scopes the link to one person. */}
 				<input
 					type="text"
-					value={label}
-					onChange={(e) => setLabel(e.target.value)}
-					placeholder="label (optional)"
-					className="flex-1 text-xs bg-background/50 border border-border/50 px-2 py-1.5 font-mono outline-none focus:border-accent"
+					value={handle}
+					onChange={(e) => setHandle(e.target.value)}
+					placeholder="share with an account (optional) — e.g. alice.bsky.social"
+					autoCapitalize="none"
+					autoCorrect="off"
+					spellCheck={false}
+					className="w-full text-xs bg-background/50 border border-border/50 px-2 py-1.5 font-mono outline-none focus:border-accent"
 				/>
-				<Button variant="outline" size="sm" className="font-mono text-xs" disabled={creating} onClick={handleCreate}>
-					<Link2 className="w-3 h-3 mr-2" />
-					{creating ? 'Creating...' : 'New link'}
-				</Button>
+
+				{handle.trim().length > 0 && (
+					<p className="text-[10px] font-mono">
+						{resolving ? (
+							<span className="text-muted-foreground">resolving…</span>
+						) : resolved ? (
+							<span className="text-green-400">
+								<Check className="w-3 h-3 inline mr-1" />
+								{resolved.handle} · <span className="text-muted-foreground">{resolved.did}</span>
+							</span>
+						) : (
+							<span className="text-amber-400">no account found for that handle</span>
+						)}
+					</p>
+				)}
+
+				<p className="text-[10px] text-muted-foreground">
+					{resolved
+						? 'only this account can open the link; they will be asked to sign in'
+						: 'leave blank for a link anyone can open, including people without an atproto account'}
+				</p>
 			</div>
 
 			{loading ? (
@@ -165,6 +256,14 @@ const PrivateSharePanel = memo(function PrivateSharePanel({
 							{/* Only the non-secret prefix is ever available here. */}
 							<code className="text-muted-foreground">{share.tokenPrefix}...</code>
 							{share.label && <span className="text-muted-foreground truncate">{share.label}</span>}
+							{/* A scoped link needs its audience visible, or there is no way to tell
+							    two links apart once the URL itself is gone. */}
+							{share.audienceDid && (
+								<Badge variant="outline" className="text-[10px] text-violet-300 border-violet-400/50 flex-shrink-0">
+									<Lock className="w-2.5 h-2.5 mr-1" />
+									{share.audienceDid}
+								</Badge>
+							)}
 							<span className="text-muted-foreground/60 ml-auto">
 								{share.expiresAt ? formatExpiry(share.expiresAt, false) : 'never expires'}
 							</span>

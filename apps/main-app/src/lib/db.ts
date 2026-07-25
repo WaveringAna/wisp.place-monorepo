@@ -176,7 +176,8 @@ await db`
         expires_at TIMESTAMPTZ,
         revoked_at TIMESTAMPTZ,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        last_used_at TIMESTAMPTZ
+        last_used_at TIMESTAMPTZ,
+        audience_did TEXT
     )
 `
 
@@ -204,7 +205,8 @@ await db`
         handoff_id TEXT PRIMARY KEY,
         secret_hash TEXT NOT NULL,
         site_id TEXT NOT NULL REFERENCES private_sites(site_id) ON DELETE CASCADE,
-        owner_did TEXT NOT NULL,
+        owner_did TEXT,
+        share_id TEXT REFERENCES private_site_shares(share_id) ON DELETE CASCADE,
         expires_at TIMESTAMPTZ NOT NULL,
         consumed_at TIMESTAMPTZ,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

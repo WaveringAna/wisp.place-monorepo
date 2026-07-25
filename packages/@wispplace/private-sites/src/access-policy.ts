@@ -32,8 +32,13 @@ export const isExpired = (expiresAt: Date | null, now: Date): boolean => {
  *   2. the owner is checked before site expiry, so an owner can still see and clean up
  *      their own expired site (it is their data)
  *   3. for everyone else, site expiry closes the site regardless of share validity
- *   4. a share is checked revoked-then-expired-then-match, so a revoked share reports
- *      revocation rather than silently falling through to `forbidden`
+ *   4. a share is checked revoked-then-expired-then-audience, so each failure reports its
+ *      own reason rather than silently collapsing into `forbidden`
+ *
+ * A share may be scoped to a single DID. That check happens last, after the token is known
+ * to be valid, so `audienceMismatch` is only ever reported to someone who genuinely holds
+ * the link — it tells a signed-out visitor to sign in, and never reveals to a random
+ * prober that the site exists.
  */
 export const evaluateAccess = ({ site, shares, principal, now }: EvaluateAccessInput): AccessDecision => {
 	if (!site) {
@@ -75,6 +80,12 @@ export const evaluateAccess = ({ site, shares, principal, now }: EvaluateAccessI
 
 	if (isExpired(matched.expiresAt, now)) {
 		return { allowed: false, reason: 'shareExpired' }
+	}
+
+	// A DID-scoped share is a grant to a person, not to whoever holds the link. The owner
+	// of the site always passes above, so this only gates third parties.
+	if (matched.audienceDid !== null && matched.audienceDid !== principal.viewerDid) {
+		return { allowed: false, reason: 'audienceMismatch', audienceDid: matched.audienceDid }
 	}
 
 	return { allowed: true, reason: 'share', shareId: matched.shareId }

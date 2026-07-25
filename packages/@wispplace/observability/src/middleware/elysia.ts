@@ -1,5 +1,6 @@
 import type { Context } from 'elysia'
 import { logCollector, metricsCollector } from '../core'
+import { redactSecretPath } from '../redact'
 
 /**
  * Elysia middleware for observability
@@ -26,7 +27,7 @@ export function observabilityMiddleware(service: string) {
 			const url = new URL(request.url)
 			const statusCode = normalizeStatus(set.status, 200)
 
-			metricsCollector.recordRequest(url.pathname, request.method, statusCode, duration, service)
+			metricsCollector.recordRequest(redactSecretPath(url.pathname), request.method, statusCode, duration, service)
 		},
 		onError: (context: any) => {
 			const { request, error, set } = context as Context & { error: Error }
@@ -35,12 +36,14 @@ export function observabilityMiddleware(service: string) {
 			const url = new URL(request.url)
 			const statusCode = normalizeStatus(set.status, 500)
 
-			metricsCollector.recordRequest(url.pathname, request.method, statusCode, duration, service)
+			metricsCollector.recordRequest(redactSecretPath(url.pathname), request.method, statusCode, duration, service)
 
 			// Don't log 404 errors or expected auth failures
 			const isAuthError = error?.message === 'Authentication required'
 			if (statusCode !== 404 && !isAuthError) {
-				logCollector.error(`Request failed: ${request.method} ${url.pathname}`, service, error, { statusCode })
+				logCollector.error(`Request failed: ${request.method} ${redactSecretPath(url.pathname)}`, service, error, {
+					statusCode,
+				})
 			}
 		},
 	}

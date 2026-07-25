@@ -780,6 +780,12 @@ export const schemaDict = {
                 description:
                   'Minutes until this link expires. Omit for the configured default; 0 for no expiry of its own.',
               },
+              audienceDid: {
+                type: 'string',
+                format: 'did',
+                description:
+                  'Restrict this link to a single account. The recipient must be signed in as this DID; the link alone grants nothing. Omit for a bearer link that anyone holding the URL can open, including people without an atproto account.',
+              },
             },
           },
         },
@@ -799,7 +805,7 @@ export const schemaDict = {
               url: {
                 type: 'string',
                 description:
-                  'Full shareable URL including the credential. Treat as a secret; it is not retrievable later.',
+                  'Short, human-friendly share link (wisp.place/p/<token>). Contains the credential and is returned exactly once.',
               },
               expiresAt: {
                 type: 'string',
@@ -808,6 +814,18 @@ export const schemaDict = {
               createdAt: {
                 type: 'string',
                 format: 'datetime',
+              },
+              audienceDid: {
+                type: 'string',
+                format: 'did',
+                description:
+                  'Set when this link is restricted to a single account.',
+              },
+              directUrl: {
+                type: 'string',
+                format: 'uri',
+                description:
+                  "The same credential on the site's own origin. Equivalent to `url`; useful when a link should not route through wisp.place.",
               },
             },
           },
@@ -1026,6 +1044,12 @@ export const schemaDict = {
           status: {
             type: 'string',
             enum: ['active', 'expired', 'revoked'],
+          },
+          audienceDid: {
+            type: 'string',
+            format: 'did',
+            description:
+              'Set when this link is restricted to a single account.',
           },
         },
       },

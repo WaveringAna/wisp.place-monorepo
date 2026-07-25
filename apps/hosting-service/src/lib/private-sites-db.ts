@@ -31,6 +31,7 @@ interface PrivateShareRow {
 	token_hash: string
 	token_prefix: string
 	label: string | null
+	audience_did: string | null
 	expires_at: Date | null
 	revoked_at: Date | null
 	created_at: Date
@@ -54,6 +55,7 @@ const mapShare = (row: PrivateShareRow): PrivateSiteShare => ({
 	tokenHash: row.token_hash,
 	tokenPrefix: row.token_prefix,
 	label: row.label,
+	audienceDid: row.audience_did,
 	expiresAt: row.expires_at,
 	revokedAt: row.revoked_at,
 	createdAt: row.created_at,
@@ -78,7 +80,7 @@ export async function getPrivateSite(siteId: string): Promise<PrivateSite | null
 /** Candidate shares for a presented token hash. The authoritative check is timing-safe. */
 export async function findSharesByTokenHash(siteId: string, tokenHash: string): Promise<PrivateSiteShare[]> {
 	const rows = await sql<PrivateShareRow[]>`
-    SELECT share_id, site_id, token_hash, token_prefix, label, expires_at, revoked_at, created_at, last_used_at
+    SELECT share_id, site_id, token_hash, token_prefix, label, audience_did, expires_at, revoked_at, created_at, last_used_at
     FROM private_site_shares WHERE site_id = ${siteId} AND token_hash = ${tokenHash}
   `
 	return rows.map(mapShare)
@@ -167,13 +169,15 @@ export async function createSession(input: {
  * The update is conditional and returns the row, so a concurrent second use cannot also
  * succeed: whichever statement wins marks it consumed and the other matches nothing.
  */
-export async function consumeHandoff(secretHash: string): Promise<{ siteId: string; ownerDid: string } | null> {
-	const rows = await sql<Array<{ site_id: string; owner_did: string }>>`
+export async function consumeHandoff(
+	secretHash: string,
+): Promise<{ siteId: string; ownerDid: string | null; shareId: string | null } | null> {
+	const rows = await sql<Array<{ site_id: string; owner_did: string | null; share_id: string | null }>>`
     UPDATE private_site_handoffs
     SET consumed_at = NOW()
     WHERE secret_hash = ${secretHash} AND consumed_at IS NULL AND expires_at > NOW()
-    RETURNING site_id, owner_did
+    RETURNING site_id, owner_did, share_id
   `
 	const row = rows[0]
-	return row ? { siteId: row.site_id, ownerDid: row.owner_did } : null
+	return row ? { siteId: row.site_id, ownerDid: row.owner_did, shareId: row.share_id } : null
 }

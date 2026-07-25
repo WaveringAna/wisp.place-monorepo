@@ -18,6 +18,7 @@
  */
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
+import { PRIVATE_SHARE_QUERY_PARAM } from '@wispplace/constants'
 
 /** Cookie name for the per-site private session. Host-only by design. */
 export const PRIVATE_SESSION_COOKIE = 'wsps'
@@ -28,8 +29,14 @@ export const PRIVATE_GRANT_QUERY_PARAM = 'g'
 /** How long an exchanged site session stays valid before it must be re-established. */
 export const PRIVATE_SESSION_TTL_MINUTES = 60
 
-/** How long a one-time owner handoff token stays usable. Deliberately very short. */
-export const OWNER_HANDOFF_TTL_SECONDS = 60
+/**
+ * How long a one-time handoff token stays usable.
+ *
+ * Short, because it only has to survive one redirect. Not *so* short that a slow network,
+ * a click-later habit, or a link preview fetch turns a working link into a 404.
+ * Single-use consumption is what actually bounds the risk here; the clock is a backstop.
+ */
+export const OWNER_HANDOFF_TTL_SECONDS = 5 * 60
 
 export type GrantKind = 'owner' | 'share'
 
@@ -96,6 +103,26 @@ export const siteIdFromHostname = (hostname: string, privateHost: string): strin
 	if (label.length === 0 || label.includes('.')) return null
 	return label
 }
+
+/** Per-site origin URL. Opening it without a credential yields a 404. */
+export const privateSiteUrl = (siteId: string, privateHost: string, scheme: 'http' | 'https'): string =>
+	`${scheme}://${privateSiteHostname(siteId, privateHost)}/`
+
+/**
+ * One-time entry URL carrying a handoff token for a site's own origin.
+ *
+ * Used both for an owner crossing over from main-app and for a DID-scoped share redeemed
+ * through the identity bounce.
+ */
+export const privateGrantUrlFor = (siteUrl: string, handoff: string): string =>
+	`${siteUrl}?${PRIVATE_GRANT_QUERY_PARAM}=${encodeURIComponent(handoff)}`
+
+/**
+ * Share URL for a site origin. Carries the credential, so it is returned once, never
+ * logged, and never persisted in this form.
+ */
+export const privateShareLinkUrl = (siteUrl: string, token: string): string =>
+	`${siteUrl}?${PRIVATE_SHARE_QUERY_PARAM}=${encodeURIComponent(token)}`
 
 /** Attributes for the site-scoped session cookie. No `Domain`, so it stays host-only. */
 export const buildSessionCookie = (value: string, secure: boolean, maxAgeSeconds: number): string => {

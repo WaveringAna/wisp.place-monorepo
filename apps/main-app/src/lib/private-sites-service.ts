@@ -26,14 +26,21 @@ import {
 	hashShareTokenSync,
 	isValidSiteId,
 	type PrivateSite,
+	privateGrantUrlFor,
+	privateShareLinkUrl,
 	resolveExpiry,
+	SHARE_TOKEN_PREFIX,
 } from '@wispplace/private-sites'
+import { privateSiteUrl } from './private-site-origin'
 import { deletePrivateSiteFiles, writePrivateFile } from './private-site-storage'
 import {
+	createOwnerHandoff,
 	createPrivateSite,
 	createShare,
+	createShareHandoff,
 	deletePrivateSite,
 	findSharesByTokenHash,
+	findSiteIdByShareTokenHash,
 	getPrivateSite,
 	listPrivateSitesByOwner,
 	listShares,
@@ -232,6 +239,12 @@ export interface CreateShareOptions {
 	ownerDid: string
 	label?: string | null
 	expiryMinutes?: number | null
+	/**
+	 * Scope the share to a single DID. The link alone then grants nothing: the recipient
+	 * must be signed in as that account. `null` keeps the bearer behaviour, which is what
+	 * makes a link usable by someone with no atproto account.
+	 */
+	audienceDid?: string | null
 }
 
 /**
@@ -248,12 +261,79 @@ export const createSiteShare = async (options: CreateShareOptions) => {
 		clampTo: site.expiresAt,
 	})
 
-	const result = await createShare(site.siteId, { label: options.label ?? null, expiresAt })
+	const result = await createShare(site.siteId, {
+		label: options.label ?? null,
+		expiresAt,
+		audienceDid: options.audienceDid ?? null,
+	})
 
 	// Deliberately logs the share id, never the token.
 	logger.info('[PrivateSite] Share created', { siteId: site.siteId, shareId: result.share.shareId })
 
 	return result
+}
+
+/**
+ * Resolve a `wisp.place/p/<token>` short link to the private-origin URL it stands for.
+ *
+ * Deliberately makes no access decision: it only finds which site the token belongs to.
+ * The private origin runs `evaluateAccess` when the visitor arrives, so a revoked, expired,
+ * or DID-scoped share behaves exactly as it does through a direct `?k=` link.
+ *
+ * Returns null for a malformed or unknown token, which the caller renders as a generic
+ * denial page.
+ */
+export const resolveShareLink = async (token: string): Promise<string | null> => {
+	if (!token.startsWith(SHARE_TOKEN_PREFIX) || token.length > 128) return null
+
+	const siteId = await findSiteIdByShareTokenHash(hashShareTokenSync(token))
+	if (!siteId) return null
+
+	return privateShareLinkUrl(privateSiteUrl(siteId), token)
+}
+
+/**
+ * Complete the identity bounce for a DID-scoped share.
+ *
+ * The visitor arrives from a private origin carrying their share token, now with a proven
+ * account identity. The decision runs through the same `evaluateAccess` as every other
+ * path — the signed-in DID is simply attached to the principal — and on success a
+ * single-use handoff is minted for that site's own origin.
+ *
+ * Returns null for every failure, so a caller cannot distinguish "wrong DID" from "no such
+ * site" from "revoked share".
+ */
+export const redeemScopedShare = async (siteId: string, token: string, viewerDid: string): Promise<string | null> => {
+	const { decision, site } = await resolvePrivateSiteAccess({
+		siteId,
+		principal: { kind: 'shareToken', token, viewerDid },
+	})
+
+	if (!site || !decision.allowed || decision.reason !== 'share') {
+		logger.info('[PrivateSite] Scoped redeem denied', { siteId, reason: decision.reason })
+		return null
+	}
+
+	const handoff = await createShareHandoff(site.siteId, decision.shareId)
+	logger.info('[PrivateSite] Scoped share redeemed', { siteId: site.siteId, shareId: decision.shareId })
+	return privateGrantUrlFor(privateSiteUrl(site.siteId), handoff)
+}
+
+/**
+ * Mint an owner entry URL for a private site, or null if this account does not own it.
+ *
+ * Returns null rather than throwing so callers render one identical denial for "not yours"
+ * and "does not exist".
+ */
+export const openOwnedPrivateSite = async (siteId: string, ownerDid: string): Promise<string | null> => {
+	if (!isValidSiteId(siteId)) return null
+	const site = await getPrivateSite(siteId)
+	if (!site || site.ownerDid !== ownerDid) {
+		logger.info('[PrivateSite] Owner open denied', { siteId })
+		return null
+	}
+	const handoff = await createOwnerHandoff(site.siteId, ownerDid)
+	return privateGrantUrlFor(privateSiteUrl(site.siteId), handoff)
 }
 
 export const listSiteShares = async (siteId: string, ownerDid: string) => {

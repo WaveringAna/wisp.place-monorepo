@@ -22,15 +22,21 @@ export interface InputSchema {
   label?: string
   /** Minutes until this link expires. Omit for the configured default; 0 for no expiry of its own. */
   expiryMinutes?: number
+  /** Restrict this link to a single account. The recipient must be signed in as this DID; the link alone grants nothing. Omit for a bearer link that anyone holding the URL can open, including people without an atproto account. */
+  audienceDid?: string
 }
 
 export interface OutputSchema {
   shareId: string
   siteId: string
-  /** Full shareable URL including the credential. Treat as a secret; it is not retrievable later. */
+  /** Short, human-friendly share link (wisp.place/p/<token>). Contains the credential and is returned exactly once. */
   url: string
   expiresAt?: string
   createdAt: string
+  /** Set when this link is restricted to a single account. */
+  audienceDid?: string
+  /** The same credential on the site's own origin. Equivalent to `url`; useful when a link should not route through wisp.place. */
+  directUrl?: string
 }
 
 export interface HandlerInput {

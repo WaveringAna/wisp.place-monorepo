@@ -50,6 +50,8 @@ export interface Share {
   createdAt: string
   lastUsedAt?: string
   status: 'active' | 'expired' | 'revoked'
+  /** Set when this link is restricted to a single account. */
+  audienceDid?: string
 }
 
 const hashShare = 'share'

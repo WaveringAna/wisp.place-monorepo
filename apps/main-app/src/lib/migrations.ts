@@ -259,6 +259,12 @@ export const runDatabaseMigrations = async (db: SQL): Promise<void> => {
 				console.error('Failed to create idx_private_sites_expires_at:', err)
 			}
 		}),
+		// A share may be scoped to a single DID, which is the v1 form of a permission grant.
+		db`ALTER TABLE private_site_shares ADD COLUMN IF NOT EXISTS audience_did TEXT`.catch((err) => {
+			if (!hasAlreadyExists(err)) {
+				console.error('Failed to add private_site_shares.audience_did:', err)
+			}
+		}),
 		db`CREATE INDEX IF NOT EXISTS idx_private_site_shares_site ON private_site_shares(site_id)`.catch((err) => {
 			if (!hasAlreadyExists(err)) {
 				console.error('Failed to create idx_private_site_shares_site:', err)
@@ -282,6 +288,20 @@ export const runDatabaseMigrations = async (db: SQL): Promise<void> => {
 				console.error('Failed to create idx_private_sessions_expires:', err)
 			}
 		}),
+		// A handoff can now represent a DID-scoped share grant, not only an owner crossing
+		// origins, so `owner_did` becomes nullable and `share_id` is added.
+		db`ALTER TABLE private_site_handoffs ALTER COLUMN owner_did DROP NOT NULL`.catch((err) => {
+			if (!hasAlreadyExists(err)) {
+				console.error('Failed to relax private_site_handoffs.owner_did:', err)
+			}
+		}),
+		db`ALTER TABLE private_site_handoffs ADD COLUMN IF NOT EXISTS share_id TEXT REFERENCES private_site_shares(share_id) ON DELETE CASCADE`.catch(
+			(err) => {
+				if (!hasAlreadyExists(err)) {
+					console.error('Failed to add private_site_handoffs.share_id:', err)
+				}
+			},
+		),
 		db`CREATE INDEX IF NOT EXISTS idx_private_handoffs_secret ON private_site_handoffs(secret_hash)`.catch((err) => {
 			if (!hasAlreadyExists(err)) {
 				console.error('Failed to create idx_private_handoffs_secret:', err)

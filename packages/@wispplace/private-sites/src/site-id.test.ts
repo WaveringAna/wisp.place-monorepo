@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'bun:test'
-import { buildPrivateStorageKey, generateSiteId, isValidSiteId, privateResponseHeaders } from './site-id'
+import {
+	buildPrivateStorageKey,
+	generateRecordId,
+	generateSiteId,
+	isValidSiteId,
+	privateResponseHeaders,
+} from './site-id'
+import { redactSecretPath } from '@wispplace/observability'
 import { generateShareToken, redactToken, redactUrlForLog } from './token'
 
 describe('site ids', () => {
@@ -14,8 +21,53 @@ describe('site ids', () => {
 		expect(seen.size).toBe(500)
 	})
 
+	/** Internal row ids stay opaque; they are not hostnames and are not read aloud. */
+	it('generates opaque record ids that are not site ids', () => {
+		const id = generateRecordId()
+		expect(id).toMatch(/^[234567a-z]{13}$/)
+		expect(isValidSiteId(id)).toBe(false)
+		expect(new Set(Array.from({ length: 500 }, () => generateRecordId())).size).toBe(500)
+	})
+
 	it('rejects ids with path traversal or separators', () => {
 		for (const bad of ['../../etc/passwd', 'abc/def', 'abcdefghijkl/', '..', '', 'ABCDEFGHIJKLM']) {
+			expect(isValidSiteId(bad)).toBe(false)
+		}
+	})
+
+	/**
+	 * The id is a hostname a person reads and repeats, so its readable shape is a
+	 * behavioural guarantee rather than an implementation detail.
+	 */
+	it('reads as three words and four digits', () => {
+		for (let i = 0; i < 100; i += 1) {
+			expect(generateSiteId()).toMatch(/^[a-z]{2,12}-[a-z]{2,12}-[a-z]{2,12}-\d{4}$/)
+		}
+	})
+
+	/** Must survive being used as a DNS label under `.priv.<host>`. */
+	it('is a valid dns label', () => {
+		for (let i = 0; i < 100; i += 1) {
+			const id = generateSiteId()
+			expect(id.length).toBeLessThanOrEqual(63)
+			expect(id.startsWith('-')).toBe(false)
+			expect(id.endsWith('-')).toBe(false)
+			expect(id).not.toContain('.')
+		}
+	})
+
+	/**
+	 * Record keys allow letters, digits, hyphens, periods and underscores, up to 512
+	 * characters. Holding this keeps the id reusable as an `skey` under proposal 0016.
+	 */
+	it('stays valid as an atproto record key', () => {
+		for (let i = 0; i < 50; i += 1) {
+			expect(generateSiteId()).toMatch(/^[A-Za-z0-9._:~-]{1,512}$/)
+		}
+	})
+
+	it('rejects a malformed readable id', () => {
+		for (const bad of ['lovable-plushie-dog', 'lovable-plushie-dog-12', 'lovable_plushie_dog_1226', '-a-b-c-1226']) {
 			expect(isValidSiteId(bad)).toBe(false)
 		}
 	})
@@ -94,5 +146,30 @@ describe('secret hygiene', () => {
 	it('produces distinct tokens', () => {
 		const seen = new Set(Array.from({ length: 200 }, () => generateShareToken().token))
 		expect(seen.size).toBe(200)
+	})
+})
+
+/**
+ * The short share link (`wisp.place/p/<token>`) puts a credential in a URL *path*, not a
+ * query string. Metric labels and error logs record paths, so these pin that the secret is
+ * stripped before it can reach a log sink.
+ */
+describe('short share links keep the token out of telemetry', () => {
+	it('redacts the token segment', () => {
+		const { token } = generateShareToken()
+		const redacted = redactSecretPath(`/p/${token}`)
+		expect(redacted).not.toContain(token)
+		expect(redacted).toBe('/p/<redacted>')
+	})
+
+	it('redacts the token but keeps any trailing path', () => {
+		const { token } = generateShareToken()
+		expect(redactSecretPath(`/p/${token}/nested`)).toBe('/p/<redacted>/nested')
+	})
+
+	it('leaves unrelated paths untouched', () => {
+		for (const path of ['/editor', '/api/user/private-sites', '/p', '/policy']) {
+			expect(redactSecretPath(path)).toBe(path)
+		}
 	})
 })

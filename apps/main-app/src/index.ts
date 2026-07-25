@@ -4,7 +4,7 @@ process.getBuiltinModule = require
 import { cors } from '@elysiajs/cors'
 import { staticPlugin } from '@elysiajs/static'
 import { BASE_HOST } from '@wispplace/constants'
-import { createLogger, initializeGrafanaExporters, logCollector } from '@wispplace/observability'
+import { createLogger, initializeGrafanaExporters, logCollector, redactSecretPath } from '@wispplace/observability'
 import { observabilityMiddleware } from '@wispplace/observability/middleware/elysia'
 import type { Context } from 'elysia'
 import { Elysia } from 'elysia'
@@ -26,6 +26,7 @@ import type { Config } from './lib/types'
 import { adminRoutes } from './routes/admin'
 import { authRoutes } from './routes/auth'
 import { domainRoutes } from './routes/domain'
+import { privateRedeemRoutes } from './routes/private-redeem'
 import { privateSiteApiRoutes } from './routes/private-site-api'
 import { secretRoutes } from './routes/secret'
 import { siteRoutes } from './routes/site'
@@ -127,7 +128,7 @@ export const app = new Elysia({
 	.onBeforeHandle(observabilityMiddleware('main-app').beforeHandle)
 	.onRequest(({ request }) => {
 		if (isLocalDev) {
-			const pathname = new URL(request.url).pathname
+			const pathname = redactSecretPath(new URL(request.url).pathname)
 			if (pathname.startsWith('/xrpc/')) {
 				console.log('[Server] Incoming /xrpc request', {
 					method: request.method,
@@ -244,6 +245,7 @@ export const app = new Elysia({
 	.use(domainRoutes(client, cookieSecret))
 	.use(userRoutes(client, cookieSecret))
 	.use(siteRoutes(client, cookieSecret))
+	.use(privateRedeemRoutes(client, cookieSecret))
 	.use(privateSiteApiRoutes(client, cookieSecret))
 	.use(webhookRoutes(client, cookieSecret))
 	.use(secretRoutes(client, cookieSecret))

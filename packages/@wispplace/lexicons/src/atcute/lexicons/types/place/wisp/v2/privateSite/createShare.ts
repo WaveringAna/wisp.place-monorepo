@@ -10,6 +10,10 @@ const _mainSchema = /*#__PURE__*/ v.procedure(
       type: "lex",
       schema: /*#__PURE__*/ v.object({
         /**
+         * Restrict this link to a single account. The recipient must be signed in as this DID; the link alone grants nothing. Omit for a bearer link that anyone holding the URL can open, including people without an atproto account.
+         */
+        audienceDid: /*#__PURE__*/ v.optional(/*#__PURE__*/ v.didString()),
+        /**
          * Minutes until this link expires. Omit for the configured default; 0 for no expiry of its own.
          * @minimum 0
          */
@@ -29,12 +33,20 @@ const _mainSchema = /*#__PURE__*/ v.procedure(
     output: {
       type: "lex",
       schema: /*#__PURE__*/ v.object({
+        /**
+         * Set when this link is restricted to a single account.
+         */
+        audienceDid: /*#__PURE__*/ v.optional(/*#__PURE__*/ v.didString()),
         createdAt: /*#__PURE__*/ v.datetimeString(),
+        /**
+         * The same credential on the site's own origin. Equivalent to `url`; useful when a link should not route through wisp.place.
+         */
+        directUrl: /*#__PURE__*/ v.optional(/*#__PURE__*/ v.genericUriString()),
         expiresAt: /*#__PURE__*/ v.optional(/*#__PURE__*/ v.datetimeString()),
         shareId: /*#__PURE__*/ v.string(),
         siteId: /*#__PURE__*/ v.recordKeyString(),
         /**
-         * Full shareable URL including the credential. Treat as a secret; it is not retrievable later.
+         * Short, human-friendly share link (wisp.place/p/<token>). Contains the credential and is returned exactly once.
          */
         url: /*#__PURE__*/ v.string(),
       }),

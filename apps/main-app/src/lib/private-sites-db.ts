@@ -11,6 +11,7 @@
 
 import {
 	generateHandoffSecret,
+	generateRecordId,
 	generateShareToken,
 	generateSiteId,
 	OWNER_HANDOFF_TTL_SECONDS,
@@ -36,6 +37,7 @@ interface PrivateShareRow {
 	token_hash: string
 	token_prefix: string
 	label: string | null
+	audience_did?: string | null
 	expires_at: string | Date | null
 	revoked_at: string | Date | null
 	created_at: string | Date
@@ -62,6 +64,7 @@ const mapShare = (row: PrivateShareRow): PrivateSiteShare => ({
 	tokenHash: row.token_hash,
 	tokenPrefix: row.token_prefix,
 	label: row.label,
+	audienceDid: row.audience_did ?? null,
 	expiresAt: toDateOrNull(row.expires_at),
 	revokedAt: toDateOrNull(row.revoked_at),
 	createdAt: toDate(row.created_at),
@@ -75,16 +78,33 @@ export interface CreatePrivateSiteInput {
 	files: Array<{ path: string; size: number; mimeType: string | null; sha256: string }>
 }
 
-/** Insert a private site and its file metadata. Returns the generated site id. */
+/** How many readable ids to try before giving up on a collision. */
+const SITE_ID_ATTEMPTS = 5
+
+/**
+ * Insert a private site and its file metadata. Returns the generated site id.
+ *
+ * Readable ids come from a smaller space than random ones, so a taken name is retried
+ * rather than surfacing as a primary-key error. `ON CONFLICT DO NOTHING` makes the
+ * database the arbiter, which is race-free where a pre-check would not be.
+ */
 export const createPrivateSite = async (input: CreatePrivateSiteInput): Promise<PrivateSite> => {
-	const siteId = generateSiteId()
 	const totalBytes = input.files.reduce((sum, f) => sum + f.size, 0)
 
-	const rows = await db<PrivateSiteRow[]>`
-        INSERT INTO private_sites (site_id, owner_did, name, file_count, total_bytes, expires_at)
-        VALUES (${siteId}, ${input.ownerDid}, ${input.name}, ${input.files.length}, ${totalBytes}, ${input.expiresAt})
-        RETURNING *
-    `
+	let rows: PrivateSiteRow[] = []
+	let siteId = ''
+	for (let attempt = 0; attempt < SITE_ID_ATTEMPTS && rows.length === 0; attempt += 1) {
+		siteId = generateSiteId()
+		rows = await db<PrivateSiteRow[]>`
+            INSERT INTO private_sites (site_id, owner_did, name, file_count, total_bytes, expires_at)
+            VALUES (${siteId}, ${input.ownerDid}, ${input.name}, ${input.files.length}, ${totalBytes}, ${input.expiresAt})
+            ON CONFLICT (site_id) DO NOTHING
+            RETURNING *
+        `
+	}
+	if (rows.length === 0) {
+		throw new Error('could not allocate a private site id')
+	}
 
 	for (const file of input.files) {
 		await db`
@@ -146,6 +166,20 @@ export const findSharesByTokenHash = async (siteId: string, tokenHash: string): 
 	return rows.map(mapShare)
 }
 
+/**
+ * Resolve a share token to the site it belongs to, for the `/p/<token>` short link.
+ *
+ * Looks up by token hash across all sites, since the short link carries only the token.
+ * Returns the site id without making an access decision — the private origin re-evaluates
+ * the token on arrival and answers with its uniform 404 if it no longer grants anything.
+ */
+export const findSiteIdByShareTokenHash = async (tokenHash: string): Promise<string | null> => {
+	const rows = await db<Array<{ site_id: string }>>`
+        SELECT site_id FROM private_site_shares WHERE token_hash = ${tokenHash} LIMIT 1
+    `
+	return rows[0]?.site_id ?? null
+}
+
 export interface CreateShareResult {
 	share: PrivateSiteShare
 	/** Plaintext token. Surface to the creator once; never store or log it. */
@@ -154,14 +188,14 @@ export interface CreateShareResult {
 
 export const createShare = async (
 	siteId: string,
-	options: { label?: string | null; expiresAt: Date | null },
+	options: { label?: string | null; expiresAt: Date | null; audienceDid?: string | null },
 ): Promise<CreateShareResult> => {
 	const { token, tokenHash, tokenPrefix } = generateShareToken()
-	const shareId = generateSiteId()
+	const shareId = generateRecordId()
 
 	const rows = await db<PrivateShareRow[]>`
-        INSERT INTO private_site_shares (share_id, site_id, token_hash, token_prefix, label, expires_at)
-        VALUES (${shareId}, ${siteId}, ${tokenHash}, ${tokenPrefix}, ${options.label ?? null}, ${options.expiresAt})
+        INSERT INTO private_site_shares (share_id, site_id, token_hash, token_prefix, label, expires_at, audience_did)
+        VALUES (${shareId}, ${siteId}, ${tokenHash}, ${tokenPrefix}, ${options.label ?? null}, ${options.expiresAt}, ${options.audienceDid ?? null})
         RETURNING *
     `
 
@@ -213,7 +247,28 @@ export const createOwnerHandoff = async (siteId: string, ownerDid: string): Prom
 
 	await db`
         INSERT INTO private_site_handoffs (handoff_id, secret_hash, site_id, owner_did, expires_at)
-        VALUES (${generateSiteId()}, ${secret.hash}, ${siteId}, ${ownerDid}, ${expiresAt})
+        VALUES (${generateRecordId()}, ${secret.hash}, ${siteId}, ${ownerDid}, ${expiresAt})
+    `
+
+	return secret.value
+}
+
+/**
+ * Mint a single-use handoff that carries a *share* grant over to the site's own origin.
+ *
+ * Used by the identity bounce: a DID-scoped share needs to know who the viewer is, but the
+ * private origins deliberately cannot read the account cookie. The visitor is sent to
+ * main-app, proves their identity there, and returns with this single-use credential
+ * instead of the long-lived share token — so that token never enters a browser history
+ * entry, a referrer, or a server log.
+ */
+export const createShareHandoff = async (siteId: string, shareId: string): Promise<string> => {
+	const secret = generateHandoffSecret()
+	const expiresAt = new Date(Date.now() + OWNER_HANDOFF_TTL_SECONDS * 1000)
+
+	await db`
+        INSERT INTO private_site_handoffs (handoff_id, secret_hash, site_id, share_id, expires_at)
+        VALUES (${generateRecordId()}, ${secret.hash}, ${siteId}, ${shareId}, ${expiresAt})
     `
 
 	return secret.value

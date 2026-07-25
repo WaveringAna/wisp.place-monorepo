@@ -3,6 +3,7 @@ import { createLogger } from '@wispplace/observability'
 import { Elysia, t } from 'elysia'
 import { getDomainByDid, getSitesByDid } from '../lib/db'
 import { authenticateRequest } from '../lib/wisp-auth'
+import { resolvePrivateShareState } from './private-redeem'
 
 const logger = createLogger('main-app')
 
@@ -80,7 +81,7 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 
 				// client.callback() validates the state parameter internally
 				// It will throw an error if state validation fails (CSRF protection)
-				const { session } = await client.callback(params)
+				const { session, state } = await client.callback(params)
 
 				if (!session) {
 					logger.error('[Auth] OAuth callback failed: no session returned')
@@ -96,6 +97,18 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 					sameSite: 'lax',
 					maxAge: 30 * 24 * 60 * 60, // 30 days
 				})
+
+				// A private-share redemption round trip carries its share token in the OAuth
+				// state, so the visitor lands back on the site they were trying to open
+				// rather than on the dashboard. The token is re-validated by
+				// `redeemScopedShare`; nothing here trusts the state beyond routing.
+				const redeem = await resolvePrivateShareState(state, session.did)
+				if (redeem) {
+					// A denied redemption lands on an explanation rather than the dashboard:
+					// the visitor asked for a specific page and signing in as the wrong
+					// account should say so, not silently drop them somewhere else.
+					return c.redirect(redeem.url ?? '/private/denied')
+				}
 
 				// Check if user has any cached sites or a claimed domain
 				const sites = await getSitesByDid(session.did)

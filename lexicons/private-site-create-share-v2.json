@@ -9,14 +9,28 @@
         "encoding": "application/json",
         "schema": {
           "type": "object",
-          "required": ["siteId"],
+          "required": [
+            "siteId"
+          ],
           "properties": {
-            "siteId": { "type": "string", "format": "record-key" },
-            "label": { "type": "string", "maxLength": 128, "description": "Optional human label for this link." },
+            "siteId": {
+              "type": "string",
+              "format": "record-key"
+            },
+            "label": {
+              "type": "string",
+              "maxLength": 128,
+              "description": "Optional human label for this link."
+            },
             "expiryMinutes": {
               "type": "integer",
               "minimum": 0,
               "description": "Minutes until this link expires. Omit for the configured default; 0 for no expiry of its own."
+            },
+            "audienceDid": {
+              "type": "string",
+              "format": "did",
+              "description": "Restrict this link to a single account. The recipient must be signed in as this DID; the link alone grants nothing. Omit for a bearer link that anyone holding the URL can open, including people without an atproto account."
             }
           }
         }
@@ -25,23 +39,55 @@
         "encoding": "application/json",
         "schema": {
           "type": "object",
-          "required": ["shareId", "siteId", "url", "createdAt"],
+          "required": [
+            "shareId",
+            "siteId",
+            "url",
+            "createdAt"
+          ],
           "properties": {
-            "shareId": { "type": "string" },
-            "siteId": { "type": "string", "format": "record-key" },
+            "shareId": {
+              "type": "string"
+            },
+            "siteId": {
+              "type": "string",
+              "format": "record-key"
+            },
             "url": {
               "type": "string",
-              "description": "Full shareable URL including the credential. Treat as a secret; it is not retrievable later."
+              "description": "Short, human-friendly share link (wisp.place/p/<token>). Contains the credential and is returned exactly once."
             },
-            "expiresAt": { "type": "string", "format": "datetime" },
-            "createdAt": { "type": "string", "format": "datetime" }
+            "expiresAt": {
+              "type": "string",
+              "format": "datetime"
+            },
+            "createdAt": {
+              "type": "string",
+              "format": "datetime"
+            },
+            "audienceDid": {
+              "type": "string",
+              "format": "did",
+              "description": "Set when this link is restricted to a single account."
+            },
+            "directUrl": {
+              "type": "string",
+              "format": "uri",
+              "description": "The same credential on the site's own origin. Equivalent to `url`; useful when a link should not route through wisp.place."
+            }
           }
         }
       },
       "errors": [
-        { "name": "AuthenticationRequired" },
-        { "name": "InvalidRequest" },
-        { "name": "NotFound" }
+        {
+          "name": "AuthenticationRequired"
+        },
+        {
+          "name": "InvalidRequest"
+        },
+        {
+          "name": "NotFound"
+        }
       ]
     }
   }

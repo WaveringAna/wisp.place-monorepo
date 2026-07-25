@@ -27,7 +27,7 @@ export function usePrivateShares() {
 	}, [])
 
 	const createShare = useCallback(
-		async (siteId: string, options: { label?: string; expiryMinutes?: number } = {}) => {
+		async (siteId: string, options: { label?: string; expiryMinutes?: number; audienceDid?: string } = {}) => {
 			try {
 				const response = await fetch(`/api/user/private-sites/${siteId}/shares`, {
 					method: 'POST',

@@ -41,6 +41,8 @@ export interface PrivateShare {
 	/** Non-secret leading fragment of the token, for identification only. */
 	tokenPrefix: string
 	label: string | null
+	/** Set when the link only works for one account. Null means anyone with the URL. */
+	audienceDid: string | null
 	expiresAt: string | null
 	revokedAt: string | null
 	createdAt: string

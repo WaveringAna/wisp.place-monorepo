@@ -10,7 +10,7 @@ import { lookup } from 'mime-types'
 import { authenticateForXrpc, type XrpcCommandOptions } from '../lib/command-utils.ts'
 import { createSpinner, pc } from '../lib/progress.ts'
 import { parseServiceDid, WISP_PROXY_SERVICE_ID } from '../lib/wisp-service.ts'
-import { callWispXrpc } from '../lib/xrpc.ts'
+import { callWispXrpc, registerWispLexicons } from '../lib/xrpc.ts'
 import { collectFiles, createIgnoreMatcher } from './deploy.ts'
 
 export interface PrivateDeployOptions extends XrpcCommandOptions {
@@ -23,6 +23,8 @@ export interface PrivateDeployOptions extends XrpcCommandOptions {
 export interface PrivateShareOptions extends XrpcCommandOptions {
 	label?: string
 	expiry?: string
+	/** Restrict the link to a single account. Omit for a bearer link anyone can open. */
+	to?: string
 }
 
 const formatBytes = (bytes: number): string => {
@@ -107,6 +109,7 @@ export async function privateDeploy(agent: Agent, options: PrivateDeployOptions)
 	// passed through as the raw request body rather than being JSON-encoded.
 	const serviceDid = parseServiceDid(options.service)
 	const proxied = agent.withProxy(WISP_PROXY_SERVICE_ID, serviceDid)
+	registerWispLexicons(proxied)
 	const response = await proxied.call('place.wisp.v2.privateSite.create', undefined, form)
 	const result = response.data as PrivateCreateOutput
 
@@ -167,6 +170,7 @@ export async function privateShare(agent: Agent, siteId: string, options: Privat
 			siteId,
 			label: options.label,
 			...(expiryMinutes === undefined ? {} : { expiryMinutes }),
+			...(options.to ? { audienceDid: options.to } : {}),
 		},
 	})
 	spinner.succeed('Share link created')
@@ -174,8 +178,14 @@ export async function privateShare(agent: Agent, siteId: string, options: Privat
 	console.log()
 	console.log(pc.bold('Shareable link:'))
 	console.log(pc.cyan(data.url))
+	if (data.directUrl && data.directUrl !== data.url) {
+		console.log(pc.dim(`direct: ${data.directUrl}`))
+	}
 	console.log()
 	console.log(`${pc.dim('share id:')} ${data.shareId}  ${formatExpiry(data.expiresAt)}`)
+	if (data.audienceDid) {
+		console.log(pc.dim(`only ${data.audienceDid} can open this; they will be asked to sign in`))
+	}
 	// The credential lives in the URL and is not stored in retrievable form, so this is
 	// the only time it can be shown.
 	console.log(pc.yellow('This link is shown once and cannot be retrieved later. Store it now.'))

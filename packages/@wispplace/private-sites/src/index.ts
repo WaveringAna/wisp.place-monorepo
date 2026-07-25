@@ -13,13 +13,17 @@ export {
 	PRIVATE_GRANT_QUERY_PARAM,
 	PRIVATE_SESSION_COOKIE,
 	PRIVATE_SESSION_TTL_MINUTES,
+	privateGrantUrlFor,
+	privateShareLinkUrl,
 	privateSiteHostname,
+	privateSiteUrl,
 	secretsMatch,
 	siteIdFromHostname,
 } from './grant'
 export { parseCookieHeader } from './session-cookie'
 export {
 	buildPrivateStorageKey,
+	generateRecordId,
 	generateSiteId,
 	isValidSiteId,
 	PRIVATE_STORAGE_PREFIX,

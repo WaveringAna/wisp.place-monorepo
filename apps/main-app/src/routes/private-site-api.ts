@@ -13,6 +13,7 @@ import type { NodeOAuthClient } from '@atproto/oauth-client-node'
 import { createLogger } from '@wispplace/observability'
 import { InvalidExpiryError, isExpired } from '@wispplace/private-sites'
 import { Elysia } from 'elysia'
+import { privateSiteUrl, shortShareUrl } from '../lib/private-site-origin'
 import { createOwnerHandoff, listShares } from '../lib/private-sites-db'
 import {
 	createSiteShare,
@@ -23,10 +24,13 @@ import {
 	requireOwnedSite,
 	revokeSiteShare,
 } from '../lib/private-sites-service'
+import { SlingshotHandleResolver } from '../lib/slingshot-handle-resolver'
 import { requireAuth } from '../lib/wisp-auth'
-import { privateOwnerUrl, privateShareUrl, privateSiteUrl } from './xrpc-private-site'
+import { privateOwnerUrl, privateShareUrl } from './xrpc-private-site'
 
 const logger = createLogger('main-app')
+
+const handleResolver = new SlingshotHandleResolver()
 
 const shareStatus = (share: { revokedAt: Date | null; expiresAt: Date | null }, now: Date): string => {
 	if (share.revokedAt !== null) return 'revoked'
@@ -107,6 +111,30 @@ export const privateSiteApiRoutes = (client: NodeOAuthClient, cookieSecret: stri
 			}
 		})
 		/**
+		 * GET /api/user/private-sites/resolve-handle?handle=...
+		 *
+		 * Resolve a handle to a DID for the share-with-account field, so the editor can show
+		 * who a link will be scoped to before creating it.
+		 *
+		 * Session-authenticated because it proxies an outbound lookup; that keeps it from
+		 * becoming an open resolver for anonymous callers.
+		 */
+		.get('/resolve-handle', async ({ query, set }) => {
+			const raw = typeof query.handle === 'string' ? query.handle.trim().replace(/^@/, '') : ''
+			// Cheap shape check first so obvious typing noise never leaves the server.
+			if (!raw || raw.length > 253 || !/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(raw)) {
+				return { found: false }
+			}
+
+			try {
+				const did = await handleResolver.resolve(raw)
+				return did ? { found: true, handle: raw, did } : { found: false }
+			} catch (err) {
+				logger.warn('[PrivateSite] Handle resolve failed', { handle: raw })
+				return errorResponse(err, set)
+			}
+		})
+		/**
 		 * GET /api/user/private-sites/:siteId/shares
 		 * Never returns share tokens, only their non-secret display prefix.
 		 */
@@ -120,6 +148,7 @@ export const privateSiteApiRoutes = (client: NodeOAuthClient, cookieSecret: stri
 						shareId: share.shareId,
 						tokenPrefix: share.tokenPrefix,
 						label: share.label,
+						audienceDid: share.audienceDid,
 						expiresAt: share.expiresAt ? share.expiresAt.toISOString() : null,
 						revokedAt: share.revokedAt ? share.revokedAt.toISOString() : null,
 						createdAt: share.createdAt.toISOString(),
@@ -138,19 +167,22 @@ export const privateSiteApiRoutes = (client: NodeOAuthClient, cookieSecret: stri
 		 */
 		.post('/:siteId/shares', async ({ params, body, auth, set }) => {
 			try {
-				const input = (body ?? {}) as { label?: string; expiryMinutes?: number | null }
+				const input = (body ?? {}) as { label?: string; expiryMinutes?: number | null; audienceDid?: string }
 				const { share, token } = await createSiteShare({
 					siteId: params.siteId,
 					ownerDid: auth.did,
 					label: input.label ?? null,
 					expiryMinutes: input.expiryMinutes,
+					audienceDid: input.audienceDid ?? null,
 				})
 
 				return {
 					success: true,
 					shareId: share.shareId,
+					audienceDid: share.audienceDid,
 					// Returned once. Not persisted in this form and not retrievable later.
-					url: privateShareUrl(share.siteId, token),
+					url: shortShareUrl(token),
+					directUrl: privateShareUrl(share.siteId, token),
 					expiresAt: share.expiresAt ? share.expiresAt.toISOString() : null,
 					createdAt: share.createdAt.toISOString(),
 				}

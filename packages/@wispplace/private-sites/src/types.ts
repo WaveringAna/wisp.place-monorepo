@@ -39,6 +39,15 @@ export interface PrivateSiteShare {
 	/** First 8 chars of the token, for display only. Not sufficient to authenticate. */
 	tokenPrefix: string
 	label: string | null
+	/**
+	 * When set, only this DID may use the share; the link alone is not enough.
+	 *
+	 * This is the v1 form of an atproto permission grant. Under proposal 0016 it becomes a
+	 * member-list entry on the permissioned space, so a DID-scoped share migrates as data
+	 * rather than as code. `null` keeps the classic bearer behaviour, which is what makes
+	 * a link shareable with someone who has no atproto account.
+	 */
+	audienceDid: string | null
 	/** `null` means this share does not expire on its own. */
 	expiresAt: Date | null
 	/** Non-null means permanently revoked. */
@@ -57,8 +66,14 @@ export interface PrivateSiteShare {
 export type AccessPrincipal =
 	/** Proven account identity (v1: main-app session cookie; v2: also space credential). */
 	| { kind: 'owner'; did: string }
-	/** Bearer share-link credential (v1: query parameter). Treat as a secret. */
-	| { kind: 'shareToken'; token: string }
+	/**
+	 * Bearer share-link credential (v1: query parameter). Treat as a secret.
+	 *
+	 * `viewerDid` is the signed-in account presenting the token, when there is one. It is
+	 * what lets a share be scoped to a specific person rather than to whoever holds the
+	 * link, and it is `null` for a visitor with no atproto account.
+	 */
+	| { kind: 'shareToken'; token: string; viewerDid?: string | null }
 	/**
 	 * A share-backed site session that already passed share validation at exchange time and
 	 * is re-checked for revocation and expiry on every request by the session lookup.
@@ -78,11 +93,19 @@ export type AccessDenialReason =
 	| 'shareRevoked'
 	/** Credential absent or did not match anything. */
 	| 'forbidden'
+	/**
+	 * A valid share was presented, but it is scoped to a DID and the viewer is not signed
+	 * in as that DID. Distinct from `forbidden` because the caller should offer sign-in
+	 * rather than render a dead end.
+	 */
+	| 'audienceMismatch'
 
 export type AccessDecision =
 	| { allowed: true; reason: 'owner' }
 	| { allowed: true; reason: 'share'; shareId: string }
-	| { allowed: false; reason: AccessDenialReason }
+	/** Carries the expected DID so the caller can name who the link was meant for. */
+	| { allowed: false; reason: 'audienceMismatch'; audienceDid: string }
+	| { allowed: false; reason: Exclude<AccessDenialReason, 'audienceMismatch'> }
 
 /** Resolved expiry instruction, produced by `resolveExpiry`. */
 export interface ResolvedExpiry {
