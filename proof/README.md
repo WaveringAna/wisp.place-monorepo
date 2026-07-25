@@ -12,6 +12,8 @@ XRPC handlers), not mocks.
 | `05-cli-uploaded-site.png` | site uploaded via `wisp private deploy`, served back |
 | `private-sites-walkthrough.mp4` | 25s, 6 steps, includes a live revocation |
 | `response-headers.txt` | no-store / no-referrer / noindex vs a public site |
+| `09-victim-legit-access.png` | real browser, real hostname: share link renders with CSS+JS |
+| `10-cross-tenant-blocked.png` | bob's hostile private site cannot read alice's, with her live cookie present |
 | `06-editor-unified-list.png` | private sites in the same editor list, with badge + expiry + share count |
 | `07-share-links-panel.png` | expanded private site: private URL, stats, share-link management |
 | `08-one-time-share-reveal.png` | one-time credential reveal after creating a link |
