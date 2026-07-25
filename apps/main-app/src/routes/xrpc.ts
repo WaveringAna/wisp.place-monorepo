@@ -58,7 +58,12 @@ const serviceJwtVerifier = new ServiceJwtVerifier({
 	serviceDid: SERVICE_DID as any,
 	resolver: new CompositeDidDocumentResolver({
 		methods: {
-			plc: new PlcDidDocumentResolver(),
+			// Defaults to the public PLC directory. A local development network runs its own,
+			// and service-auth verification fails against the public one because the DIDs
+			// only exist locally.
+			plc: new PlcDidDocumentResolver(
+				Bun.env.WISP_PLC_DIRECTORY_URL ? { apiUrl: Bun.env.WISP_PLC_DIRECTORY_URL } : undefined,
+			),
 			web: new WebDidDocumentResolver(),
 		},
 	}),

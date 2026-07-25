@@ -131,6 +131,29 @@ services:
       timeout: 3s
       retries: 30
 
+  # The PDS proxies XRPC to the Wisp service by resolving its `did:web` document.
+  # @atproto/identity only allows plain HTTP when the hostname is exactly `localhost`,
+  # which inside the PDS container means the container itself. This sidecar shares the
+  # PDS's network namespace and forwards that port to the host, so `did:web:localhost%3A8000`
+  # reaches the Wisp service running on the developer's machine. Production uses a real
+  # HTTPS `did:web`, so this exists only to make the same code path testable locally.
+  pds-host-bridge:
+    profiles: [dev]
+    image: alpine/socat:1.8.0.0
+    depends_on:
+      pds:
+        condition: service_healthy
+    network_mode: "service:pds"
+    # Both loopback families are bridged: Node may resolve `localhost` to either, and a
+    # listener on only one of them fails intermittently depending on resolution order.
+    # The image's entrypoint is socat itself, so it is overridden to run both listeners.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        socat TCP4-LISTEN:8000,fork,reuseaddr,bind=127.0.0.1 TCP:host.docker.internal:8000 &
+        socat TCP6-LISTEN:8000,fork,reuseaddr,bind=[::1] TCP:host.docker.internal:8000
+    restart: unless-stopped
+
   pds-init:
     profiles: [dev]
     image: alpine:3.20
