@@ -24,7 +24,7 @@
     "dev:infra": "./scripts/dev-infra.sh up",
     "dev:infra:down": "./scripts/dev-infra.sh down",
     "start": "bun run apps/main-app/src/index.ts",
-    "build": "cd apps/main-app && bun run build.ts",
+    "build": "cd apps/main-app && bun run build",
     "build:hosting": "cd apps/hosting-service && npm run build",
     "build:all": "bun run build && npm run build:hosting",
     "check": "bun tsc --noEmit",

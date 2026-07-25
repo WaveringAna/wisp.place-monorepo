@@ -199,9 +199,6 @@ await Bun.write(`${distDir}/admin/index.html`, adminHtmlContent)
 
 // Write wisp.css to public directory so it can be served by static plugin
 await Bun.write(`${publicDir}/wisp.css`, wispCss)
-// The built HTML references /dist/styles.css, which is served from distDir. Without this
-// the editor and admin pages load unstyled.
-await Bun.write(`${distDir}/styles.css`, wispCss)
 
 console.log('✅ Build successful!')
 console.log(`📦 Generated ${editorResult.outputs.length + adminResult.outputs.length + 4} file(s):`)
@@ -217,4 +214,4 @@ for (const output of adminResult.outputs) {
 }
 console.log(`\n   CSS:`)
 console.log(`   - ${publicDir}/wisp.css`)
-console.log(`   - ${distDir}/styles.css`)
+console.log(`   - ${distDir}/wisp.css`)
