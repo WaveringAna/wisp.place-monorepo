@@ -4,17 +4,17 @@ import type { NodeOAuthClient } from '@atproto/oauth-client-node'
 import { createLogger } from '@wispplace/observability'
 import { Elysia, t } from 'elysia'
 import { db } from '../lib/db'
-import { requireAuth } from '../lib/wisp-auth'
+import { requireAuth, SESSION_COOKIE_NAME } from '../lib/wisp-auth'
 
 const logger = createLogger('main-app')
 
 export const webhookRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 	new Elysia({
 		prefix: '/api/webhook',
-		cookie: { secrets: cookieSecret, sign: ['did'] },
+		cookie: { secrets: cookieSecret, sign: [SESSION_COOKIE_NAME] },
 	})
-		.derive(async ({ cookie }) => {
-			const auth = await requireAuth(client, cookie)
+		.derive(async ({ cookie, request }) => {
+			const auth = await requireAuth(client, cookie, request.headers.get('cookie'))
 			return { auth }
 		})
 		/**

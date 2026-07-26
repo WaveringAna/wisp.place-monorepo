@@ -20,8 +20,29 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { PRIVATE_SHARE_QUERY_PARAM } from '@wispplace/constants'
 
-/** Cookie name for the per-site private session. Host-only by design. */
+/**
+ * Cookie name for the per-site private session over plain http (local development).
+ * Host-only by design.
+ */
 export const PRIVATE_SESSION_COOKIE = 'wsps'
+
+/**
+ * Cookie name for the per-site private session over https.
+ *
+ * The `__Host-` prefix makes the browser itself enforce the isolation this cookie
+ * depends on: it may only ever be set by the site's own host, with `Secure`, `Path=/`,
+ * and no `Domain` attribute. A page on one private site can otherwise toss a
+ * `Domain=priv.<base>` cookie with this name into a visitor's jar, where it would be
+ * sent to *every* private site — poisoning or shadowing the real session cookie
+ * (RFC 6265 sends the older cookie first, and duplicate names are a parser-ordering
+ * trap). With the prefix, such a Set-Cookie is rejected at the browser, and the
+ * attacker's page cannot even create the forgery.
+ */
+export const PRIVATE_SESSION_COOKIE_SECURE = '__Host-wsps'
+
+/** The session cookie name for the current request's transport security. */
+export const sessionCookieName = (secure: boolean): string =>
+	secure ? PRIVATE_SESSION_COOKIE_SECURE : PRIVATE_SESSION_COOKIE
 
 /** Query parameter carrying a one-time owner handoff token. */
 export const PRIVATE_GRANT_QUERY_PARAM = 'g'
@@ -126,7 +147,13 @@ export const privateShareLinkUrl = (siteUrl: string, token: string): string =>
 
 /** Attributes for the site-scoped session cookie. No `Domain`, so it stays host-only. */
 export const buildSessionCookie = (value: string, secure: boolean, maxAgeSeconds: number): string => {
-	const parts = [`${PRIVATE_SESSION_COOKIE}=${value}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${maxAgeSeconds}`]
+	const parts = [
+		`${sessionCookieName(secure)}=${value}`,
+		'Path=/',
+		'HttpOnly',
+		'SameSite=Lax',
+		`Max-Age=${maxAgeSeconds}`,
+	]
 	if (secure) parts.push('Secure')
 	return parts.join('; ')
 }

@@ -25,3 +25,22 @@ export const parseCookieHeader = (header: string | null | undefined): Record<str
 	}
 	return out
 }
+
+/**
+ * Count how many times a cookie name appears in a raw `Cookie` header.
+ *
+ * Browsers are the only realistic source of duplicate names, and a duplicate session
+ * cookie is exactly what cookie tossing from a sibling subdomain produces. Callers fail
+ * closed on any duplicate, which removes parser-ordering (first-wins vs last-wins) from
+ * the attack surface entirely.
+ */
+export const countCookieOccurrences = (header: string | null | undefined, name: string): number => {
+	if (!header) return 0
+	let count = 0
+	for (const part of header.split(';')) {
+		const eq = part.indexOf('=')
+		if (eq === -1) continue
+		if (part.slice(0, eq).trim() === name) count += 1
+	}
+	return count
+}

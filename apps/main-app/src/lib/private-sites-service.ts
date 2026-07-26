@@ -123,6 +123,13 @@ export const ingestPrivateSite = async (options: CreatePrivateSiteOptions): Prom
 		if (path.length === 0) {
 			throw new PrivateSiteError(`invalid file path: ${file.path}`, 'invalidRequest')
 		}
+		// The sanitized path becomes a storage key verbatim. Backslashes are rejected
+		// because some object stores treat them as separators (turning `..\..` back into
+		// parent references and failing the write mid-ingest), and control characters
+		// have no business in a key.
+		if (/[\\\p{Cc}]/u.test(path)) {
+			throw new PrivateSiteError(`invalid file path: ${file.path}`, 'invalidRequest')
+		}
 		if (seen.has(path)) {
 			throw new PrivateSiteError(`duplicate file path: ${path}`, 'invalidRequest')
 		}
@@ -158,9 +165,16 @@ export const ingestPrivateSite = async (options: CreatePrivateSiteOptions): Prom
 	})
 
 	// Files are written after the row exists so a failed write leaves a deletable record
-	// rather than orphaned bytes with no owner.
-	for (const file of prepared) {
-		await writePrivateFile(site.siteId, file.path, file.bytes, file.mimeType)
+	// rather than orphaned bytes with no owner. A failure partway through removes both
+	// the bytes and the row, so a rejected upload never leaves a phantom site behind.
+	try {
+		for (const file of prepared) {
+			await writePrivateFile(site.siteId, file.path, file.bytes, file.mimeType)
+		}
+	} catch (err) {
+		await deletePrivateSiteFiles(site.siteId).catch(() => 0)
+		await deletePrivateSite(site.siteId).catch(() => false)
+		throw err
 	}
 
 	logger.info('[PrivateSite] Created', {

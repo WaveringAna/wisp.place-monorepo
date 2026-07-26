@@ -295,3 +295,8 @@ export const createShareHandoff = async (siteId: string, shareId: string): Promi
 export const pruneHandoffs = async (): Promise<void> => {
 	await db`DELETE FROM private_site_handoffs WHERE expires_at < NOW() OR consumed_at IS NOT NULL`
 }
+
+/** Remove expired site sessions. Live revocation is handled by the share join at read time. */
+export const pruneSessions = async (): Promise<void> => {
+	await db`DELETE FROM private_site_sessions WHERE expires_at < NOW()`
+}

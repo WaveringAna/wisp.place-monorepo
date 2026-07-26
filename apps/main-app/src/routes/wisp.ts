@@ -47,7 +47,7 @@ import {
 	getUploadJob,
 	updateJobProgress,
 } from '../lib/upload-jobs'
-import { requireAuth } from '../lib/wisp-auth'
+import { requireAuth, SESSION_COOKIE_NAME } from '../lib/wisp-auth'
 
 const logger = createLogger('main-app')
 
@@ -1105,11 +1105,11 @@ export const wispRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		prefix: '/wisp',
 		cookie: {
 			secrets: cookieSecret,
-			sign: ['did'],
+			sign: [SESSION_COOKIE_NAME],
 		},
 	})
-		.derive(async ({ cookie }) => {
-			const auth = await requireAuth(client, cookie)
+		.derive(async ({ cookie, request }) => {
+			const auth = await requireAuth(client, cookie, request.headers.get('cookie'))
 			return { auth }
 		})
 		/**

@@ -57,6 +57,16 @@ export const readPrivateSiteUpload = async (
 	request: Request,
 	options: PrivateSiteUploadOptions = {},
 ): Promise<PrivateSiteUpload> => {
+	// Reject oversized bodies before they are buffered whole into memory. The per-file
+	// accounting below only counts `files` parts, so without this a giant non-file
+	// field would sail past the size limit. 1 MiB of slack covers multipart boundaries
+	// and small fields; `Content-Length` is advisory, so this is a first line, not the
+	// only one (the per-file checks below still apply).
+	const declaredLength = Number(request.headers.get('content-length') ?? '0')
+	if (declaredLength > MAX_PRIVATE_SITE_SIZE + 1024 * 1024) {
+		throw new PrivateSiteUploadError(`private sites are limited to ${MAX_PRIVATE_SITE_SIZE} bytes`, 413)
+	}
+
 	let form: FormData
 	try {
 		form = await request.formData()
@@ -64,7 +74,11 @@ export const readPrivateSiteUpload = async (
 		throw new PrivateSiteUploadError('expected multipart/form-data body', 400)
 	}
 
-	const name = String(form.get('name') ?? '').trim()
+	const rawName = form.get('name')
+	if (typeof rawName === 'string' && rawName.length > 4096) {
+		throw new PrivateSiteUploadError('name must be at most 128 characters', 400)
+	}
+	const name = String(rawName ?? '').trim()
 	const expiryMinutes = parseExpiryMinutes(form.get('expiryMinutes'))
 	const files: UploadedPrivateFile[] = []
 	let totalBytes = 0

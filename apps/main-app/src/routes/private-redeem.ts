@@ -19,7 +19,7 @@ import { createLogger } from '@wispplace/observability'
 import { PRIVATE_ACCESS_PAGE_STYLES } from '@wispplace/private-sites'
 import { Elysia } from 'elysia'
 import { openPrivateSiteForAccount, redeemScopedShare, resolveShareLink } from '../lib/private-sites-service'
-import { authenticateRequest } from '../lib/wisp-auth'
+import { authenticateRequest, SESSION_COOKIE_NAME } from '../lib/wisp-auth'
 
 const logger = createLogger('main-app')
 
@@ -42,7 +42,7 @@ const privatePageHead = (title: string): string => `<!doctype html>
  */
 const signInPage = (siteId: string, token: string): string => `${privatePageHead('sign in')}
 <body><main class="private-page private-shell">
-<div class="private-brand"><strong>wisp.place</strong><span>private access</span></div>
+<div class="private-brand"><strong>wisp.place</strong></div>
 <p class="private-kicker">shared link</p>
 <h1>sign in to open this link</h1>
 <p>this private site was shared with a specific account.</p>
@@ -85,8 +85,7 @@ const signInPage = (siteId: string, token: string): string => `${privatePageHead
 /** Sign-in prompt for an owner opening their own private site by address. */
 const ownerSignInPage = (siteId: string): string => `${privatePageHead('sign in')}
 <body><main class="private-page private-shell">
-<div class="private-brand"><strong>wisp.place</strong><span>private access</span></div>
-<p class="private-kicker">owner access</p>
+<div class="private-brand"><strong>wisp.place</strong></div>
 <h1>sign in to open this private site</h1>
 <p>only accounts with access can open it without a share link.</p>
 <form id="f" class="private-form">
@@ -128,7 +127,7 @@ const ownerSignInPage = (siteId: string): string => `${privatePageHead('sign in'
 /** Shown for every failure, so no outcome reveals whether a private site exists. */
 const deniedPage = (): string => `${privatePageHead('not available')}
 <body><main class="private-page private-shell">
-<div class="private-brand"><strong>wisp.place</strong><span>private access</span></div>
+<div class="private-brand"><strong>wisp.place</strong></div>
 <p class="private-kicker">link unavailable</p>
 <h1>this link is not available</h1>
 <p>it may have been revoked, expired, or issued to a different account.</p>
@@ -185,7 +184,7 @@ export const resolvePrivateShareState = async (
 }
 
 export const privateRedeemRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
-	new Elysia({ cookie: { secrets: cookieSecret, sign: ['did'] } })
+	new Elysia({ cookie: { secrets: cookieSecret, sign: [SESSION_COOKIE_NAME] } })
 		/**
 		 * POST /private/redeem
 		 *
@@ -193,14 +192,14 @@ export const privateRedeemRoutes = (client: NodeOAuthClient, cookieSecret: strin
 		 * has an account session, the share is evaluated immediately and they are redirected
 		 * back with a single-use handoff. Otherwise they are offered sign-in.
 		 */
-		.post('/private/redeem', async ({ body, cookie, set }) => {
+		.post('/private/redeem', async ({ body, cookie, request, set }) => {
 			const form = readForm(body)
 			if (!form) {
 				set.status = 400
 				return htmlResponse(set, deniedPage())
 			}
 
-			const auth = await authenticateRequest(client, cookie)
+			const auth = await authenticateRequest(client, cookie, request.headers.get('cookie'))
 			if (!auth) {
 				return htmlResponse(set, signInPage(form.siteId, form.token))
 			}
@@ -226,14 +225,14 @@ export const privateRedeemRoutes = (client: NodeOAuthClient, cookieSecret: strin
 		 * SameSite=Lax account cookies are sent on this top-level navigation, unlike the
 		 * cross-site POST fallback, so an already signed-in viewer continues immediately.
 		 */
-		.get('/private/open', async ({ query, cookie, set }) => {
+		.get('/private/open', async ({ query, cookie, request, set }) => {
 			const siteId = typeof query.siteId === 'string' ? query.siteId : ''
 			if (!siteId) {
 				set.status = 400
 				return htmlResponse(set, deniedPage())
 			}
 
-			const auth = await authenticateRequest(client, cookie)
+			const auth = await authenticateRequest(client, cookie, request.headers.get('cookie'))
 			if (!auth) {
 				return htmlResponse(set, ownerSignInPage(siteId))
 			}
@@ -287,7 +286,7 @@ export const privateRedeemRoutes = (client: NodeOAuthClient, cookieSecret: strin
 		 * A non-owner and a non-existent site produce the identical denial page, so this
 		 * cannot be used to enumerate private sites.
 		 */
-		.post('/private/open', async ({ body, cookie, set }) => {
+		.post('/private/open', async ({ body, cookie, request, set }) => {
 			const siteId =
 				typeof (body as { siteId?: unknown } | null)?.siteId === 'string' ? (body as { siteId: string }).siteId : ''
 			if (!siteId) {
@@ -295,7 +294,7 @@ export const privateRedeemRoutes = (client: NodeOAuthClient, cookieSecret: strin
 				return htmlResponse(set, deniedPage())
 			}
 
-			const auth = await authenticateRequest(client, cookie)
+			const auth = await authenticateRequest(client, cookie, request.headers.get('cookie'))
 			if (!auth) {
 				return htmlResponse(set, ownerSignInPage(siteId))
 			}

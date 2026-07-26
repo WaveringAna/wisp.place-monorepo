@@ -23,6 +23,7 @@ import {
 	type AccessPrincipal,
 	buildPrivateStorageKey,
 	buildSessionCookie,
+	countCookieOccurrences,
 	evaluateAccess,
 	generateRecordId,
 	generateSessionSecret,
@@ -31,10 +32,10 @@ import {
 	isValidSiteId,
 	PRIVATE_ACCESS_PAGE_STYLES,
 	PRIVATE_GRANT_QUERY_PARAM,
-	PRIVATE_SESSION_COOKIE,
 	PRIVATE_SESSION_TTL_MINUTES,
 	parseCookieHeader,
 	privateResponseHeaders,
+	sessionCookieName,
 } from '@wispplace/private-sites'
 import {
 	consumeHandoff,
@@ -121,7 +122,8 @@ const privatePageHead = (title: string): string => `<!doctype html>
 const scopedSignInPage = (siteId: string, token: string, audienceDid: string): Response => {
 	const body = `${privatePageHead('sign in required')}
 <body><main class="private-page private-shell">
-<div class="private-brand"><strong>wisp.place</strong><span>private access</span></div>
+<script>history.replaceState(null, '', location.pathname)</script>
+<div class="private-brand"><strong>wisp.place</strong></div>
 <p class="private-kicker">account access</p>
 <h1>this link is for a specific account</h1>
 <p>it was shared with <code>${escapeHtml(audienceDid)}</code>. sign in with that account to open it.</p>
@@ -156,7 +158,7 @@ const scopedSignInPage = (siteId: string, token: string, audienceDid: string): R
 const anonymousSignInPage = (siteId: string): Response => {
 	const body = `${privatePageHead('sign in')}
 <body><main class="private-page private-shell">
-<div class="private-brand"><strong>wisp.place</strong><span>private access</span></div>
+<div class="private-brand"><strong>wisp.place</strong></div>
 <p class="private-kicker">access required</p>
 <h1>private site</h1>
 <p>this address needs a share link, or an account with access to it.</p>
@@ -204,8 +206,8 @@ const tryExchangeCredential = async (request: Request, siteId: string): Promise<
 		// Single-use handoff minted by main-app: either an owner crossing origins, or a
 		// DID-scoped share redeemed after the identity bounce. main-app has already made
 		// the access decision in both cases; consuming the row is what proves it.
-		const consumed = await consumeHandoff(hashSecret(handoffToken))
-		if (!consumed || consumed.siteId !== siteId) {
+		const consumed = await consumeHandoff(hashSecret(handoffToken), siteId)
+		if (!consumed) {
 			logger.info('[PrivateSite] Handoff rejected', { siteId })
 			return privateNotFound()
 		}
@@ -280,8 +282,17 @@ const tryExchangeCredential = async (request: Request, siteId: string): Promise<
  * cannot authorize another.
  */
 const principalFromSession = async (request: Request, siteId: string): Promise<AccessPrincipal | null> => {
-	const cookies = parseCookieHeader(request.headers.get('cookie'))
-	const raw = cookies[PRIVATE_SESSION_COOKIE]
+	const cookieHeader = request.headers.get('cookie')
+	// The name depends on the transport: https deployments use the `__Host-` prefixed
+	// name, which the browser refuses to set from any other host or with a Domain
+	// attribute. Anything under the other name is ignored here.
+	const name = sessionCookieName(isSecureRequest(request))
+	// A duplicate name means the jar was tampered with (a Domain-scoped cookie tossed
+	// from a sibling private site). Refuse to pick one.
+	if (countCookieOccurrences(cookieHeader, name) !== 1) return null
+
+	const cookies = parseCookieHeader(cookieHeader)
+	const raw = cookies[name]
 	if (!raw) return null
 
 	const session = await findLiveSession(hashSecret(raw))
@@ -306,8 +317,19 @@ export const servePrivateSite = async (request: Request, siteId: string, filePat
 
 	const site = await getPrivateSite(siteId)
 
-	// A credential in the URL is exchanged for a cookie and redirected away. Runs before
-	// the existence check so a bad credential and a missing site are indistinguishable.
+	// A credential presented at a site that does not exist must answer exactly like a
+	// bad credential at one that does. Without this, `?k=garbage` would render the
+	// sign-in page only for nonexistent sites, turning any credential parameter into a
+	// private-site existence oracle.
+	if (!site) {
+		const probe = new URL(request.url)
+		if (probe.searchParams.has(PRIVATE_SHARE_QUERY_PARAM) || probe.searchParams.has(PRIVATE_GRANT_QUERY_PARAM)) {
+			return privateNotFound()
+		}
+	}
+
+	// A credential in the URL is exchanged for a cookie and redirected away. Combined
+	// with the probe above, a bad credential and a missing site are indistinguishable.
 	const exchanged = site ? await tryExchangeCredential(request, siteId) : null
 	if (exchanged) return exchanged
 

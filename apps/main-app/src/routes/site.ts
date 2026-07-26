@@ -3,7 +3,7 @@ import type { NodeOAuthClient } from '@atproto/oauth-client-node'
 import { extractSubfsUris } from '@wispplace/atproto-utils'
 import { createLogger } from '@wispplace/observability'
 import { Elysia } from 'elysia'
-import { requireAuth } from '../lib/wisp-auth'
+import { requireAuth, SESSION_COOKIE_NAME } from '../lib/wisp-auth'
 
 const logger = createLogger('main-app')
 
@@ -12,11 +12,11 @@ export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		prefix: '/api/site',
 		cookie: {
 			secrets: cookieSecret,
-			sign: ['did'],
+			sign: [SESSION_COOKIE_NAME],
 		},
 	})
-		.derive(async ({ cookie }) => {
-			const auth = await requireAuth(client, cookie)
+		.derive(async ({ cookie, request }) => {
+			const auth = await requireAuth(client, cookie, request.headers.get('cookie'))
 			return { auth }
 		})
 		/**

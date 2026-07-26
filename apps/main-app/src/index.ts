@@ -20,9 +20,11 @@ import {
 	rotateKeysIfNeeded,
 } from './lib/oauth-client'
 import { startPrivateSiteReaper } from './lib/private-site-reaper'
+import { pruneHandoffs, pruneSessions } from './lib/private-sites-db'
 import { closeRedisClient, getRedisClient } from './lib/redis'
 import { ensureServiceIdentityKeypair } from './lib/service-identity'
 import type { Config } from './lib/types'
+import { SESSION_COOKIE_NAME } from './lib/wisp-auth'
 import { adminRoutes } from './routes/admin'
 import { authRoutes } from './routes/auth'
 import { domainRoutes } from './routes/domain'
@@ -85,6 +87,10 @@ const runMaintenance = async () => {
 	console.log('[Maintenance] Running periodic maintenance...')
 	await cleanupExpiredSessions()
 	await rotateKeysIfNeeded()
+	// Handoff and private-session rows are single-use or short-lived by design; without
+	// a sweep they accumulate forever.
+	await pruneHandoffs()
+	await pruneSessions()
 }
 
 // Run maintenance on startup
@@ -121,7 +127,7 @@ export const app = new Elysia({
 	},
 	cookie: {
 		secrets: cookieSecret,
-		sign: ['did'],
+		sign: [SESSION_COOKIE_NAME],
 	},
 })
 	// Observability middleware

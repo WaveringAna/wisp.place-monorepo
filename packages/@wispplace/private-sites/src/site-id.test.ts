@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test'
+import { redactSecretPath } from '@wispplace/observability'
 import {
 	buildPrivateStorageKey,
 	generateRecordId,
@@ -6,7 +7,6 @@ import {
 	isValidSiteId,
 	privateResponseHeaders,
 } from './site-id'
-import { redactSecretPath } from '@wispplace/observability'
 import { generateShareToken, redactToken, redactUrlForLog } from './token'
 
 describe('site ids', () => {

@@ -13,15 +13,17 @@ export {
 	OWNER_HANDOFF_TTL_SECONDS,
 	PRIVATE_GRANT_QUERY_PARAM,
 	PRIVATE_SESSION_COOKIE,
+	PRIVATE_SESSION_COOKIE_SECURE,
 	PRIVATE_SESSION_TTL_MINUTES,
 	privateGrantUrlFor,
 	privateShareLinkUrl,
 	privateSiteHostname,
 	privateSiteUrl,
 	secretsMatch,
+	sessionCookieName,
 	siteIdFromHostname,
 } from './grant'
-export { parseCookieHeader } from './session-cookie'
+export { countCookieOccurrences, parseCookieHeader } from './session-cookie'
 export {
 	buildPrivateStorageKey,
 	generateRecordId,

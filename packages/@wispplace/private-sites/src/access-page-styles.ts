@@ -17,6 +17,7 @@ export const PRIVATE_ACCESS_PAGE_STYLES = `
   --private-accent: #ff5c8a;
   --private-cta-bg: oklch(0.30 0.025 35);
   --private-cta-text: oklch(0.96 0.008 35);
+  --private-control-height: 3rem;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -80,14 +81,6 @@ body {
   letter-spacing: -0.02em;
 }
 
-.private-brand span {
-  color: var(--private-subtle);
-  font-size: 0.7rem;
-  font-weight: 400;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
 .private-kicker {
   margin: 0 0 0.75rem;
   color: var(--private-accent);
@@ -120,6 +113,7 @@ label {
 input[type=text] {
   display: block;
   width: 100%;
+  height: var(--private-control-height);
   margin: 0;
   padding: 0.75rem 0.85rem;
   border: 1px solid var(--private-border);
@@ -139,6 +133,7 @@ input[type=text]::placeholder { color: var(--private-subtle); }
 .private-action {
   display: inline-flex;
   width: 100%;
+  height: var(--private-control-height);
   align-items: center;
   justify-content: space-between;
   margin-top: 1rem;
@@ -166,6 +161,12 @@ input[type=text]::placeholder { color: var(--private-subtle); }
 .private-action:focus-visible { outline: 2px solid var(--private-accent); outline-offset: 3px; }
 
 .private-action:disabled { cursor: not-allowed; opacity: 0.5; }
+
+.private-action > span[aria-hidden="true"] {
+  font-size: 1.2rem;
+  font-weight: 700;
+  line-height: 1;
+}
 
 .private-error {
   min-height: 1.5rem;

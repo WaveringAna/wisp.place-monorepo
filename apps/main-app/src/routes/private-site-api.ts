@@ -27,7 +27,7 @@ import {
 	revokeSiteShare,
 } from '../lib/private-sites-service'
 import { SlingshotHandleResolver } from '../lib/slingshot-handle-resolver'
-import { requireAuth } from '../lib/wisp-auth'
+import { requireAuth, SESSION_COOKIE_NAME } from '../lib/wisp-auth'
 import { privateOwnerUrl, privateShareUrl } from './xrpc-private-site'
 
 const logger = createLogger('main-app')
@@ -60,10 +60,10 @@ const errorResponse = (err: unknown, set: { status?: number | string }) => {
 export const privateSiteApiRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 	new Elysia({
 		prefix: '/api/user/private-sites',
-		cookie: { secrets: cookieSecret, sign: ['did'] },
+		cookie: { secrets: cookieSecret, sign: [SESSION_COOKIE_NAME] },
 	})
-		.derive(async ({ cookie }) => {
-			const auth = await requireAuth(client, cookie)
+		.derive(async ({ cookie, request }) => {
+			const auth = await requireAuth(client, cookie, request.headers.get('cookie'))
 			return { auth }
 		})
 		/**

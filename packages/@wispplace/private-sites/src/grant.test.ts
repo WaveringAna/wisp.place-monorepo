@@ -4,8 +4,11 @@ import {
 	generateHandoffSecret,
 	generateSessionSecret,
 	hashSecret,
+	PRIVATE_SESSION_COOKIE,
+	PRIVATE_SESSION_COOKIE_SECURE,
 	privateSiteHostname,
 	secretsMatch,
+	sessionCookieName,
 	siteIdFromHostname,
 } from './grant'
 
@@ -55,6 +58,21 @@ describe('session cookie', () => {
 
 	it('omits Secure when not on https', () => {
 		expect(buildSessionCookie('wsx_abc', false, 60)).not.toContain('Secure')
+	})
+
+	/**
+	 * Over https the cookie uses the `__Host-` name, so the browser rejects any attempt
+	 * to set it from another host or with a Domain attribute — the cookie-tossing fix.
+	 */
+	it('uses the __Host- name when secure', () => {
+		expect(buildSessionCookie('wsx_abc', true, 60)).toContain(`${PRIVATE_SESSION_COOKIE_SECURE}=`)
+		expect(sessionCookieName(true)).toBe(PRIVATE_SESSION_COOKIE_SECURE)
+	})
+
+	/** Plain http (local development) keeps the unprefixed name. */
+	it('uses the plain name when not secure', () => {
+		expect(buildSessionCookie('wsx_abc', false, 60)).toContain(`${PRIVATE_SESSION_COOKIE}=`)
+		expect(sessionCookieName(false)).toBe(PRIVATE_SESSION_COOKIE)
 	})
 })
 

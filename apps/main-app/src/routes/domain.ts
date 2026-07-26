@@ -21,7 +21,7 @@ import {
 } from '../lib/db'
 import { verifyCustomDomain } from '../lib/dns-verify'
 import { extractWispHandle, isValidHandle, normalizeDomain, toDomain, validateCustomDomain } from '../lib/domain-utils'
-import { requireAuth } from '../lib/wisp-auth'
+import { requireAuth, SESSION_COOKIE_NAME } from '../lib/wisp-auth'
 
 const logger = createLogger('main-app')
 
@@ -30,7 +30,7 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		prefix: '/api/domain',
 		cookie: {
 			secrets: cookieSecret,
-			sign: ['did'],
+			sign: [SESSION_COOKIE_NAME],
 		},
 	})
 		// Public endpoints (no auth required)
@@ -94,8 +94,8 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 			}
 		})
 		// Authenticated endpoints (require auth)
-		.derive(async ({ cookie }) => {
-			const auth = await requireAuth(client, cookie)
+		.derive(async ({ cookie, request }) => {
+			const auth = await requireAuth(client, cookie, request.headers.get('cookie'))
 			return { auth }
 		})
 		/**

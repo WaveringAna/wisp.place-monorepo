@@ -164,18 +164,21 @@ export async function createSession(input: {
 }
 
 /**
- * Consume a one-time owner handoff token.
+ * Consume a one-time owner handoff token for a specific site.
  *
  * The update is conditional and returns the row, so a concurrent second use cannot also
  * succeed: whichever statement wins marks it consumed and the other matches nothing.
+ * The site id is part of the condition, so presenting a valid handoff at the wrong
+ * private host neither succeeds nor burns the token for its real destination.
  */
 export async function consumeHandoff(
 	secretHash: string,
+	siteId: string,
 ): Promise<{ siteId: string; ownerDid: string | null; shareId: string | null } | null> {
 	const rows = await sql<Array<{ site_id: string; owner_did: string | null; share_id: string | null }>>`
     UPDATE private_site_handoffs
     SET consumed_at = NOW()
-    WHERE secret_hash = ${secretHash} AND consumed_at IS NULL AND expires_at > NOW()
+    WHERE secret_hash = ${secretHash} AND site_id = ${siteId} AND consumed_at IS NULL AND expires_at > NOW()
     RETURNING site_id, owner_did, share_id
   `
 	const row = rows[0]
