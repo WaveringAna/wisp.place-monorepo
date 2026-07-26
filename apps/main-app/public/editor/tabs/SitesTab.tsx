@@ -521,7 +521,15 @@ export const SitesTab = memo(function SitesTab({
 			ref={containerRef}
 			className="h-full flex flex-col border border-border/30 bg-card/50 font-mono outline-none"
 			tabIndex={-1}
-			onClick={() => containerRef.current?.focus()}
+			onClick={(e) => {
+				// Clicking bare chrome returns focus to the keyboard-nav container, but a click
+				// that landed on a real control must be left alone — stealing focus back here
+				// is what made the share-link inputs impossible to type into.
+				const t = e.target as HTMLElement
+				if (!t.closest('input, textarea, button, select, a, label')) {
+					containerRef.current?.focus()
+				}
+			}}
 			onKeyDown={() => {}}
 		>
 			{/* Keyboard hints */}

@@ -147,6 +147,23 @@ describe('secret hygiene', () => {
 		const seen = new Set(Array.from({ length: 200 }, () => generateShareToken().token))
 		expect(seen.size).toBe(200)
 	})
+
+	/**
+	 * The token is the whole of a `wisp.place/p/<token>` link, which is meant to be pasted
+	 * into a chat message. Length is a product property here, not an implementation detail,
+	 * so it is pinned: `wss_` plus 22 base64url characters of 128-bit entropy.
+	 */
+	it('stays short enough to paste as a link', () => {
+		const { token } = generateShareToken()
+		expect(token.length).toBe(26)
+		expect(`https://wisp.place/p/${token}`.length).toBeLessThanOrEqual(48)
+	})
+
+	it('keeps the display prefix too short to authenticate with', () => {
+		const { token, tokenPrefix } = generateShareToken()
+		expect(token.startsWith(tokenPrefix)).toBe(true)
+		expect(tokenPrefix.length).toBeLessThan(token.length / 2)
+	})
 })
 
 /**

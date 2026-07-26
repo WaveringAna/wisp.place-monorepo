@@ -15,11 +15,27 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 
 export const SHARE_TOKEN_PREFIX = 'wss_'
 
-/** Number of random bytes behind a share token. 32 bytes = 256 bits. */
-const SHARE_TOKEN_BYTES = 32
+/**
+ * Number of random bytes behind a share token. 16 bytes = 128 bits, which renders as 22
+ * base64url characters.
+ *
+ * Sized for the URL bar as much as for the threat model. This token *is* the whole of
+ * `wisp.place/p/<token>`, a link meant to be pasted into a chat message, so every byte
+ * costs four characters someone has to look at. 128 bits stays far outside reach of online
+ * guessing, and online guessing is the only attack available: the plaintext is never
+ * stored, so there is nothing to grind offline.
+ *
+ * Tokens issued at the previous length keep working. They are matched by hash, not length.
+ */
+const SHARE_TOKEN_BYTES = 16
 
-/** Length of the non-secret display prefix kept alongside the hash. */
-const DISPLAY_PREFIX_LENGTH = 8
+/**
+ * Length of the non-secret display prefix kept alongside the hash.
+ *
+ * Only the owner ever sees this, and only to tell two of their own links apart. Kept to
+ * roughly a quarter of the token so a leaked database still leaves ~96 bits unknown.
+ */
+const DISPLAY_PREFIX_LENGTH = 6
 
 export interface GeneratedShareToken {
 	/** Plaintext token. Return to the creator once, then discard. Never persist. */
