@@ -1,3 +1,4 @@
+export { PRIVATE_ACCESS_PAGE_STYLES } from './access-page-styles'
 export type { EvaluateAccessInput } from './access-policy'
 export { denialStatus, evaluateAccess, isExpired } from './access-policy'
 export type { ResolveExpiryOptions } from './expiry'

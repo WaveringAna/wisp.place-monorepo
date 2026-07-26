@@ -16,8 +16,9 @@
 
 import type { NodeOAuthClient } from '@atproto/oauth-client-node'
 import { createLogger } from '@wispplace/observability'
+import { PRIVATE_ACCESS_PAGE_STYLES } from '@wispplace/private-sites'
 import { Elysia } from 'elysia'
-import { openOwnedPrivateSite, redeemScopedShare, resolveShareLink } from '../lib/private-sites-service'
+import { openPrivateSiteForAccount, redeemScopedShare, resolveShareLink } from '../lib/private-sites-service'
 import { authenticateRequest } from '../lib/wisp-auth'
 
 const logger = createLogger('main-app')
@@ -26,6 +27,12 @@ const logger = createLogger('main-app')
 const json = (value: string): string =>
 	JSON.stringify(value).replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/&/g, '\\u0026')
 
+const privatePageHead = (title: string): string => `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>${title} — wisp.place</title>
+<style>${PRIVATE_ACCESS_PAGE_STYLES}</style></head>`
 
 /**
  * Re-present the share token after sign-in.
@@ -33,111 +40,99 @@ const json = (value: string): string =>
  * The visitor arrives without a session, so they are sent through OAuth and land back here
  * with the token still in a POST body rather than in a URL.
  */
-const signInPage = (siteId: string, token: string): string => `<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex, nofollow">
-<title>sign in — wisp.place</title>
-<style>
- body{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#12111a;color:#e8e6f0;
-      display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0;padding:1.5rem}
- main{max-width:32rem;border:1px solid #322e44;border-radius:10px;padding:2rem;line-height:1.6}
- h1{margin:0 0 .75rem;font-size:1.15rem;color:#c4a7ff}
- p{margin:.5rem 0;color:#b9b3c9}
- label{display:block;margin-top:1rem;color:#b9b3c9}
- input[type=text]{width:100%;box-sizing:border-box;margin-top:.35rem;padding:.6rem;border-radius:6px;
-   border:1px solid #322e44;background:#1b1926;color:#e8e6f0;font:inherit}
- button{margin-top:1rem;background:#7c5cff;color:#fff;border:0;border-radius:6px;
-        padding:.7rem 1.2rem;font:inherit;cursor:pointer}
-</style></head>
-<body><main>
+const signInPage = (siteId: string, token: string): string => `${privatePageHead('sign in')}
+<body><main class="private-page private-shell">
+<div class="private-brand"><strong>wisp.place</strong><span>private access</span></div>
+<p class="private-kicker">shared link</p>
 <h1>sign in to open this link</h1>
 <p>this private site was shared with a specific account.</p>
-<form id="f">
- <label>your handle
-  <input type="text" id="handle" placeholder="alice.bsky.social" autocapitalize="none" autocorrect="off" required>
- </label>
- <button type="submit">continue</button>
- <p class="err" id="err"></p>
+<form id="f" class="private-form">
+ <label for="handle">your handle</label>
+ <input type="text" id="handle" placeholder="alice.bsky.social" autocomplete="username" autocapitalize="none" autocorrect="off" required>
+ <button class="private-action" id="action" type="submit" disabled>sign in to continue <span aria-hidden="true">→</span></button>
+ <p class="private-error" id="err" aria-live="polite"></p>
 </form>
+<p class="private-note">your password stays with your personal data server. wisp only starts the sign-in handoff.</p>
 <script>
  var siteId = ${json(siteId)}, token = ${json(token)}
- document.getElementById('f').addEventListener('submit', function (e) {
+ var form = document.getElementById('f'), input = document.getElementById('handle'), action = document.getElementById('action'), error = document.getElementById('err')
+ function syncAction() { action.disabled = !input.value.trim() || action.getAttribute('aria-busy') === 'true' }
+ input.addEventListener('input', syncAction)
+ form.addEventListener('submit', function (e) {
    e.preventDefault()
    var handle = document.getElementById('handle').value.trim()
-   if (!handle) return
+   if (!handle || action.getAttribute('aria-busy') === 'true') return
+   action.disabled = true
+   action.setAttribute('aria-busy', 'true')
+   action.innerHTML = 'opening sign-in… <span aria-hidden="true">→</span>'
+   error.textContent = ''
    fetch('/private/redeem/start', {
      method: 'POST',
      headers: { 'content-type': 'application/json' },
      body: JSON.stringify({ siteId: siteId, token: token, handle: handle })
    }).then(function (r) { return r.json() }).then(function (d) {
-     if (d && d.url) { location.href = d.url } else { document.getElementById('err').textContent = 'could not start sign-in for that handle.' }
-   }).catch(function () { document.getElementById('err').textContent = 'could not start sign-in.' })
+     if (d && d.url) { location.href = d.url; return }
+     error.textContent = 'could not start sign-in for that handle.'
+   }).catch(function () { error.textContent = 'could not start sign-in.' }).finally(function () {
+     action.removeAttribute('aria-busy')
+     action.innerHTML = 'sign in to continue <span aria-hidden="true">→</span>'
+     syncAction()
+   })
  })
 </script>
 </main></body></html>`
 
 /** Sign-in prompt for an owner opening their own private site by address. */
-const ownerSignInPage = (siteId: string): string => `<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex, nofollow">
-<title>sign in — wisp.place</title>
-<style>
- body{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#12111a;color:#e8e6f0;
-      display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0;padding:1.5rem}
- main{max-width:32rem;border:1px solid #322e44;border-radius:10px;padding:2rem;line-height:1.6}
- h1{margin:0 0 .75rem;font-size:1.15rem;color:#c4a7ff}
- p{margin:.5rem 0;color:#b9b3c9}
- label{display:block;margin-top:1rem;color:#b9b3c9}
- input[type=text]{width:100%;box-sizing:border-box;margin-top:.35rem;padding:.6rem;border-radius:6px;
-   border:1px solid #322e44;background:#1b1926;color:#e8e6f0;font:inherit}
- button{margin-top:1rem;background:#7c5cff;color:#fff;border:0;border-radius:6px;
-        padding:.7rem 1.2rem;font:inherit;cursor:pointer}
-</style></head>
-<body><main>
+const ownerSignInPage = (siteId: string): string => `${privatePageHead('sign in')}
+<body><main class="private-page private-shell">
+<div class="private-brand"><strong>wisp.place</strong><span>private access</span></div>
+<p class="private-kicker">owner access</p>
 <h1>sign in to open this private site</h1>
-<p>only the account that created it can open it without a share link.</p>
-<form id="f">
- <label>your handle
-  <input type="text" id="handle" placeholder="alice.bsky.social" autocapitalize="none" autocorrect="off" required>
- </label>
- <button type="submit">continue</button>
- <p class="err" id="err"></p>
+<p>only accounts with access can open it without a share link.</p>
+<form id="f" class="private-form">
+ <label for="handle">your handle</label>
+ <input type="text" id="handle" placeholder="alice.bsky.social" autocomplete="username" autocapitalize="none" autocorrect="off" required>
+ <button class="private-action" id="action" type="submit" disabled>sign in to continue <span aria-hidden="true">→</span></button>
+ <p class="private-error" id="err" aria-live="polite"></p>
 </form>
+<p class="private-note">your password stays with your personal data server. wisp only starts the sign-in handoff.</p>
 <script>
  var siteId = ${json(siteId)}
- document.getElementById('f').addEventListener('submit', function (e) {
+ var form = document.getElementById('f'), input = document.getElementById('handle'), action = document.getElementById('action'), error = document.getElementById('err')
+ function syncAction() { action.disabled = !input.value.trim() || action.getAttribute('aria-busy') === 'true' }
+ input.addEventListener('input', syncAction)
+ form.addEventListener('submit', function (e) {
    e.preventDefault()
    var handle = document.getElementById('handle').value.trim()
-   if (!handle) return
+   if (!handle || action.getAttribute('aria-busy') === 'true') return
+   action.disabled = true
+   action.setAttribute('aria-busy', 'true')
+   action.innerHTML = 'opening sign-in… <span aria-hidden="true">→</span>'
+   error.textContent = ''
    fetch('/private/open/start', {
      method: 'POST',
      headers: { 'content-type': 'application/json' },
      body: JSON.stringify({ siteId: siteId, handle: handle })
    }).then(function (r) { return r.json() }).then(function (d) {
-     if (d && d.url) { location.href = d.url } else { document.getElementById('err').textContent = 'could not start sign-in for that handle.' }
-   }).catch(function () { document.getElementById('err').textContent = 'could not start sign-in.' })
+     if (d && d.url) { location.href = d.url; return }
+     error.textContent = 'could not start sign-in for that handle.'
+   }).catch(function () { error.textContent = 'could not start sign-in.' }).finally(function () {
+     action.removeAttribute('aria-busy')
+     action.innerHTML = 'sign in to continue <span aria-hidden="true">→</span>'
+     syncAction()
+   })
  })
 </script>
 </main></body></html>`
 
 /** Shown for every failure, so no outcome reveals whether a private site exists. */
-const deniedPage = (): string => `<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex, nofollow">
-<title>not available — wisp.place</title>
-<style>
- body{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#12111a;color:#e8e6f0;
-      display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0;padding:1.5rem}
- main{max-width:30rem;border:1px solid #322e44;border-radius:10px;padding:2rem;line-height:1.6}
- h1{margin:0 0 .75rem;font-size:1.15rem;color:#c4a7ff}
- p{margin:.5rem 0;color:#b9b3c9}
-</style></head>
-<body><main>
+const deniedPage = (): string => `${privatePageHead('not available')}
+<body><main class="private-page private-shell">
+<div class="private-brand"><strong>wisp.place</strong><span>private access</span></div>
+<p class="private-kicker">link unavailable</p>
 <h1>this link is not available</h1>
 <p>it may have been revoked, expired, or issued to a different account.</p>
+<p class="private-note">no change was made to your account.</p>
 </main></body></html>`
 
 const htmlResponse = (
@@ -181,7 +176,7 @@ export const resolvePrivateShareState = async (
 	if (typeof parsed.siteId !== 'string') return null
 
 	if (parsed.kind === 'privateOpen') {
-		return { url: await openOwnedPrivateSite(parsed.siteId, viewerDid) }
+		return { url: await openPrivateSiteForAccount(parsed.siteId, viewerDid) }
 	}
 	if (parsed.kind !== 'privateShare') return null
 	if (typeof parsed.token !== 'string') return null
@@ -224,6 +219,34 @@ export const privateRedeemRoutes = (client: NodeOAuthClient, cookieSecret: strin
 		.get('/private/denied', ({ set }) => {
 			set.status = 403
 			return htmlResponse(set, deniedPage())
+		})
+		/**
+		 * GET /private/open
+		 *
+		 * SameSite=Lax account cookies are sent on this top-level navigation, unlike the
+		 * cross-site POST fallback, so an already signed-in viewer continues immediately.
+		 */
+		.get('/private/open', async ({ query, cookie, set }) => {
+			const siteId = typeof query.siteId === 'string' ? query.siteId : ''
+			if (!siteId) {
+				set.status = 400
+				return htmlResponse(set, deniedPage())
+			}
+
+			const auth = await authenticateRequest(client, cookie)
+			if (!auth) {
+				return htmlResponse(set, ownerSignInPage(siteId))
+			}
+
+			const url = await openPrivateSiteForAccount(siteId, auth.did)
+			if (!url) {
+				set.status = 404
+				return htmlResponse(set, deniedPage())
+			}
+
+			set.status = 303
+			set.headers.Location = url
+			return ''
 		})
 		/**
 		 * GET /p/:token
@@ -277,7 +300,7 @@ export const privateRedeemRoutes = (client: NodeOAuthClient, cookieSecret: strin
 				return htmlResponse(set, ownerSignInPage(siteId))
 			}
 
-			const url = await openOwnedPrivateSite(siteId, auth.did)
+			const url = await openPrivateSiteForAccount(siteId, auth.did)
 			if (!url) {
 				set.status = 404
 				return htmlResponse(set, deniedPage())

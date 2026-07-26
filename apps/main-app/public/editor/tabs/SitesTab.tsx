@@ -82,6 +82,13 @@ interface PrivateSharePanelProps {
 	onCopy: (text: string) => void
 }
 
+interface ActorSuggestion {
+	did: string
+	handle: string
+	displayName?: string
+	avatar?: string
+}
+
 /** Share-link management for one private site. */
 const PrivateSharePanel = memo(function PrivateSharePanel({
 	siteId,
@@ -97,6 +104,8 @@ const PrivateSharePanel = memo(function PrivateSharePanel({
 	const [label, setLabel] = useState('')
 	const [creating, setCreating] = useState(false)
 	const [handle, setHandle] = useState('')
+	const [suggestions, setSuggestions] = useState<ActorSuggestion[]>([])
+	const [activeSuggestion, setActiveSuggestion] = useState(-1)
 	/**
 	 * Resolution of the typed handle.
 	 *
@@ -106,35 +115,110 @@ const PrivateSharePanel = memo(function PrivateSharePanel({
 	 */
 	const [resolved, setResolved] = useState<{ handle: string; did: string } | null>(null)
 	const [resolving, setResolving] = useState(false)
+	const selectedHandleRef = useRef<string | null>(null)
 
-	// Debounced so a lookup does not fire on every keystroke, and stale responses are
-	// discarded rather than overwriting a newer one.
+	const selectSuggestion = useCallback((actor: ActorSuggestion) => {
+		selectedHandleRef.current = actor.handle
+		setHandle(actor.handle)
+		setResolved({ handle: actor.handle, did: actor.did })
+		setSuggestions([])
+		setActiveSuggestion(-1)
+	}, [])
+
+	// Search public actor typeahead results while also resolving a fully typed handle. Both
+	// requests are debounced, and stale responses are discarded rather than overwriting a
+	// newer query.
 	useEffect(() => {
 		const query = handle.trim().replace(/^@/, '')
+		const selected = selectedHandleRef.current?.toLowerCase() === query.toLowerCase()
+		if (selected) {
+			setResolving(false)
+			setSuggestions([])
+			setActiveSuggestion(-1)
+			return
+		}
+		selectedHandleRef.current = null
+		setResolved(null)
+		setSuggestions([])
+		setActiveSuggestion(-1)
 		if (!query) {
-			setResolved(null)
 			setResolving(false)
 			return
 		}
 		let cancelled = false
-		setResolving(true)
+		setResolving(query.length >= 2)
 		const timer = setTimeout(async () => {
 			try {
-				const res = await fetch(`/api/user/private-sites/resolve-handle?handle=${encodeURIComponent(query)}`)
-				const data = await res.json()
+				const typeaheadUrl = new URL('https://public.api.bsky.app/xrpc/app.bsky.actor.searchActorsTypeahead')
+				typeaheadUrl.searchParams.set('q', query)
+				typeaheadUrl.searchParams.set('limit', '6')
+				const [typeaheadResponse, resolveResponse] = await Promise.all([
+					query.length >= 2
+						? fetch(typeaheadUrl.toString(), { headers: { Accept: 'application/json' } })
+						: Promise.resolve(null),
+					query.includes('.')
+						? fetch(`/api/user/private-sites/resolve-handle?handle=${encodeURIComponent(query)}`)
+						: Promise.resolve(null),
+				])
+				const typeaheadData = typeaheadResponse?.ok ? await typeaheadResponse.json() : { actors: [] }
+				const actorList: unknown[] = Array.isArray(typeaheadData.actors) ? typeaheadData.actors : []
+				const actors = actorList.filter(
+					(actor: unknown): actor is ActorSuggestion =>
+						typeof actor === 'object' &&
+						actor !== null &&
+						'did' in actor &&
+						typeof actor.did === 'string' &&
+						'handle' in actor &&
+						typeof actor.handle === 'string',
+				)
+				const resolvedData = resolveResponse?.ok ? await resolveResponse.json() : null
 				if (cancelled) return
-				setResolved(data.found ? { handle: data.handle, did: data.did } : null)
+				const exactActor = actors.find((actor) => actor.handle.toLowerCase() === query.toLowerCase())
+				setSuggestions(actors)
+				setResolved(
+					resolvedData?.found
+						? { handle: resolvedData.handle, did: resolvedData.did }
+						: exactActor
+							? { handle: exactActor.handle, did: exactActor.did }
+							: null,
+				)
 			} catch {
-				if (!cancelled) setResolved(null)
+				if (!cancelled) {
+					setResolved(null)
+					setSuggestions([])
+				}
 			} finally {
 				if (!cancelled) setResolving(false)
 			}
-		}, 350)
+		}, 250)
 		return () => {
 			cancelled = true
 			clearTimeout(timer)
 		}
 	}, [handle])
+
+	const handleAccountKeyDown = useCallback(
+		(event: React.KeyboardEvent<HTMLInputElement>) => {
+			if (event.key === 'Escape') {
+				setSuggestions([])
+				setActiveSuggestion(-1)
+				return
+			}
+			if (suggestions.length === 0) return
+			if (event.key === 'ArrowDown') {
+				event.preventDefault()
+				setActiveSuggestion((current) => Math.min(current + 1, suggestions.length - 1))
+			} else if (event.key === 'ArrowUp') {
+				event.preventDefault()
+				setActiveSuggestion((current) => Math.max(current - 1, 0))
+			} else if (event.key === 'Enter' && activeSuggestion >= 0) {
+				event.preventDefault()
+				const actor = suggestions[activeSuggestion]
+				if (actor) selectSuggestion(actor)
+			}
+		},
+		[suggestions, activeSuggestion, selectSuggestion],
+	)
 
 	// Shares are fetched lazily, only when a private site is actually expanded.
 	useEffect(() => {
@@ -151,9 +235,13 @@ const PrivateSharePanel = memo(function PrivateSharePanel({
 		})
 		setLabel('')
 		setHandle('')
+		selectedHandleRef.current = null
 		setResolved(null)
+		setSuggestions([])
 		setCreating(false)
 	}, [siteId, label, resolved, onCreate])
+
+	const suggestionsId = `private-account-suggestions-${siteId}`
 
 	return (
 		<div>
@@ -161,8 +249,8 @@ const PrivateSharePanel = memo(function PrivateSharePanel({
 
 			{/* One-time reveal. This is the only moment the credential is available. */}
 			{justCreatedUrl && (
-				<div className="mb-3 p-3 border border-violet-400/50 bg-violet-400/10 space-y-2">
-					<p className="text-xs text-violet-200">Copy this now — it is shown once and cannot be retrieved later.</p>
+				<div className="mb-3 space-y-2 border border-accent/50 bg-accent/10 p-3">
+					<p className="text-xs text-accent">Copy this now — it is shown once and cannot be retrieved later.</p>
 					<div className="flex items-center gap-2">
 						<code className="flex-1 text-xs break-all bg-background/50 px-2 py-1.5 rounded">{justCreatedUrl}</code>
 						<Button
@@ -200,26 +288,79 @@ const PrivateSharePanel = memo(function PrivateSharePanel({
 
 				{/* Leaving this empty makes a bearer link, which is what someone without an
 				    atproto account needs. Filling it scopes the link to one person. */}
-				<input
-					type="text"
-					value={handle}
-					onChange={(e) => setHandle(e.target.value)}
-					placeholder="share with an account (optional) — e.g. alice.bsky.social"
-					autoCapitalize="none"
-					autoCorrect="off"
-					spellCheck={false}
-					className="w-full text-xs bg-background/50 border border-border/50 px-2 py-1.5 font-mono outline-none focus:border-accent"
-				/>
+				<div className="relative">
+					<input
+						type="text"
+						value={handle}
+						onChange={(event) => {
+							selectedHandleRef.current = null
+							setHandle(event.target.value)
+						}}
+						onKeyDown={handleAccountKeyDown}
+						onBlur={() => window.setTimeout(() => setSuggestions([]), 100)}
+						placeholder="share with an account (optional) — e.g. alice.bsky.social"
+						autoCapitalize="none"
+						autoComplete="off"
+						autoCorrect="off"
+						spellCheck={false}
+						role="combobox"
+						aria-autocomplete="list"
+						aria-expanded={suggestions.length > 0}
+						aria-controls={suggestionsId}
+						aria-activedescendant={activeSuggestion >= 0 ? `${suggestionsId}-${activeSuggestion}` : undefined}
+						className="w-full bg-background/50 px-2 py-1.5 text-xs font-mono outline-none border border-border/50 focus:border-accent"
+					/>
+					{suggestions.length > 0 && (
+						<div
+							id={suggestionsId}
+							role="listbox"
+							className="absolute left-0 right-0 top-full z-30 mt-1 overflow-hidden border border-border bg-popover shadow-md"
+						>
+							{suggestions.map((actor, index) => (
+								<button
+									key={actor.did}
+									id={`${suggestionsId}-${index}`}
+									role="option"
+									aria-selected={index === activeSuggestion}
+									type="button"
+									onMouseDown={(event) => event.preventDefault()}
+									onClick={() => selectSuggestion(actor)}
+									className={`flex w-full items-center gap-2 border-b border-border/30 px-2.5 py-2 text-left text-xs last:border-b-0 ${
+										index === activeSuggestion ? 'bg-accent/15' : 'hover:bg-muted/40'
+									}`}
+								>
+									{actor.avatar ? (
+										<img src={actor.avatar} alt="" className="h-6 w-6 rounded-full object-cover" />
+									) : (
+										<span className="flex h-6 w-6 items-center justify-center rounded-full bg-muted text-[10px] text-muted-foreground">
+											{actor.handle.slice(0, 1).toUpperCase()}
+										</span>
+									)}
+									<span className="min-w-0 flex-1 truncate">
+										<span className="block truncate text-foreground">{actor.handle}</span>
+										{actor.displayName && actor.displayName !== actor.handle && (
+											<span className="block truncate text-[10px] text-muted-foreground">{actor.displayName}</span>
+										)}
+									</span>
+								</button>
+							))}
+						</div>
+					)}
+				</div>
 
 				{handle.trim().length > 0 && (
 					<p className="text-[10px] font-mono">
 						{resolving ? (
-							<span className="text-muted-foreground">resolving…</span>
+							<span className="text-muted-foreground">searching accounts…</span>
 						) : resolved ? (
 							<span className="text-green-400">
 								<Check className="w-3 h-3 inline mr-1" />
 								{resolved.handle} · <span className="text-muted-foreground">{resolved.did}</span>
 							</span>
+						) : suggestions.length > 0 ? (
+							<span className="text-muted-foreground">choose an account from the suggestions</span>
+						) : handle.trim().replace(/^@/, '').length < 2 ? (
+							<span className="text-muted-foreground">type at least 2 characters</span>
 						) : (
 							<span className="text-amber-400">no account found for that handle</span>
 						)}
@@ -259,7 +400,7 @@ const PrivateSharePanel = memo(function PrivateSharePanel({
 							{/* A scoped link needs its audience visible, or there is no way to tell
 							    two links apart once the URL itself is gone. */}
 							{share.audienceDid && (
-								<Badge variant="outline" className="text-[10px] text-violet-300 border-violet-400/50 flex-shrink-0">
+								<Badge variant="outline" className="flex-shrink-0 border-accent/50 text-[10px] text-accent">
 									<Lock className="w-2.5 h-2.5 mr-1" />
 									{share.audienceDid}
 								</Badge>
@@ -595,10 +736,7 @@ export const SitesTab = memo(function SitesTab({
 								<span className="font-semibold flex-1 flex items-center gap-2">
 									{siteName}
 									{site.isPrivate && (
-										<Badge
-											variant="outline"
-											className="text-[10px] text-violet-300 border-violet-400/50 bg-violet-400/10 gap-1"
-										>
+										<Badge variant="outline" className="gap-1 border-accent/50 bg-accent/10 text-[10px] text-accent">
 											<Lock className="w-2.5 h-2.5" />
 											private
 										</Badge>

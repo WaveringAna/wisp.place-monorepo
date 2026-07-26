@@ -20,7 +20,7 @@
   },
   "scripts": {
     "test": "bun test",
-    "dev": "bun run --watch apps/main-app/src/index.ts",
+		"dev": "bun run build && bun run --watch apps/main-app/src/index.ts",
     "dev:infra": "./scripts/dev-infra.sh up",
     "dev:infra:down": "./scripts/dev-infra.sh down",
     "start": "bun run apps/main-app/src/index.ts",

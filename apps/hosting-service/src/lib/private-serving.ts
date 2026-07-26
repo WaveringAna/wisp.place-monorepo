@@ -11,7 +11,9 @@
  *     short-lived session cookie, then the URL is redirected clean. Subresources such as
  *     CSS, scripts, and images carry that cookie automatically, which a query-string
  *     credential cannot do
- *   - every denial renders an identical 404, and credentials are never logged
+ *   - anonymous requests to a well-formed private hostname render the same sign-in page,
+ *     whether or not that site exists; failed credentials still render an identical 404
+ *   - credentials are never logged
  */
 
 import { PRIVATE_SHARE_QUERY_PARAM } from '@wispplace/constants'
@@ -27,6 +29,7 @@ import {
 	hashSecret,
 	hashShareTokenSync,
 	isValidSiteId,
+	PRIVATE_ACCESS_PAGE_STYLES,
 	PRIVATE_GRANT_QUERY_PARAM,
 	PRIVATE_SESSION_COOKIE,
 	PRIVATE_SESSION_TTL_MINUTES,
@@ -92,6 +95,13 @@ const mainAppOrigin = (): string => {
 	return `https://${base}`
 }
 
+const privatePageHead = (title: string): string => `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>${title} — wisp.place</title>
+<style>${PRIVATE_ACCESS_PAGE_STYLES}</style></head>`
+
 /**
  * Sign-in interstitial for a share that is scoped to a specific DID.
  *
@@ -109,30 +119,18 @@ const mainAppOrigin = (): string => {
  * denial is an indistinguishable 404.
  */
 const scopedSignInPage = (siteId: string, token: string, audienceDid: string): Response => {
-	const body = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex, nofollow">
-<title>sign in required</title>
-<style>
- body{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#12111a;color:#e8e6f0;
-      display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0;padding:1.5rem}
- main{max-width:34rem;border:1px solid #322e44;border-radius:10px;padding:2rem;line-height:1.6}
- h1{margin:0 0 .75rem;font-size:1.15rem;color:#c4a7ff}
- p{margin:.5rem 0;color:#b9b3c9}
- code{background:#211f2e;padding:.15rem .4rem;border-radius:3px;font-size:.9em;word-break:break-all}
- button{margin-top:1.25rem;background:#7c5cff;color:#fff;border:0;border-radius:6px;
-        padding:.7rem 1.2rem;font:inherit;cursor:pointer}
- button:hover{background:#8f74ff}
-</style></head>
-<body><main>
+	const body = `${privatePageHead('sign in required')}
+<body><main class="private-page private-shell">
+<div class="private-brand"><strong>wisp.place</strong><span>private access</span></div>
+<p class="private-kicker">account access</p>
 <h1>this link is for a specific account</h1>
 <p>it was shared with <code>${escapeHtml(audienceDid)}</code>. sign in with that account to open it.</p>
-<form method="POST" action="${escapeHtml(mainAppOrigin())}/private/redeem">
+<form class="private-form" method="POST" action="${escapeHtml(mainAppOrigin())}/private/redeem">
  <input type="hidden" name="siteId" value="${escapeHtml(siteId)}">
  <input type="hidden" name="token" value="${escapeHtml(token)}">
- <button type="submit">sign in with atproto</button>
+ <button class="private-action" type="submit">sign in with atproto <span aria-hidden="true">→</span></button>
 </form>
+<p class="private-note">your password stays with your personal data server. wisp only starts the sign-in handoff.</p>
 </main></body></html>`
 
 	return new Response(body, {
@@ -148,46 +146,32 @@ const scopedSignInPage = (siteId: string, token: string, audienceDid: string): R
  * cannot read the account cookie, so the visitor proves who they are on main-app and comes
  * back with a handoff.
  *
- * **This response must be byte-identical whether or not the site exists.** It takes no
- * site-specific input for that reason. If it ever varied, a stranger could probe hostnames
- * to discover which private sites are real — the property the uniform 404 exists to
- * protect. The site id travels in the form body, and main-app answers identically for an
- * unknown site and for one the viewer cannot access.
+ * **This response must be byte-identical for a given well-formed site id whether or not the
+ * site exists.** If it ever varied based on existence, a stranger could probe hostnames to
+ * discover which private sites are real. Returning 200 does not weaken that property: every
+ * well-formed private hostname and every path receives the same page. The site id travels in
+ * the form body, and main-app answers identically for an unknown site and for one the viewer
+ * cannot access.
  */
 const anonymousSignInPage = (siteId: string): Response => {
-	const body = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex, nofollow">
-<title>sign in — wisp.place</title>
-<style>
- body{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#12111a;color:#e8e6f0;
-      display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0;padding:1.5rem}
- main{max-width:32rem;border:1px solid #322e44;border-radius:10px;padding:2rem;line-height:1.6}
- h1{margin:0 0 .75rem;font-size:1.15rem;color:#c4a7ff}
- p{margin:.5rem 0;color:#b9b3c9}
- button{margin-top:1.25rem;background:#7c5cff;color:#fff;border:0;border-radius:6px;
-        padding:.7rem 1.2rem;font:inherit;cursor:pointer}
- button:hover{background:#8f74ff}
-</style></head>
-<body><main>
+	const body = `${privatePageHead('sign in')}
+<body><main class="private-page private-shell">
+<div class="private-brand"><strong>wisp.place</strong><span>private access</span></div>
+<p class="private-kicker">access required</p>
 <h1>private site</h1>
 <p>this address needs a share link, or an account with access to it.</p>
-<form method="POST" action="${escapeHtml(mainAppOrigin())}/private/open">
+<form class="private-form" method="GET" action="${escapeHtml(mainAppOrigin())}/private/open">
  <input type="hidden" name="siteId" value="${escapeHtml(siteId)}">
- <button type="submit">sign in with atproto</button>
+ <button class="private-action" type="submit">sign in with atproto <span aria-hidden="true">→</span></button>
 </form>
+<p class="private-note">your password stays with your personal data server. wisp only starts the sign-in handoff.</p>
 </main></body></html>`
 
 	return new Response(body, {
-		status: 404,
+		status: 200,
 		headers: { ...privateResponseHeaders(), 'Content-Type': 'text/html; charset=utf-8' },
 	})
 }
-
-/** True when the request is a top-level document navigation rather than a subresource. */
-const wantsHtml = (request: Request): boolean =>
-	(request.headers.get('accept') ?? '').includes('text/html') && request.headers.get('sec-fetch-dest') !== 'iframe'
 
 const escapeHtml = (value: string): string =>
 	value.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] ?? c)
@@ -329,15 +313,11 @@ export const servePrivateSite = async (request: Request, siteId: string, filePat
 
 	const principal = site ? await principalFromSession(request, siteId) : null
 	if (!principal) {
-		// Offer sign-in for a top-level navigation with no credential: this is how an owner
-		// opens their own site by typing its address, since the private origin cannot read
-		// the account cookie. Deliberately rendered for *any* well-formed site id, existing
-		// or not, and served with a 404 status, so it reveals nothing.
-		if (wantsHtml(request)) {
-			return anonymousSignInPage(siteId)
-		}
-		logger.info('[PrivateSite] Access denied', { siteId, reason: 'noSession' })
-		return privateNotFound()
+		// The private origin cannot read the main-app account cookie, so every anonymous path
+		// offers the same owner/share sign-in handoff. This is deliberately rendered for any
+		// well-formed site id, existing or not: neither status, headers, nor body reveal whether
+		// a site or requested file exists, and no private bytes are read before authorization.
+		return anonymousSignInPage(siteId)
 	}
 	if (!site) return privateNotFound()
 
@@ -357,6 +337,15 @@ export const servePrivateSite = async (request: Request, siteId: string, filePat
 	const requested = sanitizePath(filePath.replace(/\/+$/, ''))
 	const files = await listPrivateSiteFiles(siteId)
 	const known = new Map(files.map((f) => [f.path, f]))
+	// Early editor builds retained the selected directory name (`dist/index.html`) while
+	// public uploads treated that directory as the site root. Keep those existing uploads
+	// usable, including their absolute `/assets/...` references. New editor uploads are
+	// normalized during ingestion.
+	const firstSegments = new Set(files.map((file) => file.path.split('/')[0]))
+	const legacyRoot =
+		files.length > 0 && firstSegments.size === 1 && files.every((file) => file.path.includes('/'))
+			? `${files[0]!.path.split('/')[0]}/`
+			: ''
 
 	let target: string | null = null
 	if (requested.length > 0 && known.has(requested)) {
@@ -367,6 +356,21 @@ export const servePrivateSite = async (request: Request, siteId: string, filePat
 			if (known.has(candidate)) {
 				target = candidate
 				break
+			}
+		}
+	}
+
+	if (!target && legacyRoot) {
+		const rootedRequest = `${legacyRoot}${requested}`
+		if (requested.length > 0 && known.has(rootedRequest)) {
+			target = rootedRequest
+		} else {
+			for (const index of INDEX_FILES) {
+				const candidate = requested.length > 0 ? `${rootedRequest}/${index}` : `${legacyRoot}${index}`
+				if (known.has(candidate)) {
+					target = candidate
+					break
+				}
 			}
 		}
 	}

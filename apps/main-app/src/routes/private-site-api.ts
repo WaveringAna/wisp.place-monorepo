@@ -108,7 +108,9 @@ export const privateSiteApiRoutes = (client: NodeOAuthClient, cookieSecret: stri
 			'/',
 			async ({ request, auth, set }) => {
 				try {
-					const { name, expiryMinutes, files } = await readPrivateSiteUpload(request)
+					// Directory pickers send `folder/index.html`; the selected folder is the site
+					// root, matching the existing public-upload behaviour.
+					const { name, expiryMinutes, files } = await readPrivateSiteUpload(request, { stripSharedRoot: true })
 					const site = await ingestPrivateSite({ ownerDid: auth.did, name, expiryMinutes, files })
 
 					return {

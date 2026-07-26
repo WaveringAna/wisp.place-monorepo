@@ -34,6 +34,27 @@ describe('readPrivateSiteUpload', () => {
 		expect(upload.expiryMinutes).toBe(0)
 	})
 
+	it('strips the directory-picker root for editor uploads', async () => {
+		const form = new FormData()
+		form.append('name', 'folder upload')
+		form.append('files', new File(['home'], 'index.html'), 'dist/index.html')
+		form.append('files', new File(['css'], 'app.css'), 'dist/assets/app.css')
+
+		const upload = await readPrivateSiteUpload(requestFor(form), { stripSharedRoot: true })
+
+		expect(upload.files.map((file) => file.path)).toEqual(['index.html', 'assets/app.css'])
+	})
+
+	it('does not strip mixed roots or service-authenticated relative paths', async () => {
+		const form = new FormData()
+		form.append('files', new File(['home'], 'index.html'), 'index.html')
+		form.append('files', new File(['css'], 'app.css'), 'assets/app.css')
+
+		const upload = await readPrivateSiteUpload(requestFor(form), { stripSharedRoot: true })
+
+		expect(upload.files.map((file) => file.path)).toEqual(['index.html', 'assets/app.css'])
+	})
+
 	it('rejects a non-numeric expiry', async () => {
 		const form = new FormData()
 		form.append('expiryMinutes', 'later')

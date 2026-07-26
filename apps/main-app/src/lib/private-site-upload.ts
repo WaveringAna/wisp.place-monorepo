@@ -38,7 +38,25 @@ export interface PrivateSiteUpload {
 	files: UploadedPrivateFile[]
 }
 
-export const readPrivateSiteUpload = async (request: Request): Promise<PrivateSiteUpload> => {
+export interface PrivateSiteUploadOptions {
+	/** Browser directory pickers include the selected folder name in every relative path. */
+	stripSharedRoot?: boolean
+}
+
+const withoutSharedRoot = (files: UploadedPrivateFile[]): UploadedPrivateFile[] => {
+	if (files.length === 0) return files
+
+	const paths = files.map((file) => file.path.split('/'))
+	const root = paths[0]?.[0]
+	if (!root || paths.some((parts) => parts.length < 2 || parts[0] !== root)) return files
+
+	return files.map((file, index) => ({ ...file, path: paths[index]!.slice(1).join('/') }))
+}
+
+export const readPrivateSiteUpload = async (
+	request: Request,
+	options: PrivateSiteUploadOptions = {},
+): Promise<PrivateSiteUpload> => {
 	let form: FormData
 	try {
 		form = await request.formData()
@@ -72,5 +90,9 @@ export const readPrivateSiteUpload = async (request: Request): Promise<PrivateSi
 		})
 	}
 
-	return { name, expiryMinutes, files }
+	return {
+		name,
+		expiryMinutes,
+		files: options.stripSharedRoot ? withoutSharedRoot(files) : files,
+	}
 }

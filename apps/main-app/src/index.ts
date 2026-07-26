@@ -259,36 +259,26 @@ export const app = new Elysia({
 			staticLimit: 10000,
 		}),
 	)
-	// Production only: serve built assets from dist
+	// Serve built assets from dist. The browser cannot execute the source TSX directly,
+	// so the dev script builds the editor before starting the watcher as well.
 	.use(
-		Bun.env.NODE_ENV === 'production'
-			? await staticPlugin({
-					assets: './apps/main-app/dist',
-					prefix: '/dist',
-				})
-			: (app) => app,
+		await staticPlugin({
+			assets: './apps/main-app/dist',
+			prefix: '/dist',
+		}),
 	)
+	.use(await staticPlugin({ assets: './apps/main-app/dist/editor', prefix: '/editor' }))
+	// Serve built HTML for /editor in both dev and production.
 	.use(
-		Bun.env.NODE_ENV === 'production'
-			? await staticPlugin({
-					assets: './apps/main-app/dist/editor',
-					prefix: '/editor',
-				})
-			: (app) => app,
-	)
-	// Production only: serve built HTML for /editor
-	.use(
-		Bun.env.NODE_ENV === 'production'
-			? new Elysia()
-					.get('/editor', async ({ set }) => {
-						set.headers['Content-Type'] = 'text/html; charset=utf-8'
-						return await Bun.file('./apps/main-app/dist/editor/index.html').text()
-					})
-					.get('/editor/*', async ({ set }) => {
-						set.headers['Content-Type'] = 'text/html; charset=utf-8'
-						return await Bun.file('./apps/main-app/dist/editor/index.html').text()
-					})
-			: (app) => app,
+		new Elysia()
+			.get('/editor', async ({ set }) => {
+				set.headers['Content-Type'] = 'text/html; charset=utf-8'
+				return await Bun.file('./apps/main-app/dist/editor/index.html').text()
+			})
+			.get('/editor/*', async ({ set }) => {
+				set.headers['Content-Type'] = 'text/html; charset=utf-8'
+				return await Bun.file('./apps/main-app/dist/editor/index.html').text()
+			}),
 	)
 	// Keep XRPC after static in dev, since staticPlugin(prefix='/') installs GET /* fallback.
 	.use(xrpcRoutes())

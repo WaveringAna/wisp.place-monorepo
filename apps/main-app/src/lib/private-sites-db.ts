@@ -166,6 +166,23 @@ export const findSharesByTokenHash = async (siteId: string, tokenHash: string): 
 	return rows.map(mapShare)
 }
 
+/** A live account-scoped grant lets that account enter by hostname without retaining its link. */
+export const findLiveShareForAudience = async (
+	siteId: string,
+	audienceDid: string,
+): Promise<PrivateSiteShare | null> => {
+	const rows = await db<PrivateShareRow[]>`
+        SELECT * FROM private_site_shares
+        WHERE site_id = ${siteId}
+          AND audience_did = ${audienceDid}
+          AND revoked_at IS NULL
+          AND (expires_at IS NULL OR expires_at > NOW())
+        ORDER BY created_at DESC
+        LIMIT 1
+    `
+	return rows[0] ? mapShare(rows[0]) : null
+}
+
 /**
  * Resolve a share token to the site it belongs to, for the `/p/<token>` short link.
  *

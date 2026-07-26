@@ -39,6 +39,7 @@ import {
 	createShare,
 	createShareHandoff,
 	deletePrivateSite,
+	findLiveShareForAudience,
 	findSharesByTokenHash,
 	findSiteIdByShareTokenHash,
 	getPrivateSite,
@@ -333,6 +334,34 @@ export const openOwnedPrivateSite = async (siteId: string, ownerDid: string): Pr
 		return null
 	}
 	const handoff = await createOwnerHandoff(site.siteId, ownerDid)
+	return privateGrantUrlFor(privateSiteUrl(site.siteId), handoff)
+}
+
+/**
+ * Open a private site for an authenticated account with direct access.
+ *
+ * Owners receive an owner handoff. An account named by a live account-scoped share receives
+ * a handoff bound to that share, so revocation still invalidates the resulting site session.
+ * Every failure returns null so the caller cannot distinguish a missing site from no access.
+ */
+export const openPrivateSiteForAccount = async (siteId: string, viewerDid: string): Promise<string | null> => {
+	if (!isValidSiteId(siteId)) return null
+	const site = await getPrivateSite(siteId)
+	if (!site) return null
+
+	if (site.ownerDid === viewerDid) {
+		const handoff = await createOwnerHandoff(site.siteId, viewerDid)
+		return privateGrantUrlFor(privateSiteUrl(site.siteId), handoff)
+	}
+	if (site.expiresAt !== null && site.expiresAt <= new Date()) return null
+
+	const share = await findLiveShareForAudience(site.siteId, viewerDid)
+	if (!share) {
+		logger.info('[PrivateSite] Account open denied', { siteId })
+		return null
+	}
+
+	const handoff = await createShareHandoff(site.siteId, share.shareId)
 	return privateGrantUrlFor(privateSiteUrl(site.siteId), handoff)
 }
 
