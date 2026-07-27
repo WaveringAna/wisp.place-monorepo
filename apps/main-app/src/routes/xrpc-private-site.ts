@@ -1,16 +1,4 @@
-/**
- * XRPC handlers for private sites.
- *
- * Registered by `routes/xrpc.ts` alongside the other `place.wisp.v2.*` methods, using the
- * same service-auth JWT identity, so the CLI reaches these exactly as it reaches domain and
- * secret methods.
- *
- * Every handler is owner-scoped. Authorization for *reading* a private site is not decided
- * here; that lives in `evaluateAccess` and runs in the hosting service.
- */
-
 import { json, XRPCError, type XRPCRouter } from '@atcute/xrpc-server'
-import { PRIVATE_SHARE_QUERY_PARAM } from '@wispplace/constants'
 import {
 	PlaceWispV2PrivateSiteCreate,
 	PlaceWispV2PrivateSiteCreateShare,
@@ -19,8 +7,8 @@ import {
 	PlaceWispV2PrivateSiteListShares,
 	PlaceWispV2PrivateSiteRevokeShare,
 } from '@wispplace/lexicons/atcute'
-import { InvalidExpiryError, isExpired, privateGrantUrlFor } from '@wispplace/private-sites'
-import { privateSiteUrl, shortShareUrl } from '../lib/private-site-origin'
+import { InvalidExpiryError, isExpired } from '@wispplace/private-sites'
+import { privateShareUrl, privateSiteUrl, shortShareUrl } from '../lib/private-site-origin'
 import { PrivateSiteUploadError, readPrivateSiteUpload } from '../lib/private-site-upload'
 import { listShares } from '../lib/private-sites-db'
 import {
@@ -33,24 +21,6 @@ import {
 	requireOwnedSite,
 	revokeSiteShare,
 } from '../lib/private-sites-service'
-
-/**
- * Share URL. Contains the credential, so it is returned once and never logged.
- *
- * The credential is exchanged for a site-scoped session cookie on first load and stripped
- * from the URL, so it does not persist in history or referrers.
- */
-export const privateShareUrl = (siteId: string, token: string): string =>
-	`${privateSiteUrl(siteId)}?${PRIVATE_SHARE_QUERY_PARAM}=${encodeURIComponent(token)}`
-
-/**
- * One-time entry URL carrying a handoff token for the site's own origin.
- *
- * Used both for an owner crossing from main-app and for a DID-scoped share redeemed
- * through the identity bounce.
- */
-export const privateOwnerUrl = (siteId: string, handoff: string): string =>
-	privateGrantUrlFor(privateSiteUrl(siteId), handoff)
 
 const toXrpcError = (err: unknown): never => {
 	if (err instanceof PrivateSiteError) {
@@ -169,9 +139,6 @@ export const registerPrivateSiteMethods = ({ router, requireDid }: PrivateSiteXr
 						expiryMinutes: input.expiryMinutes,
 						audienceDid: input.audienceDid ?? null,
 					})
-
-					// The URL embeds the credential. It is returned exactly once and is never
-					// persisted or logged in this form.
 					return json({
 						shareId: share.shareId,
 						siteId: share.siteId,
@@ -201,7 +168,6 @@ export const registerPrivateSiteMethods = ({ router, requireDid }: PrivateSiteXr
 					return json({
 						shares: shares.map((share) => ({
 							shareId: share.shareId,
-							// Never the token itself.
 							tokenPrefix: share.tokenPrefix,
 							label: share.label ?? undefined,
 							expiresAt: share.expiresAt ? share.expiresAt.toISOString() : undefined,

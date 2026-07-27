@@ -381,20 +381,10 @@ function initializeStorage(): TieredStorage<Uint8Array> {
 // Export singleton instance
 export const storage = initializeStorage()
 
-/**
- * Cold-only storage used exclusively for private site content.
- *
- * The public `storage` instance promotes eagerly: a read from cold writes the bytes into
- * the shared warm (disk) and hot (memory) tiers. Private content must not land in those
- * shared caches, because they outlive the authorization decision that produced the read
- * and are not scoped per-viewer. Serving private files through a cold-only instance keeps
- * every read authorized at request time.
- */
+// Avoid promotion into shared caches that outlive the authorization decision.
 function initializePrivateStorage(): TieredStorage<Uint8Array> {
 	let coldTier: StorageTier
 
-	// Private content lives in its own bucket/prefix by default so it cannot inherit a
-	// public-read policy from the public site bucket. Must match main-app's writer config.
 	const PRIVATE_BUCKET = process.env.PRIVATE_S3_BUCKET || S3_BUCKET
 	const PRIVATE_PREFIX = process.env.PRIVATE_S3_PREFIX || 'private-sites/'
 
@@ -413,10 +403,7 @@ function initializePrivateStorage(): TieredStorage<Uint8Array> {
 			}),
 		)
 	} else {
-		// Disk-only mode. Reuse the public warm DiskStorageTier instance rather than
-		// constructing a second one over the same directory: two tiers with independent
-		// eviction and index state managing the same files race each other.
-		// Private keys are namespaced under `private/`, so sharing the instance is safe.
+		// Reuse one disk tier so two independent indexes cannot race over the same directory.
 		coldTier =
 			warmTier ??
 			new DiskStorageTier({
@@ -430,7 +417,6 @@ function initializePrivateStorage(): TieredStorage<Uint8Array> {
 	return new TieredStorage<Uint8Array>({
 		tiers: { cold: coldTier },
 		compression: false,
-		// No promotion: there are no upper tiers to promote into.
 		promotionStrategy: 'lazy',
 		serialization: {
 			serialize: identitySerialize,

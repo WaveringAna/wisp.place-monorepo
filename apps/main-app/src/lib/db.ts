@@ -133,10 +133,7 @@ await db`
     )
 `
 
-// Private sites (v1). Deliberately NOT written to any PDS: atproto blobs and repo
-// records are publicly readable and broadcast over the firehose, so private content is
-// held only in wisp's own storage until permissioned data (atproto proposal 0016) ships.
-// See docs/private-sites-v2-migration.md.
+// PDS blobs are public, so private sites live only in Wisp's database and storage.
 await db`
     CREATE TABLE IF NOT EXISTS private_sites (
         site_id TEXT PRIMARY KEY,
@@ -150,8 +147,6 @@ await db`
     )
 `
 
-// Per-file content metadata. Retained so that a future migration can re-upload each file
-// as a permissioned blob and reconcile it by path and digest.
 await db`
     CREATE TABLE IF NOT EXISTS private_site_files (
         site_id TEXT NOT NULL REFERENCES private_sites(site_id) ON DELETE CASCADE,
@@ -164,8 +159,6 @@ await db`
     )
 `
 
-// Share-link grants. `token_hash` is a sha256 digest; the token itself is returned once at
-// creation and never persisted. `token_prefix` is a short non-secret display fragment.
 await db`
     CREATE TABLE IF NOT EXISTS private_site_shares (
         share_id TEXT PRIMARY KEY,
@@ -181,10 +174,6 @@ await db`
     )
 `
 
-// Per-site private sessions. A URL credential (share token or one-time owner handoff) is
-// exchanged once for a host-only cookie scoped to that site's own origin, so subresources
-// stay authorized without the credential travelling in query strings. Rows exist so that
-// revoking a share or deleting a site immediately kills live sessions.
 await db`
     CREATE TABLE IF NOT EXISTS private_site_sessions (
         session_id TEXT PRIMARY KEY,
@@ -198,8 +187,6 @@ await db`
     )
 `
 
-// Single-use, very short-lived tokens that hand an authenticated owner from main-app over
-// to their site's own origin. Consumed on first use.
 await db`
     CREATE TABLE IF NOT EXISTS private_site_handoffs (
         handoff_id TEXT PRIMARY KEY,

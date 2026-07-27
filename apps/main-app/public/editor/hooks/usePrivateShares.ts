@@ -1,13 +1,6 @@
 import { useCallback, useState } from 'react'
 import type { PrivateShare } from './useSiteData'
 
-/**
- * Share-link management for a private site.
- *
- * The plaintext share URL only exists in the response to a create call — the server stores
- * a hash — so `justCreated` holds it in memory for the one-time reveal and is cleared as
- * soon as the panel closes.
- */
 export function usePrivateShares() {
 	const [shares, setShares] = useState<Record<string, PrivateShare[]>>({})
 	const [loading, setLoading] = useState<Record<string, boolean>>({})
@@ -37,7 +30,6 @@ export function usePrivateShares() {
 				const data = await response.json()
 				if (!data.success) throw new Error(data.error || 'Failed to create share link')
 
-				// The only moment this URL is available. Surfaced once, never refetched.
 				setJustCreated({ siteId, url: data.url })
 				await fetchShares(siteId)
 				return data.url as string

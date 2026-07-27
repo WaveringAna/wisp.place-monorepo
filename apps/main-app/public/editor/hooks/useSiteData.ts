@@ -17,20 +17,11 @@ export interface DomainInfo {
 
 export interface SiteWithDomains extends Site {
 	domains?: DomainInfo[]
-	/**
-	 * Private sites are stored only by wisp and never published to the PDS. They appear in
-	 * the same list as public sites, distinguished by this flag rather than a separate tab.
-	 */
 	isPrivate?: boolean
-	/** Private only. Stable id used for share-link management and private URLs. */
 	siteId?: string
-	/** Private only. ISO timestamp, or null when the site never expires. */
 	expiresAt?: string | null
-	/** Private only. True once `expiresAt` has passed; still visible to the owner. */
 	expired?: boolean
-	/** Private only. Number of share links that currently grant access. */
 	shareCount?: number
-	/** Private only. Owner-facing URL on the private host. */
 	privateUrl?: string
 	fileCount?: number
 	totalBytes?: number
@@ -38,10 +29,8 @@ export interface SiteWithDomains extends Site {
 
 export interface PrivateShare {
 	shareId: string
-	/** Non-secret leading fragment of the token, for identification only. */
 	tokenPrefix: string
 	label: string | null
-	/** Set when the link only works for one account. Null means anyone with the URL. */
 	audienceDid: string | null
 	expiresAt: string | null
 	revokedAt: string | null
@@ -57,8 +46,6 @@ export function useSiteData() {
 
 	const fetchSites = useCallback(async () => {
 		try {
-			// Public sites come from the PDS-backed cache; private sites are wisp-only and
-			// live in a separate table, so they are fetched separately and merged here.
 			const [response, privateResponse] = await Promise.all([
 				fetch('/api/user/sites'),
 				fetch('/api/user/private-sites').catch(() => null),
@@ -103,8 +90,6 @@ export function useSiteData() {
 							url: string
 						}): SiteWithDomains => ({
 							did: '',
-							// Private sites have no PDS record key; the site id fills the same slot
-							// for display and for React keys.
 							rkey: p.siteId,
 							display_name: p.name,
 							created_at: Math.floor(new Date(p.createdAt).getTime() / 1000),
@@ -125,7 +110,6 @@ export function useSiteData() {
 				}
 			}
 
-			// Newest first across both kinds, so private sites are not visually segregated.
 			setSites([...sitesWithDomains, ...privateSites].sort((a, b) => b.created_at - a.created_at))
 		} catch (err) {
 			console.error('Failed to fetch sites:', err)

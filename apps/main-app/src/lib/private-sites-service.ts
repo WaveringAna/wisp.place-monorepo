@@ -1,16 +1,3 @@
-/**
- * Private site orchestration: ingestion, access resolution, and share management.
- *
- * This module deliberately separates the two concerns the v1 design calls out:
- *
- *   - ingestion (validating and storing uploaded files) knows nothing about who may read
- *     the result
- *   - authorization delegates entirely to `evaluateAccess`, which is transport-agnostic
- *
- * Route handlers build an `AccessPrincipal` from their own transport and call
- * `resolvePrivateSiteAccess`. No route performs its own access reasoning.
- */
-
 import { createHash } from 'node:crypto'
 import {
 	DEFAULT_PRIVATE_SITE_EXPIRY_MINUTES,
@@ -20,8 +7,6 @@ import {
 import { sanitizePath } from '@wispplace/fs-utils'
 import { createLogger } from '@wispplace/observability'
 import {
-	type AccessDecision,
-	type AccessPrincipal,
 	evaluateAccess,
 	hashShareTokenSync,
 	isValidSiteId,
@@ -95,13 +80,6 @@ export const guessMimeType = (path: string): string => {
 	const ext = path.split('.').pop()?.toLowerCase() ?? ''
 	return MIME_BY_EXT[ext] ?? 'application/octet-stream'
 }
-
-/**
- * Ingest an uploaded private site.
- *
- * Performs no authorization: the caller has already established that `ownerDid` is the
- * authenticated account. Nothing here touches the PDS or the firehose.
- */
 export const ingestPrivateSite = async (options: CreatePrivateSiteOptions): Promise<PrivateSite> => {
 	const name = options.name.trim()
 	if (name.length === 0) {
@@ -123,10 +101,6 @@ export const ingestPrivateSite = async (options: CreatePrivateSiteOptions): Prom
 		if (path.length === 0) {
 			throw new PrivateSiteError(`invalid file path: ${file.path}`, 'invalidRequest')
 		}
-		// The sanitized path becomes a storage key verbatim. Backslashes are rejected
-		// because some object stores treat them as separators (turning `..\..` back into
-		// parent references and failing the write mid-ingest), and control characters
-		// have no business in a key.
 		if (/[\\\p{Cc}]/u.test(path)) {
 			throw new PrivateSiteError(`invalid file path: ${file.path}`, 'invalidRequest')
 		}
@@ -163,10 +137,6 @@ export const ingestPrivateSite = async (options: CreatePrivateSiteOptions): Prom
 			sha256: f.sha256,
 		})),
 	})
-
-	// Files are written after the row exists so a failed write leaves a deletable record
-	// rather than orphaned bytes with no owner. A failure partway through removes both
-	// the bytes and the row, so a rejected upload never leaves a phantom site behind.
 	try {
 		for (const file of prepared) {
 			await writePrivateFile(site.siteId, file.path, file.bytes, file.mimeType)
@@ -189,46 +159,6 @@ export const ingestPrivateSite = async (options: CreatePrivateSiteOptions): Prom
 	return site
 }
 
-export interface ResolveAccessOptions {
-	siteId: string
-	principal: AccessPrincipal
-	now?: Date
-}
-
-/**
- * The one place a private-site access decision is made.
- *
- * Loads only the state the decision needs, then defers to `evaluateAccess`. Share lookups
- * are narrowed by token hash in SQL, but the authoritative match is still the timing-safe
- * comparison inside the policy module.
- */
-export const resolvePrivateSiteAccess = async ({
-	siteId,
-	principal,
-	now = new Date(),
-}: ResolveAccessOptions): Promise<{ decision: AccessDecision; site: PrivateSite | null }> => {
-	if (!isValidSiteId(siteId)) {
-		return { decision: { allowed: false, reason: 'notFound' }, site: null }
-	}
-
-	const site = await getPrivateSite(siteId)
-	if (!site) {
-		return { decision: { allowed: false, reason: 'notFound' }, site: null }
-	}
-
-	const shares =
-		principal.kind === 'shareToken' ? await findSharesByTokenHash(siteId, hashShareTokenSync(principal.token)) : []
-
-	const decision = evaluateAccess({ site, shares, principal, now })
-
-	if (decision.allowed && decision.reason === 'share') {
-		void touchShare(decision.shareId)
-	}
-
-	return { decision, site }
-}
-
-/** Load a private site the caller owns, or throw `notFound`. Never reveals other owners' sites. */
 export const requireOwnedSite = async (siteId: string, ownerDid: string): Promise<PrivateSite> => {
 	if (!isValidSiteId(siteId)) {
 		throw new PrivateSiteError('private site not found', 'notFound')
@@ -254,20 +184,8 @@ export interface CreateShareOptions {
 	ownerDid: string
 	label?: string | null
 	expiryMinutes?: number | null
-	/**
-	 * Scope the share to a single DID. The link alone then grants nothing: the recipient
-	 * must be signed in as that account. `null` keeps the bearer behaviour, which is what
-	 * makes a link usable by someone with no atproto account.
-	 */
 	audienceDid?: string | null
 }
-
-/**
- * Create a share link.
- *
- * The share's expiry is clamped to the site's expiry so a link can never outlive the
- * content it points at.
- */
 export const createSiteShare = async (options: CreateShareOptions) => {
 	const site = await requireOwnedSite(options.siteId, options.ownerDid)
 	const { expiresAt } = resolveExpiry({
@@ -281,23 +199,10 @@ export const createSiteShare = async (options: CreateShareOptions) => {
 		expiresAt,
 		audienceDid: options.audienceDid ?? null,
 	})
-
-	// Deliberately logs the share id, never the token.
 	logger.info('[PrivateSite] Share created', { siteId: site.siteId, shareId: result.share.shareId })
 
 	return result
 }
-
-/**
- * Resolve a `wisp.place/p/<token>` short link to the private-origin URL it stands for.
- *
- * Deliberately makes no access decision: it only finds which site the token belongs to.
- * The private origin runs `evaluateAccess` when the visitor arrives, so a revoked, expired,
- * or DID-scoped share behaves exactly as it does through a direct `?k=` link.
- *
- * Returns null for a malformed or unknown token, which the caller renders as a generic
- * denial page.
- */
 export const resolveShareLink = async (token: string): Promise<string | null> => {
 	if (!token.startsWith(SHARE_TOKEN_PREFIX) || token.length > 128) return null
 
@@ -306,22 +211,15 @@ export const resolveShareLink = async (token: string): Promise<string | null> =>
 
 	return privateShareLinkUrl(privateSiteUrl(siteId), token)
 }
-
-/**
- * Complete the identity bounce for a DID-scoped share.
- *
- * The visitor arrives from a private origin carrying their share token, now with a proven
- * account identity. The decision runs through the same `evaluateAccess` as every other
- * path — the signed-in DID is simply attached to the principal — and on success a
- * single-use handoff is minted for that site's own origin.
- *
- * Returns null for every failure, so a caller cannot distinguish "wrong DID" from "no such
- * site" from "revoked share".
- */
 export const redeemScopedShare = async (siteId: string, token: string, viewerDid: string): Promise<string | null> => {
-	const { decision, site } = await resolvePrivateSiteAccess({
-		siteId,
+	if (!isValidSiteId(siteId)) return null
+	const site = await getPrivateSite(siteId)
+	const shares = site ? await findSharesByTokenHash(siteId, hashShareTokenSync(token)) : []
+	const decision = evaluateAccess({
+		site,
+		shares,
 		principal: { kind: 'shareToken', token, viewerDid },
+		now: new Date(),
 	})
 
 	if (!site || !decision.allowed || decision.reason !== 'share') {
@@ -329,35 +227,11 @@ export const redeemScopedShare = async (siteId: string, token: string, viewerDid
 		return null
 	}
 
+	void touchShare(decision.shareId)
 	const handoff = await createShareHandoff(site.siteId, decision.shareId)
 	logger.info('[PrivateSite] Scoped share redeemed', { siteId: site.siteId, shareId: decision.shareId })
 	return privateGrantUrlFor(privateSiteUrl(site.siteId), handoff)
 }
-
-/**
- * Mint an owner entry URL for a private site, or null if this account does not own it.
- *
- * Returns null rather than throwing so callers render one identical denial for "not yours"
- * and "does not exist".
- */
-export const openOwnedPrivateSite = async (siteId: string, ownerDid: string): Promise<string | null> => {
-	if (!isValidSiteId(siteId)) return null
-	const site = await getPrivateSite(siteId)
-	if (!site || site.ownerDid !== ownerDid) {
-		logger.info('[PrivateSite] Owner open denied', { siteId })
-		return null
-	}
-	const handoff = await createOwnerHandoff(site.siteId, ownerDid)
-	return privateGrantUrlFor(privateSiteUrl(site.siteId), handoff)
-}
-
-/**
- * Open a private site for an authenticated account with direct access.
- *
- * Owners receive an owner handoff. An account named by a live account-scoped share receives
- * a handoff bound to that share, so revocation still invalidates the resulting site session.
- * Every failure returns null so the caller cannot distinguish a missing site from no access.
- */
 export const openPrivateSiteForAccount = async (siteId: string, viewerDid: string): Promise<string | null> => {
 	if (!isValidSiteId(siteId)) return null
 	const site = await getPrivateSite(siteId)
@@ -392,5 +266,3 @@ export const revokeSiteShare = async (siteId: string, ownerDid: string, shareId:
 	}
 	logger.info('[PrivateSite] Share revoked', { siteId, shareId })
 }
-
-export { listPrivateSiteFiles } from './private-sites-db'

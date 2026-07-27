@@ -1,13 +1,3 @@
-/**
- * The single authorization decision point for private sites.
- *
- * This module is pure: no database, no HTTP, no cookies, no query parsing. Callers build
- * an `AccessPrincipal` from whatever transport they speak and then obey the returned
- * `AccessDecision`. Keeping every decision here is what makes the v2 migration tractable —
- * under atproto proposal 0016 this function becomes the body of the managing app's
- * `com.atproto.simplespace.checkUserAccess`.
- */
-
 import { hashShareTokenSync, timingSafeEqualHex } from './token'
 import type { AccessDecision, AccessPrincipal, PrivateSite, PrivateSiteShare } from './types'
 
@@ -18,40 +8,25 @@ export interface EvaluateAccessInput {
 	now: Date
 }
 
-/** True when `expiresAt` is set and already in the past. `null` never expires. */
 export const isExpired = (expiresAt: Date | null, now: Date): boolean => {
 	if (expiresAt === null) return false
 	return expiresAt.getTime() <= now.getTime()
 }
 
-/**
- * Decide whether `principal` may read `site`.
- *
- * Ordering matters and is deliberate:
- *   1. a missing site is `notFound` for everyone
- *   2. the owner is checked before site expiry, so an owner can still see and clean up
- *      their own expired site (it is their data)
- *   3. for everyone else, site expiry closes the site regardless of share validity
- *   4. a share is checked revoked-then-expired-then-audience, so each failure reports its
- *      own reason rather than silently collapsing into `forbidden`
- *
- * A share may be scoped to a single DID. That check happens last, after the token is known
- * to be valid, so `audienceMismatch` is only ever reported to someone who genuinely holds
- * the link — it tells a signed-out visitor to sign in, and never reveals to a random
- * prober that the site exists.
- */
 export const evaluateAccess = ({ site, shares, principal, now }: EvaluateAccessInput): AccessDecision => {
-	if (!site) {
-		return { allowed: false, reason: 'notFound' }
-	}
+	if (!site) return { allowed: false, reason: 'notFound' }
 
 	if (principal.kind === 'owner' && principal.did === site.ownerDid) {
 		return { allowed: true, reason: 'owner' }
 	}
 
-	// Past this point the requester is not the owner, so an expired site is closed.
 	if (isExpired(site.expiresAt, now)) {
 		return { allowed: false, reason: 'siteExpired' }
+	}
+
+	// The session lookup has already rechecked the backing share's expiry and revocation.
+	if (principal.kind === 'sessionShare') {
+		return { allowed: true, reason: 'share', shareId: principal.shareId }
 	}
 
 	if (principal.kind !== 'shareToken') {
@@ -59,16 +34,8 @@ export const evaluateAccess = ({ site, shares, principal, now }: EvaluateAccessI
 	}
 
 	const presented = hashShareTokenSync(principal.token)
-
-	// Walk every share rather than returning on first hash match, so that revoked and
-	// expired shares produce their specific reason instead of a generic denial.
-	let matched: PrivateSiteShare | null = null
-	for (const share of shares) {
-		if (share.siteId !== site.siteId) continue
-		if (!timingSafeEqualHex(share.tokenHash, presented)) continue
-		matched = share
-		break
-	}
+	const matched =
+		shares.find((share) => share.siteId === site.siteId && timingSafeEqualHex(share.tokenHash, presented)) ?? null
 
 	if (!matched) {
 		return { allowed: false, reason: 'forbidden' }
@@ -82,21 +49,9 @@ export const evaluateAccess = ({ site, shares, principal, now }: EvaluateAccessI
 		return { allowed: false, reason: 'shareExpired' }
 	}
 
-	// A DID-scoped share is a grant to a person, not to whoever holds the link. The owner
-	// of the site always passes above, so this only gates third parties.
 	if (matched.audienceDid !== null && matched.audienceDid !== principal.viewerDid) {
 		return { allowed: false, reason: 'audienceMismatch', audienceDid: matched.audienceDid }
 	}
 
 	return { allowed: true, reason: 'share', shareId: matched.shareId }
 }
-
-/**
- * HTTP status for a denial.
- *
- * Every denial that is not an owner-visible state collapses to 404 so that an
- * unauthenticated probe cannot distinguish "this private site exists" from "it does not".
- * Revoked and expired shares also return 404 for the same reason: a holder of a dead link
- * learns nothing about whether the underlying site is still live.
- */
-export const denialStatus = (): 404 => 404

@@ -1,6 +1,6 @@
 export { PRIVATE_ACCESS_PAGE_STYLES } from './access-page-styles'
 export type { EvaluateAccessInput } from './access-policy'
-export { denialStatus, evaluateAccess, isExpired } from './access-policy'
+export { evaluateAccess, isExpired } from './access-policy'
 export type { ResolveExpiryOptions } from './expiry'
 export { InvalidExpiryError, resolveExpiry } from './expiry'
 export type { GeneratedSecret, GrantKind, PrivateSessionRecord } from './grant'
@@ -36,8 +36,6 @@ export type { GeneratedShareToken } from './token'
 export {
 	generateShareToken,
 	hashShareTokenSync,
-	redactToken,
-	redactUrlForLog,
 	SHARE_TOKEN_PREFIX,
 	timingSafeEqualHex,
 } from './token'

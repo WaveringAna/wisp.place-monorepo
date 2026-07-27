@@ -58,9 +58,7 @@ const serviceJwtVerifier = new ServiceJwtVerifier({
 	serviceDid: SERVICE_DID as any,
 	resolver: new CompositeDidDocumentResolver({
 		methods: {
-			// Defaults to the public PLC directory. A local development network runs its own,
-			// and service-auth verification fails against the public one because the DIDs
-			// only exist locally.
+			// Devnet DIDs exist only in its local PLC directory.
 			plc: new PlcDidDocumentResolver(
 				Bun.env.WISP_PLC_DIRECTORY_URL ? { apiUrl: Bun.env.WISP_PLC_DIRECTORY_URL } : undefined,
 			),
@@ -269,8 +267,7 @@ const prepareXrpcRequest = async (request: Request, parsedBody: unknown): Promis
 		return request
 	}
 
-	// Never reconstruct a multipart body. The boundary-delimited stream cannot survive a
-	// parse/re-serialize round trip, so it is passed through untouched.
+	// Reconstructing multipart would discard its boundary-delimited body.
 	if ((request.headers.get('content-type') ?? '').toLowerCase().includes('multipart/form-data')) {
 		return request
 	}
@@ -585,8 +582,6 @@ export const xrpcRoutes = () => {
 		XRPC_NSIDS.privateSiteRevokeShare,
 	]
 
-	// Private sites are owner-scoped and never touch the PDS; their handlers live in their
-	// own module but share this router's service-auth identity.
 	registerPrivateSiteMethods({
 		router,
 		requireDid: (request) => requireAuthenticated(authByRequest.get(request)).did,
@@ -1042,11 +1037,6 @@ export const xrpcRoutes = () => {
 		}
 	}
 
-	// `parse: 'none'` keeps Elysia from consuming the request body before the handler runs.
-	// Multipart uploads need the raw boundary-delimited stream: once parsed, the body is
-	// gone, and re-serializing the parsed object as JSON under a multipart content-type
-	// yields a request with no final boundary. JSON methods parse their own body inside the
-	// XRPC router, so nothing else depends on Elysia parsing here.
 	return new Elysia()
 		.all('/xrpc/:nsid', ({ body, request }) => handleXrpcRequest(request, body), { parse: 'none' })
 		.all(

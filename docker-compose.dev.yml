@@ -1,14 +1,14 @@
 services:
   postgres:
     profiles: [dev]
-    # `!reset` replaces the base file's `5432:5432` publish instead of adding to it:
+    # `!override` replaces the base file's `5432:5432` publish instead of adding to it:
     # binding both `0.0.0.0:5432` and `127.0.0.1:5432` on one container EADDRINUSEs.
-    ports: !reset
+    ports: !override
       - "127.0.0.1:${DEV_POSTGRES_PORT:-5432}:5432"
 
   redis:
     profiles: [dev]
-    ports: !reset
+    ports: !override
       - "127.0.0.1:${DEV_REDIS_PORT:-6379}:6379"
 
   minio:

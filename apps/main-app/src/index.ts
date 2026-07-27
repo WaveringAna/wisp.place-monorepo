@@ -87,8 +87,6 @@ const runMaintenance = async () => {
 	console.log('[Maintenance] Running periodic maintenance...')
 	await cleanupExpiredSessions()
 	await rotateKeysIfNeeded()
-	// Handoff and private-session rows are single-use or short-lived by design; without
-	// a sweep they accumulate forever.
 	await pruneHandoffs()
 	await pruneSessions()
 }
@@ -99,8 +97,6 @@ runMaintenance()
 // Schedule maintenance to run every hour
 setInterval(runMaintenance, 60 * 60 * 1000)
 
-// Expired private sites must actually have their bytes deleted, not merely become
-// unreachable, so a periodic sweep removes them from storage and the database.
 startPrivateSiteReaper()
 
 // Start DNS verification worker (runs every 10 minutes)

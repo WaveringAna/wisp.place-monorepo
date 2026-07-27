@@ -1,11 +1,3 @@
-/**
- * Read-only private-site queries for the hosting service.
- *
- * The hosting service never creates or mutates private sites; main-app owns writes. The
- * one exception is the best-effort `last_used_at` audit touch, which records that a share
- * link was used without recording the credential itself.
- */
-
 import type { GrantKind, PrivateSessionRecord, PrivateSite, PrivateSiteShare } from '@wispplace/private-sites'
 import postgres from 'postgres'
 
@@ -61,14 +53,6 @@ const mapShare = (row: PrivateShareRow): PrivateSiteShare => ({
 	createdAt: row.created_at,
 	lastUsedAt: row.last_used_at,
 })
-
-/**
- * Private site lookup.
- *
- * Deliberately NOT routed through the shared request cache used for public domain
- * lookups: a cached negative or stale row could keep a revoked or deleted private site
- * reachable, and private authorization state must be read fresh.
- */
 export async function getPrivateSite(siteId: string): Promise<PrivateSite | null> {
 	const rows = await sql<PrivateSiteRow[]>`
     SELECT site_id, owner_did, name, file_count, total_bytes, expires_at, created_at, updated_at
@@ -76,8 +60,6 @@ export async function getPrivateSite(siteId: string): Promise<PrivateSite | null
   `
 	return rows[0] ? mapSite(rows[0]) : null
 }
-
-/** Candidate shares for a presented token hash. The authoritative check is timing-safe. */
 export async function findSharesByTokenHash(siteId: string, tokenHash: string): Promise<PrivateSiteShare[]> {
 	const rows = await sql<PrivateShareRow[]>`
     SELECT share_id, site_id, token_hash, token_prefix, label, audience_did, expires_at, revoked_at, created_at, last_used_at
@@ -85,8 +67,6 @@ export async function findSharesByTokenHash(siteId: string, tokenHash: string): 
   `
 	return rows.map(mapShare)
 }
-
-/** File metadata for a private site, used to resolve index files and content types. */
 export async function listPrivateSiteFiles(
 	siteId: string,
 ): Promise<Array<{ path: string; size: number; mimeType: string | null }>> {
@@ -95,14 +75,10 @@ export async function listPrivateSiteFiles(
   `
 	return rows.map((r) => ({ path: r.path, size: Number(r.size), mimeType: r.mime_type }))
 }
-
-/** Best-effort audit touch. Never fails a request that has already been authorized. */
 export async function touchShare(shareId: string): Promise<void> {
 	try {
 		await sql`UPDATE private_site_shares SET last_used_at = NOW() WHERE share_id = ${shareId}`
-	} catch {
-		// intentionally ignored
-	}
+	} catch {}
 }
 
 interface SessionRow {
@@ -114,13 +90,6 @@ interface SessionRow {
 	expires_at: Date
 	created_at: Date
 }
-
-/**
- * Look up a live per-site session by its secret hash.
- *
- * Joins the owning share so a revoked or expired share invalidates any session it issued,
- * rather than the session outliving the grant it came from.
- */
 export async function findLiveSession(secretHash: string): Promise<PrivateSessionRecord | null> {
 	const rows = await sql<SessionRow[]>`
     SELECT s.session_id, s.site_id, s.kind, s.owner_did, s.share_id, s.expires_at, s.created_at
@@ -146,8 +115,6 @@ export async function findLiveSession(secretHash: string): Promise<PrivateSessio
 		createdAt: row.created_at,
 	}
 }
-
-/** Persist a newly exchanged session. */
 export async function createSession(input: {
 	sessionId: string
 	secretHash: string
@@ -162,15 +129,6 @@ export async function createSession(input: {
     VALUES (${input.sessionId}, ${input.secretHash}, ${input.siteId}, ${input.kind}, ${input.ownerDid}, ${input.shareId}, ${input.expiresAt})
   `
 }
-
-/**
- * Consume a one-time owner handoff token for a specific site.
- *
- * The update is conditional and returns the row, so a concurrent second use cannot also
- * succeed: whichever statement wins marks it consumed and the other matches nothing.
- * The site id is part of the condition, so presenting a valid handoff at the wrong
- * private host neither succeeds nor burns the token for its real destination.
- */
 export async function consumeHandoff(
 	secretHash: string,
 	siteId: string,

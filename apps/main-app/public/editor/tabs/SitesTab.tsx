@@ -25,12 +25,7 @@ interface SitesTabProps {
 	onConfigureSite: (site: SiteWithDomains) => void
 	onDeleteSite: (site: SiteWithDomains) => void
 }
-
-// Helper to generate unique site key. Private sites have no DID, so they are namespaced
-// separately to avoid colliding with a public site that shares an rkey.
 const getSiteKey = (site: SiteWithDomains) => (site.isPrivate ? `private-${site.siteId}` : `${site.did}-${site.rkey}`)
-
-// Relative expiry label for private sites.
 const formatExpiry = (expiresAt: string | null | undefined, expired: boolean | undefined): string => {
 	if (expired) return 'expired'
 	if (!expiresAt) return 'never expires'
@@ -47,8 +42,6 @@ const formatBytes = (bytes: number | undefined): string => {
 	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
 	return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
-
-// Sort domains: custom first, then wisp
 const getSortedDomains = (site: SiteWithDomains) => {
 	if (!site.domains || site.domains.length === 0) return []
 	return [...site.domains].sort((a, b) => {
@@ -57,8 +50,6 @@ const getSortedDomains = (site: SiteWithDomains) => {
 		return 0
 	})
 }
-
-// Keyboard shortcut badge component
 const Kbd = ({ children }: { children: React.ReactNode }) => (
 	<kbd className="px-2 py-1 bg-muted/50 rounded border border-border/50">{children}</kbd>
 )
@@ -67,10 +58,6 @@ interface PrivateSharePanelProps {
 	siteId: string
 	shares: PrivateShare[]
 	loading: boolean
-	/**
-	 * Present only immediately after creating a link. The server stores a hash, so this URL
-	 * cannot be recovered once the panel closes.
-	 */
 	justCreatedUrl: string | null
 	copied: boolean
 	onLoad: (siteId: string) => void
@@ -82,14 +69,6 @@ interface PrivateSharePanelProps {
 	onCopy: (text: string) => void
 }
 
-interface ActorSuggestion {
-	did: string
-	handle: string
-	displayName?: string
-	avatar?: string
-}
-
-/** Share-link management for one private site. */
 const PrivateSharePanel = memo(function PrivateSharePanel({
 	siteId,
 	shares,
@@ -104,150 +83,42 @@ const PrivateSharePanel = memo(function PrivateSharePanel({
 	const [label, setLabel] = useState('')
 	const [creating, setCreating] = useState(false)
 	const [handle, setHandle] = useState('')
-	const [suggestions, setSuggestions] = useState<ActorSuggestion[]>([])
-	const [activeSuggestion, setActiveSuggestion] = useState(-1)
-	/**
-	 * Resolution of the typed handle.
-	 *
-	 * A scoped link is only as good as the DID behind it, so the handle is resolved before
-	 * the link is created and the resolved DID is what gets sent. Typing a handle that does
-	 * not resolve disables creation rather than silently making a bearer link.
-	 */
-	const [resolved, setResolved] = useState<{ handle: string; did: string } | null>(null)
-	const [resolving, setResolving] = useState(false)
-	const selectedHandleRef = useRef<string | null>(null)
-
-	const selectSuggestion = useCallback((actor: ActorSuggestion) => {
-		selectedHandleRef.current = actor.handle
-		setHandle(actor.handle)
-		setResolved({ handle: actor.handle, did: actor.did })
-		setSuggestions([])
-		setActiveSuggestion(-1)
-	}, [])
-
-	// Search public actor typeahead results while also resolving a fully typed handle. Both
-	// requests are debounced, and stale responses are discarded rather than overwriting a
-	// newer query.
-	useEffect(() => {
-		const query = handle.trim().replace(/^@/, '')
-		const selected = selectedHandleRef.current?.toLowerCase() === query.toLowerCase()
-		if (selected) {
-			setResolving(false)
-			setSuggestions([])
-			setActiveSuggestion(-1)
-			return
-		}
-		selectedHandleRef.current = null
-		setResolved(null)
-		setSuggestions([])
-		setActiveSuggestion(-1)
-		if (!query) {
-			setResolving(false)
-			return
-		}
-		let cancelled = false
-		setResolving(query.length >= 2)
-		const timer = setTimeout(async () => {
-			try {
-				const typeaheadUrl = new URL('https://public.api.bsky.app/xrpc/app.bsky.actor.searchActorsTypeahead')
-				typeaheadUrl.searchParams.set('q', query)
-				typeaheadUrl.searchParams.set('limit', '6')
-				const [typeaheadResponse, resolveResponse] = await Promise.all([
-					query.length >= 2
-						? fetch(typeaheadUrl.toString(), { headers: { Accept: 'application/json' } })
-						: Promise.resolve(null),
-					query.includes('.')
-						? fetch(`/api/user/private-sites/resolve-handle?handle=${encodeURIComponent(query)}`)
-						: Promise.resolve(null),
-				])
-				const typeaheadData = typeaheadResponse?.ok ? await typeaheadResponse.json() : { actors: [] }
-				const actorList: unknown[] = Array.isArray(typeaheadData.actors) ? typeaheadData.actors : []
-				const actors = actorList.filter(
-					(actor: unknown): actor is ActorSuggestion =>
-						typeof actor === 'object' &&
-						actor !== null &&
-						'did' in actor &&
-						typeof actor.did === 'string' &&
-						'handle' in actor &&
-						typeof actor.handle === 'string',
-				)
-				const resolvedData = resolveResponse?.ok ? await resolveResponse.json() : null
-				if (cancelled) return
-				const exactActor = actors.find((actor) => actor.handle.toLowerCase() === query.toLowerCase())
-				setSuggestions(actors)
-				setResolved(
-					resolvedData?.found
-						? { handle: resolvedData.handle, did: resolvedData.did }
-						: exactActor
-							? { handle: exactActor.handle, did: exactActor.did }
-							: null,
-				)
-			} catch {
-				if (!cancelled) {
-					setResolved(null)
-					setSuggestions([])
-				}
-			} finally {
-				if (!cancelled) setResolving(false)
-			}
-		}, 250)
-		return () => {
-			cancelled = true
-			clearTimeout(timer)
-		}
-	}, [handle])
-
-	const handleAccountKeyDown = useCallback(
-		(event: React.KeyboardEvent<HTMLInputElement>) => {
-			if (event.key === 'Escape') {
-				setSuggestions([])
-				setActiveSuggestion(-1)
-				return
-			}
-			if (suggestions.length === 0) return
-			if (event.key === 'ArrowDown') {
-				event.preventDefault()
-				setActiveSuggestion((current) => Math.min(current + 1, suggestions.length - 1))
-			} else if (event.key === 'ArrowUp') {
-				event.preventDefault()
-				setActiveSuggestion((current) => Math.max(current - 1, 0))
-			} else if (event.key === 'Enter' && activeSuggestion >= 0) {
-				event.preventDefault()
-				const actor = suggestions[activeSuggestion]
-				if (actor) selectSuggestion(actor)
-			}
-		},
-		[suggestions, activeSuggestion, selectSuggestion],
-	)
-
-	// Shares are fetched lazily, only when a private site is actually expanded.
+	const [accountError, setAccountError] = useState('')
 	useEffect(() => {
 		if (siteId) onLoad(siteId)
 	}, [siteId, onLoad])
 
-	const scopeReady = handle.trim().length === 0 || resolved !== null
-
 	const handleCreate = useCallback(async () => {
 		setCreating(true)
-		await onCreate(siteId, {
-			...(label.trim() ? { label: label.trim() } : {}),
-			...(resolved ? { audienceDid: resolved.did } : {}),
-		})
-		setLabel('')
-		setHandle('')
-		selectedHandleRef.current = null
-		setResolved(null)
-		setSuggestions([])
-		setCreating(false)
-	}, [siteId, label, resolved, onCreate])
-
-	const suggestionsId = `private-account-suggestions-${siteId}`
+		setAccountError('')
+		try {
+			const account = handle.trim().replace(/^@/, '')
+			let audienceDid: string | undefined
+			if (account) {
+				const response = await fetch(`/api/user/private-sites/resolve-handle?handle=${encodeURIComponent(account)}`)
+				const result = response.ok ? await response.json() : null
+				if (!result?.found) {
+					setAccountError('account not found')
+					return
+				}
+				audienceDid = result.did
+			}
+			await onCreate(siteId, {
+				...(label.trim() ? { label: label.trim() } : {}),
+				...(audienceDid ? { audienceDid } : {}),
+			})
+			setLabel('')
+			setHandle('')
+		} catch {
+			setAccountError('could not resolve account')
+		} finally {
+			setCreating(false)
+		}
+	}, [siteId, label, handle, onCreate])
 
 	return (
 		<div>
 			<p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">SHARE LINKS:</p>
-
-			{/* One-time reveal. This is the only moment the credential is available. */}
 			{justCreatedUrl && (
 				<div className="mb-3 space-y-2 border border-accent/50 bg-accent/10 p-3">
 					<p className="text-xs text-accent">Copy this now — it is shown once and cannot be retrieved later.</p>
@@ -274,103 +145,29 @@ const PrivateSharePanel = memo(function PrivateSharePanel({
 						placeholder="label (optional)"
 						className="flex-1 text-xs bg-background/50 border border-border/50 px-2 py-1.5 font-mono outline-none focus:border-accent"
 					/>
-					<Button
-						variant="outline"
-						size="sm"
-						className="font-mono text-xs"
-						disabled={creating || !scopeReady}
-						onClick={handleCreate}
-					>
+					<Button variant="outline" size="sm" className="font-mono text-xs" disabled={creating} onClick={handleCreate}>
 						<Link2 className="w-3 h-3 mr-2" />
 						{creating ? 'Creating...' : 'New link'}
 					</Button>
 				</div>
 
-				{/* Leaving this empty makes a bearer link, which is what someone without an
-				    atproto account needs. Filling it scopes the link to one person. */}
-				<div className="relative">
-					<input
-						type="text"
-						value={handle}
-						onChange={(event) => {
-							selectedHandleRef.current = null
-							setHandle(event.target.value)
-						}}
-						onKeyDown={handleAccountKeyDown}
-						onBlur={() => window.setTimeout(() => setSuggestions([]), 100)}
-						placeholder="share with an account (optional) — e.g. alice.bsky.social"
-						autoCapitalize="none"
-						autoComplete="off"
-						autoCorrect="off"
-						spellCheck={false}
-						role="combobox"
-						aria-autocomplete="list"
-						aria-expanded={suggestions.length > 0}
-						aria-controls={suggestionsId}
-						aria-activedescendant={activeSuggestion >= 0 ? `${suggestionsId}-${activeSuggestion}` : undefined}
-						className="w-full bg-background/50 px-2 py-1.5 text-xs font-mono outline-none border border-border/50 focus:border-accent"
-					/>
-					{suggestions.length > 0 && (
-						<div
-							id={suggestionsId}
-							role="listbox"
-							className="absolute left-0 right-0 top-full z-30 mt-1 overflow-hidden border border-border bg-popover shadow-md"
-						>
-							{suggestions.map((actor, index) => (
-								<button
-									key={actor.did}
-									id={`${suggestionsId}-${index}`}
-									role="option"
-									aria-selected={index === activeSuggestion}
-									type="button"
-									onMouseDown={(event) => event.preventDefault()}
-									onClick={() => selectSuggestion(actor)}
-									className={`flex w-full items-center gap-2 border-b border-border/30 px-2.5 py-2 text-left text-xs last:border-b-0 ${
-										index === activeSuggestion ? 'bg-accent/15' : 'hover:bg-muted/40'
-									}`}
-								>
-									{actor.avatar ? (
-										<img src={actor.avatar} alt="" className="h-6 w-6 rounded-full object-cover" />
-									) : (
-										<span className="flex h-6 w-6 items-center justify-center rounded-full bg-muted text-[10px] text-muted-foreground">
-											{actor.handle.slice(0, 1).toUpperCase()}
-										</span>
-									)}
-									<span className="min-w-0 flex-1 truncate">
-										<span className="block truncate text-foreground">{actor.handle}</span>
-										{actor.displayName && actor.displayName !== actor.handle && (
-											<span className="block truncate text-[10px] text-muted-foreground">{actor.displayName}</span>
-										)}
-									</span>
-								</button>
-							))}
-						</div>
-					)}
-				</div>
-
-				{handle.trim().length > 0 && (
-					<p className="text-[10px] font-mono">
-						{resolving ? (
-							<span className="text-muted-foreground">searching accounts…</span>
-						) : resolved ? (
-							<span className="text-green-400">
-								<Check className="w-3 h-3 inline mr-1" />
-								{resolved.handle} · <span className="text-muted-foreground">{resolved.did}</span>
-							</span>
-						) : suggestions.length > 0 ? (
-							<span className="text-muted-foreground">choose an account from the suggestions</span>
-						) : handle.trim().replace(/^@/, '').length < 2 ? (
-							<span className="text-muted-foreground">type at least 2 characters</span>
-						) : (
-							<span className="text-amber-400">no account found for that handle</span>
-						)}
-					</p>
-				)}
-
+				<input
+					type="text"
+					value={handle}
+					onChange={(event) => {
+						setHandle(event.target.value)
+						setAccountError('')
+					}}
+					placeholder="share with an account (optional) — e.g. alice.bsky.social"
+					autoCapitalize="none"
+					autoComplete="off"
+					autoCorrect="off"
+					spellCheck={false}
+					className="w-full bg-background/50 px-2 py-1.5 text-xs font-mono outline-none border border-border/50 focus:border-accent"
+				/>
+				{accountError && <p className="text-[10px] text-amber-400">{accountError}</p>}
 				<p className="text-[10px] text-muted-foreground">
-					{resolved
-						? 'only this account can open the link; they will be asked to sign in'
-						: 'leave blank for a link anyone can open, including people without an atproto account'}
+					leave blank for a link anyone can open; otherwise the handle is resolved before creating the link
 				</p>
 			</div>
 
@@ -394,11 +191,8 @@ const PrivateSharePanel = memo(function PrivateSharePanel({
 							>
 								{share.status}
 							</Badge>
-							{/* Only the non-secret prefix is ever available here. */}
 							<code className="text-muted-foreground">{share.tokenPrefix}...</code>
 							{share.label && <span className="text-muted-foreground truncate">{share.label}</span>}
-							{/* A scoped link needs its audience visible, or there is no way to tell
-							    two links apart once the URL itself is gone. */}
 							{share.audienceDid && (
 								<Badge variant="outline" className="flex-shrink-0 border-accent/50 text-[10px] text-accent">
 									<Lock className="w-2.5 h-2.5 mr-1" />
@@ -433,7 +227,6 @@ export const SitesTab = memo(function SitesTab({
 	onConfigureSite,
 	onDeleteSite,
 }: SitesTabProps) {
-	// State: only one site can be expanded at a time (null = none expanded)
 	const [expandedSiteKey, setExpandedSiteKey] = useState<string | null>(null)
 	const [focusedIndex, setFocusedIndex] = useState(0)
 	const [copied, setCopied] = useState(false)
@@ -447,16 +240,11 @@ export const SitesTab = memo(function SitesTab({
 		revokeShare,
 		clearJustCreated,
 	} = usePrivateShares()
-
-	// Refs
 	const containerRef = useRef<HTMLDivElement>(null)
 	const siteRefs = useRef<(HTMLDivElement | null)[]>([])
 	const scrollContainerRef = useRef<HTMLDivElement>(null)
-
-	// URL helpers
 	const getSiteUrl = useCallback(
 		(site: SiteWithDomains) => {
-			// Private sites are only ever reachable on the private host.
 			if (site.isPrivate) return site.privateUrl ?? '#'
 			const sortedDomains = getSortedDomains(site)
 			if (sortedDomains.length > 0) {
@@ -480,25 +268,14 @@ export const SitesTab = memo(function SitesTab({
 		},
 		[userInfo],
 	)
-
-	// Toggle expand - auto-closes other sites
 	const toggleExpanded = useCallback(
 		(siteKey: string) => {
-			// Collapsing discards the one-time share URL held in memory.
 			clearJustCreated()
 			setCopied(false)
 			setExpandedSiteKey((prev) => (prev === siteKey ? null : siteKey))
 		},
 		[clearJustCreated],
 	)
-
-	/**
-	 * Open a private site as its owner.
-	 *
-	 * The account session is host-only to this origin, so the private host cannot see it.
-	 * Mint a single-use handoff token and follow the URL that exchanges it for a
-	 * site-scoped session.
-	 */
 	const openPrivateSite = useCallback(async (siteId: string) => {
 		try {
 			const response = await fetch(`/api/user/private-sites/${siteId}/open`, { method: 'POST' })
@@ -520,16 +297,12 @@ export const SitesTab = memo(function SitesTab({
 			console.error('Failed to copy:', err)
 		}
 	}, [])
-
-	// Auto-focus container when sites load
 	useEffect(() => {
 		if (sites.length > 0 && containerRef.current) {
 			const timer = setTimeout(() => containerRef.current?.focus(), 100)
 			return () => clearTimeout(timer)
 		}
 	}, [sites.length])
-
-	// Watch for dialog close and refocus container
 	useEffect(() => {
 		let wasDialogOpen = document.querySelector('[role="dialog"]') !== null
 
@@ -537,7 +310,6 @@ export const SitesTab = memo(function SitesTab({
 			const isDialogOpen = document.querySelector('[role="dialog"]') !== null
 
 			if (wasDialogOpen && !isDialogOpen) {
-				// Dialog just closed, refocus the container
 				setTimeout(() => containerRef.current?.focus(), 50)
 			}
 
@@ -548,8 +320,6 @@ export const SitesTab = memo(function SitesTab({
 
 		return () => observer.disconnect()
 	}, [])
-
-	// Scroll focused item into view
 	useEffect(() => {
 		const element = siteRefs.current[focusedIndex]
 		if (element && scrollContainerRef.current) {
@@ -564,8 +334,6 @@ export const SitesTab = memo(function SitesTab({
 			}
 		}
 	}, [focusedIndex])
-
-	// Keyboard navigation
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
 			const target = e.target as HTMLElement
@@ -604,8 +372,6 @@ export const SitesTab = memo(function SitesTab({
 					}
 					break
 				case 'c':
-					// Configure opens a place.wisp.settings workflow, which private sites do
-					// not have. The button is hidden for them, so the shortcut is too.
 					if (isExpanded && currentSite && !currentSite.isPrivate) {
 						e.preventDefault()
 						onConfigureSite(currentSite)
@@ -623,8 +389,6 @@ export const SitesTab = memo(function SitesTab({
 		window.addEventListener('keydown', handleKeyDown)
 		return () => window.removeEventListener('keydown', handleKeyDown)
 	}, [sites, focusedIndex, expandedSiteKey, toggleExpanded, getSiteUrl, onConfigureSite, onDeleteSite, openPrivateSite])
-
-	// Loading state
 	if (sitesLoading) {
 		return (
 			<div className="h-full flex flex-col border border-border/30 bg-card/50 font-mono">
@@ -641,8 +405,6 @@ export const SitesTab = memo(function SitesTab({
 			</div>
 		)
 	}
-
-	// Empty state
 	if (sites.length === 0) {
 		return (
 			<div className="h-full flex flex-col border border-border/30 bg-card/50 font-mono">
@@ -663,9 +425,6 @@ export const SitesTab = memo(function SitesTab({
 			className="h-full flex flex-col border border-border/30 bg-card/50 font-mono outline-none"
 			tabIndex={-1}
 			onClick={(e) => {
-				// Clicking bare chrome returns focus to the keyboard-nav container, but a click
-				// that landed on a real control must be left alone — stealing focus back here
-				// is what made the share-link inputs impossible to type into.
 				const t = e.target as HTMLElement
 				if (!t.closest('input, textarea, button, select, a, label')) {
 					containerRef.current?.focus()
@@ -673,7 +432,6 @@ export const SitesTab = memo(function SitesTab({
 			}}
 			onKeyDown={() => {}}
 		>
-			{/* Keyboard hints */}
 			<div className="flex items-center gap-4 text-xs text-muted-foreground p-4 pb-3 border-b border-border/30 flex-shrink-0">
 				<div className="flex items-center gap-2">
 					<Kbd>↑</Kbd>
@@ -702,8 +460,6 @@ export const SitesTab = memo(function SitesTab({
 					<span className="text-red-400">delete</span>
 				</div>
 			</div>
-
-			{/* Sites list */}
 			<div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-y-auto p-4 space-y-2">
 				{sites.map((site, index) => {
 					const siteKey = getSiteKey(site)
@@ -722,7 +478,6 @@ export const SitesTab = memo(function SitesTab({
 								isFocused ? 'border-accent bg-accent/10' : 'border-border/30 bg-card hover:bg-muted/10'
 							}`}
 						>
-							{/* Site header */}
 							<button
 								type="button"
 								onClick={() => toggleExpanded(siteKey)}
@@ -765,13 +520,10 @@ export const SitesTab = memo(function SitesTab({
 									{site.expired ? '[expired]' : '[active]'}
 								</Badge>
 							</button>
-
-							{/* Expanded content */}
 							{isExpanded && (
 								<div className="px-4 pb-4 pl-11 space-y-4 border-l-2 border-accent/50 ml-4">
 									{site.isPrivate ? (
 										<>
-											{/* Private URL + stats */}
 											<div>
 												<p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">PRIVATE URL:</p>
 												<button
@@ -790,8 +542,6 @@ export const SitesTab = memo(function SitesTab({
 													Only you can open this while signed in. Not published to your PDS.
 												</p>
 											</div>
-
-											{/* Share links */}
 											<PrivateSharePanel
 												siteId={site.siteId ?? ''}
 												shares={shares[site.siteId ?? ''] ?? []}
@@ -805,55 +555,47 @@ export const SitesTab = memo(function SitesTab({
 											/>
 										</>
 									) : (
-										<>
-											{/* Domains */}
-											<div>
-												<p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">
-													{sortedDomains.length > 0 ? 'DOMAINS:' : 'DEFAULT URL:'}
-												</p>
-												{sortedDomains.length > 0 ? (
-													<div className="space-y-2">
-														{sortedDomains.map((domain) => (
-															<div key={domain.domain} className="flex items-center gap-2">
-																<a
-																	href={`https://${domain.domain}`}
-																	target="_blank"
-																	rel="noopener noreferrer"
-																	className="text-sm text-accent hover:text-accent/80 flex items-center gap-2"
-																>
-																	<Globe className="w-3 h-3" />
-																	{domain.domain}
-																</a>
-																<Badge
-																	variant={domain.type === 'wisp' ? 'secondary' : 'outline'}
-																	className="text-[10px]"
-																>
-																	{domain.type}
+										<div>
+											<p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">
+												{sortedDomains.length > 0 ? 'DOMAINS:' : 'DEFAULT URL:'}
+											</p>
+											{sortedDomains.length > 0 ? (
+												<div className="space-y-2">
+													{sortedDomains.map((domain) => (
+														<div key={domain.domain} className="flex items-center gap-2">
+															<a
+																href={`https://${domain.domain}`}
+																target="_blank"
+																rel="noopener noreferrer"
+																className="text-sm text-accent hover:text-accent/80 flex items-center gap-2"
+															>
+																<Globe className="w-3 h-3" />
+																{domain.domain}
+															</a>
+															<Badge variant={domain.type === 'wisp' ? 'secondary' : 'outline'} className="text-[10px]">
+																{domain.type}
+															</Badge>
+															{domain.type === 'custom' && domain.verified !== undefined && (
+																<Badge variant={domain.verified ? 'default' : 'secondary'} className="text-[10px]">
+																	{domain.verified ? '✓ verified' : '⏳ pending'}
 																</Badge>
-																{domain.type === 'custom' && domain.verified !== undefined && (
-																	<Badge variant={domain.verified ? 'default' : 'secondary'} className="text-[10px]">
-																		{domain.verified ? '✓ verified' : '⏳ pending'}
-																	</Badge>
-																)}
-															</div>
-														))}
-													</div>
-												) : (
-													<a
-														href={getSiteUrl(site)}
-														target="_blank"
-														rel="noopener noreferrer"
-														className="text-sm text-accent hover:text-accent/80 flex items-center gap-2"
-													>
-														<Globe className="w-4 h-4" />
-														{getSiteDomainName(site)}
-													</a>
-												)}
-											</div>
-										</>
+															)}
+														</div>
+													))}
+												</div>
+											) : (
+												<a
+													href={getSiteUrl(site)}
+													target="_blank"
+													rel="noopener noreferrer"
+													className="text-sm text-accent hover:text-accent/80 flex items-center gap-2"
+												>
+													<Globe className="w-4 h-4" />
+													{getSiteDomainName(site)}
+												</a>
+											)}
+										</div>
 									)}
-
-									{/* Actions */}
 									<div>
 										<p className="text-xs text-muted-foreground uppercase tracking-wider mb-3">ACTIONS:</p>
 										<div className="flex flex-wrap gap-3">
@@ -871,7 +613,6 @@ export const SitesTab = memo(function SitesTab({
 												Open
 												<kbd className="ml-2 px-1.5 py-0.5 bg-muted/50 rounded text-[10px]">o</kbd>
 											</Button>
-											{/* Configure writes a place.wisp.settings record, which private sites do not have. */}
 											{!site.isPrivate && (
 												<Button
 													variant="outline"
@@ -896,8 +637,6 @@ export const SitesTab = memo(function SitesTab({
 											</Button>
 										</div>
 									</div>
-
-									{/* View in PDS link. Private sites are never written to the PDS. */}
 									{userInfo && !site.isPrivate && (
 										<a
 											href={`https://pdsls.dev/at://${userInfo.did}/place.wisp.fs/${site.rkey}`}

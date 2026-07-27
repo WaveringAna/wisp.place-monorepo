@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "test": "bun test",
-		"dev": "bun run build && bun run --watch src/index.ts",
+    "dev": "bun run build && bun run --watch src/index.ts",
     "start": "bun run src/index.ts",
     "build:css": "bunx @tailwindcss/cli -i public/styles/global.css -o dist/styles.css --minify",
     "build": "bun run build.ts && bun run build:css",

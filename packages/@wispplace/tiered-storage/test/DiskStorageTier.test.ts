@@ -1,25 +1,21 @@
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
-import { mkdtemp, readdir, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { readdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { DiskStorageTier } from '../src/tiers/DiskStorageTier.js'
 
-const testRoots: string[] = []
-let testRoot: string
-let testDir: string
-let traversalTarget: string
+const testDir = './test-disk-cache'
+const traversalTarget = './outside-disk-storage-tier-test.txt'
 
 describe('DiskStorageTier - Recursive Directory Support', () => {
 	beforeEach(async () => {
-		testRoot = await mkdtemp(join(tmpdir(), 'disk-storage-tier-'))
-		testRoots.push(testRoot)
-		testDir = join(testRoot, 'cache')
-		traversalTarget = join(testRoot, 'outside-disk-storage-tier-test.txt')
+		await rm(testDir, { recursive: true, force: true })
+		await rm(traversalTarget, { force: true })
 	})
 
 	afterAll(async () => {
-		await Promise.all(testRoots.map((root) => rm(root, { recursive: true, force: true })))
+		await rm(testDir, { recursive: true, force: true })
+		await rm(traversalTarget, { force: true })
 	})
 
 	describe('Nested Directory Creation', () => {

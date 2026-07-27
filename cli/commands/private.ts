@@ -16,14 +16,12 @@ import { collectFiles, createIgnoreMatcher } from './deploy.ts'
 export interface PrivateDeployOptions extends XrpcCommandOptions {
 	path: string
 	name?: string
-	/** Minutes until expiry. Omit for the server default; `0` for no expiry. */
 	expiry?: string
 }
 
 export interface PrivateShareOptions extends XrpcCommandOptions {
 	label?: string
 	expiry?: string
-	/** Restrict the link to a single account. Omit for a bearer link anyone can open. */
 	to?: string
 }
 
@@ -51,13 +49,6 @@ const parseExpiry = (raw: string | undefined): number | undefined => {
 	}
 	return value
 }
-
-/**
- * Upload a directory as a private site.
- *
- * Private sites never touch the PDS, so this posts a multipart body to the wisp service
- * rather than uploading blobs and writing a `place.wisp.fs` record.
- */
 export async function privateDeploy(agent: Agent, options: PrivateDeployOptions): Promise<PrivateCreateOutput> {
 	const siteDir = resolve(options.path)
 	if (!existsSync(siteDir) || !statSync(siteDir).isDirectory()) {
@@ -104,9 +95,6 @@ export async function privateDeploy(agent: Agent, options: PrivateDeployOptions)
 		const mime = lookup(file.relativePath) || 'application/octet-stream'
 		form.append('files', new File([new Uint8Array(bytes)], file.relativePath, { type: mime }), file.relativePath)
 	}
-
-	// The generated lexicon marks this input as a blob body, so the multipart FormData is
-	// passed through as the raw request body rather than being JSON-encoded.
 	const serviceDid = parseServiceDid(options.service)
 	const proxied = agent.withProxy(WISP_PROXY_SERVICE_ID, serviceDid)
 	registerWispLexicons(proxied)
@@ -186,8 +174,6 @@ export async function privateShare(agent: Agent, siteId: string, options: Privat
 	if (data.audienceDid) {
 		console.log(pc.dim(`only ${data.audienceDid} can open this; they will be asked to sign in`))
 	}
-	// The credential lives in the URL and is not stored in retrievable form, so this is
-	// the only time it can be shown.
 	console.log(pc.yellow('This link is shown once and cannot be retrieved later. Store it now.'))
 	console.log(pc.dim(`Revoke it with: wisp private revoke ${siteId} ${data.shareId}`))
 }
@@ -210,7 +196,6 @@ export async function privateShares(agent: Agent, siteId: string, options: XrpcC
 		const color = share.status === 'active' ? pc.green : share.status === 'revoked' ? pc.red : pc.yellow
 		const label = share.label ? ` ${pc.dim(`(${share.label})`)}` : ''
 		console.log(`- ${share.shareId}${label} ${color(share.status)}`)
-		// Only the non-secret display prefix is ever available here.
 		console.log(`  ${pc.dim('token:')} ${share.tokenPrefix}...  ${formatExpiry(share.expiresAt)}`)
 		if (share.lastUsedAt) {
 			console.log(`  ${pc.dim('last used:')} ${new Date(share.lastUsedAt).toISOString()}`)

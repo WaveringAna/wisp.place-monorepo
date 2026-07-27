@@ -1,19 +1,8 @@
-/**
- * Session-authenticated REST endpoints for private sites, used by the editor UI.
- *
- * The XRPC methods in `xrpc-private-site.ts` are authenticated with service-auth JWTs and
- * are what the CLI uses. The browser holds a session cookie instead, so the UI gets these
- * cookie-authed equivalents rather than minting a service token in the frontend.
- *
- * Both surfaces delegate to the same service layer, so the authorization rules and expiry
- * semantics cannot drift between them.
- */
-
 import type { NodeOAuthClient } from '@atproto/oauth-client-node'
 import { createLogger } from '@wispplace/observability'
 import { InvalidExpiryError, isExpired } from '@wispplace/private-sites'
 import { Elysia } from 'elysia'
-import { privateSiteUrl, shortShareUrl } from '../lib/private-site-origin'
+import { privateOwnerUrl, privateShareUrl, privateSiteUrl, shortShareUrl } from '../lib/private-site-origin'
 import { PrivateSiteUploadError, readPrivateSiteUpload } from '../lib/private-site-upload'
 import { createOwnerHandoff, listShares } from '../lib/private-sites-db'
 import {
@@ -28,7 +17,6 @@ import {
 } from '../lib/private-sites-service'
 import { SlingshotHandleResolver } from '../lib/slingshot-handle-resolver'
 import { requireAuth, SESSION_COOKIE_NAME } from '../lib/wisp-auth'
-import { privateOwnerUrl, privateShareUrl } from './xrpc-private-site'
 
 const logger = createLogger('main-app')
 
@@ -66,10 +54,6 @@ export const privateSiteApiRoutes = (client: NodeOAuthClient, cookieSecret: stri
 			const auth = await requireAuth(client, cookie, request.headers.get('cookie'))
 			return { auth }
 		})
-		/**
-		 * GET /api/user/private-sites
-		 * Only ever returns private sites owned by the authenticated account.
-		 */
 		.get('/', async ({ auth, set }) => {
 			try {
 				const now = new Date()
@@ -98,18 +82,10 @@ export const privateSiteApiRoutes = (client: NodeOAuthClient, cookieSecret: stri
 				return errorResponse(err, set)
 			}
 		})
-		/**
-		 * POST /api/user/private-sites
-		 *
-		 * Cookie-authenticated equivalent of place.wisp.v2.privateSite.create for the editor.
-		 * The upload is ingested directly into private storage and never reaches the PDS.
-		 */
 		.post(
 			'/',
 			async ({ request, auth, set }) => {
 				try {
-					// Directory pickers send `folder/index.html`; the selected folder is the site
-					// root, matching the existing public-upload behaviour.
 					const { name, expiryMinutes, files } = await readPrivateSiteUpload(request, { stripSharedRoot: true })
 					const site = await ingestPrivateSite({ ownerDid: auth.did, name, expiryMinutes, files })
 
@@ -128,17 +104,8 @@ export const privateSiteApiRoutes = (client: NodeOAuthClient, cookieSecret: stri
 					return errorResponse(err, set)
 				}
 			},
-			// Multipart parsing is shared with XRPC, so keep Elysia from consuming the body first.
 			{ parse: 'none' },
 		)
-		/**
-		 * POST /api/user/private-sites/:siteId/open
-		 *
-		 * Mints a single-use, short-lived handoff token and returns the URL that exchanges it
-		 * for a session on the site's own origin. The account session cookie is host-only to
-		 * main-app and is deliberately not accepted by the private hosts, so ownership is
-		 * proven here once and handed over explicitly.
-		 */
 		.post('/:siteId/open', async ({ params, auth, set }) => {
 			try {
 				const site = await requireOwnedSite(params.siteId, auth.did)
@@ -149,18 +116,8 @@ export const privateSiteApiRoutes = (client: NodeOAuthClient, cookieSecret: stri
 				return errorResponse(err, set)
 			}
 		})
-		/**
-		 * GET /api/user/private-sites/resolve-handle?handle=...
-		 *
-		 * Resolve a handle to a DID for the share-with-account field, so the editor can show
-		 * who a link will be scoped to before creating it.
-		 *
-		 * Session-authenticated because it proxies an outbound lookup; that keeps it from
-		 * becoming an open resolver for anonymous callers.
-		 */
 		.get('/resolve-handle', async ({ query, set }) => {
 			const raw = typeof query.handle === 'string' ? query.handle.trim().replace(/^@/, '') : ''
-			// Cheap shape check first so obvious typing noise never leaves the server.
 			if (!raw || raw.length > 253 || !/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(raw)) {
 				return { found: false }
 			}
@@ -173,10 +130,6 @@ export const privateSiteApiRoutes = (client: NodeOAuthClient, cookieSecret: stri
 				return errorResponse(err, set)
 			}
 		})
-		/**
-		 * GET /api/user/private-sites/:siteId/shares
-		 * Never returns share tokens, only their non-secret display prefix.
-		 */
 		.get('/:siteId/shares', async ({ params, auth, set }) => {
 			try {
 				const now = new Date()
@@ -200,10 +153,6 @@ export const privateSiteApiRoutes = (client: NodeOAuthClient, cookieSecret: stri
 				return errorResponse(err, set)
 			}
 		})
-		/**
-		 * POST /api/user/private-sites/:siteId/shares
-		 * The response contains the only copy of the credential that will ever exist.
-		 */
 		.post('/:siteId/shares', async ({ params, body, auth, set }) => {
 			try {
 				const input = (body ?? {}) as { label?: string; expiryMinutes?: number | null; audienceDid?: string }
@@ -219,7 +168,6 @@ export const privateSiteApiRoutes = (client: NodeOAuthClient, cookieSecret: stri
 					success: true,
 					shareId: share.shareId,
 					audienceDid: share.audienceDid,
-					// Returned once. Not persisted in this form and not retrievable later.
 					url: shortShareUrl(token),
 					directUrl: privateShareUrl(share.siteId, token),
 					expiresAt: share.expiresAt ? share.expiresAt.toISOString() : null,
@@ -230,9 +178,6 @@ export const privateSiteApiRoutes = (client: NodeOAuthClient, cookieSecret: stri
 				return errorResponse(err, set)
 			}
 		})
-		/**
-		 * DELETE /api/user/private-sites/:siteId/shares/:shareId
-		 */
 		.delete('/:siteId/shares/:shareId', async ({ params, auth, set }) => {
 			try {
 				await revokeSiteShare(params.siteId, auth.did, params.shareId)
@@ -242,9 +187,6 @@ export const privateSiteApiRoutes = (client: NodeOAuthClient, cookieSecret: stri
 				return errorResponse(err, set)
 			}
 		})
-		/**
-		 * DELETE /api/user/private-sites/:siteId
-		 */
 		.delete('/:siteId', async ({ params, auth, set }) => {
 			try {
 				await deleteOwnedPrivateSite(params.siteId, auth.did)

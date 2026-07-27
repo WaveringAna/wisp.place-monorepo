@@ -1,14 +1,9 @@
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
-import { mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { rm } from 'node:fs/promises'
 import { DiskStorageTier } from '../src/tiers/DiskStorageTier.js'
 import type { StorageMetadata } from '../src/types/index.js'
 
-const testDirs: string[] = []
-const lruTestDirs: string[] = []
-let testDir: string
-let lruTestDir: string
+const testDir = './test-disk-gc'
 
 function makeMetadata(key: string, size: number, ttl?: Date): StorageMetadata {
 	return {
@@ -25,12 +20,11 @@ function makeMetadata(key: string, size: number, ttl?: Date): StorageMetadata {
 
 describe('DiskStorageTier - Garbage Collection', () => {
 	beforeEach(async () => {
-		testDir = await mkdtemp(join(tmpdir(), 'disk-storage-gc-'))
-		testDirs.push(testDir)
+		await rm(testDir, { recursive: true, force: true })
 	})
 
 	afterAll(async () => {
-		await Promise.all(testDirs.map((dir) => rm(dir, { recursive: true, force: true })))
+		await rm(testDir, { recursive: true, force: true })
 	})
 
 	describe('gc()', () => {
@@ -198,13 +192,14 @@ describe('DiskStorageTier - Garbage Collection', () => {
 })
 
 describe('DiskStorageTier - LRU eviction respects setMetadata updates', () => {
+	const lruTestDir = './test-disk-lru'
+
 	beforeEach(async () => {
-		lruTestDir = await mkdtemp(join(tmpdir(), 'disk-storage-lru-'))
-		lruTestDirs.push(lruTestDir)
+		await rm(lruTestDir, { recursive: true, force: true })
 	})
 
 	afterAll(async () => {
-		await Promise.all(lruTestDirs.map((dir) => rm(dir, { recursive: true, force: true })))
+		await rm(lruTestDir, { recursive: true, force: true })
 	})
 
 	test('setMetadata updates lastAccessed on disk so LRU order survives restart', async () => {

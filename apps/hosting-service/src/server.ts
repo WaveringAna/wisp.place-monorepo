@@ -28,18 +28,12 @@ async function resolveDidCached(identifier: string): Promise<string | null> {
 const BASE_HOST_ENV = process.env.BASE_HOST || 'wisp.place'
 const BASE_HOST = BASE_HOST_ENV.split(':')[0] || BASE_HOST_ENV
 
-// Private sites are served from per-site origins beneath this host, i.e.
-// `<siteId>.priv.<base host>`. Each site gets its own origin so that one tenant's
-// JavaScript cannot read another tenant's content same-origin, and so a site session
-// cookie is never sent to a different site. Requires a wildcard DNS record and
-// certificate for `*.priv.<base host>`.
+// Separate origins keep tenant JavaScript and ambient cookies isolated.
 const PRIVATE_HOST = (process.env.PRIVATE_HOST || `priv.${BASE_HOST}`).split(':')[0] || `priv.${BASE_HOST}`
 
 const app = new Hono()
 
-// Add CORS middleware - allow all origins for static site hosting.
-// `credentials: false` is load-bearing for private sites: it stops a page on another
-// origin from reading a private response with the visitor's ambient session cookie.
+// Never allow cross-origin credentialed reads of private content.
 app.use(
 	'*',
 	cors({
@@ -71,15 +65,11 @@ app.get('/*', async (c) => {
 
 	logger.debug(`Request: host=${hostname} hostnameWithoutPort=${hostnameWithoutPort} path=${path}`, { BASE_HOST })
 
-	// Private sites resolve from the hostname, not the path, so each site is its own
-	// origin. This runs before any public routing so private content can never fall
-	// through to a public serving path.
 	const privateSiteId = siteIdFromHostname(hostnameWithoutPort, PRIVATE_HOST)
 	if (privateSiteId !== null) {
 		return servePrivateSite(c.req.raw, privateSiteId, sanitizePath(rawPath))
 	}
 
-	// The bare private host serves nothing; sites live only on their own subdomains.
 	if (hostnameWithoutPort === PRIVATE_HOST) {
 		return privateNotFound()
 	}

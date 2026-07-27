@@ -1,11 +1,3 @@
-/**
- * Transport-level parsing for private-site multipart uploads.
- *
- * Both the cookie-authenticated editor route and the service-authenticated XRPC route
- * use this parser, then hand the resulting files to the same ingestion service. Auth is
- * deliberately absent here so upload mechanics cannot make access decisions.
- */
-
 import { MAX_PRIVATE_SITE_FILE_COUNT, MAX_PRIVATE_SITE_SIZE } from '@wispplace/constants'
 import type { UploadedPrivateFile } from './private-sites-service'
 
@@ -39,7 +31,6 @@ export interface PrivateSiteUpload {
 }
 
 export interface PrivateSiteUploadOptions {
-	/** Browser directory pickers include the selected folder name in every relative path. */
 	stripSharedRoot?: boolean
 }
 
@@ -57,11 +48,6 @@ export const readPrivateSiteUpload = async (
 	request: Request,
 	options: PrivateSiteUploadOptions = {},
 ): Promise<PrivateSiteUpload> => {
-	// Reject oversized bodies before they are buffered whole into memory. The per-file
-	// accounting below only counts `files` parts, so without this a giant non-file
-	// field would sail past the size limit. 1 MiB of slack covers multipart boundaries
-	// and small fields; `Content-Length` is advisory, so this is a first line, not the
-	// only one (the per-file checks below still apply).
 	const declaredLength = Number(request.headers.get('content-length') ?? '0')
 	if (declaredLength > MAX_PRIVATE_SITE_SIZE + 1024 * 1024) {
 		throw new PrivateSiteUploadError(`private sites are limited to ${MAX_PRIVATE_SITE_SIZE} bytes`, 413)
