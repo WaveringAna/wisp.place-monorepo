@@ -8,6 +8,7 @@ import {
 	parseCacheInvalidationMessage,
 	parseCacheInvalidationStreamEntry,
 	resetUpdatingSitesForTests,
+	withReplayReadTimeout,
 } from './cache-invalidation'
 
 const DID = 'did:plc:test'
@@ -165,5 +166,10 @@ describe('cache invalidation updating state', () => {
 		expect(compareStreamIds('1713811200000-1', '1713811200000-2')).toBeLessThan(0)
 		expect(compareStreamIds('1713811200001-0', '1713811200000-999')).toBeGreaterThan(0)
 		expect(compareStreamIds('1713811200001-3', '1713811200001-3')).toBe(0)
+	})
+
+	test('stalled replay reads time out so the client can reconnect', async () => {
+		const stalledRead = new Promise<never>(() => {})
+		await expect(withReplayReadTimeout(stalledRead, 5)).rejects.toThrow('Redis stream read exceeded')
 	})
 })

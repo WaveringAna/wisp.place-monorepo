@@ -148,6 +148,32 @@ describe('DiskStorageTier - Recursive Directory Support', () => {
 			expect(siteKeys.sort()).toEqual(['site:a/about.html', 'site:a/index.html', 'site:b/index.html'])
 		})
 
+		test('should list directory-aligned prefixes with encoded path segments', async () => {
+			const tier = new DiskStorageTier({ directory: testDir, encodeColons: true })
+
+			const data = new TextEncoder().encode('test')
+			const createMetadata = (key: string) => ({
+				key,
+				size: data.byteLength,
+				createdAt: new Date(),
+				lastAccessed: new Date(),
+				accessCount: 0,
+				compressed: false,
+				checksum: 'abc',
+			})
+
+			await tier.set('did:plc:one/site/index.html', data, createMetadata('did:plc:one/site/index.html'))
+			await tier.set('did:plc:one/site/assets/logo.svg', data, createMetadata('did:plc:one/site/assets/logo.svg'))
+			await tier.set('did:plc:two/site/index.html', data, createMetadata('did:plc:two/site/index.html'))
+
+			const siteKeys: string[] = []
+			for await (const key of tier.listKeys('did:plc:one/site/')) {
+				siteKeys.push(key)
+			}
+
+			expect(siteKeys.sort()).toEqual(['did:plc:one/site/assets/logo.svg', 'did:plc:one/site/index.html'])
+		})
+
 		test('should handle empty directories gracefully', async () => {
 			const tier = new DiskStorageTier({ directory: testDir })
 
@@ -290,6 +316,32 @@ describe('DiskStorageTier - Recursive Directory Support', () => {
 	})
 
 	describe('Deletion from Nested Directories', () => {
+		test('should detach a directory prefix without affecting sibling sites', async () => {
+			const tier = new DiskStorageTier({ directory: testDir, encodeColons: true })
+			const data = new TextEncoder().encode('test')
+			const createMetadata = (key: string) => ({
+				key,
+				size: data.byteLength,
+				createdAt: new Date(),
+				lastAccessed: new Date(),
+				accessCount: 0,
+				compressed: false,
+				checksum: 'abc',
+			})
+
+			const targetKeys = ['did:plc:one/site/index.html', 'did:plc:one/site/assets/logo.svg']
+			const siblingKey = 'did:plc:two/site/index.html'
+			for (const key of [...targetKeys, siblingKey]) {
+				await tier.set(key, data, createMetadata(key))
+			}
+
+			expect(await tier.deletePrefix('did:plc:one/site/')).toBe(2)
+			for (const key of targetKeys) {
+				expect(await tier.exists(key)).toBe(false)
+			}
+			expect(await tier.exists(siblingKey)).toBe(true)
+		})
+
 		test('should delete files from nested directories', async () => {
 			const tier = new DiskStorageTier({ directory: testDir })
 

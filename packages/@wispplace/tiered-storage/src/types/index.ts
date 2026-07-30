@@ -287,6 +287,13 @@ export interface StorageTier {
 	deleteMany(keys: string[]): Promise<void>
 
 	/**
+	 * Remove every key under a prefix without enumerating it first.
+	 * Implementations may use an atomic namespace operation so readers stop
+	 * seeing invalidated data before physical cleanup finishes.
+	 */
+	deletePrefix?(prefix: string): Promise<number>
+
+	/**
 	 * Retrieve metadata for a key without fetching the data.
 	 *
 	 * @param key - The key to get metadata for
