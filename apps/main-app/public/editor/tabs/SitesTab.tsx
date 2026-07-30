@@ -1,9 +1,21 @@
 import { Badge } from '@public/components/ui/badge'
 import { Button } from '@public/components/ui/button'
 import { SkeletonShimmer } from '@public/components/ui/skeleton'
-import { ChevronDown, ChevronRight, ExternalLink, Globe, Settings as SettingsIcon, Trash2 } from 'lucide-react'
+import {
+	Check,
+	ChevronDown,
+	ChevronRight,
+	Copy,
+	ExternalLink,
+	Globe,
+	Link2,
+	Lock,
+	Settings as SettingsIcon,
+	Trash2,
+} from 'lucide-react'
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
-import type { SiteWithDomains } from '../hooks/useSiteData'
+import { usePrivateShares } from '../hooks/usePrivateShares'
+import type { PrivateShare, SiteWithDomains } from '../hooks/useSiteData'
 import type { UserInfo } from '../hooks/useUserInfo'
 
 interface SitesTabProps {
@@ -13,11 +25,23 @@ interface SitesTabProps {
 	onConfigureSite: (site: SiteWithDomains) => void
 	onDeleteSite: (site: SiteWithDomains) => void
 }
+const getSiteKey = (site: SiteWithDomains) => (site.isPrivate ? `private-${site.siteId}` : `${site.did}-${site.rkey}`)
+const formatExpiry = (expiresAt: string | null | undefined, expired: boolean | undefined): string => {
+	if (expired) return 'expired'
+	if (!expiresAt) return 'never expires'
+	const mins = Math.round((new Date(expiresAt).getTime() - Date.now()) / 60000)
+	if (mins <= 0) return 'expired'
+	if (mins < 60) return `expires in ${mins}m`
+	if (mins < 60 * 24) return `expires in ${Math.round(mins / 60)}h`
+	return `expires in ${Math.round(mins / (60 * 24))}d`
+}
 
-// Helper to generate unique site key
-const getSiteKey = (site: SiteWithDomains) => `${site.did}-${site.rkey}`
-
-// Sort domains: custom first, then wisp
+const formatBytes = (bytes: number | undefined): string => {
+	if (!bytes) return '0 B'
+	if (bytes < 1024) return `${bytes} B`
+	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+	return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
 const getSortedDomains = (site: SiteWithDomains) => {
 	if (!site.domains || site.domains.length === 0) return []
 	return [...site.domains].sort((a, b) => {
@@ -26,11 +50,173 @@ const getSortedDomains = (site: SiteWithDomains) => {
 		return 0
 	})
 }
-
-// Keyboard shortcut badge component
 const Kbd = ({ children }: { children: React.ReactNode }) => (
 	<kbd className="px-2 py-1 bg-muted/50 rounded border border-border/50">{children}</kbd>
 )
+
+interface PrivateSharePanelProps {
+	siteId: string
+	shares: PrivateShare[]
+	loading: boolean
+	justCreatedUrl: string | null
+	copied: boolean
+	onLoad: (siteId: string) => void
+	onCreate: (
+		siteId: string,
+		options?: { label?: string; expiryMinutes?: number; audienceDid?: string },
+	) => Promise<string | null>
+	onRevoke: (siteId: string, shareId: string) => Promise<boolean>
+	onCopy: (text: string) => void
+}
+
+const PrivateSharePanel = memo(function PrivateSharePanel({
+	siteId,
+	shares,
+	loading,
+	justCreatedUrl,
+	copied,
+	onLoad,
+	onCreate,
+	onRevoke,
+	onCopy,
+}: PrivateSharePanelProps) {
+	const [label, setLabel] = useState('')
+	const [creating, setCreating] = useState(false)
+	const [handle, setHandle] = useState('')
+	const [accountError, setAccountError] = useState('')
+	useEffect(() => {
+		if (siteId) onLoad(siteId)
+	}, [siteId, onLoad])
+
+	const handleCreate = useCallback(async () => {
+		setCreating(true)
+		setAccountError('')
+		try {
+			const account = handle.trim().replace(/^@/, '')
+			let audienceDid: string | undefined
+			if (account) {
+				const response = await fetch(`/api/user/private-sites/resolve-handle?handle=${encodeURIComponent(account)}`)
+				const result = response.ok ? await response.json() : null
+				if (!result?.found) {
+					setAccountError('account not found')
+					return
+				}
+				audienceDid = result.did
+			}
+			await onCreate(siteId, {
+				...(label.trim() ? { label: label.trim() } : {}),
+				...(audienceDid ? { audienceDid } : {}),
+			})
+			setLabel('')
+			setHandle('')
+		} catch {
+			setAccountError('could not resolve account')
+		} finally {
+			setCreating(false)
+		}
+	}, [siteId, label, handle, onCreate])
+
+	return (
+		<div>
+			<p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">SHARE LINKS:</p>
+			{justCreatedUrl && (
+				<div className="mb-3 space-y-2 border border-accent/50 bg-accent/10 p-3">
+					<p className="text-xs text-accent">Copy this now — it is shown once and cannot be retrieved later.</p>
+					<div className="flex items-center gap-2">
+						<code className="flex-1 text-xs break-all bg-background/50 px-2 py-1.5 rounded">{justCreatedUrl}</code>
+						<Button
+							variant="outline"
+							size="sm"
+							className="font-mono text-xs flex-shrink-0"
+							onClick={() => onCopy(justCreatedUrl)}
+						>
+							{copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+						</Button>
+					</div>
+				</div>
+			)}
+
+			<div className="space-y-1.5 mb-3">
+				<div className="flex items-center gap-2">
+					<input
+						type="text"
+						value={label}
+						onChange={(e) => setLabel(e.target.value)}
+						placeholder="label (optional)"
+						className="flex-1 text-xs bg-background/50 border border-border/50 px-2 py-1.5 font-mono outline-none focus:border-accent"
+					/>
+					<Button variant="outline" size="sm" className="font-mono text-xs" disabled={creating} onClick={handleCreate}>
+						<Link2 className="w-3 h-3 mr-2" />
+						{creating ? 'Creating...' : 'New link'}
+					</Button>
+				</div>
+
+				<input
+					type="text"
+					value={handle}
+					onChange={(event) => {
+						setHandle(event.target.value)
+						setAccountError('')
+					}}
+					placeholder="share with an account (optional) — e.g. alice.bsky.social"
+					autoCapitalize="none"
+					autoComplete="off"
+					autoCorrect="off"
+					spellCheck={false}
+					className="w-full bg-background/50 px-2 py-1.5 text-xs font-mono outline-none border border-border/50 focus:border-accent"
+				/>
+				{accountError && <p className="text-[10px] text-amber-400">{accountError}</p>}
+				<p className="text-[10px] text-muted-foreground">leave blank for a link anyone can open</p>
+			</div>
+
+			{loading ? (
+				<SkeletonShimmer className="h-8 w-full" />
+			) : shares.length === 0 ? (
+				<p className="text-xs text-muted-foreground">No share links yet.</p>
+			) : (
+				<div className="space-y-1.5">
+					{shares.map((share) => (
+						<div key={share.shareId} className="flex items-center gap-2 text-xs">
+							<Badge
+								variant="outline"
+								className={`text-[10px] ${
+									share.status === 'active'
+										? 'text-green-400 border-green-400/50'
+										: share.status === 'revoked'
+											? 'text-red-400 border-red-400/50'
+											: 'text-amber-400 border-amber-400/50'
+								}`}
+							>
+								{share.status}
+							</Badge>
+							<code className="text-muted-foreground">{share.tokenPrefix}...</code>
+							{share.label && <span className="text-muted-foreground truncate">{share.label}</span>}
+							{share.audienceDid && (
+								<Badge variant="outline" className="flex-shrink-0 border-accent/50 text-[10px] text-accent">
+									<Lock className="w-2.5 h-2.5 mr-1" />
+									{share.audienceDid}
+								</Badge>
+							)}
+							<span className="text-muted-foreground/60 ml-auto">
+								{share.expiresAt ? formatExpiry(share.expiresAt, false) : 'never expires'}
+							</span>
+							{share.status === 'active' && (
+								<Button
+									variant="ghost"
+									size="sm"
+									className="h-6 px-2 text-[10px] text-red-400 hover:text-red-500"
+									onClick={() => onRevoke(siteId, share.shareId)}
+								>
+									revoke
+								</Button>
+							)}
+						</div>
+					))}
+				</div>
+			)}
+		</div>
+	)
+})
 
 export const SitesTab = memo(function SitesTab({
 	sites,
@@ -39,18 +225,25 @@ export const SitesTab = memo(function SitesTab({
 	onConfigureSite,
 	onDeleteSite,
 }: SitesTabProps) {
-	// State: only one site can be expanded at a time (null = none expanded)
 	const [expandedSiteKey, setExpandedSiteKey] = useState<string | null>(null)
 	const [focusedIndex, setFocusedIndex] = useState(0)
+	const [copied, setCopied] = useState(false)
 
-	// Refs
+	const {
+		shares,
+		loading: sharesLoading,
+		justCreated,
+		fetchShares,
+		createShare,
+		revokeShare,
+		clearJustCreated,
+	} = usePrivateShares()
 	const containerRef = useRef<HTMLDivElement>(null)
 	const siteRefs = useRef<(HTMLDivElement | null)[]>([])
 	const scrollContainerRef = useRef<HTMLDivElement>(null)
-
-	// URL helpers
 	const getSiteUrl = useCallback(
 		(site: SiteWithDomains) => {
+			if (site.isPrivate) return site.privateUrl ?? '#'
 			const sortedDomains = getSortedDomains(site)
 			if (sortedDomains.length > 0) {
 				return `https://${sortedDomains[0].domain}`
@@ -63,6 +256,7 @@ export const SitesTab = memo(function SitesTab({
 
 	const getSiteDomainName = useCallback(
 		(site: SiteWithDomains) => {
+			if (site.isPrivate) return formatExpiry(site.expiresAt, site.expired)
 			const sortedDomains = getSortedDomains(site)
 			if (sortedDomains.length > 0) {
 				return sortedDomains[0].domain
@@ -72,21 +266,41 @@ export const SitesTab = memo(function SitesTab({
 		},
 		[userInfo],
 	)
-
-	// Toggle expand - auto-closes other sites
-	const toggleExpanded = useCallback((siteKey: string) => {
-		setExpandedSiteKey((prev) => (prev === siteKey ? null : siteKey))
+	const toggleExpanded = useCallback(
+		(siteKey: string) => {
+			clearJustCreated()
+			setCopied(false)
+			setExpandedSiteKey((prev) => (prev === siteKey ? null : siteKey))
+		},
+		[clearJustCreated],
+	)
+	const openPrivateSite = useCallback(async (siteId: string) => {
+		try {
+			const response = await fetch(`/api/user/private-sites/${siteId}/open`, { method: 'POST' })
+			const data = await response.json()
+			if (!data.success) throw new Error(data.error || 'Failed to open private site')
+			window.open(data.url, '_blank', 'noopener')
+		} catch (err) {
+			console.error('Open private site error:', err)
+			alert(`Failed to open private site: ${err instanceof Error ? err.message : 'Unknown error'}`)
+		}
 	}, [])
 
-	// Auto-focus container when sites load
+	const copyToClipboard = useCallback(async (text: string) => {
+		try {
+			await navigator.clipboard.writeText(text)
+			setCopied(true)
+			setTimeout(() => setCopied(false), 2000)
+		} catch (err) {
+			console.error('Failed to copy:', err)
+		}
+	}, [])
 	useEffect(() => {
 		if (sites.length > 0 && containerRef.current) {
 			const timer = setTimeout(() => containerRef.current?.focus(), 100)
 			return () => clearTimeout(timer)
 		}
 	}, [sites.length])
-
-	// Watch for dialog close and refocus container
 	useEffect(() => {
 		let wasDialogOpen = document.querySelector('[role="dialog"]') !== null
 
@@ -94,7 +308,6 @@ export const SitesTab = memo(function SitesTab({
 			const isDialogOpen = document.querySelector('[role="dialog"]') !== null
 
 			if (wasDialogOpen && !isDialogOpen) {
-				// Dialog just closed, refocus the container
 				setTimeout(() => containerRef.current?.focus(), 50)
 			}
 
@@ -105,8 +318,6 @@ export const SitesTab = memo(function SitesTab({
 
 		return () => observer.disconnect()
 	}, [])
-
-	// Scroll focused item into view
 	useEffect(() => {
 		const element = siteRefs.current[focusedIndex]
 		if (element && scrollContainerRef.current) {
@@ -121,8 +332,6 @@ export const SitesTab = memo(function SitesTab({
 			}
 		}
 	}, [focusedIndex])
-
-	// Keyboard navigation
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
 			const target = e.target as HTMLElement
@@ -153,11 +362,15 @@ export const SitesTab = memo(function SitesTab({
 				case 'o':
 					if (isExpanded && currentSite) {
 						e.preventDefault()
-						window.open(getSiteUrl(currentSite), '_blank')
+						if (currentSite.isPrivate) {
+							void openPrivateSite(currentSite.siteId ?? currentSite.rkey)
+						} else {
+							window.open(getSiteUrl(currentSite), '_blank')
+						}
 					}
 					break
 				case 'c':
-					if (isExpanded && currentSite) {
+					if (isExpanded && currentSite && !currentSite.isPrivate) {
 						e.preventDefault()
 						onConfigureSite(currentSite)
 					}
@@ -173,9 +386,7 @@ export const SitesTab = memo(function SitesTab({
 
 		window.addEventListener('keydown', handleKeyDown)
 		return () => window.removeEventListener('keydown', handleKeyDown)
-	}, [sites, focusedIndex, expandedSiteKey, toggleExpanded, getSiteUrl, onConfigureSite, onDeleteSite])
-
-	// Loading state
+	}, [sites, focusedIndex, expandedSiteKey, toggleExpanded, getSiteUrl, onConfigureSite, onDeleteSite, openPrivateSite])
 	if (sitesLoading) {
 		return (
 			<div className="h-full flex flex-col border border-border/30 bg-card/50 font-mono">
@@ -192,8 +403,6 @@ export const SitesTab = memo(function SitesTab({
 			</div>
 		)
 	}
-
-	// Empty state
 	if (sites.length === 0) {
 		return (
 			<div className="h-full flex flex-col border border-border/30 bg-card/50 font-mono">
@@ -213,10 +422,14 @@ export const SitesTab = memo(function SitesTab({
 			ref={containerRef}
 			className="h-full flex flex-col border border-border/30 bg-card/50 font-mono outline-none"
 			tabIndex={-1}
-			onClick={() => containerRef.current?.focus()}
+			onClick={(e) => {
+				const t = e.target as HTMLElement
+				if (!t.closest('input, textarea, button, select, a, label')) {
+					containerRef.current?.focus()
+				}
+			}}
 			onKeyDown={() => {}}
 		>
-			{/* Keyboard hints */}
 			<div className="flex items-center gap-4 text-xs text-muted-foreground p-4 pb-3 border-b border-border/30 flex-shrink-0">
 				<div className="flex items-center gap-2">
 					<Kbd>↑</Kbd>
@@ -245,8 +458,6 @@ export const SitesTab = memo(function SitesTab({
 					<span className="text-red-400">delete</span>
 				</div>
 			</div>
-
-			{/* Sites list */}
 			<div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-y-auto p-4 space-y-2">
 				{sites.map((site, index) => {
 					const siteKey = getSiteKey(site)
@@ -265,7 +476,6 @@ export const SitesTab = memo(function SitesTab({
 								isFocused ? 'border-accent bg-accent/10' : 'border-border/30 bg-card hover:bg-muted/10'
 							}`}
 						>
-							{/* Site header */}
 							<button
 								type="button"
 								onClick={() => toggleExpanded(siteKey)}
@@ -276,66 +486,111 @@ export const SitesTab = memo(function SitesTab({
 								) : (
 									<ChevronRight className="w-4 h-4 text-muted-foreground flex-shrink-0" />
 								)}
-								<span className="font-semibold flex-1">{siteName}</span>
+								<span className="font-semibold flex-1 flex items-center gap-2">
+									{siteName}
+									{site.isPrivate && (
+										<Badge variant="outline" className="gap-1 border-accent/50 bg-accent/10 text-[10px] text-accent">
+											<Lock className="w-2.5 h-2.5" />
+											private
+										</Badge>
+									)}
+								</span>
 								<div className="flex items-center gap-2">
 									<span className="text-xs text-muted-foreground">{getSiteDomainName(site)}</span>
-									{site.domains && site.domains.length > 1 && (
+									{site.isPrivate && (site.shareCount ?? 0) > 0 && (
+										<Badge variant="secondary" className="text-[10px] gap-1">
+											<Link2 className="w-2.5 h-2.5" />
+											{site.shareCount}
+										</Badge>
+									)}
+									{!site.isPrivate && site.domains && site.domains.length > 1 && (
 										<Badge variant="outline" className="text-[10px]">
 											+{site.domains.length - 1}
 										</Badge>
 									)}
 								</div>
-								<Badge variant="outline" className="text-[10px] text-accent border-accent/50">
-									[active]
+								<Badge
+									variant="outline"
+									className={`text-[10px] ${
+										site.expired ? 'text-amber-400 border-amber-400/50' : 'text-accent border-accent/50'
+									}`}
+								>
+									{site.expired ? '[expired]' : '[active]'}
 								</Badge>
 							</button>
-
-							{/* Expanded content */}
 							{isExpanded && (
 								<div className="px-4 pb-4 pl-11 space-y-4 border-l-2 border-accent/50 ml-4">
-									{/* Domains */}
-									<div>
-										<p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">
-											{sortedDomains.length > 0 ? 'DOMAINS:' : 'DEFAULT URL:'}
-										</p>
-										{sortedDomains.length > 0 ? (
-											<div className="space-y-2">
-												{sortedDomains.map((domain) => (
-													<div key={domain.domain} className="flex items-center gap-2">
-														<a
-															href={`https://${domain.domain}`}
-															target="_blank"
-															rel="noopener noreferrer"
-															className="text-sm text-accent hover:text-accent/80 flex items-center gap-2"
-														>
-															<Globe className="w-3 h-3" />
-															{domain.domain}
-														</a>
-														<Badge variant={domain.type === 'wisp' ? 'secondary' : 'outline'} className="text-[10px]">
-															{domain.type}
-														</Badge>
-														{domain.type === 'custom' && domain.verified !== undefined && (
-															<Badge variant={domain.verified ? 'default' : 'secondary'} className="text-[10px]">
-																{domain.verified ? '✓ verified' : '⏳ pending'}
-															</Badge>
-														)}
-													</div>
-												))}
+									{site.isPrivate ? (
+										<>
+											<div>
+												<p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">PRIVATE URL:</p>
+												<button
+													type="button"
+													onClick={() => void openPrivateSite(site.siteId ?? site.rkey)}
+													className="text-sm text-accent hover:text-accent/80 flex items-center gap-2 text-left"
+												>
+													<Lock className="w-3 h-3" />
+													{site.privateUrl}
+												</button>
+												<p className="text-xs text-muted-foreground mt-2">
+													{site.fileCount} files · {formatBytes(site.totalBytes)} ·{' '}
+													{formatExpiry(site.expiresAt, site.expired)}
+												</p>
 											</div>
-										) : (
-											<a
-												href={getSiteUrl(site)}
-												target="_blank"
-												rel="noopener noreferrer"
-												className="text-sm text-accent hover:text-accent/80 flex items-center gap-2"
-											>
-												<Globe className="w-4 h-4" />
-												{getSiteDomainName(site)}
-											</a>
-										)}
-									</div>
-
-									{/* Actions */}
+											<PrivateSharePanel
+												siteId={site.siteId ?? ''}
+												shares={shares[site.siteId ?? ''] ?? []}
+												loading={Boolean(sharesLoading[site.siteId ?? ''])}
+												justCreatedUrl={justCreated && justCreated.siteId === site.siteId ? justCreated.url : null}
+												copied={copied}
+												onLoad={fetchShares}
+												onCreate={createShare}
+												onRevoke={revokeShare}
+												onCopy={copyToClipboard}
+											/>
+										</>
+									) : (
+										<div>
+											<p className="text-xs text-muted-foreground uppercase tracking-wider mb-2">
+												{sortedDomains.length > 0 ? 'DOMAINS:' : 'DEFAULT URL:'}
+											</p>
+											{sortedDomains.length > 0 ? (
+												<div className="space-y-2">
+													{sortedDomains.map((domain) => (
+														<div key={domain.domain} className="flex items-center gap-2">
+															<a
+																href={`https://${domain.domain}`}
+																target="_blank"
+																rel="noopener noreferrer"
+																className="text-sm text-accent hover:text-accent/80 flex items-center gap-2"
+															>
+																<Globe className="w-3 h-3" />
+																{domain.domain}
+															</a>
+															<Badge variant={domain.type === 'wisp' ? 'secondary' : 'outline'} className="text-[10px]">
+																{domain.type}
+															</Badge>
+															{domain.type === 'custom' && domain.verified !== undefined && (
+																<Badge variant={domain.verified ? 'default' : 'secondary'} className="text-[10px]">
+																	{domain.verified ? '✓ verified' : '⏳ pending'}
+																</Badge>
+															)}
+														</div>
+													))}
+												</div>
+											) : (
+												<a
+													href={getSiteUrl(site)}
+													target="_blank"
+													rel="noopener noreferrer"
+													className="text-sm text-accent hover:text-accent/80 flex items-center gap-2"
+												>
+													<Globe className="w-4 h-4" />
+													{getSiteDomainName(site)}
+												</a>
+											)}
+										</div>
+									)}
 									<div>
 										<p className="text-xs text-muted-foreground uppercase tracking-wider mb-3">ACTIONS:</p>
 										<div className="flex flex-wrap gap-3">
@@ -343,22 +598,28 @@ export const SitesTab = memo(function SitesTab({
 												variant="outline"
 												size="sm"
 												className="font-mono text-xs"
-												onClick={() => window.open(getSiteUrl(site), '_blank')}
+												onClick={() =>
+													site.isPrivate
+														? void openPrivateSite(site.siteId ?? site.rkey)
+														: window.open(getSiteUrl(site), '_blank')
+												}
 											>
 												<ExternalLink className="w-3 h-3 mr-2" />
 												Open
 												<kbd className="ml-2 px-1.5 py-0.5 bg-muted/50 rounded text-[10px]">o</kbd>
 											</Button>
-											<Button
-												variant="outline"
-												size="sm"
-												className="font-mono text-xs"
-												onClick={() => onConfigureSite(site)}
-											>
-												<SettingsIcon className="w-3 h-3 mr-2" />
-												Configure
-												<kbd className="ml-2 px-1.5 py-0.5 bg-muted/50 rounded text-[10px]">c</kbd>
-											</Button>
+											{!site.isPrivate && (
+												<Button
+													variant="outline"
+													size="sm"
+													className="font-mono text-xs"
+													onClick={() => onConfigureSite(site)}
+												>
+													<SettingsIcon className="w-3 h-3 mr-2" />
+													Configure
+													<kbd className="ml-2 px-1.5 py-0.5 bg-muted/50 rounded text-[10px]">c</kbd>
+												</Button>
+											)}
 											<Button
 												variant="outline"
 												size="sm"
@@ -371,9 +632,7 @@ export const SitesTab = memo(function SitesTab({
 											</Button>
 										</div>
 									</div>
-
-									{/* View in PDS link */}
-									{userInfo && (
+									{userInfo && !site.isPrivate && (
 										<a
 											href={`https://pdsls.dev/at://${userInfo.did}/place.wisp.fs/${site.rkey}`}
 											target="_blank"

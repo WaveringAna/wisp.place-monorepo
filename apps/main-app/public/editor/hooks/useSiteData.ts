@@ -17,6 +17,26 @@ export interface DomainInfo {
 
 export interface SiteWithDomains extends Site {
 	domains?: DomainInfo[]
+	isPrivate?: boolean
+	siteId?: string
+	expiresAt?: string | null
+	expired?: boolean
+	shareCount?: number
+	privateUrl?: string
+	fileCount?: number
+	totalBytes?: number
+}
+
+export interface PrivateShare {
+	shareId: string
+	tokenPrefix: string
+	label: string | null
+	audienceDid: string | null
+	expiresAt: string | null
+	revokedAt: string | null
+	createdAt: string
+	lastUsedAt: string | null
+	status: 'active' | 'expired' | 'revoked'
 }
 
 export function useSiteData() {
@@ -26,7 +46,10 @@ export function useSiteData() {
 
 	const fetchSites = useCallback(async () => {
 		try {
-			const response = await fetch('/api/user/sites')
+			const [response, privateResponse] = await Promise.all([
+				fetch('/api/user/sites'),
+				fetch('/api/user/private-sites').catch(() => null),
+			])
 			const data = await response.json()
 			const sitesData: Site[] = data.sites || []
 
@@ -50,7 +73,44 @@ export function useSiteData() {
 				}),
 			)
 
-			setSites(sitesWithDomains)
+			let privateSites: SiteWithDomains[] = []
+			if (privateResponse?.ok) {
+				try {
+					const privateData = await privateResponse.json()
+					privateSites = (privateData.sites || []).map(
+						(p: {
+							siteId: string
+							name: string
+							fileCount: number
+							totalBytes: number
+							expiresAt: string | null
+							createdAt: string
+							expired: boolean
+							shareCount: number
+							url: string
+						}): SiteWithDomains => ({
+							did: '',
+							rkey: p.siteId,
+							display_name: p.name,
+							created_at: Math.floor(new Date(p.createdAt).getTime() / 1000),
+							updated_at: Math.floor(new Date(p.createdAt).getTime() / 1000),
+							domains: [],
+							isPrivate: true,
+							siteId: p.siteId,
+							expiresAt: p.expiresAt,
+							expired: p.expired,
+							shareCount: p.shareCount,
+							privateUrl: p.url,
+							fileCount: p.fileCount,
+							totalBytes: p.totalBytes,
+						}),
+					)
+				} catch (err) {
+					console.error('Failed to parse private sites:', err)
+				}
+			}
+
+			setSites([...sitesWithDomains, ...privateSites].sort((a, b) => b.created_at - a.created_at))
 		} catch (err) {
 			console.error('Failed to fetch sites:', err)
 		} finally {
@@ -79,9 +139,9 @@ export function useSiteData() {
 	}, [fetchSites])
 
 	const deleteSite = useCallback(
-		async (rkey: string) => {
+		async (rkey: string, isPrivate = false) => {
 			try {
-				const response = await fetch(`/api/site/${rkey}`, {
+				const response = await fetch(isPrivate ? `/api/user/private-sites/${rkey}` : `/api/site/${rkey}`, {
 					method: 'DELETE',
 				})
 

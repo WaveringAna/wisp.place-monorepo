@@ -10,6 +10,7 @@ import type { Record as WispSettings } from '@wispplace/lexicons/types/place/wis
 import { validateRecord as validateSettingsRecord } from '@wispplace/lexicons/types/place/wisp/settings'
 import { createLogger } from '@wispplace/observability'
 import { config } from '../config'
+import { enqueueSiteRevalidation } from './cache-invalidation'
 import {
 	fetchSiteRecord,
 	handleSettingsDelete,
@@ -18,7 +19,7 @@ import {
 	handleSiteDelete,
 } from './cache-writer'
 
-const idResolver = new IdResolver()
+const idResolver = new IdResolver({ plcUrl: config.plcDirectoryUrl })
 const logger = createLogger('firehose-service')
 
 // Track firehose health
@@ -153,11 +154,15 @@ async function handleEvent(evt: Event | CommitEvt): Promise<void> {
 							await handleSiteCreateOrUpdate(did, rkey, verified.record, verified.cid)
 						} else {
 							logger.warn(`[place.wisp.fs] Skipping ${commitEvt.event} event - verification failed`, { did, rkey })
+							await enqueueSiteRevalidation(did, rkey, `firehose-verification-failed:${commitEvt.event}`)
 						}
 					}
 					logger.debug(`[place.wisp.fs] Completed ${commitEvt.event} event`, { did, rkey })
 				} catch (err) {
 					logger.error(`[place.wisp.fs] Error handling event`, err, { did, rkey, event: commitEvt.event })
+					if (commitEvt.event !== 'delete') {
+						await enqueueSiteRevalidation(did, rkey, `firehose-processing-failed:${commitEvt.event}`)
+					}
 				}
 			})
 		}

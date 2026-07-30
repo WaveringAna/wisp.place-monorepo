@@ -48,13 +48,13 @@ export interface DeployOptions {
 	forceGzip?: boolean
 }
 
-interface FileInfo {
+export interface FileInfo {
 	path: string
 	relativePath: string
 	size: number
 }
 
-function createIgnoreMatcher(siteDir: string): Ignore {
+export function createIgnoreMatcher(siteDir: string): Ignore {
 	const ig = ignore()
 	ig.add(DEFAULT_IGNORE_PATTERNS)
 
@@ -81,7 +81,7 @@ function toUnixPath(p: string): string {
 	return p
 }
 
-function collectFiles(dir: string, ig: Ignore, baseDir: string): FileInfo[] {
+export function collectFiles(dir: string, ig: Ignore, baseDir: string): FileInfo[] {
 	const files: FileInfo[] = []
 
 	const entries = readdirSync(dir, { withFileTypes: true })

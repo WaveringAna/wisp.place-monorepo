@@ -22,6 +22,10 @@ const CHANNEL = 'wisp:cache-invalidate'
 const STREAM = process.env.WISP_CACHE_INVALIDATION_STREAM || 'wisp:cache-invalidate-stream'
 const STREAM_BLOCK_MS = parsePositiveInt(process.env.WISP_CACHE_INVALIDATION_BLOCK_MS, 5000)
 const STREAM_BATCH_COUNT = parsePositiveInt(process.env.WISP_CACHE_INVALIDATION_BATCH_COUNT, 100)
+const STREAM_READ_TIMEOUT_MS = parsePositiveInt(
+	process.env.WISP_CACHE_INVALIDATION_READ_TIMEOUT_MS,
+	STREAM_BLOCK_MS + 10_000,
+)
 const CURSOR_FILE =
 	process.env.WISP_CACHE_INVALIDATION_CURSOR_FILE ||
 	resolve(process.env.CACHE_DIR || './cache/sites', '..', 'cache-invalidation.lastid')
@@ -110,11 +114,19 @@ export function getUpdatingSiteCountForTests(): number {
 
 let subscriber: Redis | null = null
 let replayClient: Redis | null = null
+let replayRedisUrl: string | null = null
 let stopReplayRequested = false
 let replayLoop: Promise<void> | null = null
 let processingQueue: Promise<void> = Promise.resolve()
 let cursorPersistQueue: Promise<void> = Promise.resolve()
 let lastProcessedStreamId = '0-0'
+
+class ReplayReadTimeoutError extends Error {
+	constructor() {
+		super(`Redis stream read exceeded ${STREAM_READ_TIMEOUT_MS}ms`)
+		this.name = 'ReplayReadTimeoutError'
+	}
+}
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {
 	if (!value) return fallback
@@ -270,6 +282,10 @@ export function parseCacheInvalidationStreamEntry(streamId: string, fields: stri
  */
 async function invalidateTier(tier: StorageTier, tierName: string, prefix: string): Promise<number> {
 	try {
+		if (tier.deletePrefix) {
+			return await tier.deletePrefix(prefix)
+		}
+
 		const keys: string[] = []
 		for await (const key of tier.listKeys(prefix)) {
 			keys.push(key)
@@ -374,6 +390,53 @@ function enqueueCacheInvalidation(parsed: CacheInvalidationMessage, source: 'pub
 	return processingQueue
 }
 
+function createReplayClient(redisUrl: string): Redis {
+	const client = new Redis(redisUrl, {
+		maxRetriesPerRequest: 2,
+		enableReadyCheck: true,
+	})
+
+	client.on('error', (err) => {
+		console.error('[CacheInvalidation] Replay Redis error:', err)
+	})
+	client.on('ready', () => {
+		console.log('[CacheInvalidation] Redis replay client connected')
+		ensureReplayLoopStarted()
+	})
+
+	return client
+}
+
+function resetReplayClient(): void {
+	const stalledClient = replayClient
+	replayClient = null
+	stalledClient?.disconnect()
+
+	if (!stopReplayRequested && replayRedisUrl) {
+		replayClient = createReplayClient(replayRedisUrl)
+	}
+}
+
+export async function withReplayReadTimeout<T>(read: Promise<T>, timeoutMs = STREAM_READ_TIMEOUT_MS): Promise<T> {
+	let timeout: ReturnType<typeof setTimeout> | undefined
+	try {
+		return await Promise.race([
+			read,
+			new Promise<never>((_, reject) => {
+				timeout = setTimeout(() => reject(new ReplayReadTimeoutError()), timeoutMs)
+			}),
+		])
+	} finally {
+		if (timeout) clearTimeout(timeout)
+	}
+}
+
+async function readReplayBatch(client: Redis) {
+	return withReplayReadTimeout(
+		client.xread('COUNT', STREAM_BATCH_COUNT, 'BLOCK', STREAM_BLOCK_MS, 'STREAMS', STREAM, lastProcessedStreamId),
+	)
+}
+
 function ensureReplayLoopStarted(): void {
 	if (!replayClient || replayLoop || stopReplayRequested) return
 
@@ -382,15 +445,12 @@ function ensureReplayLoopStarted(): void {
 
 		while (!stopReplayRequested) {
 			try {
-				const response = await replayClient.xread(
-					'COUNT',
-					STREAM_BATCH_COUNT,
-					'BLOCK',
-					STREAM_BLOCK_MS,
-					'STREAMS',
-					STREAM,
-					lastProcessedStreamId,
-				)
+				const client = replayClient
+				if (!client) {
+					await new Promise((resolve) => setTimeout(resolve, 1000))
+					continue
+				}
+				const response = await readReplayBatch(client)
 
 				if (!response) continue
 
@@ -408,7 +468,12 @@ function ensureReplayLoopStarted(): void {
 				}
 			} catch (err) {
 				if (stopReplayRequested) break
-				console.error('[CacheInvalidation] Replay loop error:', err)
+				if (err instanceof ReplayReadTimeoutError) {
+					console.warn('[CacheInvalidation] Replay read stalled; reconnecting Redis client')
+					resetReplayClient()
+				} else {
+					console.error('[CacheInvalidation] Replay loop error:', err)
+				}
 				await new Promise((resolve) => setTimeout(resolve, 1000))
 			}
 		}
@@ -432,30 +497,21 @@ export function startCacheInvalidationSubscriber(): void {
 
 	loadCursorFromDisk()
 	stopReplayRequested = false
+	replayRedisUrl = redisUrl
 
-	console.log(`[CacheInvalidation] Connecting to Redis for subscribing: ${redisUrl}`)
+	console.log('[CacheInvalidation] Connecting to Redis for subscribing')
 	subscriber = new Redis(redisUrl, {
 		maxRetriesPerRequest: 2,
 		enableReadyCheck: true,
 	})
-	replayClient = new Redis(redisUrl, {
-		maxRetriesPerRequest: 2,
-		enableReadyCheck: true,
-	})
+	replayClient = createReplayClient(redisUrl)
 
 	subscriber.on('error', (err) => {
 		console.error('[CacheInvalidation] Redis error:', err)
 	})
-	replayClient.on('error', (err) => {
-		console.error('[CacheInvalidation] Replay Redis error:', err)
-	})
 
 	subscriber.on('ready', () => {
 		console.log('[CacheInvalidation] Redis subscriber connected')
-	})
-	replayClient.on('ready', () => {
-		console.log('[CacheInvalidation] Redis replay client connected')
-		ensureReplayLoopStarted()
 	})
 
 	subscriber.subscribe(CHANNEL, (err) => {
@@ -481,6 +537,7 @@ export function startCacheInvalidationSubscriber(): void {
 
 export async function stopCacheInvalidationSubscriber(): Promise<void> {
 	stopReplayRequested = true
+	replayRedisUrl = null
 	await replayLoop
 	await processingQueue
 	await cursorPersistQueue.catch(() => undefined)

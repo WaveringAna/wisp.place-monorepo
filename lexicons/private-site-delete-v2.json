@@ -1,0 +1,36 @@
+{
+  "lexicon": 1,
+  "id": "place.wisp.v2.privateSite.delete",
+  "defs": {
+    "main": {
+      "type": "procedure",
+      "description": "Delete an owned private site, its stored files, and all of its share links.",
+      "input": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["siteId"],
+          "properties": {
+            "siteId": { "type": "string", "format": "record-key" }
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["siteId", "deleted"],
+          "properties": {
+            "siteId": { "type": "string", "format": "record-key" },
+            "deleted": { "type": "boolean", "const": true }
+          }
+        }
+      },
+      "errors": [
+        { "name": "AuthenticationRequired" },
+        { "name": "InvalidRequest" },
+        { "name": "NotFound" }
+      ]
+    }
+  }
+}

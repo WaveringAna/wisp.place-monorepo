@@ -1,0 +1,98 @@
+{
+  "lexicon": 1,
+  "id": "place.wisp.v2.privateSite.listShares",
+  "defs": {
+    "main": {
+      "type": "query",
+      "description": "List share links for an owned private site. Never returns share tokens, only their non-secret display prefix.",
+      "parameters": {
+        "type": "params",
+        "required": [
+          "siteId"
+        ],
+        "properties": {
+          "siteId": {
+            "type": "string",
+            "format": "record-key"
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": [
+            "shares"
+          ],
+          "properties": {
+            "shares": {
+              "type": "array",
+              "items": {
+                "type": "ref",
+                "ref": "#share"
+              }
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "name": "AuthenticationRequired"
+        },
+        {
+          "name": "NotFound"
+        }
+      ]
+    },
+    "share": {
+      "type": "object",
+      "required": [
+        "shareId",
+        "tokenPrefix",
+        "createdAt",
+        "status"
+      ],
+      "properties": {
+        "shareId": {
+          "type": "string"
+        },
+        "tokenPrefix": {
+          "type": "string",
+          "description": "Non-secret leading fragment, for identification only."
+        },
+        "label": {
+          "type": "string"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "datetime"
+        },
+        "revokedAt": {
+          "type": "string",
+          "format": "datetime"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "datetime"
+        },
+        "lastUsedAt": {
+          "type": "string",
+          "format": "datetime"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "expired",
+            "revoked"
+          ]
+        },
+        "audienceDid": {
+          "type": "string",
+          "format": "did",
+          "description": "Set when this link is restricted to a single account."
+        }
+      }
+    }
+  }
+}

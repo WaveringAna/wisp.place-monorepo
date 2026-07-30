@@ -209,7 +209,7 @@ export async function startRevalidateWorker(): Promise<void> {
 
 	if (running) return
 
-	logger.info(`[Revalidate] Connecting to Redis: ${config.redisUrl}`)
+	logger.info('[Revalidate] Connecting to Redis')
 	redis = new Redis(config.redisUrl, {
 		maxRetriesPerRequest: 2,
 		enableReadyCheck: true,

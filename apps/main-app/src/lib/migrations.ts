@@ -202,52 +202,78 @@ export const runDatabaseMigrations = async (db: SQL): Promise<void> => {
         `
 	})
 
-	// Create indexes for common query patterns
-	await Promise.all([
-		db`CREATE INDEX IF NOT EXISTS idx_oauth_states_expires_at ON oauth_states(expires_at)`.catch((err) => {
-			if (!hasAlreadyExists(err)) {
-				console.error('Failed to create idx_oauth_states_expires_at:', err)
-			}
-		}),
-		db`CREATE INDEX IF NOT EXISTS idx_oauth_sessions_expires_at ON oauth_sessions(expires_at)`.catch((err) => {
-			if (!hasAlreadyExists(err)) {
-				console.error('Failed to create idx_oauth_sessions_expires_at:', err)
-			}
-		}),
-		db`CREATE INDEX IF NOT EXISTS idx_oauth_keys_created_at ON oauth_keys(created_at)`.catch((err) => {
-			if (!hasAlreadyExists(err)) {
-				console.error('Failed to create idx_oauth_keys_created_at:', err)
-			}
-		}),
-		db`CREATE INDEX IF NOT EXISTS idx_domains_did_rkey ON domains(did, rkey)`.catch((err) => {
-			if (!hasAlreadyExists(err)) {
-				console.error('Failed to create idx_domains_did_rkey:', err)
-			}
-		}),
-		db`CREATE INDEX IF NOT EXISTS idx_custom_domains_did ON custom_domains(did)`.catch((err) => {
-			if (!hasAlreadyExists(err)) {
-				console.error('Failed to create idx_custom_domains_did:', err)
-			}
-		}),
-		db`CREATE INDEX IF NOT EXISTS idx_custom_domains_did_rkey ON custom_domains(did, rkey)`.catch((err) => {
-			if (!hasAlreadyExists(err)) {
-				console.error('Failed to create idx_custom_domains_did_rkey:', err)
-			}
-		}),
-		db`CREATE INDEX IF NOT EXISTS idx_custom_domains_verified ON custom_domains(verified)`.catch((err) => {
-			if (!hasAlreadyExists(err)) {
-				console.error('Failed to create idx_custom_domains_verified:', err)
-			}
-		}),
-		db`CREATE INDEX IF NOT EXISTS idx_site_cache_did ON site_cache(did)`.catch((err) => {
-			if (!hasAlreadyExists(err)) {
-				console.error('Failed to create idx_site_cache_did:', err)
-			}
-		}),
-		db`CREATE INDEX IF NOT EXISTS idx_site_cache_updated ON site_cache(updated_at)`.catch((err) => {
-			if (!hasAlreadyExists(err)) {
-				console.error('Failed to create idx_site_cache_updated:', err)
-			}
-		}),
-	])
+	const migrations: Array<[string, () => Promise<unknown>]> = [
+		[
+			'idx_oauth_states_expires_at',
+			async () => db`CREATE INDEX IF NOT EXISTS idx_oauth_states_expires_at ON oauth_states(expires_at)`,
+		],
+		[
+			'idx_oauth_sessions_expires_at',
+			async () => db`CREATE INDEX IF NOT EXISTS idx_oauth_sessions_expires_at ON oauth_sessions(expires_at)`,
+		],
+		[
+			'idx_oauth_keys_created_at',
+			async () => db`CREATE INDEX IF NOT EXISTS idx_oauth_keys_created_at ON oauth_keys(created_at)`,
+		],
+		['idx_domains_did_rkey', async () => db`CREATE INDEX IF NOT EXISTS idx_domains_did_rkey ON domains(did, rkey)`],
+		[
+			'idx_custom_domains_did',
+			async () => db`CREATE INDEX IF NOT EXISTS idx_custom_domains_did ON custom_domains(did)`,
+		],
+		[
+			'idx_custom_domains_did_rkey',
+			async () => db`CREATE INDEX IF NOT EXISTS idx_custom_domains_did_rkey ON custom_domains(did, rkey)`,
+		],
+		[
+			'idx_custom_domains_verified',
+			async () => db`CREATE INDEX IF NOT EXISTS idx_custom_domains_verified ON custom_domains(verified)`,
+		],
+		['idx_site_cache_did', async () => db`CREATE INDEX IF NOT EXISTS idx_site_cache_did ON site_cache(did)`],
+		[
+			'idx_site_cache_updated',
+			async () => db`CREATE INDEX IF NOT EXISTS idx_site_cache_updated ON site_cache(updated_at)`,
+		],
+		[
+			'idx_private_sites_owner',
+			async () => db`CREATE INDEX IF NOT EXISTS idx_private_sites_owner ON private_sites(owner_did)`,
+		],
+		[
+			'idx_private_sites_expires_at',
+			async () => db`CREATE INDEX IF NOT EXISTS idx_private_sites_expires_at ON private_sites(expires_at)`,
+		],
+		[
+			'private_site_shares.audience_did',
+			async () => db`ALTER TABLE private_site_shares ADD COLUMN IF NOT EXISTS audience_did TEXT`,
+		],
+		[
+			'idx_private_site_shares_site',
+			async () => db`CREATE INDEX IF NOT EXISTS idx_private_site_shares_site ON private_site_shares(site_id)`,
+		],
+		[
+			'idx_private_site_shares_token_hash',
+			async () => db`CREATE INDEX IF NOT EXISTS idx_private_site_shares_token_hash ON private_site_shares(token_hash)`,
+		],
+		[
+			'idx_private_sessions_secret',
+			async () => db`CREATE INDEX IF NOT EXISTS idx_private_sessions_secret ON private_site_sessions(secret_hash)`,
+		],
+		[
+			'idx_private_sessions_expires',
+			async () => db`CREATE INDEX IF NOT EXISTS idx_private_sessions_expires ON private_site_sessions(expires_at)`,
+		],
+		[
+			'private_site_handoffs.owner_did nullable',
+			async () => db`ALTER TABLE private_site_handoffs ALTER COLUMN owner_did DROP NOT NULL`,
+		],
+		[
+			'private_site_handoffs.share_id',
+			async () =>
+				db`ALTER TABLE private_site_handoffs ADD COLUMN IF NOT EXISTS share_id TEXT REFERENCES private_site_shares(share_id) ON DELETE CASCADE`,
+		],
+		[
+			'idx_private_handoffs_secret',
+			async () => db`CREATE INDEX IF NOT EXISTS idx_private_handoffs_secret ON private_site_handoffs(secret_hash)`,
+		],
+	]
+	await Promise.all(migrations.map(([name, migration]) => runMigration(name, migration, { ignoreAlreadyExists: true })))
 }

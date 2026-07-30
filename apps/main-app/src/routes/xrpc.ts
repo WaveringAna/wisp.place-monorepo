@@ -43,6 +43,7 @@ import {
 } from '../lib/db'
 import { verifyCustomDomain } from '../lib/dns-verify'
 import { extractWispHandle, isValidHandle, normalizeDomain, toDomain, validateCustomDomain } from '../lib/domain-utils'
+import { registerPrivateSiteMethods } from './xrpc-private-site'
 
 const logger = createLogger('main-app')
 const isLocalDev = Bun.env.LOCAL_DEV === 'true'
@@ -57,7 +58,10 @@ const serviceJwtVerifier = new ServiceJwtVerifier({
 	serviceDid: SERVICE_DID as any,
 	resolver: new CompositeDidDocumentResolver({
 		methods: {
-			plc: new PlcDidDocumentResolver(),
+			// Devnet DIDs exist only in its local PLC directory.
+			plc: new PlcDidDocumentResolver(
+				Bun.env.WISP_PLC_DIRECTORY_URL ? { apiUrl: Bun.env.WISP_PLC_DIRECTORY_URL } : undefined,
+			),
 			web: new WebDidDocumentResolver(),
 		},
 	}),
@@ -96,6 +100,12 @@ const XRPC_NSIDS = {
 	secretList: 'place.wisp.v2.secret.list',
 	secretDelete: 'place.wisp.v2.secret.delete',
 	secretRotate: 'place.wisp.v2.secret.rotate',
+	privateSiteCreate: 'place.wisp.v2.privateSite.create',
+	privateSiteList: 'place.wisp.v2.privateSite.list',
+	privateSiteDelete: 'place.wisp.v2.privateSite.delete',
+	privateSiteCreateShare: 'place.wisp.v2.privateSite.createShare',
+	privateSiteListShares: 'place.wisp.v2.privateSite.listShares',
+	privateSiteRevokeShare: 'place.wisp.v2.privateSite.revokeShare',
 } as const
 
 const toIsoFromEpoch = (epoch: unknown): string | undefined => {
@@ -254,6 +264,11 @@ const serializeBodyForForwarding = (body: unknown): string | undefined => {
 
 const prepareXrpcRequest = async (request: Request, parsedBody: unknown): Promise<Request> => {
 	if (request.method === 'GET' || request.method === 'HEAD') {
+		return request
+	}
+
+	// Reconstructing multipart would discard its boundary-delimited body.
+	if ((request.headers.get('content-type') ?? '').toLowerCase().includes('multipart/form-data')) {
 		return request
 	}
 
@@ -559,7 +574,18 @@ export const xrpcRoutes = () => {
 		XRPC_NSIDS.secretList,
 		XRPC_NSIDS.secretDelete,
 		XRPC_NSIDS.secretRotate,
+		XRPC_NSIDS.privateSiteCreate,
+		XRPC_NSIDS.privateSiteList,
+		XRPC_NSIDS.privateSiteDelete,
+		XRPC_NSIDS.privateSiteCreateShare,
+		XRPC_NSIDS.privateSiteListShares,
+		XRPC_NSIDS.privateSiteRevokeShare,
 	]
+
+	registerPrivateSiteMethods({
+		router,
+		requireDid: (request) => requireAuthenticated(authByRequest.get(request)).did,
+	})
 
 	addProcedureWithAliases(
 		router,
@@ -1012,14 +1038,18 @@ export const xrpcRoutes = () => {
 	}
 
 	return new Elysia()
-		.all('/xrpc/:nsid', ({ body, request }) => handleXrpcRequest(request, body))
-		.all('/xrpc/:nsid/', async ({ body, request }) => {
-			const url = new URL(request.url)
-			if (url.pathname.endsWith('/') && url.pathname.length > '/xrpc/'.length) {
-				url.pathname = url.pathname.slice(0, -1)
-			}
+		.all('/xrpc/:nsid', ({ body, request }) => handleXrpcRequest(request, body), { parse: 'none' })
+		.all(
+			'/xrpc/:nsid/',
+			async ({ body, request }) => {
+				const url = new URL(request.url)
+				if (url.pathname.endsWith('/') && url.pathname.length > '/xrpc/'.length) {
+					url.pathname = url.pathname.slice(0, -1)
+				}
 
-			const rewritten = new Request(url.toString(), request)
-			return handleXrpcRequest(rewritten, body)
-		})
+				const rewritten = new Request(url.toString(), request)
+				return handleXrpcRequest(rewritten, body)
+			},
+			{ parse: 'none' },
+		)
 }

@@ -27,6 +27,7 @@ export default defineConfig({
 				{
 					label: 'Guides',
 					items: [
+						{ label: 'Local Development', slug: 'local-development' },
 						{ label: 'Architecture', slug: 'architecture' },
 						{ label: 'Self-Hosting', slug: 'deployment' },
 						{ label: 'Monitoring & Metrics', slug: 'monitoring' },

@@ -4,6 +4,8 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import os from 'node:os'
+import { gunzipSync } from 'node:zlib'
 import type { ServerType } from '@hono/node-server'
 import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
@@ -20,6 +22,17 @@ interface MockRequest {
 	body: any
 }
 
+async function readMockBody(request: Request): Promise<unknown> {
+	let body = new Uint8Array(await request.arrayBuffer())
+	if (request.headers.get('content-encoding') === 'gzip') body = gunzipSync(body)
+
+	if (request.headers.get('content-type')?.includes('json')) {
+		return JSON.parse(new TextDecoder().decode(body))
+	}
+
+	return body
+}
+
 class MockGrafanaServer {
 	private app: Hono
 	private server?: ServerType
@@ -32,7 +45,7 @@ class MockGrafanaServer {
 
 		// Mock Loki endpoint
 		this.app.post('/loki/api/v1/push', async (c) => {
-			const body = await c.req.json()
+			const body = await readMockBody(c.req.raw)
 			this.requests.push({
 				method: 'POST',
 				path: '/loki/api/v1/push',
@@ -44,7 +57,7 @@ class MockGrafanaServer {
 
 		// Mock Prometheus/OTLP endpoint
 		this.app.post('/v1/metrics', async (c) => {
-			const body = await c.req.json()
+			const body = await readMockBody(c.req.raw)
 			this.requests.push({
 				method: 'POST',
 				path: '/v1/metrics',
@@ -177,6 +190,7 @@ describe('Grafana Integration', () => {
 		expect(stream).toHaveProperty('stream')
 		expect(stream).toHaveProperty('values')
 		expect(stream.stream.job).toBe('test-logs')
+		expect(stream.stream.instance).toBe(`test-logs-${os.hostname()}`)
 
 		await shutdownGrafanaExporters()
 	})

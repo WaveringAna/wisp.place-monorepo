@@ -42,12 +42,16 @@ services:
     depends_on:
       minio:
         condition: service_healthy
+    environment:
+      WISP_PUBLIC_BUCKET: wisp-e2e
+      WISP_PRIVATE_BUCKET: wisp-private-e2e
     entrypoint:
       - /bin/sh
       - -c
       - |
         mc alias set local http://minio:9000 minioadmin minioadmin
-        mc mb --ignore-existing local/wisp-e2e
+        mc mb --ignore-existing "local/$${WISP_PUBLIC_BUCKET}"
+        mc mb --ignore-existing "local/$${WISP_PRIVATE_BUCKET}"
 
   main-app:
     build:
@@ -58,6 +62,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      minio-create-bucket:
+        condition: service_completed_successfully
+      pds-init:
+        condition: service_completed_successfully
     environment:
       NODE_ENV: development
       LOCAL_DEV: "true"
@@ -68,6 +76,19 @@ services:
       SKIP_ADMIN_SETUP: "true"
       DISABLE_DNS_WORKER: "true"
       BASE_DOMAIN: wisp.place
+      PRIVATE_HOST: priv.wisp.localhost:3001
+      S3_BUCKET: wisp-e2e
+      PRIVATE_S3_BUCKET: wisp-private-e2e
+      S3_REGION: us-east-1
+      S3_ENDPOINT: http://minio:9000
+      S3_FORCE_PATH_STYLE: "true"
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      OAUTH_HANDLE_RESOLVER_URL: http://pds:3300/xrpc/com.atproto.identity.resolveHandle
+      OAUTH_PLC_DIRECTORY_URL: http://plc:2582
+      OAUTH_ALLOW_HTTP: "true"
+      OAUTH_FETCH_REWRITE_FROM: http://localhost:3300
+      OAUTH_FETCH_REWRITE_TO: http://pds:3300
       WISP_CACHE_INVALIDATION_STREAM: wisp:e2e:cache-invalidate-stream
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8000/api/health >/dev/null"]
@@ -86,14 +107,20 @@ services:
         condition: service_healthy
       minio-create-bucket:
         condition: service_completed_successfully
+      pds-init:
+        condition: service_completed_successfully
     environment:
       NODE_ENV: production
+      LOCAL_DEV: "true"
       DATABASE_URL: postgres://postgres:postgres@postgres:5432/wisp
       REDIS_URL: redis://redis:6379
       HEALTH_PORT: "3001"
-      FIREHOSE_SERVICE: ${FIREHOSE_SERVICE:-wss://bsky.network}
+      FIREHOSE_SERVICE: ${FIREHOSE_SERVICE:-ws://pds:3300}
       FIREHOSE_SERVICE_SECONDARY: ${FIREHOSE_SERVICE_SECONDARY:-}
       FIREHOSE_MAX_CONCURRENCY: "5"
+      WISP_PLC_DIRECTORY_URL: http://plc:2582
+      PDS_FETCH_REWRITE_FROM: http://localhost:3300
+      PDS_FETCH_REWRITE_TO: http://pds:3300
       S3_BUCKET: wisp-e2e
       S3_REGION: us-east-1
       S3_ENDPOINT: http://minio:9000
@@ -127,9 +154,11 @@ services:
       REDIS_URL: redis://redis:6379
       BASE_HOST: wisp.place
       BASE_DOMAIN: wisp.place
+      PRIVATE_HOST: priv.wisp.localhost
       CACHE_DIR: /cache/sites
       HOT_CACHE_TTL: "300"
       S3_BUCKET: wisp-e2e
+      PRIVATE_S3_BUCKET: wisp-private-e2e
       S3_REGION: us-east-1
       S3_ENDPOINT: http://minio:9000
       S3_FORCE_PATH_STYLE: "true"
@@ -158,12 +187,17 @@ services:
         condition: service_healthy
       hosting-service:
         condition: service_healthy
+      pds-init:
+        condition: service_completed_successfully
     environment:
-      E2E_ATPROTO_HANDLE: ${E2E_ATPROTO_HANDLE:?Set E2E_ATPROTO_HANDLE to the test ATProto handle}
-      E2E_ATPROTO_PASSWORD: ${E2E_ATPROTO_PASSWORD:?Set E2E_ATPROTO_PASSWORD to the test account password}
+      E2E_ATPROTO_HANDLE: ${E2E_ATPROTO_HANDLE:-alice.test}
+      E2E_ATPROTO_PASSWORD: ${E2E_ATPROTO_PASSWORD:-alice-dev-password}
       E2E_APP_URL: http://127.0.0.1:8000
       E2E_APP_UPSTREAM: http://main-app:8000
       E2E_HOSTING_URL: http://hosting-service:3001
+      E2E_HOSTING_BROWSER_URL: http://127.0.0.1:3001
+      E2E_PDS_BROWSER_URL: http://127.0.0.1:3300
+      E2E_PDS_UPSTREAM: http://pds:3300
       E2E_FIREHOSE_URL: http://firehose-service:3001
       E2E_CLEANUP: ${E2E_CLEANUP:-true}
       E2E_HEADLESS: ${E2E_HEADLESS:-true}

@@ -1,8 +1,9 @@
 import type { NodeOAuthClient } from '@atproto/oauth-client-node'
 import { createLogger } from '@wispplace/observability'
-import { Elysia, t } from 'elysia'
+import { Elysia } from 'elysia'
 import { getDomainByDid, getSitesByDid } from '../lib/db'
-import { authenticateRequest } from '../lib/wisp-auth'
+import { authenticateRequest, SESSION_COOKIE_NAME } from '../lib/wisp-auth'
+import { resolvePrivateShareState } from './private-redeem'
 
 const logger = createLogger('main-app')
 
@@ -10,7 +11,7 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 	new Elysia({
 		cookie: {
 			secrets: cookieSecret,
-			sign: ['did'],
+			sign: [SESSION_COOKIE_NAME],
 		},
 	})
 		/**
@@ -80,22 +81,28 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 
 				// client.callback() validates the state parameter internally
 				// It will throw an error if state validation fails (CSRF protection)
-				const { session } = await client.callback(params)
+				const { session, state } = await client.callback(params)
 
 				if (!session) {
 					logger.error('[Auth] OAuth callback failed: no session returned')
-					c.cookie.did.remove()
+					c.cookie[SESSION_COOKIE_NAME].remove()
 					return c.redirect('/?error=auth_failed')
 				}
 
 				const cookieSession = c.cookie
-				cookieSession.did.set({
+				cookieSession[SESSION_COOKIE_NAME].set({
 					value: session.did,
 					httpOnly: true,
 					secure: process.env.NODE_ENV === 'production',
 					sameSite: 'lax',
 					maxAge: 30 * 24 * 60 * 60, // 30 days
 				})
+
+				// Revalidate the OAuth state token before returning a share visitor to its site.
+				const redeem = await resolvePrivateShareState(state, session.did)
+				if (redeem) {
+					return c.redirect(redeem.url ?? '/private/denied')
+				}
 
 				// Check if user has any cached sites or a claimed domain
 				const sites = await getSitesByDid(session.did)
@@ -110,7 +117,7 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 			} catch (err) {
 				// This catches state validation failures and other OAuth errors
 				logger.error('[Auth] OAuth callback error', err)
-				c.cookie.did.remove()
+				c.cookie[SESSION_COOKIE_NAME].remove()
 				return c.redirect('/?error=auth_failed')
 			}
 		})
@@ -119,69 +126,53 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		 * Success: { success: true }
 		 * Failure: { error: 'Logout failed' }
 		 */
-		.post(
-			'/api/auth/logout',
-			async (c) => {
-				try {
-					const cookieSession = c.cookie
-					const did = cookieSession.did?.value
+		.post('/api/auth/logout', async (c) => {
+			try {
+				const cookieSession = c.cookie
+				const did = cookieSession[SESSION_COOKIE_NAME]?.value
 
-					// Clear the session cookie
-					cookieSession.did.remove()
+				// Clear the session cookie
+				cookieSession[SESSION_COOKIE_NAME].remove()
 
-					// If we have a DID, try to revoke the OAuth session
-					if (did && typeof did === 'string') {
-						try {
-							await client.revoke(did)
-							logger.debug('[Auth] Revoked OAuth session for', did as any)
-						} catch (err) {
-							logger.error('[Auth] Failed to revoke session', err)
-							// Continue with logout even if revoke fails
-						}
+				// If we have a DID, try to revoke the OAuth session
+				if (did && typeof did === 'string') {
+					try {
+						await client.revoke(did)
+						logger.debug('[Auth] Revoked OAuth session for', did as any)
+					} catch (err) {
+						logger.error('[Auth] Failed to revoke session', err)
+						// Continue with logout even if revoke fails
 					}
-
-					return { success: true }
-				} catch (err) {
-					logger.error('[Auth] Logout error', err)
-					c.set.status = 500
-					return { error: 'Logout failed' }
 				}
-			},
-			{
-				cookie: t.Cookie({
-					did: t.Optional(t.String()),
-				}),
-			},
-		)
+
+				return { success: true }
+			} catch (err) {
+				logger.error('[Auth] Logout error', err)
+				c.set.status = 500
+				return { error: 'Logout failed' }
+			}
+		})
 		/**
 		 * GET /api/auth/status
 		 * Authenticated: { authenticated: true, did }
 		 * Not authenticated: { authenticated: false }
 		 */
-		.get(
-			'/api/auth/status',
-			async (c) => {
-				try {
-					const auth = await authenticateRequest(client, c.cookie)
+		.get('/api/auth/status', async (c) => {
+			try {
+				const auth = await authenticateRequest(client, c.cookie, c.request.headers.get('cookie'))
 
-					if (!auth) {
-						c.cookie.did.remove()
-						return { authenticated: false }
-					}
-
-					return {
-						authenticated: true,
-						did: auth.did,
-					}
-				} catch (err) {
-					logger.error('[Auth] Status check error', err)
-					c.cookie.did.remove()
+				if (!auth) {
+					c.cookie[SESSION_COOKIE_NAME].remove()
 					return { authenticated: false }
 				}
-			},
-			{
-				cookie: t.Cookie({
-					did: t.Optional(t.String()),
-				}),
-			},
-		)
+
+				return {
+					authenticated: true,
+					did: auth.did,
+				}
+			} catch (err) {
+				logger.error('[Auth] Status check error', err)
+				c.cookie[SESSION_COOKIE_NAME].remove()
+				return { authenticated: false }
+			}
+		})

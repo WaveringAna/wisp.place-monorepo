@@ -1,0 +1,42 @@
+{
+  "lexicon": 1,
+  "id": "place.wisp.v2.privateSite.create",
+  "defs": {
+    "main": {
+      "type": "procedure",
+      "description": "Create a private site from an uploaded archive. Private sites are stored only by the wisp hosting service and are never written to the owner's PDS, because atproto repo records and blobs are publicly readable and broadcast over the firehose. Access is granted to the owner's authenticated account and to any share links they create.",
+      "input": {
+        "encoding": "multipart/form-data"
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["siteId", "name", "fileCount", "totalBytes", "createdAt", "url"],
+          "properties": {
+            "siteId": {
+              "type": "string",
+              "format": "record-key",
+              "description": "Stable identifier for this private site. Record-key syntax so it can become a permissioned-space key in v2."
+            },
+            "name": { "type": "string", "description": "Display name. Not an identifier." },
+            "fileCount": { "type": "integer" },
+            "totalBytes": { "type": "integer" },
+            "expiresAt": {
+              "type": "string",
+              "format": "datetime",
+              "description": "Absent when the site never expires."
+            },
+            "createdAt": { "type": "string", "format": "datetime" },
+            "url": { "type": "string", "description": "Owner-facing URL. Requires an authenticated session." }
+          }
+        }
+      },
+      "errors": [
+        { "name": "AuthenticationRequired" },
+        { "name": "InvalidRequest" },
+        { "name": "PayloadTooLarge" }
+      ]
+    }
+  }
+}

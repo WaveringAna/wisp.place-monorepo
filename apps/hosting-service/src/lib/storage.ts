@@ -381,6 +381,52 @@ function initializeStorage(): TieredStorage<Uint8Array> {
 // Export singleton instance
 export const storage = initializeStorage()
 
+// Avoid promotion into shared caches that outlive the authorization decision.
+function initializePrivateStorage(): TieredStorage<Uint8Array> {
+	let coldTier: StorageTier
+
+	const PRIVATE_BUCKET = process.env.PRIVATE_S3_BUCKET || S3_BUCKET
+	const PRIVATE_PREFIX = process.env.PRIVATE_S3_PREFIX || 'private-sites/'
+
+	if (PRIVATE_BUCKET) {
+		coldTier = new ReadOnlyS3Tier(
+			new S3StorageTier({
+				bucket: PRIVATE_BUCKET,
+				region: S3_REGION,
+				endpoint: S3_ENDPOINT,
+				forcePathStyle: S3_FORCE_PATH_STYLE,
+				credentials:
+					AWS_ACCESS_KEY_ID && AWS_SECRET_ACCESS_KEY
+						? { accessKeyId: AWS_ACCESS_KEY_ID, secretAccessKey: AWS_SECRET_ACCESS_KEY }
+						: undefined,
+				prefix: PRIVATE_PREFIX,
+			}),
+		)
+	} else {
+		// Reuse one disk tier so two independent indexes cannot race over the same directory.
+		coldTier =
+			warmTier ??
+			new DiskStorageTier({
+				directory: CACHE_DIR,
+				maxSizeBytes: WARM_CACHE_SIZE,
+				evictionPolicy: WARM_EVICTION_POLICY,
+				encodeColons: false,
+			})
+	}
+
+	return new TieredStorage<Uint8Array>({
+		tiers: { cold: coldTier },
+		compression: false,
+		promotionStrategy: 'lazy',
+		serialization: {
+			serialize: identitySerialize,
+			deserialize: identityDeserialize,
+		},
+	})
+}
+
+export const privateStorage = initializePrivateStorage()
+
 /**
  * Get storage configuration summary for logging
  */

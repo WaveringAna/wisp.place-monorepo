@@ -1,4 +1,5 @@
 import type { Context } from 'hono'
+import { routePath } from 'hono/route'
 import { logCollector, metricsCollector } from '../core'
 
 /**
@@ -12,7 +13,7 @@ export function observabilityMiddleware(service: string) {
 		await next()
 
 		const duration = Date.now() - startTime
-		const { pathname } = new URL(c.req.url)
+		const pathname = routePath(c) || new URL(c.req.url).pathname
 
 		metricsCollector.recordRequest(pathname, c.req.method, c.res.status, duration, service)
 	}

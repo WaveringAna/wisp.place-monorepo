@@ -326,7 +326,8 @@ function Dashboard() {
 		if (!site) return
 
 		setIsDeletingSite(true)
-		const success = await deleteSite(site.rkey)
+		// Private sites are deleted through their own endpoint; they have no PDS record.
+		const success = await deleteSite(site.isPrivate ? (site.siteId ?? site.rkey) : site.rkey, site.isPrivate)
 		if (success) {
 			// Refresh domains in case this site was mapped
 			await fetchDomains()

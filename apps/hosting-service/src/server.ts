@@ -6,11 +6,13 @@
 import { sanitizePath } from '@wispplace/fs-utils'
 import { createLogger } from '@wispplace/observability'
 import { observabilityErrorHandler, observabilityMiddleware } from '@wispplace/observability/middleware/hono'
+import { siteIdFromHostname } from '@wispplace/private-sites'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { cache } from './lib/cache-manager'
 import { getCustomDomain, getCustomDomainByHash, getWispDomain } from './lib/db'
 import { serveFromCache, serveFromCacheWithRewrite } from './lib/file-serving'
+import { privateNotFound, servePrivateSite } from './lib/private-serving'
 import { extractHeaders, isValidRkey } from './lib/request-utils'
 import { resolveDid } from './lib/utils'
 
@@ -26,9 +28,12 @@ async function resolveDidCached(identifier: string): Promise<string | null> {
 const BASE_HOST_ENV = process.env.BASE_HOST || 'wisp.place'
 const BASE_HOST = BASE_HOST_ENV.split(':')[0] || BASE_HOST_ENV
 
+// Separate origins keep tenant JavaScript and ambient cookies isolated.
+const PRIVATE_HOST = (process.env.PRIVATE_HOST || `priv.${BASE_HOST}`).split(':')[0] || `priv.${BASE_HOST}`
+
 const app = new Hono()
 
-// Add CORS middleware - allow all origins for static site hosting
+// Never allow cross-origin credentialed reads of private content.
 app.use(
 	'*',
 	cors({
@@ -59,6 +64,15 @@ app.get('/*', async (c) => {
 	const path = hasTrailingSlash ? `${sanitizePath(rawPath)}/` : sanitizePath(rawPath)
 
 	logger.debug(`Request: host=${hostname} hostnameWithoutPort=${hostnameWithoutPort} path=${path}`, { BASE_HOST })
+
+	const privateSiteId = siteIdFromHostname(hostnameWithoutPort, PRIVATE_HOST)
+	if (privateSiteId !== null) {
+		return servePrivateSite(c.req.raw, privateSiteId, sanitizePath(rawPath))
+	}
+
+	if (hostnameWithoutPort === PRIVATE_HOST) {
+		return privateNotFound()
+	}
 
 	// Check if this is sites.wisp.place subdomain (strip port for comparison)
 	if (hostnameWithoutPort === `sites.${BASE_HOST}`) {

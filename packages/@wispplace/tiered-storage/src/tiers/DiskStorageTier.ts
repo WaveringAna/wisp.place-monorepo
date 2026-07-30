@@ -137,6 +137,7 @@ export class DiskStorageTier implements StorageTier {
 		this.encodeColons = config.encodeColons ?? platform === 'win32'
 
 		void this.ensureDirectory()
+		void rm(join(resolve(this.config.directory), '.invalidated'), { recursive: true, force: true })
 		void this.rebuildIndex()
 
 		if (config.gcIntervalMs) {
@@ -163,6 +164,7 @@ export class DiskStorageTier implements StorageTier {
 			const fullPath = join(dir, entry.name)
 
 			if (entry.isDirectory()) {
+				if (entry.name === '.invalidated') continue
 				await this.rebuildIndexRecursive(fullPath)
 			} else if (!entry.name.endsWith('.meta')) {
 				try {
@@ -402,8 +404,12 @@ export class DiskStorageTier implements StorageTier {
 			return
 		}
 
-		// Recursively list all files in directory tree
-		for await (const key of this.listKeysRecursive(this.config.directory, prefix)) {
+		const searchDirectory = prefix?.endsWith('/') ? this.getFilePath(prefix) : this.config.directory
+		if (!existsSync(searchDirectory)) {
+			return
+		}
+
+		for await (const key of this.listKeysRecursive(searchDirectory, prefix)) {
 			yield key
 		}
 	}
@@ -418,6 +424,7 @@ export class DiskStorageTier implements StorageTier {
 			const fullPath = join(dir, entry.name)
 
 			if (entry.isDirectory()) {
+				if (entry.name === '.invalidated') continue
 				// Recurse into subdirectory
 				for await (const key of this.listKeysRecursive(fullPath, prefix)) {
 					yield key
@@ -440,6 +447,45 @@ export class DiskStorageTier implements StorageTier {
 
 	async deleteMany(keys: string[]): Promise<void> {
 		await Promise.all(keys.map((key) => this.delete(key)))
+	}
+
+	async deletePrefix(prefix: string): Promise<number> {
+		if (!prefix.endsWith('/')) {
+			const keys: string[] = []
+			for await (const key of this.listKeys(prefix)) {
+				keys.push(key)
+			}
+			await this.deleteMany(keys)
+			return keys.length
+		}
+
+		const prefixDirectory = this.getFilePath(prefix)
+		if (!existsSync(prefixDirectory)) return 0
+
+		const invalidationDirectory = join(resolve(this.config.directory), '.invalidated')
+		await mkdir(invalidationDirectory, { recursive: true })
+		const detachedDirectory = join(
+			invalidationDirectory,
+			`${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+		)
+
+		try {
+			await rename(prefixDirectory, detachedDirectory)
+		} catch (error) {
+			if (getErrnoCode(error) === 'ENOENT') return 0
+			throw error
+		}
+
+		let deleted = 0
+		for (const [key, entry] of this.metadataIndex) {
+			if (!key.startsWith(prefix)) continue
+			this.metadataIndex.delete(key)
+			this.currentSize -= entry.size
+			deleted++
+		}
+
+		void rm(detachedDirectory, { recursive: true, force: true }).catch(() => {})
+		return deleted
 	}
 
 	async getMetadata(key: string): Promise<StorageMetadata | null> {
@@ -514,6 +560,7 @@ export class DiskStorageTier implements StorageTier {
 			const fullPath = join(dir, entry.name)
 
 			if (entry.isDirectory()) {
+				if (entry.name === '.invalidated') continue
 				const subStats = await this.getStatsRecursive(fullPath)
 				bytes += subStats.bytes
 				items += subStats.items

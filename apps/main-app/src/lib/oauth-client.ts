@@ -3,6 +3,7 @@ import { type ClientMetadata, NodeOAuthClient, type RuntimeLock } from '@atproto
 import { SQL } from 'bun'
 import { db } from './db'
 import { logger } from './logger'
+import { createOAuthFetch } from './oauth-fetch'
 import { SlingshotHandleResolver } from './slingshot-handle-resolver'
 
 // Cluster-wide lock backed by Postgres advisory locks. Replaces requestLocalLock
@@ -52,7 +53,25 @@ const requestPgLock: RuntimeLock = async (name, fn) => {
 
 // OAuth scope for all client types
 const OAUTH_SCOPE =
-	'atproto repo:place.wisp.fs repo:place.wisp.domain repo:place.wisp.subfs repo:place.wisp.settings repo:place.wisp.v2.wh repo:site.standard.publication repo:site.standard.document blob:*/*'
+	'atproto repo:place.wisp.fs repo:place.wisp.domain repo:place.wisp.subfs repo:place.wisp.settings repo:place.wisp.v2.wh blob:*/*'
+
+const oauthNetworkOptions = () => {
+	const allowHttp = Bun.env.OAUTH_ALLOW_HTTP === 'true'
+	const hasRewrite = Boolean(Bun.env.OAUTH_FETCH_REWRITE_FROM || Bun.env.OAUTH_FETCH_REWRITE_TO)
+	if ((allowHttp || hasRewrite) && Bun.env.LOCAL_DEV !== 'true') {
+		throw new Error('insecure OAuth networking overrides require LOCAL_DEV=true')
+	}
+
+	return {
+		allowHttp,
+		plcDirectoryUrl: Bun.env.OAUTH_PLC_DIRECTORY_URL,
+		fetch: createOAuthFetch({
+			rewriteFrom: Bun.env.OAUTH_FETCH_REWRITE_FROM,
+			rewriteTo: Bun.env.OAUTH_FETCH_REWRITE_TO,
+		}),
+	}
+}
+
 // Session timeout configuration (30 days in seconds)
 const SESSION_TIMEOUT = 30 * 24 * 60 * 60 // 2592000 seconds
 // OAuth state timeout (1 hour in seconds)
@@ -154,12 +173,13 @@ export const cleanupExpiredSessions = async () => {
 	}
 }
 
-export const createClientMetadata = (config: {
-	domain: `http://${string}` | `https://${string}`
-	clientName: string
-}): ClientMetadata => {
-	const isLocalDev = Bun.env.LOCAL_DEV === 'true'
-
+export const createClientMetadata = (
+	config: {
+		domain: `http://${string}` | `https://${string}`
+		clientName: string
+	},
+	isLocalDev = Bun.env.LOCAL_DEV === 'true',
+): ClientMetadata => {
 	if (isLocalDev) {
 		// Loopback client for local development
 		// For loopback, scopes and redirect_uri must be in client_id query string
@@ -188,7 +208,7 @@ export const createClientMetadata = (config: {
 	return {
 		client_id: `${config.domain}/oauth-client-metadata.json`,
 		client_name: config.clientName,
-		client_uri: `https://wisp.place`,
+		client_uri: config.domain,
 		logo_uri: `${config.domain}/logo.png`,
 		tos_uri: `${config.domain}/tos`,
 		policy_uri: `${config.domain}/policy`,
@@ -301,6 +321,7 @@ export const getOAuthClient = async (config: {
 	const keys = await ensureKeys()
 
 	return new NodeOAuthClient({
+		...oauthNetworkOptions(),
 		clientMetadata: createClientMetadata(config),
 		keyset: keys,
 		stateStore,

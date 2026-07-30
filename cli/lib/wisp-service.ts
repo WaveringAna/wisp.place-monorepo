@@ -6,8 +6,6 @@ export const WISP_OAUTH_BASE_SCOPES = [
 	'repo:place.wisp.fs',
 	'repo:place.wisp.subfs',
 	'repo:place.wisp.settings',
-	'repo:site.standard.publication',
-	'repo:site.standard.document',
 	'blob:*/*',
 ] as const
 

@@ -30,7 +30,7 @@ function getPublisher(): RedisClient | null {
 	}
 
 	if (!publisher) {
-		logger.info(`[Redis] Connecting to ${config.redisUrl}`)
+		logger.info('[Redis] Connecting')
 		publisher = new RedisClient(config.redisUrl)
 		publisher.onconnect = () => logger.info('[Redis] Publisher connected')
 		publisher.onclose = (err) => {

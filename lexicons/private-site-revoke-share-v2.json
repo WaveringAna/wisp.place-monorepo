@@ -1,0 +1,37 @@
+{
+  "lexicon": 1,
+  "id": "place.wisp.v2.privateSite.revokeShare",
+  "defs": {
+    "main": {
+      "type": "procedure",
+      "description": "Revoke a share link. Revocation takes effect immediately and is permanent.",
+      "input": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["siteId", "shareId"],
+          "properties": {
+            "siteId": { "type": "string", "format": "record-key" },
+            "shareId": { "type": "string" }
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["shareId", "revoked"],
+          "properties": {
+            "shareId": { "type": "string" },
+            "revoked": { "type": "boolean", "const": true }
+          }
+        }
+      },
+      "errors": [
+        { "name": "AuthenticationRequired" },
+        { "name": "InvalidRequest" },
+        { "name": "NotFound" }
+      ]
+    }
+  }
+}

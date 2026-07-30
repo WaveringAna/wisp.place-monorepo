@@ -26,19 +26,8 @@ import {
 // import { validateRecord, type Directory } from '@wispplace/lexicons/types/place/wisp/fs'
 import type { Directory } from '@wispplace/lexicons/types/place/wisp/fs'
 import { createLogger } from '@wispplace/observability'
-import {
-	buildPublicationWellKnownFile,
-	detectStandardSite,
-	publishStandardSite,
-	type RepoAgent,
-	type StaticSiteFile,
-	stripUploadRoot,
-	type UploadedBlobReference,
-} from '@wispplace/standard-site'
 import { Elysia } from 'elysia'
 import { createIgnoreMatcher, parseWispignore, shouldIgnore } from '../lib/ignore-patterns'
-import { resolveStandardSitePublicationUrl } from '../lib/standard-site-publication-url'
-import { injectStandardSiteLinksIntoUploadBuffers } from '../lib/standard-site-upload'
 import {
 	addJobListener,
 	completeUploadJob,
@@ -47,11 +36,9 @@ import {
 	getUploadJob,
 	updateJobProgress,
 } from '../lib/upload-jobs'
-import { requireAuth } from '../lib/wisp-auth'
+import { requireAuth, SESSION_COOKIE_NAME } from '../lib/wisp-auth'
 
 const logger = createLogger('main-app')
-
-type StandardSiteUploadSummary = NonNullable<Parameters<typeof completeUploadJob>[1]>['standardSite']
 
 export function isValidSiteName(siteName: string): boolean {
 	if (!siteName || typeof siteName !== 'string') return false
@@ -72,29 +59,9 @@ export function isValidSiteName(siteName: string): boolean {
 	return true
 }
 
-function parseBooleanFormValue(value: unknown): boolean {
-	if (typeof value === 'boolean') return value
-	if (typeof value === 'string') return value === 'true' || value === '1' || value === 'on'
-	return false
-}
-
 function getFileUploadPath(file: File): string {
 	const webkitPath = 'webkitRelativePath' in file ? String(file.webkitRelativePath) : ''
 	return webkitPath || file.name
-}
-
-function inferSharedUploadRoot(files: File[]): string | undefined {
-	const paths = files.map(getFileUploadPath).filter((path) => path.includes('/'))
-	if (paths.length === 0 || paths.length !== files.length) return undefined
-
-	const root = paths[0]?.split('/')[0]
-	if (!root) return undefined
-
-	return paths.every((path) => path.split('/')[0] === root) ? root : undefined
-}
-
-function withUploadRoot(path: string, uploadRoot: string | undefined): string {
-	return uploadRoot ? `${uploadRoot}/${path}` : `./${path}`
 }
 
 async function processUploadInBackground(
@@ -103,7 +70,6 @@ async function processUploadInBackground(
 	did: string,
 	siteName: string,
 	fileArray: File[],
-	publishStandardSiteRecords: boolean,
 ): Promise<void> {
 	try {
 		// Try to fetch existing record to enable incremental updates
@@ -209,15 +175,7 @@ async function processUploadInBackground(
 
 		// Convert File objects to UploadedFile format
 		const uploadedFiles: UploadedFile[] = []
-		const standardSiteFiles: StaticSiteFile[] = []
 		const skippedFiles: Array<{ name: string; reason: string }> = []
-		let standardSiteSummary: StandardSiteUploadSummary = publishStandardSiteRecords
-			? {
-					enabled: true,
-					detected: false,
-					posts: 0,
-				}
-			: undefined
 
 		console.log('Processing files, count:', fileArray.length)
 		updateJobProgress(jobId, { phase: 'compressing' })
@@ -266,13 +224,6 @@ async function processUploadInBackground(
 			const arrayBuffer = await file.arrayBuffer()
 			const originalContent = Buffer.from(arrayBuffer)
 			const originalMimeType = file.type || 'application/octet-stream'
-			standardSiteFiles.push({
-				path: filePath,
-				content: originalContent,
-				mimeType: originalMimeType,
-				size: originalContent.length,
-			})
-
 			// Determine if file should be compressed (pass filename to exclude _redirects)
 			const shouldCompress = shouldCompressFile(originalMimeType, normalizedPath)
 
@@ -294,77 +245,6 @@ async function processUploadInBackground(
 				compressed,
 				originalMimeType,
 			})
-		}
-
-		if (publishStandardSiteRecords) {
-			const siteUrl = await resolveStandardSitePublicationUrl(did, siteName)
-			const detected = detectStandardSite({
-				siteUrl,
-				siteName,
-				files: standardSiteFiles,
-			})
-
-			standardSiteSummary = {
-				enabled: true,
-				detected: detected.detected,
-				posts: detected.posts.length,
-				score: detected.score,
-			}
-
-			if (detected.detected) {
-				try {
-					updateJobProgress(jobId, { phase: 'publishing_standard_site' })
-					const prepublished = await publishStandardSite({
-						agent: agent as unknown as RepoAgent,
-						did,
-						siteRkey: siteName,
-						detection: detected,
-					})
-					const linksInjected = injectStandardSiteLinksIntoUploadBuffers({
-						did,
-						posts: detected.posts,
-						uploadedFiles,
-						standardSiteFiles,
-					})
-					const uploadRoot = inferSharedUploadRoot(fileArray)
-					const wellKnown = buildPublicationWellKnownFile(did, siteName)
-					const wellKnownContent = Buffer.from(String(wellKnown.content))
-					const wellKnownPath = withUploadRoot(wellKnown.path, uploadRoot)
-					standardSiteSummary = {
-						...standardSiteSummary,
-						publicationUri: prepublished.publication.uri,
-						documents: prepublished.documents,
-						linksInjected,
-					}
-
-					uploadedFiles.push({
-						name: wellKnownPath,
-						content: wellKnownContent,
-						mimeType: wellKnown.mimeType ?? 'text/plain;charset=utf-8',
-						size: wellKnownContent.length,
-						originalMimeType: wellKnown.mimeType ?? 'text/plain;charset=utf-8',
-					})
-					standardSiteFiles.push({
-						...wellKnown,
-						path: wellKnownPath,
-						content: wellKnownContent,
-						size: wellKnownContent.length,
-					})
-
-					logger.info(
-						`[StandardSite] Prepublished ${prepublished.documents.createdOrUpdated} documents for ${did}/${siteName}`,
-					)
-				} catch (err) {
-					const error = err instanceof Error ? err.message : 'Failed to prepublish standard.site records'
-					standardSiteSummary = {
-						...standardSiteSummary,
-						error,
-					}
-					logger.error(`[StandardSite] Failed to prepublish records for ${did}/${siteName}`, err)
-				}
-			} else {
-				logger.info(`[StandardSite] No blog posts detected for ${did}/${siteName}`)
-			}
 		}
 
 		// Update total file count after filtering (important for progress tracking)
@@ -941,15 +821,12 @@ async function processUploadInBackground(
 
 		// First attempt: no base64 encoding
 		let record: Awaited<ReturnType<typeof agent.com.atproto.repo.putRecord>>
-		let manifestBlobs = uploadedBlobs
 		try {
 			record = await buildManifestAndPut(uploadedBlobs)
 		} catch (err: any) {
 			if (err?.status !== 500) throw err
 
 			// On 500, retry with base64 encoding for compressed text files.
-			// Use the upload buffers because standard.site verification links may
-			// have already rewritten HTML before compression.
 			logger.warn('Manifest put returned 500 — retrying with base64-encoded text files', err)
 			console.warn('[Upload] Manifest put failed with 500, retrying with base64 encoding for text files...')
 
@@ -981,68 +858,7 @@ async function processUploadInBackground(
 				}
 			}
 
-			manifestBlobs = base64Blobs
 			record = await buildManifestAndPut(base64Blobs)
-		}
-
-		if (publishStandardSiteRecords) {
-			updateJobProgress(jobId, { phase: 'publishing_standard_site' })
-			try {
-				const siteUrl = await resolveStandardSitePublicationUrl(did, siteName)
-				const blobReferences: UploadedBlobReference[] = manifestBlobs.map((blob) => ({
-					path: blob.filePath,
-					blob: blob.result.blobRef,
-					mimeType: blob.returnedMimeType,
-					size: blob.result.blobRef.size,
-				}))
-				const successfulPaths = new Set(manifestBlobs.map((blob) => stripUploadRoot(blob.filePath)))
-				const successfulStandardSiteFiles = standardSiteFiles.filter((file) =>
-					successfulPaths.has(stripUploadRoot(file.path)),
-				)
-				const detected = detectStandardSite({
-					siteUrl,
-					siteName,
-					files: successfulStandardSiteFiles,
-					blobReferences,
-				})
-
-				standardSiteSummary = {
-					enabled: true,
-					detected: detected.detected,
-					posts: detected.posts.length,
-					score: detected.score,
-					linksInjected: standardSiteSummary?.linksInjected,
-				}
-
-				if (detected.detected) {
-					const published = await publishStandardSite({
-						agent: agent as unknown as RepoAgent,
-						did,
-						siteRkey: siteName,
-						detection: detected,
-					})
-
-					standardSiteSummary = {
-						...standardSiteSummary,
-						publicationUri: published.publication.uri,
-						documents: published.documents,
-					}
-					logger.info(
-						`[StandardSite] Published ${published.documents.createdOrUpdated} documents for ${did}/${siteName}`,
-					)
-				}
-			} catch (err) {
-				const error = err instanceof Error ? err.message : 'Failed to publish standard.site records'
-				standardSiteSummary = {
-					enabled: true,
-					detected: standardSiteSummary?.detected ?? false,
-					posts: standardSiteSummary?.posts ?? 0,
-					score: standardSiteSummary?.score,
-					linksInjected: standardSiteSummary?.linksInjected,
-					error,
-				}
-				logger.error(`[StandardSite] Failed to publish records for ${did}/${siteName}`, err)
-			}
 		}
 
 		// Clean up old subfs records if we had any
@@ -1088,7 +904,6 @@ async function processUploadInBackground(
 			failedFiles,
 			uploadedCount: validUploadedFiles.length - failedFiles.length,
 			hasFailures: failedFiles.length > 0,
-			standardSite: standardSiteSummary,
 		})
 
 		console.log('=== UPLOAD FILES COMPLETE ===')
@@ -1105,11 +920,11 @@ export const wispRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		prefix: '/wisp',
 		cookie: {
 			secrets: cookieSecret,
-			sign: ['did'],
+			sign: [SESSION_COOKIE_NAME],
 		},
 	})
-		.derive(async ({ cookie }) => {
-			const auth = await requireAuth(client, cookie)
+		.derive(async ({ cookie, request }) => {
+			const auth = await requireAuth(client, cookie, request.headers.get('cookie'))
 			return { auth }
 		})
 		/**
@@ -1212,16 +1027,10 @@ export const wispRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		 * Failure: throws error with message "Failed to upload files: ..."
 		 */
 		.post('/upload-files', async ({ body, auth }) => {
-			const {
-				siteName,
-				files,
-				publishStandardSite: publishStandardSiteValue,
-			} = body as {
+			const { siteName, files } = body as {
 				siteName: string
 				files: File | File[]
-				publishStandardSite?: string | boolean
 			}
-			const publishStandardSiteRecords = parseBooleanFormValue(publishStandardSiteValue)
 
 			console.log('=== UPLOAD FILES START ===')
 			console.log('Site name:', siteName)
@@ -1377,12 +1186,10 @@ export const wispRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				console.log('Created upload job:', jobId)
 
 				// Start background processing (don't await)
-				processUploadInBackground(jobId, agent, auth.did, siteName, fileArray, publishStandardSiteRecords).catch(
-					(err) => {
-						console.error('Background upload process failed:', err)
-						logger.error('Background upload process failed', err)
-					},
-				)
+				processUploadInBackground(jobId, agent, auth.did, siteName, fileArray).catch((err) => {
+					console.error('Background upload process failed:', err)
+					logger.error('Background upload process failed', err)
+				})
 
 				// Return immediately with job ID
 				return {

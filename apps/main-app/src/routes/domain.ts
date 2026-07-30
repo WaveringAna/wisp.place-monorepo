@@ -18,10 +18,11 @@ import {
 	updateCustomDomainVerification,
 	updateDomain,
 	updateWispDomainSite,
+	waitForSiteCache,
 } from '../lib/db'
 import { verifyCustomDomain } from '../lib/dns-verify'
 import { extractWispHandle, isValidHandle, normalizeDomain, toDomain, validateCustomDomain } from '../lib/domain-utils'
-import { requireAuth } from '../lib/wisp-auth'
+import { requireAuth, SESSION_COOKIE_NAME } from '../lib/wisp-auth'
 
 const logger = createLogger('main-app')
 
@@ -30,7 +31,7 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		prefix: '/api/domain',
 		cookie: {
 			secrets: cookieSecret,
-			sign: ['did'],
+			sign: [SESSION_COOKIE_NAME],
 		},
 	})
 		// Public endpoints (no auth required)
@@ -94,8 +95,8 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 			}
 		})
 		// Authenticated endpoints (require auth)
-		.derive(async ({ cookie }) => {
-			const auth = await requireAuth(client, cookie)
+		.derive(async ({ cookie, request }) => {
+			const auth = await requireAuth(client, cookie, request.headers.get('cookie'))
 			return { auth }
 		})
 		/**
@@ -341,6 +342,11 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 					throw new Error('Unauthorized: You do not own this domain')
 				}
 
+				if (siteRkey && !(await waitForSiteCache(auth.did, siteRkey))) {
+					set.status = 503
+					throw new Error('Site is still being processed. Please try again in a moment.')
+				}
+
 				// Update wisp.place domain to point to this site
 				await updateWispDomainSite(domainLower, siteRkey)
 				await publishDomainCacheInvalidation(domainLower, 'wisp')
@@ -420,6 +426,11 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				if (domainInfo.did !== auth.did) {
 					set.status = 403
 					throw new Error('Unauthorized: You do not own this domain')
+				}
+
+				if (siteRkey && !(await waitForSiteCache(auth.did, siteRkey))) {
+					set.status = 503
+					throw new Error('Site is still being processed. Please try again in a moment.')
 				}
 
 				// Update custom domain to point to this site

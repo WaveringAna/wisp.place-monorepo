@@ -70,6 +70,30 @@
       "types": "./src/types/place/wisp/v2/site/getList.ts",
       "default": "./src/types/place/wisp/v2/site/getList.ts"
     },
+    "./types/place/wisp/v2/privateSite/create": {
+      "types": "./src/types/place/wisp/v2/privateSite/create.ts",
+      "default": "./src/types/place/wisp/v2/privateSite/create.ts"
+    },
+    "./types/place/wisp/v2/privateSite/createShare": {
+      "types": "./src/types/place/wisp/v2/privateSite/createShare.ts",
+      "default": "./src/types/place/wisp/v2/privateSite/createShare.ts"
+    },
+    "./types/place/wisp/v2/privateSite/delete": {
+      "types": "./src/types/place/wisp/v2/privateSite/delete.ts",
+      "default": "./src/types/place/wisp/v2/privateSite/delete.ts"
+    },
+    "./types/place/wisp/v2/privateSite/list": {
+      "types": "./src/types/place/wisp/v2/privateSite/list.ts",
+      "default": "./src/types/place/wisp/v2/privateSite/list.ts"
+    },
+    "./types/place/wisp/v2/privateSite/listShares": {
+      "types": "./src/types/place/wisp/v2/privateSite/listShares.ts",
+      "default": "./src/types/place/wisp/v2/privateSite/listShares.ts"
+    },
+    "./types/place/wisp/v2/privateSite/revokeShare": {
+      "types": "./src/types/place/wisp/v2/privateSite/revokeShare.ts",
+      "default": "./src/types/place/wisp/v2/privateSite/revokeShare.ts"
+    },
     "./atcute": {
       "types": "./src/atcute/lexicons/index.ts",
       "default": "./src/atcute/lexicons/index.ts"

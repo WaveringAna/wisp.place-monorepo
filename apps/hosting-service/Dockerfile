@@ -1,7 +1,7 @@
 # Build from monorepo root: docker build -f apps/hosting-service/Dockerfile .
 
 # Stage 1: Compile to standalone binary
-FROM oven/bun:1.3.7-alpine AS builder
+FROM oven/bun:1.3.14-alpine AS builder
 
 WORKDIR /app
 

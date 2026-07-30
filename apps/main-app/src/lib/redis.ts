@@ -11,7 +11,7 @@ export function getRedisClient(): RedisClient | null {
 	if (!redisUrl) return null
 
 	if (!client) {
-		logger.info(`[Redis] Connecting to ${redisUrl}`)
+		logger.info('[Redis] Connecting')
 		client = new RedisClient(redisUrl)
 		client.onconnect = () => logger.info('[Redis] Connected')
 		client.onclose = (err) => {

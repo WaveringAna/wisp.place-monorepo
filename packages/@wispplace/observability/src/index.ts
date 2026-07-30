@@ -17,3 +17,4 @@ export {
 // Note: Middleware should be imported from specific subpaths:
 // - import { observabilityMiddleware } from '@wispplace/observability/middleware/elysia'
 // - import { observabilityMiddleware, observabilityErrorHandler } from '@wispplace/observability/middleware/hono'
+export { redactSecretPath } from './redact'

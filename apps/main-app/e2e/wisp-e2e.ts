@@ -35,6 +35,9 @@ const env = (name: string, fallback: string): string => process.env[name] || fal
 const appUrl = env('E2E_APP_URL', 'http://127.0.0.1:8000').replace(/\/$/, '')
 const appUpstream = env('E2E_APP_UPSTREAM', 'http://main-app:8000').replace(/\/$/, '')
 const hostingUrl = env('E2E_HOSTING_URL', 'http://hosting-service:3001').replace(/\/$/, '')
+const hostingBrowserUrl = env('E2E_HOSTING_BROWSER_URL', 'http://127.0.0.1:3001').replace(/\/$/, '')
+const pdsBrowserUrl = env('E2E_PDS_BROWSER_URL', 'http://127.0.0.1:3300').replace(/\/$/, '')
+const pdsUpstream = env('E2E_PDS_UPSTREAM', 'http://pds:3300').replace(/\/$/, '')
 const firehoseUrl = env('E2E_FIREHOSE_URL', 'http://firehose-service:3001').replace(/\/$/, '')
 const atprotoHandle = requiredEnv('E2E_ATPROTO_HANDLE')
 const atprotoPassword = requiredEnv('E2E_ATPROTO_PASSWORD')
@@ -49,9 +52,9 @@ const domain = `${domainHandle}.wisp.place`
 const siteName = env('E2E_SITE_RKEY', `e2e-${runId}`).toLowerCase()
 const marker = `wisp-e2e-${runId}`
 
-function startLoopbackProxy() {
-	const listenUrl = new URL(appUrl)
-	const upstreamUrl = new URL(appUpstream)
+function startLoopbackProxy(listen: string, upstream: string, label: string, preserveHost = false) {
+	const listenUrl = new URL(listen)
+	const upstreamUrl = new URL(upstream)
 
 	const server = Bun.serve({
 		hostname: listenUrl.hostname,
@@ -60,7 +63,9 @@ function startLoopbackProxy() {
 			const incomingUrl = new URL(request.url)
 			const target = new URL(`${incomingUrl.pathname}${incomingUrl.search}`, upstreamUrl)
 			const headers = new Headers(request.headers)
-			headers.delete('host')
+			headers.set('accept-encoding', 'identity')
+			if (preserveHost) headers.set('host', incomingUrl.host)
+			else headers.delete('host')
 			headers.set('x-forwarded-host', listenUrl.host)
 			headers.set('x-forwarded-proto', listenUrl.protocol.replace(':', ''))
 
@@ -73,7 +78,7 @@ function startLoopbackProxy() {
 		},
 	})
 
-	console.log(`[e2e] Loopback proxy listening on ${appUrl} -> ${appUpstream}`)
+	console.log(`[e2e] ${label} loopback proxy listening on ${listen} -> ${upstream}`)
 	return server
 }
 
@@ -158,7 +163,10 @@ async function appAuthStatus(page: Page): Promise<{ authenticated: boolean; did?
 
 async function completeAtprotoLogin(page: Page): Promise<string> {
 	const loginUrl = `${appUrl}/api/auth/login?login_hint=${encodeURIComponent(atprotoHandle)}`
-	await page.goto(loginUrl, { waitUntil: 'domcontentloaded' })
+	// The reference PDS authorization page can keep loading subresources after the
+	// redirect commits. Return as soon as navigation commits; the loop below owns the
+	// form interaction and waits for each subsequent state transition explicitly.
+	await page.goto(loginUrl, { waitUntil: 'commit', timeout: timeoutMs })
 
 	const started = Date.now()
 	let lastLoggedUrl = ''
@@ -559,7 +567,11 @@ async function cleanup(page: Page): Promise<void> {
 
 async function main(): Promise<void> {
 	console.log(`[e2e] domain=${domain} site=${siteName} marker=${marker}`)
-	const proxy = startLoopbackProxy()
+	const proxies = [
+		startLoopbackProxy(appUrl, appUpstream, 'main app'),
+		startLoopbackProxy(pdsBrowserUrl, pdsUpstream, 'pds', true),
+		startLoopbackProxy(hostingBrowserUrl, hostingUrl, 'hosting', true),
+	]
 	let browser: Browser | null = null
 	let page: Page | null = null
 	let needsCleanup = true
@@ -595,11 +607,11 @@ async function main(): Promise<void> {
 		needsCleanup = false
 		console.log('[e2e] Harness completed successfully')
 	} finally {
-		if (page && needsCleanup) {
+		if (page && needsCleanup && page.url().startsWith(appUrl)) {
 			await cleanup(page)
 		}
 		await browser?.close()
-		proxy.stop(true)
+		for (const proxy of proxies) proxy.stop(true)
 	}
 }
 

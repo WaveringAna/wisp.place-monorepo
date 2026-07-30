@@ -3,10 +3,15 @@ import type { CustomDomainLookup, DomainLookup, SiteCache, SiteSettingsCache } f
 import postgres from 'postgres'
 import { cache } from './cache-manager'
 
-const sql = postgres(process.env.DATABASE_URL || 'postgres://postgres:postgres@localhost:5432/wisp', {
+const writeDatabaseUrl = process.env.DATABASE_URL || 'postgres://postgres:postgres@localhost:5432/wisp'
+const readDatabaseUrl = process.env.DATABASE_READ_URL || writeDatabaseUrl
+
+const sql = postgres(readDatabaseUrl, {
 	max: 10,
 	idle_timeout: 20,
 })
+
+const writeSql = readDatabaseUrl === writeDatabaseUrl ? sql : postgres(writeDatabaseUrl, { max: 10, idle_timeout: 20 })
 
 // Cache-only mode: skip all DB writes and only use tiered storage
 export const CACHE_ONLY = process.env.CACHE_ONLY === 'true'
@@ -91,9 +96,9 @@ export async function upsertSiteCache(
 	}
 
 	try {
-		await sql`
+		await writeSql`
       INSERT INTO site_cache (did, rkey, record_cid, file_cids, cached_at, updated_at, cold_synced)
-      VALUES (${did}, ${rkey}, ${recordCid}, ${sql.json(fileCids ?? {})}, EXTRACT(EPOCH FROM NOW()), EXTRACT(EPOCH FROM NOW()), ${coldSynced})
+      VALUES (${did}, ${rkey}, ${recordCid}, ${writeSql.json(fileCids ?? {})}, EXTRACT(EPOCH FROM NOW()), EXTRACT(EPOCH FROM NOW()), ${coldSynced})
       ON CONFLICT (did, rkey)
       DO UPDATE SET
         record_cid = EXCLUDED.record_cid,
@@ -132,7 +137,7 @@ export async function tryAcquireLock(key: string): Promise<boolean> {
 	const lockId = stringToLockId(key)
 
 	try {
-		const result = await sql`SELECT pg_try_advisory_lock(${Number(lockId)}) as acquired`
+		const result = await writeSql`SELECT pg_try_advisory_lock(${Number(lockId)}) as acquired`
 		const acquired = result[0]?.acquired === true
 		if (acquired) {
 			activeLocks.add(key)
@@ -151,7 +156,7 @@ export async function releaseLock(key: string): Promise<void> {
 	const lockId = stringToLockId(key)
 
 	try {
-		await sql`SELECT pg_advisory_unlock(${Number(lockId)})`
+		await writeSql`SELECT pg_advisory_unlock(${Number(lockId)})`
 		activeLocks.delete(key)
 	} catch (err) {
 		console.error('Failed to release lock', { key, error: err })
@@ -175,6 +180,7 @@ export async function closeDatabase(): Promise<void> {
 		}
 
 		await sql.end({ timeout: 5 })
+		if (writeSql !== sql) await writeSql.end({ timeout: 5 })
 		console.log('[DB] Database connections closed')
 	} catch (err) {
 		console.error('[DB] Error closing database connections:', err)

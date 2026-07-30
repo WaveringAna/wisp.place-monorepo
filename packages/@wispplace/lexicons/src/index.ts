@@ -17,6 +17,12 @@ import * as PlaceWispV2DomainDelete from './types/place/wisp/v2/domain/delete.js
 import * as PlaceWispV2DomainGetList from './types/place/wisp/v2/domain/getList.js'
 import * as PlaceWispV2DomainGetStatus from './types/place/wisp/v2/domain/getStatus.js'
 import * as PlaceWispV2DomainVerify from './types/place/wisp/v2/domain/verify.js'
+import * as PlaceWispV2PrivateSiteCreateShare from './types/place/wisp/v2/privateSite/createShare.js'
+import * as PlaceWispV2PrivateSiteCreate from './types/place/wisp/v2/privateSite/create.js'
+import * as PlaceWispV2PrivateSiteDelete from './types/place/wisp/v2/privateSite/delete.js'
+import * as PlaceWispV2PrivateSiteListShares from './types/place/wisp/v2/privateSite/listShares.js'
+import * as PlaceWispV2PrivateSiteList from './types/place/wisp/v2/privateSite/list.js'
+import * as PlaceWispV2PrivateSiteRevokeShare from './types/place/wisp/v2/privateSite/revokeShare.js'
 import * as PlaceWispV2SecretCreate from './types/place/wisp/v2/secret/create.js'
 import * as PlaceWispV2SecretDelete from './types/place/wisp/v2/secret/delete.js'
 import * as PlaceWispV2SecretList from './types/place/wisp/v2/secret/list.js'
@@ -62,12 +68,14 @@ export class PlaceWispNS {
 export class PlaceWispV2NS {
   _server: Server
   domain: PlaceWispV2DomainNS
+  privateSite: PlaceWispV2PrivateSiteNS
   secret: PlaceWispV2SecretNS
   site: PlaceWispV2SiteNS
 
   constructor(server: Server) {
     this._server = server
     this.domain = new PlaceWispV2DomainNS(server)
+    this.privateSite = new PlaceWispV2PrivateSiteNS(server)
     this.secret = new PlaceWispV2SecretNS(server)
     this.site = new PlaceWispV2SiteNS(server)
   }
@@ -161,6 +169,86 @@ export class PlaceWispV2DomainNS {
     >,
   ) {
     const nsid = 'place.wisp.v2.domain.verify' // @ts-ignore
+    return this._server.xrpc.method(nsid, cfg)
+  }
+}
+
+export class PlaceWispV2PrivateSiteNS {
+  _server: Server
+
+  constructor(server: Server) {
+    this._server = server
+  }
+
+  createShare<A extends Auth = void>(
+    cfg: MethodConfigOrHandler<
+      A,
+      PlaceWispV2PrivateSiteCreateShare.QueryParams,
+      PlaceWispV2PrivateSiteCreateShare.HandlerInput,
+      PlaceWispV2PrivateSiteCreateShare.HandlerOutput
+    >,
+  ) {
+    const nsid = 'place.wisp.v2.privateSite.createShare' // @ts-ignore
+    return this._server.xrpc.method(nsid, cfg)
+  }
+
+  create<A extends Auth = void>(
+    cfg: MethodConfigOrHandler<
+      A,
+      PlaceWispV2PrivateSiteCreate.QueryParams,
+      PlaceWispV2PrivateSiteCreate.HandlerInput,
+      PlaceWispV2PrivateSiteCreate.HandlerOutput
+    >,
+  ) {
+    const nsid = 'place.wisp.v2.privateSite.create' // @ts-ignore
+    return this._server.xrpc.method(nsid, cfg)
+  }
+
+  delete<A extends Auth = void>(
+    cfg: MethodConfigOrHandler<
+      A,
+      PlaceWispV2PrivateSiteDelete.QueryParams,
+      PlaceWispV2PrivateSiteDelete.HandlerInput,
+      PlaceWispV2PrivateSiteDelete.HandlerOutput
+    >,
+  ) {
+    const nsid = 'place.wisp.v2.privateSite.delete' // @ts-ignore
+    return this._server.xrpc.method(nsid, cfg)
+  }
+
+  listShares<A extends Auth = void>(
+    cfg: MethodConfigOrHandler<
+      A,
+      PlaceWispV2PrivateSiteListShares.QueryParams,
+      PlaceWispV2PrivateSiteListShares.HandlerInput,
+      PlaceWispV2PrivateSiteListShares.HandlerOutput
+    >,
+  ) {
+    const nsid = 'place.wisp.v2.privateSite.listShares' // @ts-ignore
+    return this._server.xrpc.method(nsid, cfg)
+  }
+
+  list<A extends Auth = void>(
+    cfg: MethodConfigOrHandler<
+      A,
+      PlaceWispV2PrivateSiteList.QueryParams,
+      PlaceWispV2PrivateSiteList.HandlerInput,
+      PlaceWispV2PrivateSiteList.HandlerOutput
+    >,
+  ) {
+    const nsid = 'place.wisp.v2.privateSite.list' // @ts-ignore
+    return this._server.xrpc.method(nsid, cfg)
+  }
+
+  revokeShare<A extends Auth = void>(
+    cfg: MethodConfigOrHandler<
+      A,
+      PlaceWispV2PrivateSiteRevokeShare.QueryParams,
+      PlaceWispV2PrivateSiteRevokeShare.HandlerInput,
+      PlaceWispV2PrivateSiteRevokeShare.HandlerOutput
+    >,
+  ) {
+    const nsid = 'place.wisp.v2.privateSite.revokeShare' // @ts-ignore
     return this._server.xrpc.method(nsid, cfg)
   }
 }

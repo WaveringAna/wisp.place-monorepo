@@ -1,6 +1,7 @@
 import { SQL } from 'bun'
 import { isValidHandle, toDomain } from './domain-utils'
 import { runDatabaseMigrations } from './migrations'
+import { waitForSiteCacheProjection } from './site-cache-wait'
 
 export { isValidHandle, toDomain } from './domain-utils'
 
@@ -130,6 +131,73 @@ await db`
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         last_rotated_at TIMESTAMPTZ,
         PRIMARY KEY (did, name)
+    )
+`
+
+// PDS blobs are public, so private sites live only in Wisp's database and storage.
+await db`
+    CREATE TABLE IF NOT EXISTS private_sites (
+        site_id TEXT PRIMARY KEY,
+        owner_did TEXT NOT NULL,
+        name TEXT NOT NULL,
+        file_count INTEGER NOT NULL DEFAULT 0,
+        total_bytes BIGINT NOT NULL DEFAULT 0,
+        expires_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+`
+
+await db`
+    CREATE TABLE IF NOT EXISTS private_site_files (
+        site_id TEXT NOT NULL REFERENCES private_sites(site_id) ON DELETE CASCADE,
+        path TEXT NOT NULL,
+        size BIGINT NOT NULL,
+        mime_type TEXT,
+        sha256 TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (site_id, path)
+    )
+`
+
+await db`
+    CREATE TABLE IF NOT EXISTS private_site_shares (
+        share_id TEXT PRIMARY KEY,
+        site_id TEXT NOT NULL REFERENCES private_sites(site_id) ON DELETE CASCADE,
+        token_hash TEXT NOT NULL,
+        token_prefix TEXT NOT NULL,
+        label TEXT,
+        expires_at TIMESTAMPTZ,
+        revoked_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        last_used_at TIMESTAMPTZ,
+        audience_did TEXT
+    )
+`
+
+await db`
+    CREATE TABLE IF NOT EXISTS private_site_sessions (
+        session_id TEXT PRIMARY KEY,
+        secret_hash TEXT NOT NULL,
+        site_id TEXT NOT NULL REFERENCES private_sites(site_id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        owner_did TEXT,
+        share_id TEXT REFERENCES private_site_shares(share_id) ON DELETE CASCADE,
+        expires_at TIMESTAMPTZ NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+`
+
+await db`
+    CREATE TABLE IF NOT EXISTS private_site_handoffs (
+        handoff_id TEXT PRIMARY KEY,
+        secret_hash TEXT NOT NULL,
+        site_id TEXT NOT NULL REFERENCES private_sites(site_id) ON DELETE CASCADE,
+        owner_did TEXT,
+        share_id TEXT REFERENCES private_site_shares(share_id) ON DELETE CASCADE,
+        expires_at TIMESTAMPTZ NOT NULL,
+        consumed_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
 `
 
@@ -353,6 +421,12 @@ export const getSitesByDid = async (did: string) => {
     `
 	return rows
 }
+
+export const waitForSiteCache = async (did: string, rkey: string): Promise<boolean> =>
+	waitForSiteCacheProjection(async () => {
+		const rows = await db`SELECT 1 FROM site_cache WHERE did = ${did} AND rkey = ${rkey} LIMIT 1`
+		return rows.length > 0
+	})
 
 // Get all domains (wisp + custom) mapped to a specific site
 export const getDomainsBySite = async (did: string, rkey: string) => {

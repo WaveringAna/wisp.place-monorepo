@@ -35,7 +35,7 @@ function getRedisClient(): Redis | null {
 	}
 
 	if (!client) {
-		console.log(`[Revalidate] Connecting to Redis: ${redisUrl}`)
+		console.log('[Revalidate] Connecting to Redis')
 		client = new Redis(redisUrl, {
 			maxRetriesPerRequest: 2,
 			enableReadyCheck: true,

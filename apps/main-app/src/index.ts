@@ -4,7 +4,7 @@ process.getBuiltinModule = require
 import { cors } from '@elysiajs/cors'
 import { staticPlugin } from '@elysiajs/static'
 import { BASE_HOST } from '@wispplace/constants'
-import { createLogger, initializeGrafanaExporters, logCollector } from '@wispplace/observability'
+import { createLogger, initializeGrafanaExporters, logCollector, redactSecretPath } from '@wispplace/observability'
 import { observabilityMiddleware } from '@wispplace/observability/middleware/elysia'
 import type { Context } from 'elysia'
 import { Elysia } from 'elysia'
@@ -19,12 +19,17 @@ import {
 	getOAuthClient,
 	rotateKeysIfNeeded,
 } from './lib/oauth-client'
+import { startPrivateSiteReaper } from './lib/private-site-reaper'
+import { pruneHandoffs, pruneSessions } from './lib/private-sites-db'
 import { closeRedisClient, getRedisClient } from './lib/redis'
 import { ensureServiceIdentityKeypair } from './lib/service-identity'
 import type { Config } from './lib/types'
+import { SESSION_COOKIE_NAME } from './lib/wisp-auth'
 import { adminRoutes } from './routes/admin'
 import { authRoutes } from './routes/auth'
 import { domainRoutes } from './routes/domain'
+import { privateRedeemRoutes } from './routes/private-redeem'
+import { privateSiteApiRoutes } from './routes/private-site-api'
 import { secretRoutes } from './routes/secret'
 import { siteRoutes } from './routes/site'
 import { userRoutes } from './routes/user'
@@ -82,6 +87,8 @@ const runMaintenance = async () => {
 	console.log('[Maintenance] Running periodic maintenance...')
 	await cleanupExpiredSessions()
 	await rotateKeysIfNeeded()
+	await pruneHandoffs()
+	await pruneSessions()
 }
 
 // Run maintenance on startup
@@ -89,6 +96,8 @@ runMaintenance()
 
 // Schedule maintenance to run every hour
 setInterval(runMaintenance, 60 * 60 * 1000)
+
+startPrivateSiteReaper()
 
 // Start DNS verification worker (runs every 10 minutes)
 // Can be disabled via DISABLE_DNS_WORKER=true environment variable
@@ -114,14 +123,14 @@ export const app = new Elysia({
 	},
 	cookie: {
 		secrets: cookieSecret,
-		sign: ['did'],
+		sign: [SESSION_COOKIE_NAME],
 	},
 })
 	// Observability middleware
 	.onBeforeHandle(observabilityMiddleware('main-app').beforeHandle)
 	.onRequest(({ request }) => {
 		if (isLocalDev) {
-			const pathname = new URL(request.url).pathname
+			const pathname = redactSecretPath(new URL(request.url).pathname)
 			if (pathname.startsWith('/xrpc/')) {
 				console.log('[Server] Incoming /xrpc request', {
 					method: request.method,
@@ -238,6 +247,8 @@ export const app = new Elysia({
 	.use(domainRoutes(client, cookieSecret))
 	.use(userRoutes(client, cookieSecret))
 	.use(siteRoutes(client, cookieSecret))
+	.use(privateRedeemRoutes(client, cookieSecret))
+	.use(privateSiteApiRoutes(client, cookieSecret))
 	.use(webhookRoutes(client, cookieSecret))
 	.use(secretRoutes(client, cookieSecret))
 	.use(adminRoutes(cookieSecret))
@@ -250,36 +261,26 @@ export const app = new Elysia({
 			staticLimit: 10000,
 		}),
 	)
-	// Production only: serve built assets from dist
+	// Serve built assets from dist. The browser cannot execute the source TSX directly,
+	// so the dev script builds the editor before starting the watcher as well.
 	.use(
-		Bun.env.NODE_ENV === 'production'
-			? await staticPlugin({
-					assets: './apps/main-app/dist',
-					prefix: '/dist',
-				})
-			: (app) => app,
+		await staticPlugin({
+			assets: './apps/main-app/dist',
+			prefix: '/dist',
+		}),
 	)
+	.use(await staticPlugin({ assets: './apps/main-app/dist/editor', prefix: '/editor' }))
+	// Serve built HTML for /editor in both dev and production.
 	.use(
-		Bun.env.NODE_ENV === 'production'
-			? await staticPlugin({
-					assets: './apps/main-app/dist/editor',
-					prefix: '/editor',
-				})
-			: (app) => app,
-	)
-	// Production only: serve built HTML for /editor
-	.use(
-		Bun.env.NODE_ENV === 'production'
-			? new Elysia()
-					.get('/editor', async ({ set }) => {
-						set.headers['Content-Type'] = 'text/html; charset=utf-8'
-						return await Bun.file('./apps/main-app/dist/editor/index.html').text()
-					})
-					.get('/editor/*', async ({ set }) => {
-						set.headers['Content-Type'] = 'text/html; charset=utf-8'
-						return await Bun.file('./apps/main-app/dist/editor/index.html').text()
-					})
-			: (app) => app,
+		new Elysia()
+			.get('/editor', async ({ set }) => {
+				set.headers['Content-Type'] = 'text/html; charset=utf-8'
+				return await Bun.file('./apps/main-app/dist/editor/index.html').text()
+			})
+			.get('/editor/*', async ({ set }) => {
+				set.headers['Content-Type'] = 'text/html; charset=utf-8'
+				return await Bun.file('./apps/main-app/dist/editor/index.html').text()
+			}),
 	)
 	// Keep XRPC after static in dev, since staticPlugin(prefix='/') installs GET /* fallback.
 	.use(xrpcRoutes())
