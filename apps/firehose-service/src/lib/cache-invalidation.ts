@@ -82,9 +82,19 @@ export async function enqueueSiteRevalidation(did: string, rkey: string, reason:
 	const redis = getPublisher()
 	if (!redis) return false
 
+	const dedupeKey = `revalidate:site:other:${did}:${rkey}`
+	let dedupeAcquired = false
+	let enqueued = false
 	try {
+		const set = await redis.set(dedupeKey, '1', 'EX', config.revalidateDedupeTtlSeconds, 'NX')
+		if (!set) return false
+		dedupeAcquired = true
+
 		const streamId = await redis.xadd(
 			config.revalidateStream,
+			'MAXLEN',
+			'~',
+			config.revalidateStreamMaxLen.toString(),
 			'*',
 			'did',
 			did,
@@ -95,9 +105,11 @@ export async function enqueueSiteRevalidation(did: string, rkey: string, reason:
 			'ts',
 			Date.now().toString(),
 		)
+		enqueued = true
 		logger.info(`[Revalidate] Enqueued ${did}/${rkey} after firehose failure`, { reason, streamId })
 		return true
 	} catch (err) {
+		if (dedupeAcquired && !enqueued) await redis.del(dedupeKey).catch(() => undefined)
 		logger.error('[Revalidate] Failed to enqueue site after firehose failure', err, { did, rkey, reason })
 		return false
 	}
