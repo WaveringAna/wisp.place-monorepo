@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { verifyRequestOrigin } from './csrf'
+import { csrfProtection, verifyRequestOrigin } from './csrf'
 
 describe('verifyRequestOrigin', () => {
 	test('should accept matching origin and host', () => {
@@ -86,5 +86,39 @@ describe('verifyRequestOrigin', () => {
 	test('should handle IPv6 addresses', () => {
 		expect(verifyRequestOrigin('http://[::1]:8000', ['[::1]:8000'])).toBe(true)
 		expect(verifyRequestOrigin('http://[2001:db8::1]', ['[2001:db8::1]'])).toBe(true)
+	})
+})
+
+describe('csrfProtection', () => {
+	const privateOrigin = 'https://amber-anchor-fox-1234.priv.wisp.place'
+	const protect = csrfProtection(['.priv.wisp.place'])
+
+	const run = (path: string) => {
+		const set: { status?: number | string } = {}
+		const result = protect({
+			request: new Request(`https://wisp.place${path}`, {
+				method: 'POST',
+				headers: { Host: 'wisp.place', Origin: privateOrigin },
+			}),
+			set,
+		})
+		return { result, set }
+	}
+
+	test('allows private-site origins for scoped share redemption', () => {
+		const { result, set } = run('/private/redeem')
+		expect(result).toBeUndefined()
+		expect(set.status).toBeUndefined()
+	})
+
+	test('rejects private-site origins for other unsafe routes', () => {
+		for (const path of ['/wisp/upload-files', '/api/auth/logout', '/api/domain/claim']) {
+			const { result, set } = run(path)
+			expect(set.status).toBe(403)
+			expect(result).toEqual({
+				error: 'CSRF validation failed',
+				message: 'Request origin does not match host',
+			})
+		}
 	})
 })
