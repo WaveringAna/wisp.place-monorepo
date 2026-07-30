@@ -21,22 +21,34 @@ export function observabilityMiddleware(service: string) {
 			// Store start time on request object
 			;(request as any).__startTime = Date.now()
 		},
-		afterHandle: ({ request, set }: Context) => {
+		afterHandle: ({ request, route, set }: Context) => {
 			const startTime = (request as any).__startTime || Date.now()
 			const duration = Date.now() - startTime
 			const url = new URL(request.url)
 			const statusCode = normalizeStatus(set.status, 200)
 
-			metricsCollector.recordRequest(redactSecretPath(url.pathname), request.method, statusCode, duration, service)
+			metricsCollector.recordRequest(
+				route || redactSecretPath(url.pathname),
+				request.method,
+				statusCode,
+				duration,
+				service,
+			)
 		},
 		onError: (context: any) => {
-			const { request, error, set } = context as Context & { error: Error }
+			const { request, error, route, set } = context as Context & { error: Error }
 			const startTime = (request as any).__startTime || Date.now()
 			const duration = Date.now() - startTime
 			const url = new URL(request.url)
 			const statusCode = normalizeStatus(set.status, 500)
 
-			metricsCollector.recordRequest(redactSecretPath(url.pathname), request.method, statusCode, duration, service)
+			metricsCollector.recordRequest(
+				route || redactSecretPath(url.pathname),
+				request.method,
+				statusCode,
+				duration,
+				service,
+			)
 
 			// Don't log 404 errors or expected auth failures
 			const isAuthError = error?.message === 'Authentication required'

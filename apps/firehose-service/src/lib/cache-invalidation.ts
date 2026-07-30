@@ -26,7 +26,7 @@ function getPublisher(): Redis | null {
 	}
 
 	if (!publisher) {
-		logger.info(`[CacheInvalidation] Connecting to Redis for publishing: ${config.redisUrl}`)
+		logger.info('[CacheInvalidation] Connecting to Redis for publishing')
 		publisher = new Redis(config.redisUrl, {
 			maxRetriesPerRequest: 2,
 			enableReadyCheck: true,
@@ -75,6 +75,31 @@ export async function publishCacheInvalidation(
 		await redis.publish(CHANNEL, message)
 	} catch (err) {
 		logger.error('[CacheInvalidation] Failed to publish', err)
+	}
+}
+
+export async function enqueueSiteRevalidation(did: string, rkey: string, reason: string): Promise<boolean> {
+	const redis = getPublisher()
+	if (!redis) return false
+
+	try {
+		const streamId = await redis.xadd(
+			config.revalidateStream,
+			'*',
+			'did',
+			did,
+			'rkey',
+			rkey,
+			'reason',
+			reason,
+			'ts',
+			Date.now().toString(),
+		)
+		logger.info(`[Revalidate] Enqueued ${did}/${rkey} after firehose failure`, { reason, streamId })
+		return true
+	} catch (err) {
+		logger.error('[Revalidate] Failed to enqueue site after firehose failure', err, { did, rkey, reason })
+		return false
 	}
 }
 

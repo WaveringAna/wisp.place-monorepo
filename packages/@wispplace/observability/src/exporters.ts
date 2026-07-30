@@ -5,7 +5,7 @@
 
 import os from 'node:os'
 import { gzipSync } from 'node:zlib'
-import { type Counter, type Histogram, type MeterProvider, metrics } from '@opentelemetry/api'
+import { type Counter, type Histogram, type MeterProvider, metrics, type ObservableGauge } from '@opentelemetry/api'
 import { OTLPMetricExporter as OTLPMetricExporterHTTP } from '@opentelemetry/exporter-metrics-otlp-http'
 import { OTLPMetricExporter as OTLPMetricExporterProto } from '@opentelemetry/exporter-metrics-otlp-proto'
 import type { CompressionAlgorithm } from '@opentelemetry/otlp-exporter-base'
@@ -46,6 +46,10 @@ interface LokiStream {
 
 interface LokiBatch {
 	streams: LokiStream[]
+}
+
+function serviceInstance(serviceName: string): string {
+	return `${serviceName}-${os.hostname()}`
 }
 
 // ============================================================================
@@ -127,9 +131,11 @@ class LokiExporter {
 	private errorBuffer: ErrorEntry[] = []
 	private flushTimer?: NodeJS.Timeout
 	private config: GrafanaConfig = {}
+	private instance = serviceInstance('wisp-app')
 
 	initialize(config: GrafanaConfig) {
 		this.config = config
+		this.instance = serviceInstance(config.serviceName || 'wisp-app')
 
 		if (this.config.enabled && this.config.lokiUrl) {
 			this.startBatching()
@@ -230,6 +236,7 @@ class LokiExporter {
 					service: service || 'unknown',
 					level: level || 'info',
 					job: this.config.serviceName || 'wisp-app',
+					instance: this.instance,
 				},
 				values,
 			})
@@ -264,6 +271,7 @@ class LokiExporter {
 					service: service,
 					level: 'error',
 					job: this.config.serviceName || 'wisp-app',
+					instance: this.instance,
 					type: 'aggregated_error',
 				},
 				values: errorValues,
@@ -316,6 +324,7 @@ class MetricsExporter {
 	private requestCounter?: Counter
 	private requestDuration?: Histogram
 	private errorCounter?: Counter
+	private serviceInfo?: ObservableGauge
 	private config: GrafanaConfig = {}
 
 	initialize(config: GrafanaConfig) {
@@ -340,13 +349,13 @@ class MetricsExporter {
 			encoding === 'protobuf' ? new OTLPMetricExporterProto(exporterConfig) : new OTLPMetricExporterHTTP(exporterConfig)
 
 		// Create meter provider with periodic exporting
-		const hostname = os.hostname()
 		const serviceName = this.config.serviceName || 'wisp-app'
+		const instance = serviceInstance(serviceName)
 		const meterProvider = new SdkMeterProvider({
 			resource: resourceFromAttributes({
 				[ATTR_SERVICE_NAME]: serviceName,
 				[ATTR_SERVICE_VERSION]: this.config.serviceVersion || '1.0.0',
-				instance: `${serviceName}-${hostname}`,
+				instance,
 			}),
 			readers: [
 				new PeriodicExportingMetricReader({
@@ -374,6 +383,13 @@ class MetricsExporter {
 
 		this.errorCounter = meter.createCounter('errors_total', {
 			description: 'Total number of errors',
+		})
+
+		this.serviceInfo = meter.createObservableGauge('service_instance_info', {
+			description: 'Service instance presence',
+		})
+		this.serviceInfo.addCallback((result) => {
+			result.observe(1, { service: serviceName, instance })
 		})
 	}
 

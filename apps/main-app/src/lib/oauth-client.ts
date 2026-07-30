@@ -173,12 +173,13 @@ export const cleanupExpiredSessions = async () => {
 	}
 }
 
-export const createClientMetadata = (config: {
-	domain: `http://${string}` | `https://${string}`
-	clientName: string
-}): ClientMetadata => {
-	const isLocalDev = Bun.env.LOCAL_DEV === 'true'
-
+export const createClientMetadata = (
+	config: {
+		domain: `http://${string}` | `https://${string}`
+		clientName: string
+	},
+	isLocalDev = Bun.env.LOCAL_DEV === 'true',
+): ClientMetadata => {
 	if (isLocalDev) {
 		// Loopback client for local development
 		// For loopback, scopes and redirect_uri must be in client_id query string
@@ -207,7 +208,7 @@ export const createClientMetadata = (config: {
 	return {
 		client_id: `${config.domain}/oauth-client-metadata.json`,
 		client_name: config.clientName,
-		client_uri: `https://wisp.place`,
+		client_uri: config.domain,
 		logo_uri: `${config.domain}/logo.png`,
 		tos_uri: `${config.domain}/tos`,
 		policy_uri: `${config.domain}/policy`,

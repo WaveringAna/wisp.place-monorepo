@@ -433,7 +433,7 @@ export function startCacheInvalidationSubscriber(): void {
 	loadCursorFromDisk()
 	stopReplayRequested = false
 
-	console.log(`[CacheInvalidation] Connecting to Redis for subscribing: ${redisUrl}`)
+	console.log('[CacheInvalidation] Connecting to Redis for subscribing')
 	subscriber = new Redis(redisUrl, {
 		maxRetriesPerRequest: 2,
 		enableReadyCheck: true,
