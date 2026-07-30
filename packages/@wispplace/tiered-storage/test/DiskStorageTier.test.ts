@@ -81,8 +81,30 @@ describe('DiskStorageTier - Recursive Directory Support', () => {
 				checksum: 'evil',
 			}
 
-			await expect(tier.set(metadata.key, data, metadata)).rejects.toThrow(/outside configured directory/)
+			// Traversal segments are rejected before the cache-root containment check.
+			await expect(tier.set(metadata.key, data, metadata)).rejects.toThrow(/traversal segment|outside configured directory/)
 			expect(existsSync(traversalTarget)).toBe(false)
+		})
+
+		test('should reject cross-tenant traversal segments that stay within the cache root', async () => {
+			// A key that escapes its own prefix but lands inside the cache root must
+			// still be rejected, otherwise directory-aligned deletePrefix/listKeys
+			// miss it and the object poisons another tenant's cache path.
+			const tier = new DiskStorageTier({ directory: testDir })
+			const data = new TextEncoder().encode('evil')
+			const maliciousKey = 'did:plc:attacker/site/../../did:plc:victim/victimSite/index.html'
+			const metadata = {
+				key: maliciousKey,
+				size: data.byteLength,
+				createdAt: new Date(),
+				lastAccessed: new Date(),
+				accessCount: 0,
+				compressed: false,
+				checksum: 'evil',
+			}
+
+			await expect(tier.set(maliciousKey, data, metadata)).rejects.toThrow(/traversal segment/)
+			expect(await tier.get('did:plc:victim/victimSite/index.html')).toBe(null)
 		})
 	})
 

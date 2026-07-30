@@ -479,6 +479,12 @@ function tryDecodeBase64(content: Uint8Array): Uint8Array | null {
 	}
 }
 
+function isSafeEntryName(name: string): boolean {
+	return (
+		name !== '' && name !== '.' && name !== '..' && !name.includes('/') && !name.includes('\\') && !name.includes('\0')
+	)
+}
+
 /**
  * Collect file info from directory entries
  */
@@ -486,6 +492,14 @@ function collectFileInfo(entries: Entry[], pathPrefix: string = ''): FileInfo[] 
 	const files: FileInfo[] = []
 
 	for (const entry of entries) {
+		// Reject traversal/control segments before they reach a storage key. Site
+		// entry names are untrusted public record data; without this a name like
+		// `..` could relocate an object to another tenant's prefix on disk-backed
+		// tiers and evade prefix invalidation.
+		if (!isSafeEntryName(entry.name)) {
+			const entryPath = pathPrefix ? `${pathPrefix}/${entry.name}` : entry.name
+			throw new Error(`Unsafe filesystem entry name: ${entryPath}`)
+		}
 		const currentPath = pathPrefix ? `${pathPrefix}/${entry.name}` : entry.name
 		const node = entry.node
 

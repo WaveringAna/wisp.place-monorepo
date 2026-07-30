@@ -665,6 +665,17 @@ export class DiskStorageTier implements StorageTier {
 	 */
 	private getFilePath(key: string): string {
 		const encoded = encodeKey(key, this.encodeColons)
+		// Reject traversal segments. The cache-root containment check below only
+		// prevents escape outside the configured directory; a key such as
+		// `a/site/../../b/site/x` still resolves under the root but relocates the
+		// object to another tenant's prefix, and directory-aligned deletePrefix/
+		// listKeys would then miss it during invalidation. Refuse `.`/`..`
+		// segments outright so logical keys map 1:1 to their physical prefix.
+		for (const segment of encoded.split('/')) {
+			if (segment === '..' || segment === '.') {
+				throw new Error(`Storage key contains a traversal segment: ${key}`)
+			}
+		}
 		const baseDir = resolve(this.config.directory)
 		const filePath = resolve(baseDir, encoded)
 		const relativePath = relative(baseDir, filePath)
