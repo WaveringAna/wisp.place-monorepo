@@ -28,6 +28,8 @@ export const config = {
 	redisUrl: process.env.REDIS_URL,
 	revalidateStream: process.env.WISP_REVALIDATE_STREAM || 'wisp:revalidate',
 	revalidateGroup: process.env.WISP_REVALIDATE_GROUP || 'firehose-service',
+	revalidateStreamMaxLen: parseInt(process.env.WISP_REVALIDATE_STREAM_MAXLEN || '10000', 10),
+	revalidateDedupeTtlSeconds: parseInt(process.env.WISP_REVALIDATE_DEDUPE_TTL_SECONDS || '60', 10),
 	cacheInvalidationStream: process.env.WISP_CACHE_INVALIDATION_STREAM || 'wisp:cache-invalidate-stream',
 	cacheInvalidationStreamMaxLen: parseInt(process.env.WISP_CACHE_INVALIDATION_STREAM_MAXLEN || '10000', 10),
 
