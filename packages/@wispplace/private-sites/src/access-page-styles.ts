@@ -175,14 +175,6 @@ input[type=text]::placeholder { color: var(--private-subtle); }
   font-size: 0.75rem;
 }
 
-.private-note {
-  margin-top: 1.5rem;
-  padding-top: 1rem;
-  border-top: 1px solid color-mix(in oklch, var(--private-border) 55%, transparent);
-  color: var(--private-subtle);
-  font-size: 0.75rem;
-}
-
 @media (prefers-reduced-motion: reduce) {
   .private-action { transition: opacity 160ms ease-out, background-color 160ms ease-out, color 160ms ease-out; }
 }

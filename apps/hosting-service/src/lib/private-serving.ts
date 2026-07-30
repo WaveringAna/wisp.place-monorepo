@@ -61,7 +61,6 @@ const scopedSignInPage = (siteId: string, token: string, audienceDid: string): R
 <body><main class="private-page private-shell">
 <script>history.replaceState(null, '', location.pathname)</script>
 <div class="private-brand"><strong>wisp.place</strong></div>
-<p class="private-kicker">account access</p>
 <h1>this link is for a specific account</h1>
 <p>it was shared with <code>${escapeHtml(audienceDid)}</code>. sign in with that account to open it.</p>
 <form class="private-form" method="POST" action="${escapeHtml(mainAppOrigin())}/private/redeem">

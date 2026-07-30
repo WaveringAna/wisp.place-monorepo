@@ -24,7 +24,7 @@ const signInPage = (siteId: string, token?: string): string => {
 		`<div class="private-brand"><strong>wisp.place</strong></div>
 ${shared ? '<p class="private-kicker">shared link</p>' : ''}
 <h1>sign in to open this ${shared ? 'link' : 'private site'}</h1>
-<p>${shared ? 'this private site was shared with a specific account.' : 'only accounts with access can open it without a share link.'}</p>
+${shared ? '' : '<p>only accounts with access can open it without a share link.</p>'}
 <form id="f" class="private-form">
  <label for="handle">your handle</label>
  <input type="text" id="handle" placeholder="alice.bsky.social" autocomplete="username" autocapitalize="none" autocorrect="off" required>
@@ -58,7 +58,6 @@ const deniedPage = (): string =>
 	page(
 		'not available',
 		`<div class="private-brand"><strong>wisp.place</strong></div>
-<p class="private-kicker">link unavailable</p>
 <h1>this link is not available</h1>
 <p>it may have been revoked, expired, or issued to a different account.</p>`,
 	)

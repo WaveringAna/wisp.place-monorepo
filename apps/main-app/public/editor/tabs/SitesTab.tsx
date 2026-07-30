@@ -166,9 +166,7 @@ const PrivateSharePanel = memo(function PrivateSharePanel({
 					className="w-full bg-background/50 px-2 py-1.5 text-xs font-mono outline-none border border-border/50 focus:border-accent"
 				/>
 				{accountError && <p className="text-[10px] text-amber-400">{accountError}</p>}
-				<p className="text-[10px] text-muted-foreground">
-					leave blank for a link anyone can open; otherwise the handle is resolved before creating the link
-				</p>
+				<p className="text-[10px] text-muted-foreground">leave blank for a link anyone can open</p>
 			</div>
 
 			{loading ? (
@@ -537,9 +535,6 @@ export const SitesTab = memo(function SitesTab({
 												<p className="text-xs text-muted-foreground mt-2">
 													{site.fileCount} files · {formatBytes(site.totalBytes)} ·{' '}
 													{formatExpiry(site.expiresAt, site.expired)}
-												</p>
-												<p className="text-xs text-muted-foreground mt-1">
-													Only you can open this while signed in. Not published to your PDS.
 												</p>
 											</div>
 											<PrivateSharePanel
