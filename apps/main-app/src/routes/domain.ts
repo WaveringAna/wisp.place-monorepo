@@ -18,6 +18,7 @@ import {
 	updateCustomDomainVerification,
 	updateDomain,
 	updateWispDomainSite,
+	waitForSiteCache,
 } from '../lib/db'
 import { verifyCustomDomain } from '../lib/dns-verify'
 import { extractWispHandle, isValidHandle, normalizeDomain, toDomain, validateCustomDomain } from '../lib/domain-utils'
@@ -341,6 +342,11 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 					throw new Error('Unauthorized: You do not own this domain')
 				}
 
+				if (siteRkey && !(await waitForSiteCache(auth.did, siteRkey))) {
+					set.status = 503
+					throw new Error('Site is still being processed. Please try again in a moment.')
+				}
+
 				// Update wisp.place domain to point to this site
 				await updateWispDomainSite(domainLower, siteRkey)
 				await publishDomainCacheInvalidation(domainLower, 'wisp')
@@ -420,6 +426,11 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				if (domainInfo.did !== auth.did) {
 					set.status = 403
 					throw new Error('Unauthorized: You do not own this domain')
+				}
+
+				if (siteRkey && !(await waitForSiteCache(auth.did, siteRkey))) {
+					set.status = 503
+					throw new Error('Site is still being processed. Please try again in a moment.')
 				}
 
 				// Update custom domain to point to this site

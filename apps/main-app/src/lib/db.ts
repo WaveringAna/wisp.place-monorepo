@@ -1,6 +1,7 @@
 import { SQL } from 'bun'
 import { isValidHandle, toDomain } from './domain-utils'
 import { runDatabaseMigrations } from './migrations'
+import { waitForSiteCacheProjection } from './site-cache-wait'
 
 export { isValidHandle, toDomain } from './domain-utils'
 
@@ -420,6 +421,12 @@ export const getSitesByDid = async (did: string) => {
     `
 	return rows
 }
+
+export const waitForSiteCache = async (did: string, rkey: string): Promise<boolean> =>
+	waitForSiteCacheProjection(async () => {
+		const rows = await db`SELECT 1 FROM site_cache WHERE did = ${did} AND rkey = ${rkey} LIMIT 1`
+		return rows.length > 0
+	})
 
 // Get all domains (wisp + custom) mapped to a specific site
 export const getDomainsBySite = async (did: string, rkey: string) => {
