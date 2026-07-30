@@ -69,7 +69,6 @@ const scopedSignInPage = (siteId: string, token: string, audienceDid: string): R
  <input type="hidden" name="token" value="${escapeHtml(token)}">
  <button class="private-action" type="submit">sign in with atproto <span aria-hidden="true">→</span></button>
 </form>
-<p class="private-note">your password stays with your personal data server. wisp only starts the sign-in handoff.</p>
 </main></body></html>`
 
 	return new Response(body, {
@@ -89,7 +88,6 @@ const anonymousSignInPage = (siteId: string): Response => {
  <input type="hidden" name="siteId" value="${escapeHtml(siteId)}">
  <button class="private-action" type="submit">sign in with atproto <span aria-hidden="true">→</span></button>
 </form>
-<p class="private-note">your password stays with your personal data server. wisp only starts the sign-in handoff.</p>
 </main></body></html>`
 
 	return new Response(body, {

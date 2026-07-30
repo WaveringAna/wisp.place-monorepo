@@ -31,7 +31,6 @@ ${shared ? '<p class="private-kicker">shared link</p>' : ''}
  <button class="private-action" id="action" type="submit" disabled>sign in to continue <span aria-hidden="true">→</span></button>
  <p class="private-error" id="err" aria-live="polite"></p>
 </form>
-<p class="private-note">your password stays with your personal data server. wisp only starts the sign-in handoff.</p>
 <script>
  var payload = ${json({ siteId, token })}
  var form = document.getElementById('f'), input = document.getElementById('handle'), action = document.getElementById('action'), error = document.getElementById('err')
@@ -61,8 +60,7 @@ const deniedPage = (): string =>
 		`<div class="private-brand"><strong>wisp.place</strong></div>
 <p class="private-kicker">link unavailable</p>
 <h1>this link is not available</h1>
-<p>it may have been revoked, expired, or issued to a different account.</p>
-<p class="private-note">no change was made to your account.</p>`,
+<p>it may have been revoked, expired, or issued to a different account.</p>`,
 	)
 
 const htmlResponse = (set: { headers: Record<string, string | number>; status?: number | string }, body: string) => {
