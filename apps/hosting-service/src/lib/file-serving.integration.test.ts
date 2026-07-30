@@ -234,7 +234,7 @@ describe('serveFileInternal directory-index fallback for extensioned paths', () 
 		expect(response.headers.get('Cache-Control')).toBe('public, max-age=31536000, immutable')
 	})
 
-	test('proxies absolute 200 rewrite targets with inline query placeholders', async () => {
+	test('rejects absolute 200 rewrite targets without proxying them', async () => {
 		storeFile(
 			'_redirects',
 			'/.well-known/webfinger?resource=:resource https://webfinger.madoka-winter.workers.dev/?resource=:resource 200',
@@ -249,13 +249,9 @@ describe('serveFileInternal directory-index fallback for extensioned paths', () 
 			{ accept: 'application/jrd+json' },
 		)
 
-		expect(response.status).toBe(200)
-		expect(response.headers.get('Content-Type')).toContain('application/jrd+json')
-		expect(await response.json()).toEqual({ subject: 'acct:ana@example.com' })
-		expect(safeFetchCalls).toHaveLength(1)
-		expect(safeFetchCalls[0]?.url).toBe(
-			'https://webfinger.madoka-winter.workers.dev/?resource=acct%3Aana%40example.com',
-		)
+		expect(response.status).toBe(400)
+		expect(await response.text()).toBe('Absolute URL rewrites are not supported')
+		expect(safeFetchCalls).toHaveLength(0)
 		expect(storageGetWithMetadataKeys).not.toContain(
 			`${DID}/${RKEY}/https://webfinger.madoka-winter.workers.dev/?resource=acct%3Aana%40example.com`,
 		)

@@ -142,8 +142,12 @@ export const ingestPrivateSite = async (options: CreatePrivateSiteOptions): Prom
 			await writePrivateFile(site.siteId, file.path, file.bytes, file.mimeType)
 		}
 	} catch (err) {
-		await deletePrivateSiteFiles(site.siteId).catch(() => 0)
-		await deletePrivateSite(site.siteId).catch(() => false)
+		await deletePrivateSiteFiles(site.siteId).catch((cleanupErr) => {
+			logger.error('[PrivateSite] cleanup after failed ingest failed', cleanupErr, { siteId: site.siteId })
+		})
+		await deletePrivateSite(site.siteId).catch((cleanupErr) => {
+			logger.error('[PrivateSite] cleanup after failed ingest failed', cleanupErr, { siteId: site.siteId })
+		})
 		throw err
 	}
 

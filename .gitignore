@@ -56,3 +56,4 @@ package-lock.json
 **/*.bun
 
 server
+.env.dev
