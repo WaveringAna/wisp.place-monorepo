@@ -225,7 +225,7 @@ export const app = new Elysia({
 		}
 	})
 	// Private-site subdomains (<siteId>.priv.<host>) legitimately POST /private/redeem
-	// to redeem audience-scoped shares, so allow that origin through CSRF.
+	// to redeem audience-scoped shares. The middleware scopes this exception to that path.
 	.onBeforeHandle(csrfProtection([`.${process.env.PRIVATE_HOST || `priv.${BASE_HOST}`}`]))
 	.get('/', async ({ request, set }) => {
 		// Build dynamic login URL for AT Protocol OAuth entryway

@@ -39,9 +39,9 @@ export function verifyRequestOrigin(origin: string, allowedHosts: string[]): boo
  * not propagate to those routes, leaving CSRF silently unenforced. Applying the
  * hook directly on the root instance propagates to all child `.use()` routes.
  *
- * `allowedExtraOrigins` permits additional exact hosts (e.g. the private-site
- * origin that legitimately POSTs /private/redeem). Entries beginning with `.`
- * match any subdomain of that suffix, so `<siteId>.priv.<host>` is covered.
+ * `allowedExtraOrigins` permits additional hosts only for /private/redeem.
+ * Entries beginning with `.` match any subdomain of that suffix, so
+ * `<siteId>.priv.<host>` is covered without exempting any other route.
  *
  * Usage:
  * ```ts
@@ -66,14 +66,16 @@ export const csrfProtection =
 		const originHeader = request.headers.get('Origin')
 		// Use X-Forwarded-Host if behind a proxy, otherwise use Host
 		const hostHeader = request.headers.get('X-Forwarded-Host') || request.headers.get('Host')
+		const path = new URL(request.url).pathname
+		const extraHosts = path === '/private/redeem' ? allowedExtraOrigins : []
 
-		// Validate origin matches host or an explicitly allowlisted origin
-		if (!originHeader || !hostHeader || !verifyRequestOrigin(originHeader, [hostHeader, ...allowedExtraOrigins])) {
+		// Extra origins are trusted only for the scoped-share redemption endpoint.
+		if (!originHeader || !hostHeader || !verifyRequestOrigin(originHeader, [hostHeader, ...extraHosts])) {
 			logger.warn('[CSRF] Request blocked', {
 				method,
 				origin: originHeader,
 				host: hostHeader,
-				path: new URL(request.url).pathname,
+				path,
 			})
 
 			set.status = 403
