@@ -69,6 +69,15 @@ describe('verifyRequestOrigin', () => {
 		expect(verifyRequestOrigin('https://example.com', [])).toBe(false)
 	})
 
+	test('should allow private-site subdomain origins via dot-suffix allowlist', () => {
+		// <siteId>.priv.wisp.place legitimately POSTs /private/redeem
+		const allowed = ['.priv.wisp.place']
+		expect(verifyRequestOrigin('https://amber-anchor-fox-1234.priv.wisp.place', allowed)).toBe(true)
+		expect(verifyRequestOrigin('https://priv.wisp.place', allowed)).toBe(false)
+		expect(verifyRequestOrigin('https://evilpriv.wisp.place', allowed)).toBe(false)
+		expect(verifyRequestOrigin('https://amber-anchor-fox-1234.priv.evil.com', allowed)).toBe(false)
+	})
+
 	test('should handle IPv4 addresses', () => {
 		expect(verifyRequestOrigin('http://127.0.0.1:8000', ['127.0.0.1:8000'])).toBe(true)
 		expect(verifyRequestOrigin('http://192.168.1.1', ['192.168.1.1'])).toBe(true)

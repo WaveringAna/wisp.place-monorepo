@@ -224,7 +224,9 @@ export const app = new Elysia({
 			statusCode,
 		}
 	})
-	.use(csrfProtection())
+	// Private-site subdomains (<siteId>.priv.<host>) legitimately POST /private/redeem
+	// to redeem audience-scoped shares, so allow that origin through CSRF.
+	.onBeforeHandle(csrfProtection([`.${process.env.PRIVATE_HOST || `priv.${BASE_HOST}`}`]))
 	.get('/', async ({ request, set }) => {
 		// Build dynamic login URL for AT Protocol OAuth entryway
 		const loginUrl = isLocalDev ? `${new URL(request.url).origin}/api/auth/login` : `${config.domain}/api/auth/login`
