@@ -1,5 +1,4 @@
 import { Button } from '@public/components/ui/button'
-import { Checkbox } from '@public/components/ui/checkbox'
 import { Input } from '@public/components/ui/input'
 import { Label } from '@public/components/ui/label'
 import { AlertCircle, CheckCircle2, ChevronDown, ChevronUp, Loader2, RefreshCw, Upload, XCircle } from 'lucide-react'
@@ -11,21 +10,6 @@ type FileStatus = 'pending' | 'checking' | 'uploading' | 'uploaded' | 'reused' |
 interface FileProgress {
 	name: string
 	status: FileStatus
-	error?: string
-}
-
-interface StandardSiteSummary {
-	enabled: boolean
-	detected: boolean
-	posts: number
-	score?: number
-	publicationUri?: string
-	documents?: {
-		createdOrUpdated: number
-		deleted: number
-		skipped: number
-	}
-	linksInjected?: number
 	error?: string
 }
 
@@ -49,8 +33,6 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 	const [failedFiles, setFailedFiles] = useState<Array<{ name: string; index: number; error: string; size: number }>>(
 		[],
 	)
-	const [publishStandardSite, setPublishStandardSite] = useState(false)
-	const [standardSiteSummary, setStandardSiteSummary] = useState<StandardSiteSummary | null>(null)
 	const [uploadedCount, setUploadedCount] = useState(0)
 	const [fileProgressList, setFileProgressList] = useState<FileProgress[]>([])
 	const [showFileProgress, setShowFileProgress] = useState(false)
@@ -254,8 +236,6 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 				message = 'Creating manifest...'
 			} else if (progress.phase === 'finalizing') {
 				message = 'Finalizing upload...'
-			} else if (progress.phase === 'publishing_standard_site') {
-				message = 'Publishing standard.site records...'
 			}
 
 			setUploadProgress(message)
@@ -268,9 +248,7 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 			currentJobIdRef.current = null
 
 			const hasIssues =
-				(result.skippedFiles && result.skippedFiles.length > 0) ||
-				(result.failedFiles && result.failedFiles.length > 0) ||
-				!!result.standardSite?.error
+				(result.skippedFiles && result.skippedFiles.length > 0) || (result.failedFiles && result.failedFiles.length > 0)
 
 			// Update file progress list with failed files
 			if (result.failedFiles && result.failedFiles.length > 0) {
@@ -300,7 +278,6 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 			setSkippedFiles(result.skippedFiles || [])
 			setFailedFiles(result.failedFiles || [])
 			setUploadedCount(result.uploadedCount || result.fileCount || 0)
-			setStandardSiteSummary(result.standardSite || null)
 
 			// Debug: log failed files
 			console.log('Failed files:', result.failedFiles)
@@ -339,7 +316,6 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 				setFailedFiles([])
 				setUploadedCount(0)
 				setFileProgressList([])
-				setStandardSiteSummary(null)
 				setIsUploading(false)
 			}, resetDelay)
 		})
@@ -386,9 +362,6 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 		try {
 			const formData = new FormData()
 			formData.append(siteMode === 'private' ? 'name' : 'siteName', siteName)
-			if (siteMode !== 'private') {
-				formData.append('publishStandardSite', String(publishStandardSite))
-			}
 			if (siteMode === 'private') {
 				if (privateExpiryMode === 'never') {
 					formData.append('expiryMinutes', '0')
@@ -658,38 +631,6 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 					/>
 				</button>
 
-				{siteMode !== 'private' && (
-					<div className="flex items-start gap-2 border border-border/30 bg-muted/20 p-3">
-						<Checkbox
-							id="publish-standard-site"
-							checked={publishStandardSite}
-							onCheckedChange={(checked) => setPublishStandardSite(checked === true)}
-							disabled={isUploading}
-							className="mt-0.5"
-						/>
-						<div className="space-y-0.5">
-							<div className="flex items-center gap-1.5">
-								<Label htmlFor="publish-standard-site" className="text-xs font-medium">
-									Auto-detect blog posts
-								</Label>
-								<span className="group relative inline-flex">
-									<button
-										type="button"
-										aria-label="auto-detect blog posts info"
-										className="inline-flex h-4 min-w-4 items-center justify-center border border-border/50 bg-transparent px-1 text-[10px] leading-none text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-									>
-										(i)
-									</button>
-									<span className="pointer-events-none absolute bottom-full left-0 z-20 mb-2 w-72 max-w-[calc(100vw-3rem)] border border-border bg-popover p-2 text-xs leading-5 text-popover-foreground opacity-0 shadow-md transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
-										Creates standard.site publication and document records. Detects Astro, Hugo, 11ty, Next.js, Gatsby,
-										SvelteKit, Jekyll, Zola, HTML article metadata, JSON-LD, and Markdown/MDX frontmatter.
-									</span>
-								</span>
-							</div>
-						</div>
-					</div>
-				)}
-
 				{/* Progress */}
 				{uploadProgress && (
 					<div className="space-y-2">
@@ -762,57 +703,6 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 										<div className="text-muted-foreground">…and {failedFiles.length - 10} more</div>
 									)}
 								</div>
-							</div>
-						)}
-
-						{standardSiteSummary && (
-							<div
-								className={`p-3 border text-xs space-y-1 ${
-									standardSiteSummary.error
-										? 'bg-red-500/10 border-red-500/20'
-										: standardSiteSummary.detected
-											? 'bg-green-500/10 border-green-500/20'
-											: 'bg-muted/40 border-border/30'
-								}`}
-							>
-								<div
-									className={`flex items-center gap-2 font-medium ${
-										standardSiteSummary.error
-											? 'text-red-400'
-											: standardSiteSummary.detected
-												? 'text-green-500'
-												: 'text-muted-foreground'
-									}`}
-								>
-									{standardSiteSummary.error ? (
-										<XCircle className="w-3 h-3 shrink-0" />
-									) : standardSiteSummary.detected ? (
-										<CheckCircle2 className="w-3 h-3 shrink-0" />
-									) : (
-										<AlertCircle className="w-3 h-3 shrink-0" />
-									)}
-									{standardSiteSummary.error
-										? 'standard.site publish failed'
-										: standardSiteSummary.detected
-											? `${standardSiteSummary.posts} blog post${standardSiteSummary.posts === 1 ? '' : 's'} published`
-											: 'No blog posts detected'}
-								</div>
-								{standardSiteSummary.documents && (
-									<p className="ml-5 text-muted-foreground">
-										{standardSiteSummary.documents.createdOrUpdated} document
-										{standardSiteSummary.documents.createdOrUpdated === 1 ? '' : 's'} written
-										{standardSiteSummary.documents.deleted > 0 &&
-											`, ${standardSiteSummary.documents.deleted} stale deleted`}
-										{standardSiteSummary.linksInjected !== undefined &&
-											`, ${standardSiteSummary.linksInjected} link${
-												standardSiteSummary.linksInjected === 1 ? '' : 's'
-											} injected`}
-									</p>
-								)}
-								{standardSiteSummary.publicationUri && (
-									<p className="ml-5 font-mono break-all text-muted-foreground">{standardSiteSummary.publicationUri}</p>
-								)}
-								{standardSiteSummary.error && <p className="ml-5 text-red-400">{standardSiteSummary.error}</p>}
 							</div>
 						)}
 

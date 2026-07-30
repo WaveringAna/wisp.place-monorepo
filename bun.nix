@@ -1476,7 +1476,6 @@
   "@wispplace/observability" = copyPathToStore (builtins.toPath "${toString ./.}/packages/@wispplace/observability");
   "@wispplace/page-generators" = copyPathToStore (builtins.toPath "${toString ./.}/packages/@wispplace/page-generators");
   "@wispplace/safe-fetch" = copyPathToStore (builtins.toPath "${toString ./.}/packages/@wispplace/safe-fetch");
-  "@wispplace/standard-site" = copyPathToStore (builtins.toPath "${toString ./.}/packages/@wispplace/standard-site");
   "@wispplace/tiered-storage" = copyPathToStore (builtins.toPath "${toString ./.}/packages/@wispplace/tiered-storage");
   "abort-controller@3.0.0" = fetchurl {
     url = "https://registry.npmjs.org/abort-controller/-/abort-controller-3.0.0.tgz";

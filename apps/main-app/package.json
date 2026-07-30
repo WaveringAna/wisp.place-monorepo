@@ -42,7 +42,6 @@
     "@wispplace/fs-utils": "workspace:*",
     "@wispplace/lexicons": "workspace:*",
     "@wispplace/observability": "workspace:*",
-    "@wispplace/standard-site": "workspace:*",
     "actor-typeahead": "^0.1.2",
     "atproto-ui": "^0.12.0",
     "bun-plugin-tailwind": "^0.1.2",

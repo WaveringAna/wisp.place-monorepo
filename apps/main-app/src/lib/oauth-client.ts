@@ -53,7 +53,7 @@ const requestPgLock: RuntimeLock = async (name, fn) => {
 
 // OAuth scope for all client types
 const OAUTH_SCOPE =
-	'atproto repo:place.wisp.fs repo:place.wisp.domain repo:place.wisp.subfs repo:place.wisp.settings repo:place.wisp.v2.wh repo:site.standard.publication repo:site.standard.document blob:*/*'
+	'atproto repo:place.wisp.fs repo:place.wisp.domain repo:place.wisp.subfs repo:place.wisp.settings repo:place.wisp.v2.wh blob:*/*'
 
 const oauthNetworkOptions = () => {
 	const allowHttp = Bun.env.OAUTH_ALLOW_HTTP === 'true'
