@@ -92,10 +92,15 @@ const runMaintenance = async () => {
 }
 
 // Run maintenance on startup
-runMaintenance()
+runMaintenance().catch((err) => logger.error('[Maintenance] Periodic maintenance failed', err))
 
 // Schedule maintenance to run every hour
-setInterval(runMaintenance, 60 * 60 * 1000)
+setInterval(
+	() => {
+		runMaintenance().catch((err) => logger.error('[Maintenance] Periodic maintenance failed', err))
+	},
+	60 * 60 * 1000,
+)
 
 startPrivateSiteReaper()
 

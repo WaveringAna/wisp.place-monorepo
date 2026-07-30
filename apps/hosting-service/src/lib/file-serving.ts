@@ -9,7 +9,6 @@ import { normalizeFileCids } from '@wispplace/fs-utils'
 import { isHtmlContent, rewriteHtmlPaths } from '@wispplace/fs-utils/html-rewriter'
 import type { Record as WispSettings } from '@wispplace/lexicons/types/place/wisp/settings'
 import { createLogger } from '@wispplace/observability'
-import { safeFetch } from '@wispplace/safe-fetch'
 import type { StorageResult } from '@wispplace/tiered-storage'
 import { lookup } from 'mime-types'
 import { isSiteUpdating } from './cache-invalidation'
@@ -116,51 +115,14 @@ function isAbsoluteHttpUrl(path: string): boolean {
 	return path.startsWith('http://') || path.startsWith('https://')
 }
 
-function getForwardedProxyHeaders(requestHeaders?: Record<string, string>): HeadersInit {
-	const forwarded: Record<string, string> = {}
-	for (const name of ['accept', 'accept-language', 'range']) {
-		const value = requestHeaders?.[name]
-		if (value) forwarded[name] = value
-	}
-	return forwarded
-}
-
-async function proxyExternalRewrite(targetPath: string, requestHeaders?: Record<string, string>): Promise<Response> {
-	try {
-		const upstream = await safeFetch(targetPath, {
-			headers: getForwardedProxyHeaders(requestHeaders),
-			maxSize: 10 * 1024 * 1024,
-			retry: false,
-			timeout: 30_000,
-		})
-		const responseHeaders = new Headers(upstream.headers)
-
-		responseHeaders.delete('connection')
-		responseHeaders.delete('keep-alive')
-		responseHeaders.delete('proxy-authenticate')
-		responseHeaders.delete('proxy-authorization')
-		responseHeaders.delete('te')
-		responseHeaders.delete('trailer')
-		responseHeaders.delete('transfer-encoding')
-		responseHeaders.delete('upgrade')
-		if (!responseHeaders.has('Cache-Control')) {
-			responseHeaders.set('Cache-Control', STANDARD_CACHE_CONTROL)
-		}
-
-		return new Response(upstream.body, {
-			status: upstream.status,
-			statusText: upstream.statusText,
-			headers: responseHeaders,
-		})
-	} catch (err) {
-		logger.warn('External rewrite proxy failed', { targetPath, error: err })
-		return new Response('Bad Gateway', {
-			status: 502,
-			headers: {
-				'Cache-Control': 'no-store',
-			},
-		})
-	}
+function externalRewriteNotAllowedResponse(targetPath: string): Response {
+	logger.warn('Blocked absolute URL for status 200 rewrite', { targetPath })
+	return new Response('Absolute URL rewrites are not supported', {
+		status: 400,
+		headers: {
+			'Cache-Control': 'no-store',
+		},
+	})
 }
 
 function manifestHasPath(fileCids: Record<string, string> | null, filePath: string): boolean {
@@ -514,7 +476,7 @@ export async function serveFromCache(
 			// Handle different status codes
 			if (status === 200) {
 				if (isAbsoluteHttpUrl(targetPath)) {
-					const response = await proxyExternalRewrite(targetPath, headers)
+					const response = externalRewriteNotAllowedResponse(targetPath)
 					logTrace(trace, filePath || '/', logger)
 					return response
 				}
@@ -834,7 +796,7 @@ export async function serveFromCacheWithRewrite(
 			// Handle different status codes
 			if (status === 200) {
 				if (isAbsoluteHttpUrl(targetPath)) {
-					const response = await proxyExternalRewrite(targetPath, headers)
+					const response = externalRewriteNotAllowedResponse(targetPath)
 					logTrace(trace, filePath || '/', logger)
 					return response
 				}

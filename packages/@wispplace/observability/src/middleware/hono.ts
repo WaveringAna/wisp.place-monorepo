@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import { routePath } from 'hono/route'
 import { logCollector, metricsCollector } from '../core'
+import { redactSecretPath } from '../redact'
 
 /**
  * Hono middleware for observability
@@ -27,7 +28,9 @@ export function observabilityErrorHandler(service: string) {
 	return (err: Error, c: Context) => {
 		const { pathname } = new URL(c.req.url)
 
-		logCollector.error(`Request failed: ${c.req.method} ${pathname}`, service, err, { statusCode: c.res.status || 500 })
+		logCollector.error(`Request failed: ${c.req.method} ${redactSecretPath(pathname)}`, service, err, {
+			statusCode: c.res.status || 500,
+		})
 
 		return c.text('Internal Server Error', 500)
 	}

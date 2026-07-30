@@ -254,6 +254,11 @@ export const runDatabaseMigrations = async (db: SQL): Promise<void> => {
 			async () => db`CREATE INDEX IF NOT EXISTS idx_private_site_shares_token_hash ON private_site_shares(token_hash)`,
 		],
 		[
+			'idx_private_site_shares_token_hash_unique',
+			async () =>
+				db`CREATE UNIQUE INDEX IF NOT EXISTS idx_private_site_shares_token_hash_unique ON private_site_shares(token_hash)`,
+		],
+		[
 			'idx_private_sessions_secret',
 			async () => db`CREATE INDEX IF NOT EXISTS idx_private_sessions_secret ON private_site_sessions(secret_hash)`,
 		],
