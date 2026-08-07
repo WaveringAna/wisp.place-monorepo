@@ -93,12 +93,12 @@ describe('csrfProtection', () => {
 	const privateOrigin = 'https://amber-anchor-fox-1234.priv.wisp.place'
 	const protect = csrfProtection(['.priv.wisp.place'])
 
-	const run = (path: string) => {
+	const run = (path: string, origin: string = privateOrigin) => {
 		const set: { status?: number | string } = {}
 		const result = protect({
 			request: new Request(`https://wisp.place${path}`, {
 				method: 'POST',
-				headers: { Host: 'wisp.place', Origin: privateOrigin },
+				headers: { Host: 'wisp.place', Origin: origin },
 			}),
 			set,
 		})
@@ -109,6 +109,18 @@ describe('csrfProtection', () => {
 		const { result, set } = run('/private/redeem')
 		expect(result).toBeUndefined()
 		expect(set.status).toBeUndefined()
+	})
+
+	// Browsers serialize the origin of a non-CORS POST as `null` when the posting
+	// document sends `Referrer-Policy: no-referrer`, so the private sign-in page
+	// must not use that policy — see privateFormResponseHeaders().
+	test('rejects opaque null origins on scoped share redemption', () => {
+		const { result, set } = run('/private/redeem', 'null')
+		expect(set.status).toBe(403)
+		expect(result).toEqual({
+			error: 'CSRF validation failed',
+			message: 'Request origin does not match host',
+		})
 	})
 
 	test('rejects private-site origins for other unsafe routes', () => {

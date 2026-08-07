@@ -30,6 +30,7 @@ export {
 	generateSiteId,
 	isValidSiteId,
 	PRIVATE_STORAGE_PREFIX,
+	privateFormResponseHeaders,
 	privateResponseHeaders,
 } from './site-id'
 export type { GeneratedShareToken } from './token'

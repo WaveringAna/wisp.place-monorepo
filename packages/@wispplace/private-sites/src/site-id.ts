@@ -39,3 +39,16 @@ export const privateResponseHeaders = (): Record<string, string> => ({
 	'Referrer-Policy': 'no-referrer',
 	'X-Robots-Tag': 'noindex, nofollow, noarchive, nosnippet',
 })
+
+/**
+ * Headers for private pages that submit a cross-origin form to the main app.
+ *
+ * `no-referrer` cannot be used here: per Fetch, a non-CORS POST from a
+ * `no-referrer` document serializes its origin as the literal `null`, which
+ * fails the main app's Origin/Host CSRF check. `strict-origin` still withholds
+ * the path (and any share token in it) while sending a usable Origin.
+ */
+export const privateFormResponseHeaders = (): Record<string, string> => ({
+	...privateResponseHeaders(),
+	'Referrer-Policy': 'strict-origin',
+})

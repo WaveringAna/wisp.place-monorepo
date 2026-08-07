@@ -20,7 +20,7 @@ COPY cli/package.json ./cli/package.json
 RUN bun install --frozen-lockfile
 
 # Compile to a single binary
-RUN bun build --compile --minify apps/hosting-service/src/index.ts --outfile /app/hosting
+RUN NODE_ENV=production bun build --compile --minify apps/hosting-service/src/index.ts --outfile /app/hosting
 
 # Stage 2: Minimal runtime
 FROM alpine:3.22

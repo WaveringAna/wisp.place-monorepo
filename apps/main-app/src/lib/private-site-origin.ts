@@ -7,8 +7,9 @@ import {
 const BASE_HOST = (process.env.BASE_HOST || process.env.BASE_DOMAIN || 'wisp.place').split(':')[0] || 'wisp.place'
 export const privateHost = (): string => process.env.PRIVATE_HOST || `priv.${BASE_HOST}`
 
-const scheme = (): 'http' | 'https' =>
-	process.env.LOCAL_DEV === 'true' || process.env.NODE_ENV !== 'production' ? 'http' : 'https'
+// process.env.NODE_ENV is inlined by `bun build --compile` at image build time, so the
+// scheme must key off LOCAL_DEV (a runtime-only read) to stay https in production binaries.
+const scheme = (): 'http' | 'https' => (process.env.LOCAL_DEV === 'true' ? 'http' : 'https')
 export const privateSiteUrl = (siteId: string): string => buildPrivateSiteUrl(siteId, privateHost(), scheme())
 export const privateOwnerUrl = (siteId: string, handoff: string): string =>
 	privateGrantUrlFor(privateSiteUrl(siteId), handoff)

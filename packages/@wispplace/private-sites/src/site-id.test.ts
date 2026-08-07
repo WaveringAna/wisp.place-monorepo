@@ -5,6 +5,7 @@ import {
 	generateRecordId,
 	generateSiteId,
 	isValidSiteId,
+	privateFormResponseHeaders,
 	privateResponseHeaders,
 } from './site-id'
 import { generateShareToken } from './token'
@@ -44,6 +45,15 @@ describe('storage and response isolation', () => {
 		const headers = privateResponseHeaders()
 		expect(headers['Cache-Control']).toContain('no-store')
 		expect(headers['Referrer-Policy']).toBe('no-referrer')
+		expect(headers['X-Robots-Tag']).toContain('noindex')
+	})
+
+	it('keeps a usable origin on pages that post cross-origin forms', () => {
+		const headers = privateFormResponseHeaders()
+		// `no-referrer` makes browsers send `Origin: null` on non-CORS POSTs,
+		// which the main app's CSRF check rejects.
+		expect(headers['Referrer-Policy']).toBe('strict-origin')
+		expect(headers['Cache-Control']).toContain('no-store')
 		expect(headers['X-Robots-Tag']).toContain('noindex')
 	})
 })

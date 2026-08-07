@@ -230,22 +230,19 @@ async function main() {
 		contexts.push(bobContext)
 		const bobPage = await bobContext.newPage()
 		await login(bobPage, bob)
-		const redeem = await bobContext.request.post(`${appUrl}/private/redeem`, {
-			form: {
-				siteId: site.siteId,
-				token: new URL(share.data.directUrl).searchParams.get('wisp_share') || '',
-			},
-			headers: { Origin: appUrl },
-			maxRedirects: 0,
-		})
-		const grant = redeem.headers().location
-		if (redeem.status() !== 303 || !grant)
-			throw new Error(`audience redeem failed: ${redeem.status()} ${await redeem.text()}`)
-		await bobPage.goto(grant, { waitUntil: 'domcontentloaded' })
-		if (!(await bobPage.getByText('permissioned data, in practice').count()))
+		// Submit the gate's form from the browser rather than via the API client: the
+		// cross-origin POST only carries a usable Origin header when the gate page's
+		// referrer policy allows one, and the main app's CSRF check rejects `null`.
+		await bobPage.goto(share.data.directUrl, { waitUntil: 'domcontentloaded' })
+		await bobPage.getByRole('button', { name: /sign in with atproto/i }).click()
+		await bobPage.waitForLoadState('domcontentloaded')
+		try {
+			await bobPage.getByText('permissioned data, in practice').first().waitFor({ timeout: 15_000 })
+		} catch {
 			throw new Error(
 				`audience account could not open site: ${bobPage.url()} ${await bobPage.locator('body').innerText()}`,
 			)
+		}
 		await screenshot(bobPage, '05-audience-site-open')
 
 		const revoke = await json(ownerPage, `/api/user/private-sites/${site.siteId}/shares/${share.data.shareId}`, {

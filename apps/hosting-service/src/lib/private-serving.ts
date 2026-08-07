@@ -16,6 +16,7 @@ import {
 	PRIVATE_GRANT_QUERY_PARAM,
 	PRIVATE_SESSION_TTL_MINUTES,
 	parseCookieHeader,
+	privateFormResponseHeaders,
 	privateResponseHeaders,
 	sessionCookieName,
 } from '@wispplace/private-sites'
@@ -70,9 +71,10 @@ const scopedSignInPage = (siteId: string, token: string, audienceDid: string): R
 </form>
 </main></body></html>`
 
+	// This page POSTs cross-origin to the main app, so it cannot send `no-referrer`.
 	return new Response(body, {
 		status: 200,
-		headers: { ...privateResponseHeaders(), 'Content-Type': 'text/html; charset=utf-8' },
+		headers: { ...privateFormResponseHeaders(), 'Content-Type': 'text/html; charset=utf-8' },
 	})
 }
 const anonymousSignInPage = (siteId: string): Response => {
