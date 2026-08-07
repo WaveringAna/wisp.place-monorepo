@@ -373,6 +373,7 @@ const claimWispSubdomain = async (did: DidString, input: { handle: string; siteR
 	if (existing.registered && existing.did === did) {
 		if (input.siteRkey !== undefined) {
 			await updateWispDomainSite(domain, input.siteRkey)
+			await publishDomainCacheInvalidation(domain, 'wisp')
 		}
 
 		return json({
@@ -401,6 +402,7 @@ const claimWispSubdomain = async (did: DidString, input: { handle: string; siteR
 	if (input.siteRkey !== undefined) {
 		await updateWispDomainSite(domain, input.siteRkey)
 	}
+	await publishDomainCacheInvalidation(domain, 'wisp')
 
 	return json({
 		domain,
@@ -433,6 +435,7 @@ const claimCustomDomainForDid = async (did: DidString, input: { domain: string; 
 	if (existing && existing.did === did) {
 		if (input.siteRkey !== undefined) {
 			await updateCustomDomainRkey(existing.id, input.siteRkey)
+			await publishDomainCacheInvalidation(domain, 'custom', existing.id)
 		}
 
 		const status = existing.verified ? 'verified' : 'pendingVerification'
@@ -453,6 +456,7 @@ const claimCustomDomainForDid = async (did: DidString, input: { domain: string; 
 	} catch {
 		alreadyClaimed('domain is already claimed')
 	}
+	await publishDomainCacheInvalidation(domain, 'custom', challengeId)
 
 	return json({
 		domain,
@@ -487,6 +491,7 @@ const mapDomainToSiteForDid = async (did: DidString, input: { domain: string; si
 
 	if (existing.type === 'wisp') {
 		await updateWispDomainSite(domain, siteRkey)
+		await publishDomainCacheInvalidation(domain, 'wisp')
 
 		return json({
 			domain,
@@ -503,6 +508,7 @@ const mapDomainToSiteForDid = async (did: DidString, input: { domain: string; si
 	}
 
 	await updateCustomDomainRkey(custom.id as string, siteRkey)
+	await publishDomainCacheInvalidation(domain, 'custom', custom.id as string)
 
 	return json({
 		domain,
@@ -806,6 +812,7 @@ export const xrpcRoutes = () => {
 
 			if (existing.type === 'wisp') {
 				await deleteWispDomain(domain)
+				await publishDomainCacheInvalidation(domain, 'wisp')
 			} else {
 				const custom = await getCustomDomainInfo(domain)
 				if (!custom || custom.did !== did) {
@@ -813,6 +820,7 @@ export const xrpcRoutes = () => {
 				}
 
 				await deleteCustomDomain(custom.id as string)
+				await publishDomainCacheInvalidation(domain, 'custom', custom.id as string)
 			}
 
 			return json({

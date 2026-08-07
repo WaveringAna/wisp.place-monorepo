@@ -57,3 +57,4 @@ package-lock.json
 
 server
 .env.dev
+e2e-artifacts/

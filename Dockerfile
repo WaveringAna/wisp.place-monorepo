@@ -23,8 +23,9 @@ COPY apps/main-app ./apps/main-app
 # Build frontend (CSS + JS bundles)
 RUN cd apps/main-app && bun run build
 
-# Build compiled server
-RUN bun build \
+# Build compiled server (NODE_ENV must be set here: bun inlines process.env.NODE_ENV
+# reads at build time, and without it they freeze as non-production in the binary)
+RUN NODE_ENV=production bun build \
 	--compile \
 	--target bun \
 	--minify \

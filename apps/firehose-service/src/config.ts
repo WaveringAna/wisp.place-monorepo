@@ -48,4 +48,9 @@ export const config = {
 		process.env.BACKFILL === 'true' ||
 		process.env.DB_FILL_ONLY === 'true',
 	backfillConcurrency: parseInt(process.env.BACKFILL_CONCURRENCY || '5', 10),
+
+	// Optional hydrant indexer used as the backfill discovery source. When set,
+	// backfill enumerates place.wisp.fs repos from hydrant instead of only
+	// rediscovering DIDs already present in our own database.
+	hydrantUrl: process.env.HYDRANT_URL,
 } as const
