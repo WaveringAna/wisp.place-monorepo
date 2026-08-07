@@ -10,6 +10,7 @@
 import { serve } from '@hono/node-server'
 import { createLogger, initializeGrafanaExporters } from '@wispplace/observability'
 import { observabilityErrorHandler, observabilityMiddleware } from '@wispplace/observability/middleware/hono'
+import { safeFetchJson } from '@wispplace/safe-fetch'
 import { Hono } from 'hono'
 import { config } from './config'
 import { closeCacheInvalidationPublisher } from './lib/cache-invalidation'
@@ -78,14 +79,58 @@ process.on('SIGINT', () => shutdown('SIGINT'))
 process.on('SIGTERM', () => shutdown('SIGTERM'))
 
 /**
+ * Enumerate DIDs from a hydrant indexer.
+ *
+ * Unlike listAllKnownDids(), which can only rediscover DIDs we already have a
+ * row for, hydrant tracks every repo in the network that publishes a
+ * place.wisp.* record, so this also surfaces sites we have never seen.
+ */
+async function listDidsFromHydrant(hydrantUrl: string): Promise<string[]> {
+	const base = hydrantUrl.replace(/\/$/, '')
+	const pageSize = 1000
+	const dids: string[] = []
+	// hydrant's JSON response is a bare array with no cursor field; pages are
+	// walked by passing the last DID of the previous page (exclusive).
+	let cursor: string | undefined
+
+	while (true) {
+		const params = new URLSearchParams({ limit: String(pageSize) })
+		if (cursor) params.set('cursor', cursor)
+
+		const rows = (await safeFetchJson(`${base}/repos?${params.toString()}`, {
+			headers: { Accept: 'application/json' },
+		})) as Array<{ did?: string }>
+
+		if (!Array.isArray(rows) || rows.length === 0) break
+
+		for (const row of rows) {
+			if (row.did) dids.push(row.did)
+		}
+
+		const lastDid = rows[rows.length - 1]?.did
+		if (!lastDid || rows.length < pageSize) break
+		cursor = lastDid
+	}
+
+	return [...new Set(dids)]
+}
+
+/**
  * Backfill phase 1+2:
  * - Collect all known DIDs from DB
  * - Discover each DID's place.wisp.fs records directly from the PDS
  */
 async function collectSitesFromKnownDids(): Promise<Array<{ did: string; rkey: string }>> {
-	logger.info('Phase 1/3: Collecting known DIDs')
-	const dids = await listAllKnownDids()
-	logger.info(`Collected ${dids.length} known DIDs`)
+	let dids: string[]
+	if (config.hydrantUrl) {
+		logger.info(`Phase 1/3: Collecting DIDs from hydrant (${config.hydrantUrl})`)
+		dids = await listDidsFromHydrant(config.hydrantUrl)
+		logger.info(`Collected ${dids.length} DIDs from hydrant`)
+	} else {
+		logger.info('Phase 1/3: Collecting known DIDs')
+		dids = await listAllKnownDids()
+		logger.info(`Collected ${dids.length} known DIDs`)
+	}
 
 	if (dids.length === 0) {
 		logger.warn('No known DIDs found; skipping site discovery')
