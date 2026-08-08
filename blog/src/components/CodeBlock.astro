@@ -1,0 +1,66 @@
+---
+import { Code } from 'astro:components';
+
+interface Props {
+	code: string;
+	/** Any Shiki language id. */
+	lang?: string;
+	/** Filename shown in the header, e.g. "src/index.ts". */
+	title?: string;
+	/** Set false to drop the copy button (e.g. for pseudo-code). */
+	copy?: boolean;
+}
+
+const { code, lang = 'text', title, copy = true } = Astro.props;
+const trimmed = code.replace(/^\n+|\s+$/g, '');
+---
+
+<figure class="code-block">
+	{
+		(title || copy) && (
+			<figcaption class="code-block__header">
+				{title && <span>{title}</span>}
+				<span class="code-block__lang">{lang}</span>
+				{copy && (
+					<button class="copy-button" type="button" data-copy aria-label="Copy code">
+						copy
+					</button>
+				)}
+			</figcaption>
+		)
+	}
+	{/* Dual themes so light/dark both read correctly; blog.css picks per scheme. */}
+	<Code
+		code={trimmed}
+		lang={lang as any}
+		themes={{ light: 'github-light', dark: 'github-dark' }}
+		defaultColor="light"
+	/>
+</figure>
+
+<script>
+	// Delegated so it covers every code block and terminal on the page with one
+	// listener. Astro bundles this script once no matter how many instances exist.
+	document.addEventListener('click', async (event) => {
+		const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-copy]');
+		if (!button) return;
+
+		const source = button.closest('.code-block, .terminal')?.querySelector('pre, .terminal__body');
+		if (!source?.textContent) return;
+
+		try {
+			await navigator.clipboard.writeText(source.textContent.trimEnd());
+			button.dataset.copied = 'true';
+			button.textContent = 'copied';
+			setTimeout(() => {
+				delete button.dataset.copied;
+				button.textContent = 'copy';
+			}, 1500);
+		} catch {
+			button.textContent = 'failed';
+			setTimeout(() => {
+				button.textContent = 'copy';
+			}, 1500);
+		}
+	});
+</script>

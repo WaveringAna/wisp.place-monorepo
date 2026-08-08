@@ -1,0 +1,15 @@
+---
+interface Props {
+	type?: 'note' | 'tip' | 'caution' | 'danger';
+	/** Defaults to the type name. Pass an empty string to hide the label. */
+	title?: string;
+}
+
+const { type = 'note', title } = Astro.props;
+const label = title ?? type;
+---
+
+<aside class={`callout callout--${type}`}>
+	{label && <p class="callout__title">{label}</p>}
+	<slot />
+</aside>

@@ -1,0 +1,87 @@
+---
+import { formatDate } from '../site';
+import { getPost, neighbours, postHref } from '../posts';
+import Base from './Base.astro';
+
+interface Props {
+	/** Must match an entry in src/posts.ts. */
+	slug: string;
+}
+
+const { slug } = Astro.props;
+const post = getPost(slug);
+const { previous, next } = neighbours(slug);
+---
+
+<Base
+	title={post.title}
+	description={post.description}
+	path={postHref(slug)}
+	ogType="article"
+	publishedAt={post.date}
+	narrow
+	noindex={post.draft}
+>
+	<a class="backlink" href="/">&larr; All posts</a>
+
+	<article>
+		<header class="post-head">
+			<h1>{post.title}</h1>
+			<p class="post-head__desc">{post.description}</p>
+
+			<div class="post-head__meta">
+				<time datetime={post.date}>{formatDate(post.date)}</time>
+				<span>
+					{
+						post.author.url ? (
+							<a href={post.author.url} rel="author noopener" target="_blank">
+								{post.author.handle ?? post.author.name}
+							</a>
+						) : (
+							(post.author.handle ?? post.author.name)
+						)
+					}
+				</span>
+				{post.updated && <span>Updated {formatDate(post.updated)}</span>}
+				{post.draft && <span class="badge-draft">Draft</span>}
+
+				<div class="post-head__tags">
+					{post.tags.map((tag) => <span class="tag tag--static">{tag}</span>)}
+				</div>
+			</div>
+		</header>
+
+		<div class="prose">
+			<slot />
+		</div>
+	</article>
+
+	<footer class="post-foot">
+		<p class="post-foot__discuss">
+			Questions or corrections? Reply on <a
+				href="https://bsky.app/profile/wisp.place"
+				target="_blank"
+				rel="noopener">Bluesky</a
+			> or email <a href="mailto:contact@wisp.place">contact@wisp.place</a>.
+		</p>
+
+		{
+			(previous || next) && (
+				<nav class="pager" aria-label="More posts">
+					{previous && (
+						<a class="pager__link" href={postHref(previous.slug)}>
+							<span class="pager__dir">&larr; Older</span>
+							<span class="pager__title">{previous.title}</span>
+						</a>
+					)}
+					{next && (
+						<a class="pager__link pager__link--next" href={postHref(next.slug)}>
+							<span class="pager__dir">Newer &rarr;</span>
+							<span class="pager__title">{next.title}</span>
+						</a>
+					)}
+				</nav>
+			)
+		}
+	</footer>
+</Base>

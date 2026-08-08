@@ -1,0 +1,209 @@
+---
+import Callout from '../../components/Callout.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import Terminal from '../../components/Terminal.astro';
+import Post from '../../layouts/Post.astro';
+
+const newPostExample = `
+---
+import Post from '../../layouts/Post.astro';
+---
+
+<Post slug="my-post">
+  <p>Write whatever HTML you want in here.</p>
+</Post>
+`;
+
+const registryExample = `
+{
+  slug: 'my-post',
+  title: 'A title that fits on one line',
+  description: 'One or two sentences. Shown on the index and in RSS.',
+  date: '2026-08-14',
+  author: authors.nekomimi,
+  tags: ['release'],
+  draft: true,
+}
+`;
+
+const scopedStyleExample = `
+<div class="chart">…</div>
+
+<style>
+  /* Scoped to this page only — Astro rewrites the selector. */
+  .chart { border: 1px solid var(--border); padding: 1rem; }
+</style>
+
+<script>
+  document.querySelector('.chart')?.classList.add('ready');
+</script>
+`;
+---
+
+<Post slug="style-guide">
+	<p>
+		This post is a permanent draft: it never appears on the production index, but it renders in <code
+			>astro dev</code
+		> so there is always a live reference for what a post can contain. Copy from it freely.
+	</p>
+
+	<h2>Adding a post</h2>
+
+	<p>Two steps. First, add the metadata to <code>src/posts.ts</code>:</p>
+
+	<CodeBlock lang="ts" title="src/posts.ts" code={registryExample} />
+
+	<p>
+		Then create <code>src/pages/posts/my-post.astro</code> and wrap the content in the post layout.
+		The layout reads the title, date, author and tags from the registry, so the page itself is
+		nothing but your content:
+	</p>
+
+	<CodeBlock lang="astro" title="src/pages/posts/my-post.astro" code={newPostExample} />
+
+	<p>
+		Remove <code>draft: true</code> when it's ready. If a page references a slug that isn't in the registry,
+		the build fails rather than shipping a post with no date on it.
+	</p>
+
+	<Callout type="note" title="Why not markdown">
+		Posts are real pages. You can drop in a scoped stylesheet, an inline SVG diagram, a canvas
+		element or a small interactive demo without fighting a content pipeline.
+	</Callout>
+
+	<h2>Prose</h2>
+
+	<p>
+		Regular paragraphs get muted body colour and a comfortable measure. <strong
+			>Bold text</strong
+		> lifts to full contrast, <em>italics</em> stay muted, <a href="/">links</a> wipe an underline in
+		on hover, and <code>inline code</code> gets the accent treatment. Keyboard shortcuts render as <kbd
+			>⌘</kbd
+		> <kbd>K</kbd>.
+	</p>
+
+	<h3>A third-level heading</h3>
+
+	<p>
+		Second and third-level headings both get an accent pip, sized down at each level, matching the
+		docs site.
+	</p>
+
+	<ul>
+		<li>Unordered lists get square accent bullets</li>
+		<li>
+			Nested lists work too:
+			<ul>
+				<li>like this</li>
+				<li>and this</li>
+			</ul>
+		</li>
+	</ul>
+
+	<ol>
+		<li>Ordered lists get accent numerals</li>
+		<li>Counting continues as expected</li>
+	</ol>
+
+	<blockquote>
+		<p>
+			Blockquotes get an accent rule and a tinted panel. Good for quoting an issue, a spec, or
+			yourself from six months ago.
+		</p>
+	</blockquote>
+
+	<h2>Code</h2>
+
+	<p>
+		<code>&lt;CodeBlock /&gt;</code> takes a <code>code</code> string, an optional <code>lang</code> for
+		Shiki, and an optional <code>title</code> for the filename bar. It ships a copy button by default.
+	</p>
+
+	<CodeBlock lang="astro" title="an .astro page" code={scopedStyleExample} />
+
+	<h2>Terminals</h2>
+
+	<p>
+		<code>&lt;Terminal /&gt;</code> renders the traffic-light chrome from the landing page. Whitespace
+		inside is preserved, and the helper classes <code>t-prompt</code>, <code>t-muted</code>, <code
+			>t-success</code
+		>, <code>t-cyan</code> and <code>t-out</code> colour the lines.
+	</p>
+
+	<Terminal title="wispctl">
+		<span class="t-prompt">$</span> wispctl serve nekomimi.pet -s myblog
+		{'\n\n'}
+		<span class="t-muted">◇</span> Serving myblog from nekomimi.pet
+		{'\n'}
+		<span class="t-success">✓ Server running at http://localhost:8080</span>
+		{'\n'}
+		<span class="t-muted">◇</span> Watching for updates via firehose...
+	</Terminal>
+
+	<h2>Callouts</h2>
+
+	<Callout type="note">Neutral context the reader can skip without losing the thread.</Callout>
+	<Callout type="tip">A shortcut, or the thing you wish you'd known first.</Callout>
+	<Callout type="caution">Something that will bite in a specific situation.</Callout>
+	<Callout type="danger" title="Breaking change">Data loss, or an action that can't be undone.</Callout>
+
+	<h2>Tables</h2>
+
+	<p>
+		Wrap tables in <code>.table-scroll</code> so wide ones scroll inside their own box instead of
+		making the whole page scroll sideways.
+	</p>
+
+	<div class="table-scroll">
+		<table>
+			<thead>
+				<tr>
+					<th>Component</th>
+					<th>Props</th>
+					<th>Use for</th>
+				</tr>
+			</thead>
+			<tbody>
+				<tr>
+					<td><code>CodeBlock</code></td>
+					<td><code>code</code>, <code>lang</code>, <code>title</code>, <code>copy</code></td>
+					<td>Source listings</td>
+				</tr>
+				<tr>
+					<td><code>Terminal</code></td>
+					<td><code>title</code>, <code>copy</code></td>
+					<td>Shell transcripts</td>
+				</tr>
+				<tr>
+					<td><code>Callout</code></td>
+					<td><code>type</code>, <code>title</code></td>
+					<td>Asides and warnings</td>
+				</tr>
+			</tbody>
+		</table>
+	</div>
+
+	<h2>Images</h2>
+
+	<p>
+		Put files in <code>public/</code> and reference them from the root. Use a <code>figure</code> so the
+		caption picks up the right styling:
+	</p>
+
+	<CodeBlock
+		lang="html"
+		code={`<figure>
+  <img src="/images/cache-tiers.png" alt="Hot, warm and cold storage tiers" />
+  <figcaption>Reads bubble up, writes bubble down.</figcaption>
+</figure>`}
+	/>
+
+	<hr />
+
+	<p>
+		Everything above uses the tokens in <code>src/styles/blog.css</code>, which mirror the docs site
+		and <code>wisp.css</code>. If you need a colour, reach for <code>var(--accent)</code>, <code
+			>var(--border)</code
+		>, <code>var(--text-muted)</code> and friends rather than a hard-coded hex, so both themes keep working.
+	</p>
+</Post>

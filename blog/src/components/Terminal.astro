@@ -1,0 +1,28 @@
+---
+interface Props {
+	/** Label on the right of the title bar. */
+	title?: string;
+	copy?: boolean;
+}
+
+const { title = 'terminal', copy = false } = Astro.props;
+---
+
+{/*
+  Shell transcript with the traffic-light chrome used on the landing page.
+  Put the transcript in the slot; whitespace is preserved, so indent literally:
+
+    <Terminal>
+      <span class="t-prompt">$</span> wispctl deploy
+      <span class="t-success">✓</span> Deployed
+    </Terminal>
+
+  Helper classes: t-prompt, t-muted, t-success, t-cyan, t-out.
+*/}
+<div class="terminal">
+	<div class="terminal__header">
+		<span class="terminal__title">{title}</span>
+		{copy && <button class="copy-button" type="button" data-copy aria-label="Copy output">copy</button>}
+	</div>
+	<div class="terminal__body"><slot /></div>
+</div>

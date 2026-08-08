@@ -1,0 +1,58 @@
+---
+when:
+  - event:
+      - push
+    branch:
+      - main
+  - event:
+      - manual
+engine: microvm
+clone:
+  skip: false
+  depth: 1
+  submodules: true
+dependencies:
+  - git
+  - nodejs
+  - gcc
+  - glibc
+  - github:NixOS/nixpkgs/nixpkgs-unstable#bun
+environment:
+  WISP_HANDLE: wisp.place
+  SITE_PATH: blog/dist
+  SITE_NAME: blog
+steps:
+  - name: Initialize submodules
+    command: |
+      git submodule update --init --recursive
+  - name: Build wisp-cli
+    command: |
+      export PATH="$HOME/.nix-profile/bin:$PATH"
+
+      bun install
+
+      cd cli
+
+      bun install
+      bun run build
+      bun link
+
+      cd ..
+  - name: Build blog
+    command: |
+      export PATH="$HOME/.nix-profile/bin:$PATH"
+
+      cd blog
+      bun install
+      bun run build
+  - name: Deploy to Wisp.place
+    command: |
+      export PATH="$HOME/.nix-profile/bin:$PATH"
+
+      pwd
+      ls
+
+      bun run ./cli/dist/index.js "$WISP_HANDLE" \
+        --path "$SITE_PATH" \
+        --site "$SITE_NAME" \
+        --password "$WISP_APP_PASSWORD"

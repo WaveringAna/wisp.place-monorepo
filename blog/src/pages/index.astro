@@ -1,0 +1,85 @@
+---
+import Base from '../layouts/Base.astro';
+import { allPosts, allTags, postHref } from '../posts';
+import { formatDate, site } from '../site';
+---
+
+<Base title={site.title} description={site.description} path="/">
+	<header class="page-head">
+		<span class="head-pip" aria-hidden="true"></span>
+		<h1>{site.tagline}</h1>
+	</header>
+
+	{
+		allTags.length > 1 && (
+			<div class="filters" data-tag-filter>
+				<span class="filters__label">Filter</span>
+				<button class="tag" type="button" data-tag="*" aria-pressed="true">
+					all
+				</button>
+				{allTags.map((tag) => (
+					<button class="tag" type="button" data-tag={tag} aria-pressed="false">
+						{tag}
+					</button>
+				))}
+			</div>
+		)
+	}
+
+	<ul class="post-list">
+		{
+			allPosts.map((post) => (
+				<li class="post-list__item" data-tags={post.tags.join(' ')}>
+					<a class="post-card" href={postHref(post.slug)}>
+						<time class="post-card__date" datetime={post.date}>
+							{formatDate(post.date)}
+						</time>
+						<div>
+							<h2 class="post-card__title">{post.title}</h2>
+							<p class="post-card__desc">{post.description}</p>
+							<div class="post-card__meta">
+								{post.draft && <span class="badge-draft">Draft</span>}
+								{post.tags.map((tag) => (
+									<span class="tag tag--static">{tag}</span>
+								))}
+							</div>
+						</div>
+					</a>
+				</li>
+			))
+		}
+	</ul>
+
+	<p class="empty-state" hidden data-empty>No posts with that tag yet.</p>
+
+	{allPosts.length === 0 && <p class="empty-state">Nothing published yet. Check back soon.</p>}
+</Base>
+
+<script>
+	// Client-side tag filtering — the whole index is on one page, so there is no
+	// reason to make the reader load a new document to narrow it down.
+	const filters = document.querySelector<HTMLElement>('[data-tag-filter]');
+	const items = [...document.querySelectorAll<HTMLElement>('.post-list__item')];
+	const empty = document.querySelector<HTMLElement>('[data-empty]');
+
+	filters?.addEventListener('click', (event) => {
+		const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-tag]');
+		if (!button) return;
+
+		const selected = button.dataset.tag ?? '*';
+
+		for (const other of filters.querySelectorAll<HTMLButtonElement>('[data-tag]')) {
+			other.setAttribute('aria-pressed', String(other === button));
+		}
+
+		let shown = 0;
+		for (const item of items) {
+			const tags = (item.dataset.tags ?? '').split(' ');
+			const visible = selected === '*' || tags.includes(selected);
+			item.hidden = !visible;
+			if (visible) shown++;
+		}
+
+		if (empty) empty.hidden = shown > 0;
+	});
+</script>
