@@ -8,6 +8,8 @@ template: doc
 
 wisp.place enables you to host static websites directly in your AT Protocol repository. Your Personal Data Server (PDS) holds the cryptographically signed manifest and files as the authoritative source of truth, while hosting services index and serve them with CDN-like performance.
 
+Private sites use wisp.place storage instead. They are access-controlled and never written to your PDS or the firehose.
+
 ## Quick Start
 
 ### Using the Web Interface
@@ -42,6 +44,7 @@ Your PDS is the source of truth. Hosting services are read-only caches — they 
 ## Next steps
 
 - [CLI reference](/cli) — deploy, pull, and serve sites from the command line
+- [Private sites](/private-sites) — upload and share access-controlled sites
 - [Architecture](/architecture) — how the firehose, hosting, and storage tiers fit together
 - [Self-hosting](/deployment) — run your own Wisp instance
 - [Redirects & rewrites](/redirects) — Netlify-style URL rules

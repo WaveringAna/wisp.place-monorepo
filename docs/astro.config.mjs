@@ -27,6 +27,7 @@ export default defineConfig({
 				{
 					label: 'Guides',
 					items: [
+						{ label: 'Private Sites', slug: 'private-sites' },
 						{ label: 'Local Development', slug: 'local-development' },
 						{ label: 'Architecture', slug: 'architecture' },
 						{ label: 'Self-Hosting', slug: 'deployment' },

@@ -240,6 +240,181 @@ Deletes a site and detaches all mapped domains.
 
 ---
 
+## Private Sites
+
+Private-site methods are authenticated and only operate on sites owned by the calling DID.
+Private-site files are stored by wisp.place and are not written to the caller's PDS. See
+[Private Sites](/private-sites) for the feature's access and expiry rules.
+
+### `place.wisp.v2.privateSite.create` — procedure 🔒
+
+Creates a private site from a `multipart/form-data` upload.
+
+**Input:**
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `name` | `string` | ✅ | Display name, up to 128 characters |
+| `files` | `file` | ✅ | Repeat for each file; the filename is used as its path |
+| `expiryMinutes` | `integer` | | Omit for seven days, `0` for no expiry, maximum 525600 |
+
+Uploads are limited to 500 files and 100 MB in total.
+
+**Response:**
+
+| Field | Type | Notes |
+|---|---|---|
+| `siteId` | `string` (record-key) | Stable private-site identifier |
+| `name` | `string` | Display name |
+| `fileCount` | `integer` | |
+| `totalBytes` | `integer` | |
+| `expiresAt` | `string` (datetime) | Omitted when the site does not expire |
+| `createdAt` | `string` (datetime) | |
+| `url` | `string` | Requires an account with access or a share link |
+
+**Errors:** `AuthenticationRequired`, `InvalidRequest`, `PayloadTooLarge`
+
+---
+
+### `place.wisp.v2.privateSite.list` — query 🔒
+
+Lists private sites owned by the authenticated DID.
+
+**Response:**
+
+```json
+{
+  "sites": [
+    {
+      "siteId": "3mabc...",
+      "name": "review",
+      "fileCount": 12,
+      "totalBytes": 48321,
+      "expiresAt": "2026-08-22T12:00:00.000Z",
+      "createdAt": "2026-08-15T12:00:00.000Z",
+      "shareCount": 1,
+      "expired": false
+    }
+  ]
+}
+```
+
+`expiresAt` is omitted when the site does not expire. `shareCount` includes only active
+shares.
+
+**Errors:** `AuthenticationRequired`
+
+---
+
+### `place.wisp.v2.privateSite.delete` — procedure 🔒
+
+Deletes an owned private site, its files, and all of its share links.
+
+**Input:**
+
+| Field | Type | Required |
+|---|---|---|
+| `siteId` | `string` (record-key) | ✅ |
+
+**Response:**
+
+```json
+{ "siteId": "3mabc...", "deleted": true }
+```
+
+**Errors:** `AuthenticationRequired`, `InvalidRequest`, `NotFound`
+
+---
+
+### `place.wisp.v2.privateSite.createShare` — procedure 🔒
+
+Creates a share link for an owned private site. The returned URL contains the credential
+and is only returned once.
+
+**Input:**
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `siteId` | `string` (record-key) | ✅ | |
+| `label` | `string` | | Human label, up to 128 characters |
+| `expiryMinutes` | `integer` | | Omit for seven days; `0` for no independent expiry |
+| `audienceDid` | `string` (DID) | | Restricts the link to this account; omit for an unrestricted link |
+
+A share's expiry is clamped to the site's expiry.
+
+**Response:**
+
+| Field | Type | Notes |
+|---|---|---|
+| `shareId` | `string` | |
+| `siteId` | `string` (record-key) | |
+| `url` | `string` | Short share URL; returned once |
+| `directUrl` | `string` (URI) | Equivalent URL on the private-site origin |
+| `expiresAt` | `string` (datetime) | Omitted when the share does not expire |
+| `createdAt` | `string` (datetime) | |
+| `audienceDid` | `string` (DID) | Present for account-restricted links |
+
+**Errors:** `AuthenticationRequired`, `InvalidRequest`, `NotFound`
+
+---
+
+### `place.wisp.v2.privateSite.listShares` — query 🔒
+
+Lists share links for an owned private site. Share credentials are never returned.
+
+**Params:**
+
+| Field | Type | Required |
+|---|---|---|
+| `siteId` | `string` (record-key) | ✅ |
+
+**Response:**
+
+```json
+{
+  "shares": [
+    {
+      "shareId": "3mdef...",
+      "tokenPrefix": "wss_abcd",
+      "label": "review",
+      "audienceDid": "did:plc:...",
+      "expiresAt": "2026-08-22T12:00:00.000Z",
+      "createdAt": "2026-08-15T12:00:00.000Z",
+      "lastUsedAt": "2026-08-16T09:00:00.000Z",
+      "status": "active"
+    }
+  ]
+}
+```
+
+`status` is `active`, `expired`, or `revoked`. `tokenPrefix` is for identification only
+and does not grant access.
+
+**Errors:** `AuthenticationRequired`, `NotFound`
+
+---
+
+### `place.wisp.v2.privateSite.revokeShare` — procedure 🔒
+
+Permanently revokes a share link.
+
+**Input:**
+
+| Field | Type | Required |
+|---|---|---|
+| `siteId` | `string` (record-key) | ✅ |
+| `shareId` | `string` | ✅ |
+
+**Response:**
+
+```json
+{ "shareId": "3mdef...", "revoked": true }
+```
+
+**Errors:** `AuthenticationRequired`, `InvalidRequest`, `NotFound`
+
+---
+
 ## Signing Secrets
 
 Server-managed HMAC signing secrets for webhooks. The token is returned **once** at creation time and never stored in plaintext — it cannot be retrieved again, only rotated.

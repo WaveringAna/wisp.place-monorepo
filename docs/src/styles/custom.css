@@ -497,6 +497,28 @@ starlight-toc a[aria-current="true"] {
 	font-weight: 600 !important;
 }
 
+/* Separate document sections without ruling every endpoint. */
+starlight-toc > nav > ul > li + li {
+	border-top: 1px solid color-mix(in oklch, var(--sl-color-border) 70%, transparent) !important;
+	margin-top: 0.65rem !important;
+	padding-top: 0.65rem !important;
+}
+
+starlight-toc > nav > ul > li > a {
+	color: var(--sl-color-gray-2) !important;
+	font-weight: 600 !important;
+}
+
+starlight-toc > nav > ul > li > ul {
+	margin-top: 0.15rem !important;
+}
+
+starlight-toc > nav > ul > li > ul a {
+	font-size: 0.72rem !important;
+	line-height: 1.35 !important;
+	padding-left: 1rem !important;
+}
+
 /* ── Badges ────────────────────────────────────────────────────────────────── */
 
 .sl-badge {

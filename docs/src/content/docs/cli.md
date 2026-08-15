@@ -14,6 +14,7 @@ The Wisp CLI is a command-line tool for deploying static websites directly to yo
 - **Deploy**: Push static sites directly from your terminal
 - **Pull**: Download sites from the PDS for development or backup
 - **Serve**: Run a local server with real-time firehose updates
+- **Private sites**: Upload access-controlled sites and manage share links
 - **Authenticate** with app password or OAuth
 - **Incremental updates**: Only upload changed files
 
