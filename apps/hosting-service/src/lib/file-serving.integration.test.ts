@@ -185,6 +185,18 @@ describe('serveFileInternal directory-index fallback for extensioned paths', () 
 		expect(storageGetWithMetadataKeys.filter((key) => key === `${DID}/${RKEY}/direct.md`)).toHaveLength(1)
 	})
 
+	test('serves decoded file names containing spaces', async () => {
+		const path = '486x486bb 3.webp'
+		storeFile(path, 'image bytes', 'image/webp')
+		siteFileCids = { [path]: 'image-cid' }
+
+		const response = await serveFileInternal(DID, RKEY, path)
+
+		expect(response.status).toBe(200)
+		expect(await response.text()).toBe('image bytes')
+		expect(storageGetWithMetadataKeys).toContain(`${DID}/${RKEY}/${path}`)
+	})
+
 	test('skips manifest-absent storage probes before clean URL html fallback', async () => {
 		storeFile('modelapp.html', '<html>model app</html>')
 		siteFileCids = {

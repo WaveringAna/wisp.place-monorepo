@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { Record as WispSettings } from '@wispplace/lexicons/types/place/wisp/settings'
-import { applyCustomHeaders } from './request-utils'
+import { applyCustomHeaders, decodeRequestPathname } from './request-utils'
 
 const settings = {
 	$type: 'place.wisp.settings',
@@ -28,5 +28,16 @@ describe('applyCustomHeaders', () => {
 		applyCustomHeaders(headers, 'sw.js', settings)
 
 		expect(headers['Service-Worker-Allowed']).toBe('/')
+	})
+})
+
+describe('decodeRequestPathname', () => {
+	test('decodes percent-encoded file names before storage lookup', () => {
+		expect(decodeRequestPathname('/486x486bb%203.webp')).toBe('/486x486bb 3.webp')
+		expect(decodeRequestPathname('/caf%C3%A9/photo.webp')).toBe('/café/photo.webp')
+	})
+
+	test('rejects malformed percent encoding', () => {
+		expect(decodeRequestPathname('/invalid%2')).toBeNull()
 	})
 })

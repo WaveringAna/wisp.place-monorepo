@@ -6,6 +6,14 @@ import type { Record as WispSettings } from '@wispplace/lexicons/types/place/wis
 
 const SHARED_ORIGIN_BLOCKED_HEADERS = new Set(['service-worker-allowed'])
 
+export function decodeRequestPathname(pathname: string): string | null {
+	try {
+		return decodeURIComponent(pathname)
+	} catch {
+		return null
+	}
+}
+
 interface CustomHeaderOptions {
 	sharedOrigin?: boolean
 }

@@ -13,7 +13,7 @@ import { cache } from './lib/cache-manager'
 import { getCustomDomain, getCustomDomainByHash, getWispDomain } from './lib/db'
 import { serveFromCache, serveFromCacheWithRewrite } from './lib/file-serving'
 import { privateNotFound, servePrivateSite } from './lib/private-serving'
-import { extractHeaders, isValidRkey } from './lib/request-utils'
+import { decodeRequestPathname, extractHeaders, isValidRkey } from './lib/request-utils'
 import { resolveDid } from './lib/utils'
 
 const logger = createLogger('hosting-service')
@@ -57,9 +57,13 @@ app.get('/health', (c) => c.json({ status: 'ok' }))
 // Main site serving route
 app.get('/*', async (c) => {
 	const url = new URL(c.req.url)
+	const decodedPathname = decodeRequestPathname(url.pathname)
+	if (decodedPathname === null) {
+		return c.text('Invalid URL encoding', 400)
+	}
 	const hostname = c.req.header('host') || ''
 	const hostnameWithoutPort = hostname.split(':')[0] || ''
-	const rawPath = url.pathname.replace(/^\//, '')
+	const rawPath = decodedPathname.replace(/^\//, '')
 	const hasTrailingSlash = rawPath.endsWith('/')
 	const path = hasTrailingSlash ? `${sanitizePath(rawPath)}/` : sanitizePath(rawPath)
 
