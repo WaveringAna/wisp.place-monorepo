@@ -1,6 +1,7 @@
 ---
 import { formatDate } from '../site';
 import { getPost, neighbours, postHref } from '../posts';
+import { standardDocumentUri } from '../standard';
 import Base from './Base.astro';
 
 interface Props {
@@ -11,6 +12,7 @@ interface Props {
 const { slug } = Astro.props;
 const post = getPost(slug);
 const { previous, next } = neighbours(slug);
+const documentUri = post.draft ? undefined : standardDocumentUri(slug);
 ---
 
 <Base
@@ -19,6 +21,7 @@ const { previous, next } = neighbours(slug);
 	path={postHref(slug)}
 	ogType="article"
 	publishedAt={post.date}
+	standardDocumentUri={documentUri}
 	narrow
 	noindex={post.draft}
 >

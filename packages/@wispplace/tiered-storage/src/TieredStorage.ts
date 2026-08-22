@@ -123,9 +123,13 @@ export class TieredStorage<T = unknown> {
 					await this.delete(key)
 					return null
 				}
-				// Eager promotion to hot tier (awaited - guaranteed to complete)
+				// Eager promotion to hot tier (awaited - guaranteed to complete).
+				// Best-effort: see the cold-tier promotion below for why a failed
+				// promotion must not fail the read.
 				if (this.config.tiers.hot && this.config.promotionStrategy === 'eager') {
-					await this.config.tiers.hot.set(key, result.data, result.metadata)
+					try {
+						await this.config.tiers.hot.set(key, result.data, result.metadata)
+					} catch {}
 				}
 				// Fire-and-forget access stats update (non-critical)
 				void this.updateAccessStats(key, 'warm')
@@ -145,8 +149,15 @@ export class TieredStorage<T = unknown> {
 				return null
 			}
 
-			// Promote to warm and hot (if configured)
-			// Eager promotion is awaited to guarantee completion
+			// Promote to warm and hot (if configured).
+			// Eager promotion is awaited to guarantee completion.
+			//
+			// Best-effort: a promotion writes a redundant *copy* of data we already hold,
+			// so its failure must never fail the read. Notably, deletePrefix() invalidates
+			// a prefix by renaming its whole directory away, which can land between the
+			// disk tier's directory check and its writeFile and surface as ENOENT. Letting
+			// that escape would discard a successful cold-tier read and, for callers that
+			// promote in a loop, abort the entire batch.
 			if (this.config.promotionStrategy === 'eager') {
 				const promotions: Promise<void>[] = []
 				if (this.config.tiers.warm) {
@@ -155,7 +166,7 @@ export class TieredStorage<T = unknown> {
 				if (this.config.tiers.hot) {
 					promotions.push(this.config.tiers.hot.set(key, result.data, result.metadata))
 				}
-				await Promise.all(promotions)
+				await Promise.allSettled(promotions)
 			}
 
 			// Fire-and-forget access stats update (non-critical)

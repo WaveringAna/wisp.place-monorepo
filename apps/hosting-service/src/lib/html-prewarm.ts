@@ -19,23 +19,33 @@ function isHtmlStorageKey(key: string): boolean {
 async function loadSiteHtmlKeysIntoHotTier(
 	did: string,
 	rkey: string,
-): Promise<{ scannedKeys: number; warmedHtmlKeys: number }> {
+): Promise<{ scannedKeys: number; warmedHtmlKeys: number; failedKeys: number }> {
 	const prefix = `${did}/${rkey}/`
 	let scannedKeys = 0
 	let warmedHtmlKeys = 0
+	let failedKeys = 0
 
 	for await (const key of storage.listKeys(prefix)) {
 		scannedKeys++
 		if (!isHtmlStorageKey(key)) continue
 
-		// getWithMetadata uses eager promotion and moves the key into hot tier.
-		const result = await storage.getWithMetadata(key)
-		if (result) {
-			warmedHtmlKeys++
+		// Isolate each key: one unreadable entry (e.g. a concurrent invalidation removing it
+		// mid-scan) must not abandon the rest of the site's HTML. An escaping error also
+		// skipped the warmedSites bookkeeping in the caller, so every later request re-ran
+		// this entire listing — the repeated scan this cache exists to prevent.
+		try {
+			// getWithMetadata uses eager promotion and moves the key into hot tier.
+			const result = await storage.getWithMetadata(key)
+			if (result) {
+				warmedHtmlKeys++
+			}
+		} catch (err) {
+			failedKeys++
+			logger.debug(`HTML prewarm skipped ${key}`, { error: err })
 		}
 	}
 
-	return { scannedKeys, warmedHtmlKeys }
+	return { scannedKeys, warmedHtmlKeys, failedKeys }
 }
 
 export function triggerSiteHtmlHotCacheWarmup(did: string, rkey: string): void {
@@ -50,17 +60,20 @@ export function triggerSiteHtmlHotCacheWarmup(did: string, rkey: string): void {
 		generation,
 		promise: (async () => {
 			try {
-				const { scannedKeys, warmedHtmlKeys } = await loadSiteHtmlKeysIntoHotTier(did, rkey)
+				const { scannedKeys, warmedHtmlKeys, failedKeys } = await loadSiteHtmlKeysIntoHotTier(did, rkey)
 				const latestGeneration = prewarmGeneration.get(siteKey) ?? 0
 				if (latestGeneration !== generation) return
 
 				// Remember successful scans even when there are no matching keys so repeated
 				// requests for the same missing/empty prefix cannot force repeated storage scans.
+				// Individually skipped keys still count as a completed scan: they are re-fetched
+				// on demand by the normal serving path, which is far cheaper than re-listing.
 				warmedSites.add(siteKey)
 
 				logger.debug(`HTML prewarm finished for ${did}/${rkey}`, {
 					scannedKeys,
 					warmedHtmlKeys,
+					failedKeys,
 				})
 			} catch (err) {
 				logger.warn(`HTML prewarm failed for ${did}/${rkey}`, { error: err })

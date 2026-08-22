@@ -11,42 +11,42 @@ import Post from '../../layouts/Post.astro';
 		on Bluesky at the time. None of that is findable six months later.
 	</p>
 
-	<p>So: a blog. Same domain, same design system, no analytics.</p>
+	<p>so: a blog.</p>
 
-	<h2>What goes here</h2>
+	<h2>what goes here</h2>
 
 	<ul>
 		<li>
-			<strong>Release notes.</strong> When something ships that changes how you deploy or how your
+			<strong>release notes.</strong> when something ships that changes how you deploy or how your
 			sites are served, it gets a post.
 		</li>
 		<li>
-			<strong>Architecture write-ups.</strong> How the firehose consumer, tiered storage and hosting
+			<strong>architecture write-ups.</strong> how the firehose consumer, tiered storage and hosting
 			service fit together, and why they were built the way they were.
 		</li>
 		<li>
-			<strong>Postmortems.</strong> When wisp.place breaks, what broke and what changed afterwards.
+			<strong>postmortems.</strong> when wisp.place breaks, what broke and what changed afterwards.
 		</li>
 		<li>
-			<strong>Protocol notes.</strong> Things learned building on AT Protocol that aren't specific
+			<strong>protocol notes.</strong> things learned building on AT Protocol that aren't specific
 			to wisp.place.
 		</li>
 	</ul>
 
 	<p>
-		What doesn't go here: marketing. wisp.place is a passion project, not a startup — there is
+		Wwat doesn't go here: marketing. wisp.place is a passion project, not a startup, so there is
 		nothing to upsell you on.
 	</p>
 
-	<h2>The short version of what wisp.place is</h2>
+	<h2>the short version of what wisp.place is</h2>
 
 	<p>
-		If you found this post before you found the project: wisp.place is static hosting built on the <a
+		if you found this post before you found the project: wisp.place is static hosting built on the <a
 			href="https://atproto.com"
 			target="_blank"
 			rel="noopener">AT Protocol</a
-		>. You upload your site's files to your own PDS as blobs, and a record lists every file and the
-		site's name. The hosting service watches the network for those records and serves what it finds.
+		>. you upload your site's files to your own PDS as blobs, and a record lists every file and the
+		site's name. the hosting service watches the network for those records and serves what it finds.
 	</p>
 
 	<Terminal copy>
@@ -64,30 +64,30 @@ import Post from '../../layouts/Post.astro';
 	</Terminal>
 
 	<p>
-		The practical consequence is that your site isn't locked in a hosting account. The files live in
+		the practical consequence is that your site isn't locked in a hosting account. the files live in
 		your PDS, under your identity. If wisp.place disappeared tomorrow, someone else could serve the
-		exact same records — the CLI already does this, and so can you.
+		exact same records. the CLI already does this, and so can you.
 	</p>
 
 	<Callout type="tip" title="Getting started">
-		The <a href="https://docs.wisp.place" target="_blank" rel="noopener">docs</a> cover the CLI, the
+		the <a href="https://docs.wisp.place" target="_blank" rel="noopener">docs</a> cover the CLI, the
 		lexicons, redirects and self-hosting. If you just want a site up, drag a folder into the <a
 			href="https://wisp.place/editor">dashboard</a
 		>.
 	</Callout>
 
-	<h2>Subscribing</h2>
+	<h2>subscribing</h2>
 
 	<p>
-		There's an <a href="/rss.xml">RSS feed</a>. Announcements will also go out on <a
+		There's an <a href="/rss.xml">RSS feed</a>. announcements will also go out on <a
 			href="https://bsky.app/profile/wisp.place"
 			target="_blank"
 			rel="noopener">@wisp.place</a
-		>. There is no mailing list and there won't be one.
+		>. there is no mailing list and there won't be one.
 	</p>
 
 	<p>
-		This blog is itself a wisp.place site — a folder of HTML, uploaded to a PDS, served by the same
-		code that serves yours. If it goes down, that's informative too.
+		this blog is itself a wisp.place site. a folder of HTML, uploaded to a PDS, served by the same
+		code that serves yours. if it goes down, that's informative too.
 	</p>
 </Post>

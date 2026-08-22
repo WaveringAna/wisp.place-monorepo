@@ -358,7 +358,19 @@ export class DiskStorageTier implements StorageTier {
 		}
 
 		await this.writeMetadataAtomically(metaPath, metadata)
-		await writeFile(filePath, data)
+		try {
+			await writeFile(filePath, data)
+		} catch (error) {
+			// Mirror writeMetadataAtomically: deletePrefix()/clear can rename this key's
+			// directory away between the existsSync check above and this write, so the
+			// open fails with ENOENT. Don't recreate the directory — the invalidation that
+			// removed it may be newer than `data`, and resurrecting the path would restore
+			// content the caller just invalidated. Drop the entry instead and let the next
+			// read miss and re-fetch from the source of truth.
+			if (getErrnoCode(error) !== 'ENOENT') throw error
+			this.metadataIndex.delete(key)
+			return
+		}
 
 		this.metadataIndex.set(key, {
 			size: data.byteLength,

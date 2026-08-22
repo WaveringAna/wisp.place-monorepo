@@ -636,4 +636,50 @@ describe('TieredStorage', () => {
 			expect(await cold.exists('other-key')).toBe(true)
 		})
 	})
+
+	// Promotion writes a redundant copy of data the read already holds, so a failed
+	// promotion must never fail the read. In production this surfaced as ENOENT when
+	// deletePrefix() renamed a key's directory away between the disk tier's directory
+	// check and its write, aborting reads that had already succeeded against S3.
+	describe('Promotion failures', () => {
+		const failingTier = (inner: MemoryStorageTier) =>
+			Object.assign(Object.create(Object.getPrototypeOf(inner)), inner, {
+				async set() {
+					throw Object.assign(new Error('ENOENT: no such file or directory, open'), { code: 'ENOENT' })
+				},
+			})
+
+		// Memory tiers throughout: these assert promotion semantics only, and staying off
+		// disk keeps them from touching the shared testDir the other tests here reuse.
+		const memoryTier = () => new MemoryStorageTier({ maxSizeBytes: 1024 * 1024 })
+
+		test('cold read still succeeds when promotion to warm throws', async () => {
+			const cold = memoryTier()
+			const warm = failingTier(memoryTier())
+
+			await new TieredStorage({ tiers: { cold } }).set('race-key', { message: 'from cold' })
+
+			const storage = new TieredStorage({ tiers: { warm, cold }, promotionStrategy: 'eager' })
+			const result = await storage.getWithMetadata('race-key')
+
+			expect(result?.data).toEqual({ message: 'from cold' })
+			expect(result?.source).toBe('cold')
+		})
+
+		test('warm read still succeeds when promotion to hot throws', async () => {
+			const warm = memoryTier()
+			const hot = failingTier(memoryTier())
+
+			await new TieredStorage({ tiers: { cold: warm } }).set('race-key', { message: 'from warm' })
+
+			const storage = new TieredStorage({
+				tiers: { hot, warm, cold: memoryTier() },
+				promotionStrategy: 'eager',
+			})
+			const result = await storage.getWithMetadata('race-key')
+
+			expect(result?.data).toEqual({ message: 'from warm' })
+			expect(result?.source).toBe('warm')
+		})
+	})
 })

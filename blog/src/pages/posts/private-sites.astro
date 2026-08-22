@@ -126,11 +126,35 @@ const scopedStyleExample = `
 		link to a particular DID, revoke it later, or let it expire
 		automatically.
 	</p>
+	<pre><code>Creating private site test from /home/regent/Developer/wisp.place/docs/
+│
+◇  ✓ Found 2 files (15.3 MB)
+│
+◇  ✓ Uploaded
+Private site: https://dusky-cactus-iguana-7120.priv.wisp.place/
+site id: dusky-cactus-iguana-7120
+files: 2  size: 15.3 MB
+expiry: expires 2026-08-29
+
+Only you can open that URL while signed in.
+Create a shareable link with: wisp private share dusky-cactus-iguana-7120</code></pre>
 	<p>
 		private sites use a dedicated private origin. share tokens are generated
 		from cryptographically random bytes, displayed once, and stored only as
 		hashes. links can expire, be revoked, or be restricted to a specific AT
 		Protocol account.
+	</p>
+	<figure>
+		<img
+			src="/images/private-sites.png"
+			alt="A sign in page for a wisp private site."
+		/>
+	</figure>
+	<p>
+		you can try private sites now by going to <a href="https://wisp.place"
+			>wisp.place</a
+		> or by installing the cli with <code>npm install -g wispctl@1.2.1</code
+		>
 	</p>
 	<h2>future: permissioned data</h2>
 	<p>
@@ -145,17 +169,13 @@ const scopedStyleExample = `
 		for private wisp sites, the intended future could look roughly like
 		this:
 	</p>
-	<pre>
-	<code>
-user and wisp.place create a space
+	<pre><code>user and wisp.place create a space
          ↓
 site files live in the user's permissioned repository
          ↓
 wisp.place receives access to the space
          ↓
-wisp gathers, validates, caches, and serves the site
-	</code>
-	</pre>
+wisp gathers, validates, caches, and serves the site</code></pre>
 	<p>
 		this fits private sites very naturally as the files could once again be
 		owned by the user rather than existing only inside wisp's private

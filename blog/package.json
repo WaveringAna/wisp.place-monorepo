@@ -7,6 +7,7 @@
     "start": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
+    "standard:publish": "bun run scripts/publish-standard.ts",
     "astro": "astro"
   },
   "dependencies": {

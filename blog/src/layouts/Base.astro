@@ -12,6 +12,8 @@ interface Props {
 	/** 'article' on posts, 'website' everywhere else. */
 	ogType?: 'website' | 'article';
 	publishedAt?: string;
+	/** AT-URI of this page's Standard.site document record. */
+	standardDocumentUri?: string;
 	/** Constrain the main column to reading width. */
 	narrow?: boolean;
 	/** Keep the page out of search results (drafts, error pages). */
@@ -24,6 +26,7 @@ const {
 	path = Astro.url.pathname,
 	ogType = 'website',
 	publishedAt,
+	standardDocumentUri,
 	narrow = false,
 	noindex = false,
 } = Astro.props;
@@ -46,6 +49,7 @@ const shellClass = narrow ? 'shell shell--narrow' : 'shell';
 
 		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 		<link rel="alternate" type="application/rss+xml" title={site.title} href="/rss.xml" />
+		{standardDocumentUri && <link rel="site.standard.document" href={standardDocumentUri} />}
 
 		<meta property="og:type" content={ogType} />
 		<meta property="og:url" content={canonical} />
