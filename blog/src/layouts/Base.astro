@@ -65,10 +65,11 @@ const shellClass = narrow ? 'shell shell--narrow' : 'shell';
 		<script is:inline>
 			try {
 				const stored = localStorage.getItem('wisp-theme');
-				if (stored === 'dark' || stored === 'light') {
-					document.documentElement.dataset.theme = stored;
-				}
-			} catch {}
+				document.documentElement.dataset.theme =
+					stored === 'light' || stored === 'dark' ? stored : 'dark';
+			} catch {
+				document.documentElement.dataset.theme = 'dark';
+			}
 		</script>
 	</head>
 

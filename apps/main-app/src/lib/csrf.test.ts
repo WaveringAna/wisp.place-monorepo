@@ -123,6 +123,40 @@ describe('csrfProtection', () => {
 		})
 	})
 
+	// A PDS relays `agent.call(...)` to /xrpc server-to-server, so those requests carry
+	// no Origin header. XRPC is bearer-authenticated and never reads the session cookie,
+	// so requiring an origin there only breaks the CLI.
+	test('allows originless XRPC procedures', () => {
+		for (const path of ['/xrpc/place.wisp.v2.privateSite.create', '/xrpc/place.wisp.v2.domain.claim', '/xrpc']) {
+			const set: { status?: number | string } = {}
+			const result = protect({
+				request: new Request(`https://wisp.place${path}`, {
+					method: 'POST',
+					headers: { Host: 'wisp.place', Authorization: 'Bearer service-jwt' },
+				}),
+				set,
+			})
+			expect(result).toBeUndefined()
+			expect(set.status).toBeUndefined()
+		}
+	})
+
+	test('still rejects originless cookie-authenticated routes', () => {
+		const set: { status?: number | string } = {}
+		const result = protect({
+			request: new Request('https://wisp.place/wisp/upload-files', {
+				method: 'POST',
+				headers: { Host: 'wisp.place' },
+			}),
+			set,
+		})
+		expect(set.status).toBe(403)
+		expect(result).toEqual({
+			error: 'CSRF validation failed',
+			message: 'Request origin does not match host',
+		})
+	})
+
 	test('rejects private-site origins for other unsafe routes', () => {
 		for (const path of ['/wisp/upload-files', '/api/auth/logout', '/api/domain/claim']) {
 			const { result, set } = run(path)

@@ -1,0 +1,226 @@
+---
+import Callout from "../../components/Callout.astro";
+import CodeBlock from "../../components/CodeBlock.astro";
+import Terminal from "../../components/Terminal.astro";
+import Post from "../../layouts/Post.astro";
+
+const newPostExample = `
+---
+import Post from '../../layouts/Post.astro';
+---
+
+<Post slug="my-post">
+  <p>Write whatever HTML you want in here.</p>
+</Post>
+`;
+
+const registryExample = `
+{
+  slug: 'my-post',
+  title: 'A title that fits on one line',
+  description: 'One or two sentences. Shown on the index and in RSS.',
+  date: '2026-08-14',
+  author: authors.nekomimi,
+  tags: ['release'],
+  draft: true,
+}
+`;
+
+const scopedStyleExample = `
+<div class="chart">…</div>
+
+<style>
+  /* Scoped to this page only — Astro rewrites the selector. */
+  .chart { border: 1px solid var(--border); padding: 1rem; }
+</style>
+
+<script>
+  document.querySelector('.chart')?.classList.add('ready');
+</script>
+`;
+---
+
+<Post slug="private-sites">
+	<p>
+		wisp will be almost a year old soon. there are over 500 websites across
+		300 DIDs, and even became a cute home for many computer girls alongside
+		humans. thank you for this as i never imagined that people will happily
+		use what i have created just for my sake of hosting stuff quickly.
+		people praise how nice the DX is, agents and humans alike enjoy the CLI
+		and the ease of being able to create wisp sites with their extant
+		atproto tooling, and that i'm able to serve you all very sustainably
+		because of generous donations. thank you.
+	</p>
+
+	<h2>new: private sites</h2>
+	<p>
+		private sites have been released silently for a few days now and are
+		quite cool. it's a feature ive wanted after having my coding agents
+		write reports, visualizations, and other things as HTML to me rather
+		than plain markdown, and then wanting to share these with other people.
+		many people have made their own solutions for this problem, but i found
+		them cumbersome and also clunky to share around, so thus for the same
+		reason why i spawned wisp.place, private sites are here too.
+	</p>
+	<p>first though, what private sites are not.</p>
+	<h2>they are not e2ee</h2>
+	<p>
+		private sites are access-controlled, not end-to-end encrypted. the host,
+		wisp.place, or potentially you if you fully self-host, can see the
+		contents of a private site.
+	</p>
+	<p>
+		i am running this for a community, and honestly, i do not have the
+		resources to deal with the 0.1% of bad actors who upload, you know,
+		that. section 230 is also uniquely american, and infrastructure
+		operators elsewhere do not necessarily have the same legal protections.
+	</p>
+	<p>
+		if you want something that is zero knowledge and fully encrypted, my
+		friend juliet has a nice piece of software called <a
+			href="https://github.com/notjuliet/drop">drop</a
+		>. it's nicely designed and really easy to self host.
+	</p>
+	<h2>they are not on your PDS</h2>
+	<p>
+		for the initial version, private-site files are uploaded directly to
+		wisp through an XRPC route. they never touch your PDS and do not use
+		permissioned spaces. perm spaces was not yet put into alpha release like
+		they were just today when i was making this.
+	</p>
+	<p>
+		this does make private sites more centralized than ordinary wisp sites.
+		for a normal `place.wisp.fs site`, wisp is mostly a CDN and hosting
+		layer. the site records and blobs live on your PDS. you can host them
+		yourself with wispctl, and anyone else can write their own software to
+		render and serve the same site.
+	</p>
+	<p>
+		that is what we like to call the open web, and it is one of the things
+		AT Protocol is known for. the first version of private sites does not
+		have that property. wisp stores the authoritative files and controls
+		their delivery.
+	</p>
+	<p>
+		i do not love this compromise, but i would rather launch something
+		useful, with limitations, than wait for every part of the ideal protocol
+		to exist.
+	</p>
+	<h2>what private sites are</h2>
+	<p>
+		private sites will be an easy way to upload websites that only you can
+		see. you will also be able to create share links for a small group, or
+		authorize specific AT Protocol accounts to view a site.
+	</p>
+	<p>
+		wispctl will be able to upload private sites directly to wisp.place. you
+		will be able to list them, delete them, create and revoke share links,
+		and manage access through both wispctl and the wisp dashboard.
+	</p>
+	<code>
+		wisp private deploy --path ./report --name "architecture review"
+	</code>
+	<p>
+		after running a command like this, you get a private site owned by your
+		account. you can open it yourself, create a share link, restrict that
+		link to a particular DID, revoke it later, or let it expire
+		automatically.
+	</p>
+	<p>
+		private sites use a dedicated private origin. share tokens are generated
+		from cryptographically random bytes, displayed once, and stored only as
+		hashes. links can expire, be revoked, or be restricted to a specific AT
+		Protocol account.
+	</p>
+	<h2>future: permissioned data</h2>
+	<p>
+		AT Protocol is developing permissioned data which allows data to remain
+		tied to a user and their AT Protocol identity without being published
+		onto the global public firehose. the proposal introduces spaces. a user
+		can participate in a space, write data into a permissioned repository on
+		their own PDS, and authorize applications to read and work with the
+		contents of that space.
+	</p>
+	<p>
+		for private wisp sites, the intended future could look roughly like
+		this:
+	</p>
+	<pre>
+	<code>
+user and wisp.place create a space
+         ↓
+site files live in the user's permissioned repository
+         ↓
+wisp.place receives access to the space
+         ↓
+wisp gathers, validates, caches, and serves the site
+	</code>
+	</pre>
+	<p>
+		this fits private sites very naturally as the files could once again be
+		owned by the user rather than existing only inside wisp's private
+		storage. wisp could remain the application that evaluates share links,
+		account access, expiration, publication, and hosting, while the
+		authoritative source belongs to the user's DID.
+	</p>
+	<p>
+		i also currently intend to move public Wisp sites into spaces. a major
+		reason is operational. spaces would give wisp a much clearer boundary
+		for tracking storage, managing sites, and enforcing fair total quotas.
+		right now, public wisp sites are scattered across ordinary public
+		repositories and blobs. wisp can cache and serve them, but there is no
+		clean per-user storage boundary that wisp controls.
+	</p>
+	<p>
+		with spaces, wisp can treat each user's sites as managed data, measure
+		what it is serving, reject over-quota state, and make the hosted service
+		sustainable without changing the fact that users can replace wisp.place
+		with their own wispctl deployment.
+	</p>
+	<h2>anonymous access to spaces</h2>
+	<p>
+		under the current permissioned-data design, a space is not anonymously
+		world-readable. an authorized application can read it. a member can read
+		it. wisp can read it and serve the result, but an anonymous person
+		cannot simply discover a user's PDS, request the space records and
+		blobs, and reconstruct the site. that is perfectly reasonable for a
+		private site, but much less comfortable for a public one.
+	</p>
+	<p>
+		a public website can still be visible to everyone through wisp, but its
+		underlying records and blobs would only be available to the user, wisp,
+		or another application authorized to access the space. the website would
+		still be public, but the source would no longer be anonymously and
+		independently replicable in the way ordinary public AT Protocol data is
+		today. so while i currently intend to move public sites into spaces, i
+		do not think the current read model is ideal.
+	</p>
+	<p>
+		i hope there is more discussion around allowing spaces to opt into
+		anonymous read access. a space that permits public reads while retaining
+		controlled writes and space-based management would solve this neatly.
+	</p>
+	<h2>the other reality: quotas</h2>
+	<p>
+		i mentioned this already, but right now, wisp.place does not enforce a
+		total storage quota across a user's public sites. moving sites into
+		permissioned spaces will make it much easier to measure and enforce
+		storage fairly, and i intend to do that. each user will receive: 300 MB
+		total or 1 GB total for supporters. these limits apply to storage
+		provided by wisp.place. they are not a protocol limitation, and they are
+		not meant to prevent you from hosting larger sites yourself.
+	</p>
+	<p>
+		if you do not like the quota, use wispctl. self-hosted wispctl can take
+		the place of wisp.place in this architecture. you can run your own host,
+		use your own storage, set your own limits, and serve as much as your
+		infrastructure allows. that escape hatch matters to me.
+	</p>
+	<p>
+		wisp is still something I operate partly out of my own pocket. i do not
+		want to charge for it, and i do not want to turn it into a subscription
+		hosting company. but free infrastructure without fair limits eventually
+		becomes infrastructure subsidized for whoever is willing to consume the
+		most.
+	</p>
+</Post>

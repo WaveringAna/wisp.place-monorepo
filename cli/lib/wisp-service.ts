@@ -16,6 +16,13 @@ export const WISP_SERVICE_LXMS = [
 	'place.wisp.v2.domain.delete',
 	'place.wisp.v2.domain.getList',
 	'place.wisp.v2.domain.getStatus',
+	'place.wisp.v2.domain.verify',
+	'place.wisp.v2.privateSite.create',
+	'place.wisp.v2.privateSite.createShare',
+	'place.wisp.v2.privateSite.delete',
+	'place.wisp.v2.privateSite.list',
+	'place.wisp.v2.privateSite.listShares',
+	'place.wisp.v2.privateSite.revokeShare',
 	'place.wisp.v2.site.delete',
 	'place.wisp.v2.site.getList',
 ] as const

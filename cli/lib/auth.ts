@@ -377,6 +377,17 @@ export async function hasDirSession(dbPath?: string): Promise<boolean> {
 }
 
 /**
+ * Return the subset of `WISP_OAUTH_SCOPE` not present in a token's granted scope.
+ *
+ * Reused both after a fresh OAuth callback (to warn) and at session restore (to
+ * transparently re-auth when a stored token predates an expanded scope set).
+ */
+function missingScopesFor(grantedScope: string | undefined): string[] {
+	const granted = new Set((grantedScope || '').split(/\s+/).filter(Boolean))
+	return WISP_OAUTH_SCOPE.split(' ').filter((s) => !granted.has(decodeURIComponent(s)))
+}
+
+/**
  * Authenticate with AT Protocol using OAuth loopback flow
  */
 export async function authenticateOAuth(
@@ -420,6 +431,9 @@ export async function authenticateOAuth(
 	let redirectUri = `http://${LOOPBACK_HOST}:${oauthPort}/oauth/callback`
 	let client = createOAuthClient(redirectUri)
 	const storedDid = kvGet(kv, dirKey)
+	// Identifier to pass to `client.authorize`. Falls back to the stored DID so a
+	// transparent re-auth (missing scopes) never prompts the user for a handle.
+	let loginIdentifier = handle
 	if (storedDid && options.forceReauth) {
 		kv.del(dirKey)
 	} else if (storedDid) {
@@ -439,8 +453,21 @@ export async function authenticateOAuth(
 			try {
 				const session = await client.restore(storedDid)
 				if (session) {
-					emitStatus(options, `Restored session for ${storedDid}`)
-					return { agent: new Agent(session), did: storedDid }
+					// A stored token may predate an expanded scope set (e.g. the
+					// privateSite/domain.verify scopes). Re-auth transparently so the
+					// subsequent XRPC call doesn't fail with a scope error.
+					const tokenInfo = await session.getTokenInfo(false)
+					const missingScopes = missingScopesFor(tokenInfo.scope)
+					if (missingScopes.length > 0) {
+						emitStatus(options, `Stored session is missing ${missingScopes.length} scope(s). Re-authenticating...`)
+						kv.del(dirKey)
+						canRestore = false
+						// Re-auth for the same account without re-prompting.
+						loginIdentifier = storedDid
+					} else {
+						emitStatus(options, `Restored session for ${storedDid}`)
+						return { agent: new Agent(session), did: storedDid }
+					}
 				}
 			} catch {
 				// Session invalid or expired — clear mapping and re-auth
@@ -449,8 +476,8 @@ export async function authenticateOAuth(
 		}
 	}
 
-	// Need a handle to start a new OAuth flow
-	if (!handle) {
+	// Need an identifier to start a new OAuth flow
+	if (!loginIdentifier) {
 		throw new Error('No active session for this directory. Run `wispctl login <handle>` first.')
 	}
 
@@ -476,7 +503,7 @@ export async function authenticateOAuth(
 	}
 
 	// Start new OAuth flow
-	emitStatus(options, `Starting OAuth flow for ${handle}...`)
+	emitStatus(options, `Starting OAuth flow for ${loginIdentifier}...`)
 
 	const callbackPromise = new Promise<{ params: URLSearchParams }>((resolve, reject) => {
 		const app = new Hono()
@@ -587,7 +614,7 @@ export async function authenticateOAuth(
 		}
 	})
 
-	const authUrl = await client.authorize(handle, { scope: WISP_OAUTH_SCOPE })
+	const authUrl = await client.authorize(loginIdentifier, { scope: WISP_OAUTH_SCOPE })
 
 	emitStatus(options, 'Opening browser for authentication...')
 	emitStatus(options, `If browser does not open, visit: ${authUrl}`)
@@ -597,8 +624,7 @@ export async function authenticateOAuth(
 	const { session } = await client.callback(params)
 
 	const tokenInfo = await session.getTokenInfo(false)
-	const grantedScopes = new Set((tokenInfo.scope || '').split(/\s+/).filter(Boolean))
-	const missingScopes = WISP_OAUTH_SCOPE.split(' ').filter((s) => !grantedScopes.has(decodeURIComponent(s)))
+	const missingScopes = missingScopesFor(tokenInfo.scope)
 	if (missingScopes.length > 0) {
 		emitWarning(
 			options,

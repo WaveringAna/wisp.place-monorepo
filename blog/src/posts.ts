@@ -64,6 +64,14 @@ const posts: Post[] = [
 		tags: ['meta'],
 		draft: true,
 	},
+	{
+		slug: 'private-sites',
+		title: 'New and future: private sites, permissioned data, and open web realities.',
+		description: 'The annocunement of private sites and detailing upcoming quota systems when permissioned data lands',
+		date: '2026-08-11',
+		author: authors.nekomimi,
+		tags: ['announcement'],
+	}
 ]
 
 /** True in `astro build`, false in `astro dev`. */

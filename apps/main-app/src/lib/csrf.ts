@@ -43,6 +43,9 @@ export function verifyRequestOrigin(origin: string, allowedHosts: string[]): boo
  * Entries beginning with `.` match any subdomain of that suffix, so
  * `<siteId>.priv.<host>` is covered without exempting any other route.
  *
+ * `/xrpc/*` is exempt entirely: it is bearer-token authenticated, not cookie
+ * authenticated.
+ *
  * Usage:
  * ```ts
  * import { csrfProtection } from './lib/csrf'
@@ -67,6 +70,16 @@ export const csrfProtection =
 		// Use X-Forwarded-Host if behind a proxy, otherwise use Host
 		const hostHeader = request.headers.get('X-Forwarded-Host') || request.headers.get('Host')
 		const path = new URL(request.url).pathname
+
+		// XRPC routes authenticate only via `Authorization: Bearer <service JWT>` and never
+		// read the session cookie, so a cross-site POST carries no ambient authority to abuse.
+		// An origin check there only breaks legitimate non-browser clients: a PDS relays
+		// `agent.call(...)` server-to-server with no Origin header, which 403'd every CLI
+		// procedure (private-site deploy, domain claim, site delete).
+		if (path === '/xrpc' || path.startsWith('/xrpc/')) {
+			return
+		}
+
 		const extraHosts = path === '/private/redeem' ? allowedExtraOrigins : []
 
 		// Extra origins are trusted only for the scoped-share redemption endpoint.
