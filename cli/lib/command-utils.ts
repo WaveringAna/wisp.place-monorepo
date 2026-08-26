@@ -1,7 +1,7 @@
 import type { Agent } from '@atproto/api'
 import { cancel, isCancel, text } from '@clack/prompts'
 import type { Command } from 'commander'
-import { authenticate, hasDirSession } from './auth.ts'
+import { authenticate, resolveAccountForCwd } from './auth.ts'
 import { createSpinner, pc, type SpinnerLike } from './progress.ts'
 import { parseServiceDid } from './wisp-service.ts'
 
@@ -27,7 +27,7 @@ export function withExit(handler: (...args: any[]) => Promise<void>): (...args: 
 export function addXrpcAuthOptions<T extends Command>(command: T): T {
 	return command
 		.option('--password <password>', 'App password for headless authentication')
-		.option('--db <path>', 'OAuth session database path')
+		.option('--db <path>', 'Account database path')
 		.option('--service <did:...>', 'Service DID to proxy through')
 		.option('--json', 'Output raw JSON')
 }
@@ -105,9 +105,9 @@ export async function authenticateForXrpc(
 		)
 	}
 
-	// Skip the handle prompt if the current directory already has a stored session
-	const resolvedIdentifier =
-		identifier ?? ((await hasDirSession(options.db)) ? undefined : await resolveIdentifier(undefined))
+	// Skip the handle prompt if a stored account already applies here
+	const knownAccount = identifier || options.password ? undefined : await resolveAccountForCwd(options.db)
+	const resolvedIdentifier = identifier ?? (knownAccount ? undefined : await resolveIdentifier(undefined))
 	const serviceDid = parseServiceDid(options.service)
 
 	const spinner = createSpinner('Authenticating...').start()
@@ -116,7 +116,7 @@ export async function authenticateForXrpc(
 		dbPath: options.db,
 		onStatus: bindAuthStatusToSpinner(spinner),
 	})
-	spinner.succeed(`Authenticated as ${did}`)
+	spinner.succeed(`Authenticated as ${resolvedIdentifier ?? knownAccount?.handle ?? did}`)
 
 	return { agent, serviceDid, did }
 }

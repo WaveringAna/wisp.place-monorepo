@@ -23,7 +23,17 @@ import {
 } from './commands/private.ts'
 import { pull } from './commands/pull.ts'
 import { serve } from './commands/serve.ts'
-import { authenticate, authenticateOAuth, clearDirSession, clearSessions, hasDirSession } from './lib/auth.ts'
+import {
+	authenticate,
+	authenticateOAuth,
+	clearDirSession,
+	clearSessions,
+	listStoredAccounts,
+	loginWithAppPassword,
+	logoutAccount,
+	resolveAccountForCwd,
+	setDefaultAccount,
+} from './lib/auth.ts'
 import {
 	addXrpcAuthOptions,
 	authenticateForXrpc,
@@ -33,6 +43,7 @@ import {
 } from './lib/command-utils.ts'
 import { createSpinner, pc } from './lib/progress.ts'
 import { callWispXrpc } from './lib/xrpc.ts'
+import packageJson from './package.json'
 
 const program = new Command()
 program.enablePositionalOptions()
@@ -152,9 +163,9 @@ async function deleteSiteWithSelection(
 }
 
 program
-	.name('wisp-cli')
+	.name('wispctl')
 	.description('CLI for wisp.place - deploy static sites to the AT Protocol')
-	.version('1.2.0')
+	.version(packageJson.version)
 	.option('-q, --quiet', 'Suppress progress output — useful for CI/agents (also set via WISPCTL_NO_PROGRESS=1)')
 
 // Deploy command (default)
@@ -168,7 +179,7 @@ program
 	.option('-c, --concurrency <n>', 'Number of concurrent uploads (backs off to 2 on rate limit)', '3')
 	.option('--force-gzip', 'Force gzip compression for all files regardless of type')
 	.option('--password <password>', 'App password for headless authentication')
-	.option('--db <path>', 'OAuth session database path')
+	.option('--db <path>', 'Account database path')
 	.option('-y, --yes', 'Skip confirmation prompts')
 	.action(
 		withExit(async (handle: string | undefined, options) => {
@@ -176,8 +187,8 @@ program
 			let resolvedPath = options.path
 			let resolvedSite = options.site
 
-			const hasDirSess = !resolvedHandle && !options.password && (await hasDirSession(options.db))
-			const needsHandlePrompt = !resolvedHandle && !hasDirSess
+			const knownAccount = resolvedHandle || options.password ? undefined : await resolveAccountForCwd(options.db)
+			const needsHandlePrompt = !resolvedHandle && !knownAccount
 			const needsPrompts = needsHandlePrompt || !resolvedPath || !resolvedSite
 
 			if (needsPrompts) {
@@ -238,8 +249,9 @@ program
 
 			console.log()
 			console.log(pc.dim(`  URI: ${result.uri}`))
-			if (resolvedHandle) {
-				console.log(pc.cyan(`  URL: https://sites.wisp.place/${resolvedHandle}/${resolvedSite}`))
+			const displayHandle = resolvedHandle ?? knownAccount?.handle
+			if (displayHandle) {
+				console.log(pc.cyan(`  URL: https://sites.wisp.place/${displayHandle}/${resolvedSite}`))
 			}
 			console.log(pc.cyan(`  URL: ${result.url}`))
 
@@ -641,10 +653,30 @@ addXrpcAuthOptions(
 // Login command
 program
 	.command('login <handle>')
-	.description('Authenticate and store session for the current directory')
-	.option('--db <path>', 'OAuth session database path')
+	.description('Authenticate and store credentials for use from any directory')
+	.option('--db <path>', 'Account database path')
+	.option('--password <password>', 'Log in with an app password instead of OAuth (or set WISPCTL_APP_PASSWORD)')
 	.action(
 		withExit(async (handle: string, options) => {
+			const appPassword = options.password ?? process.env.WISPCTL_APP_PASSWORD
+			if (appPassword !== undefined) {
+				const authSpinner = createSpinner('Authenticating...').start()
+				const result = await loginWithAppPassword(handle, appPassword, {
+					dbPath: options.db,
+					onStatus: bindAuthStatusToSpinner(authSpinner),
+				})
+				authSpinner.succeed(`Authenticated as ${result.handle}`)
+				if (result.stored) {
+					console.log(pc.dim('  App password saved to the system keychain'))
+				} else {
+					console.log(
+						pc.yellow(`  App password not saved: ${result.keychainDetail ?? 'no OS credential store available.'}`),
+					)
+					console.log(pc.dim('  Use --password or WISPCTL_APP_PASSWORD for future commands.'))
+				}
+				return
+			}
+
 			const authSpinner = createSpinner('Authenticating...').start()
 			const { did } = await authenticateOAuth(handle, {
 				dbPath: options.db,
@@ -657,17 +689,97 @@ program
 
 // Logout command
 program
-	.command('logout')
-	.description('Clear the stored session for the current directory')
-	.option('--db <path>', 'OAuth session database path')
-	.option('--all', 'Clear all stored sessions across all directories')
-	.action(async (options) => {
-		if (options.all) {
-			await clearSessions(options.db)
-		} else {
+	.command('logout [handle]')
+	.description('Unlink the current directory, or forget an account everywhere')
+	.option('--db <path>', 'Account database path')
+	.option('--all', 'Forget every stored account and credential')
+	.action(
+		withExit(async (handle: string | undefined, options) => {
+			if (options.all) {
+				await clearSessions(options.db)
+				return
+			}
+			if (handle) {
+				const account = await logoutAccount(handle, options.db)
+				if (account) {
+					console.log(`Forgot ${account.handle ?? account.did} and removed its stored credentials`)
+				} else {
+					console.log(`No stored account for ${handle}`)
+				}
+				return
+			}
 			await clearDirSession(options.db)
-		}
-	})
+		}),
+	)
+
+// Accounts command
+const accountsCommand = program.command('accounts').description('Manage stored accounts')
+
+accountsCommand
+	.command('list', { isDefault: true })
+	.description('List stored accounts')
+	.option('--db <path>', 'Account database path')
+	.option('--json', 'Output raw JSON')
+	.action(
+		withExit(async (options) => {
+			const accounts = await listStoredAccounts(options.db)
+
+			if (options.json) {
+				console.log(JSON.stringify(accounts, null, 2))
+				return
+			}
+
+			if (accounts.length === 0) {
+				console.log('No stored accounts. Run `wispctl login <handle>` to add one.')
+				return
+			}
+
+			console.log()
+			for (const account of accounts) {
+				const tags = [
+					account.method === 'app-password' ? 'app password' : 'oauth',
+					account.hasCredential ? undefined : pc.yellow('no credential'),
+					account.isDefault ? pc.green('default') : undefined,
+					account.isCurrentDir ? pc.cyan('this directory') : undefined,
+				].filter(Boolean)
+				console.log(`  ${pc.bold(account.handle ?? account.did)}  ${pc.dim(`(${tags.join(', ')})`)}`)
+				// Only worth a second line when it is not just the title again.
+				if (account.handle) {
+					console.log(pc.dim(`    ${account.did}`))
+				}
+				if (account.dirs.length > 0) {
+					console.log(pc.dim(`    ${account.dirs.length} linked director${account.dirs.length === 1 ? 'y' : 'ies'}`))
+				}
+			}
+			console.log()
+		}),
+	)
+
+accountsCommand
+	.command('use <handle>')
+	.description('Set the account used in directories with no linked account')
+	.option('--db <path>', 'Account database path')
+	.action(
+		withExit(async (handle: string, options) => {
+			const account = await setDefaultAccount(handle, options.db)
+			console.log(`Default account set to ${account.handle ?? account.did}`)
+		}),
+	)
+
+accountsCommand
+	.command('remove <handle>')
+	.description('Forget an account and remove its stored credentials')
+	.option('--db <path>', 'Account database path')
+	.action(
+		withExit(async (handle: string, options) => {
+			const account = await logoutAccount(handle, options.db)
+			if (account) {
+				console.log(`Forgot ${account.handle ?? account.did} and removed its stored credentials`)
+			} else {
+				console.log(`No stored account for ${handle}`)
+			}
+		}),
+	)
 
 // Set WISPCTL_NO_PROGRESS from --quiet flag before any command runs
 program.hook('preAction', () => {

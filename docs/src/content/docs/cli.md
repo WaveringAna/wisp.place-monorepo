@@ -26,7 +26,7 @@ The Wisp CLI is a command-line tool for deploying static websites directly to yo
 
 <div class="downloads">
 
-<h2>Download v1.1.0</h2>
+<h2>Download v1.3.0</h2>
 
 <a href="https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-aarch64-darwin" class="download-link" download="">
 
@@ -61,11 +61,12 @@ The Wisp CLI is a command-line tool for deploying static websites directly to yo
 <h3 style="margin-top: 1.5rem; margin-bottom: 0.5rem;">SHA-256 Checksums</h3>
 
 <pre style="font-size: 0.75rem; padding: 1rem;" class="language-bash" tabindex="0"><code class="language-bash">
-67c7552645d8006daa41fc6c62d7412f9a6aef50cdd04cc2e815189c6d5fa7af  wisp-cli-aarch64-darwin
-5a0b09c00eac6a8d2b1a8d8c2e54a16cf173cc6c38cc631bf19b0483d093a7f5  wisp-cli-x86_64-darwin
-b23fe58b8c53a670414a2f0cebe38f31630fd8b5ecca099cd85d543ea0c3f2d1  wisp-cli-aarch64-linux
-f1d4d655f2714879f44bb23318b30aab79f78cb329bbf6b51abe1fd7a6a5bd84  wisp-cli-x86_64-linux
-df9660b27a9d6f8bcebcafab4622be88639d15dbe74649bdb16e5001d8abe041  wisp-cli-x86_64-windows.exe
+af91f58c37957bf9ce28da443a536ee0267b4f8deb04fe220c585b8d9b9b43e5  wisp-cli-aarch64-darwin
+ec1529bf74f594e25390c066b06525c483a4d8bf664e4f1c14738d6d27554171  wisp-cli-x86_64-darwin
+0781b8daf7ebd2344b561aea1845cc94e5655ea2ce2b019aaa1e887a4f2ada85  wisp-cli-darwin-universal
+037521ce5fc756891a67dffb87d98c52c9112358ad1dd78adad05861fddf1d39  wisp-cli-aarch64-linux
+960364c5530b23660fe7d787a349b8a3c10472d1e85ea7f423173e4b18817a98  wisp-cli-x86_64-linux
+d1aaa70fbc805b1b352dcfbc42c46b46e43c8a15725ca9f52cff92a45be1c0f0  wisp-cli-x86_64-windows.exe
 </code></pre>
 
 </div>
@@ -119,11 +120,12 @@ steps:
       ./wisp-cli \
         "$WISP_HANDLE" \
         --path "$SITE_PATH" \
-        --site "$SITE_NAME" \
-        --password "$WISP_APP_PASSWORD"
+        --site "$SITE_NAME"
 ```
 
-**Note:** Set `WISP_APP_PASSWORD` as a secret in your Tangled Spindle repository settings. Generate an app password from your AT Protocol account settings.
+**Note:** Set `WISPCTL_APP_PASSWORD` as a secret in your Tangled Spindle repository settings.
+The CLI reads it directly from the environment, keeping the app password out of the process
+arguments. Generate an app password from your AT Protocol account settings.
 
 ## Basic Usage
 
@@ -221,15 +223,22 @@ Downloads site, serves it, and watches firehose for live updates!
 
 ## Authentication
 
+Credentials are stored once and shared across every directory. Handles are remembered per
+directory, so after the first login a bare `wispctl deploy` in that folder just works.
+
 ### OAuth (Recommended)
 
-The CLI uses OAuth by default, opening your browser for secure authentication:
-
 ```bash
-wispctl deploy your-handle.bsky.social --path ./dist --site my-site
+wispctl login your-handle.bsky.social
 ```
 
-This creates a session stored locally (default: `/tmp/wisp-oauth-session.json`).
+This opens your browser and stores the session in your OS keychain (macOS Keychain, Windows
+Credential Manager, or the Secret Service on Linux), keyed by DID. Running
+`wispctl deploy your-handle.bsky.social` from any other directory reuses that stored session
+instead of opening the browser again.
+
+If no OS credential store is available, OAuth sessions fall back to a local SQLite file at
+`~/.config/wispctl/state.sqlite` and the CLI warns you.
 
 ### App Password
 
@@ -242,7 +251,52 @@ wispctl deploy your-handle.bsky.social \
   --password YOUR_APP_PASSWORD
 ```
 
+To avoid putting the secret in the command line (where it is visible in the process table),
+set `WISPCTL_APP_PASSWORD` instead:
+
+```bash
+export WISPCTL_APP_PASSWORD=YOUR_APP_PASSWORD
+wispctl deploy your-handle.bsky.social --path ./dist --site my-site
+```
+
+The environment variable is used whenever a handle is given; with no handle the CLI falls back
+to your stored accounts as usual.
+
+You can also save an app password to the keychain so you do not have to supply it each time:
+
+```bash
+WISPCTL_APP_PASSWORD=YOUR_APP_PASSWORD wispctl login your-handle.bsky.social
+```
+
+App passwords are only ever written to the OS credential store — unlike short-lived OAuth
+tokens they are never written to the SQLite fallback. On a machine without a keychain, the
+login still works but the password is not saved.
+
 **Generate app passwords** from your AT Protocol account settings.
+
+### Managing Accounts
+
+```bash
+# List stored accounts, their credentials, and which directories are linked
+wispctl accounts
+
+# Pick the account used in directories with no linked account
+wispctl accounts use your-handle.bsky.social
+
+# Unlink the current directory (stored credentials stay put)
+wispctl logout
+
+# Forget one account everywhere, including its stored credentials
+wispctl logout your-handle.bsky.social
+
+# Forget everything
+wispctl logout --all
+```
+
+A bare command with no handle resolves in this order: the account linked to the current
+directory, then the account chosen with `wispctl accounts use`, then your only stored account
+if you have exactly one. With several accounts and no explicit choice, the CLI prompts rather
+than guessing which identity to deploy as.
 
 ## File Processing
 
@@ -266,16 +320,16 @@ The CLI tracks file changes using CID-based content addressing to minimize uploa
 ### Deploy Command
 
 ```bash
-wisp-cli deploy [OPTIONS] <INPUT>
+wispctl deploy [OPTIONS] [HANDLE]
 
 Arguments:
-  <INPUT>  Handle (e.g., alice.bsky.social), DID, or PDS URL
+  [HANDLE]  Handle (e.g., alice.bsky.social) or DID. Optional once an account is stored.
 
 Options:
   -p, --path <PATH>           Path to site directory [default: .]
   -s, --site <SITE>           Site name (defaults to directory name)
-      --store <STORE>         OAuth session file path [default: /tmp/wisp-oauth-session.json]
       --password <PASSWORD>   App password for authentication
+      --db <PATH>             Account database path [default: ~/.config/wispctl/state.sqlite]
   -h, --help                  Print help
 ```
 

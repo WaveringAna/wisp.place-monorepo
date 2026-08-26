@@ -60,6 +60,10 @@ alice_access="$(printf '%s' "$alice_session" | jq -er '.accessJwt')"
 alice_app_password="$existing_app_password"
 if [ -z "$alice_app_password" ] || ! login "$ALICE_HANDLE" "$alice_app_password" >/dev/null; then
 	log 'creating alice app password'
+	curl -fsS -X POST "$PDS_URL/xrpc/com.atproto.server.revokeAppPassword" \
+		-H 'Content-Type: application/json' \
+		-H "Authorization: Bearer $alice_access" \
+		-d '{"name":"wisp-dev"}' >/dev/null 2>&1 || true
 	alice_app_password="$(curl -fsS -X POST "$PDS_URL/xrpc/com.atproto.server.createAppPassword" \
 		-H 'Content-Type: application/json' \
 		-H "Authorization: Bearer $alice_access" \

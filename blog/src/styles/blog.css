@@ -776,6 +776,27 @@ main {
 	color: var(--accent-high);
 }
 
+.prose pre:not(.astro-code) {
+	border: 1px solid var(--term-border);
+	background: var(--term-bg);
+	padding: 0.85rem 1.1rem;
+	margin-block: 1.25rem;
+	overflow-x: auto;
+	font-family: var(--font-mono);
+	font-size: 0.8rem;
+	line-height: 1.65;
+	color: var(--term-text);
+}
+
+.prose pre:not(.astro-code) code {
+	font-family: inherit;
+	font-size: inherit;
+	background: transparent;
+	border: none;
+	padding: 0;
+	color: inherit;
+}
+
 .prose blockquote {
 	border-left: 2px solid var(--accent);
 	background: var(--bg-accent);

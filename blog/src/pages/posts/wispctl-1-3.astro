@@ -1,0 +1,76 @@
+---
+import Callout from '../../components/Callout.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import Terminal from '../../components/Terminal.astro';
+import Post from '../../layouts/Post.astro';
+---
+
+<Post slug="wispctl-1-3">
+	<p>
+		wispctl 1.3 is a small version upgrade that makes using the cli across CWDs more ergonomic, so you and your agent can more easily push to wisp without reauthing often.
+	</p>
+
+	<h2>log in once</h2>
+
+	<Terminal title="wispctl">
+		<span class="t-prompt">$</span> wispctl login alice.bsky.social
+		{`\n`}
+		<span class="t-muted">◇ opening browser for authentication...</span>
+		{`\n`}
+		<span class="t-success">✓ authenticated as alice.bsky.social</span>
+		{`\n\n`}
+		<span class="t-prompt">$</span> cd ~/code/my-site
+		{`\n`}
+		<span class="t-prompt">$</span> wispctl deploy --path ./dist --site my-site
+	</Terminal>
+
+	<p>
+		OAuth sessions are keyed by DID and reused across directories.
+		When a command succeeds, wispctl links the current directory to that account,
+		so future bare commands there reuse the same identity.
+		Otherwise, it uses your default account, or your only stored account
+		if there is exactly one; if multiple accounts remain possible, it asks instead of guessing.
+	</p>
+
+	<h2>account commands</h2>
+
+	<p>the new <code>accounts</code> command shows what wispctl knows and why an account will be used:</p>
+
+	<Terminal title="wispctl accounts">
+		<span class="t-prompt">$</span> wispctl accounts
+		{`\n\n`}
+		<span class="t-out"> alice.bsky.social (oauth, default, this directory)</span>
+		{`\n`}
+		<span class="t-muted"> did:plc:examplealice</span>
+		{`\n`}
+		<span class="t-out"> work.example (app password)</span>
+		{`\n`}
+		<span class="t-muted"> did:plc:examplework</span>
+	</Terminal>
+
+	<h2>app passwords without argv</h2>
+
+	<p>
+		<code>--password</code> still exists for compatibility, but command arguments can be visible in a
+		process list. 1.3 also reads <code>WISPCTL_APP_PASSWORD</code>, which is the better choice for ci and
+		headless machines:
+	</p>
+
+	<CodeBlock
+		lang="bash"
+		code={`export WISPCTL_APP_PASSWORD="$ATPROTO_APP_PASSWORD"
+wispctl deploy alice.bsky.social --path ./dist --site docs`}
+	/>
+
+	<p>the same environment variable can save an app password into your system credential store:</p>
+
+	<CodeBlock
+		lang="bash"
+		code={`WISPCTL_APP_PASSWORD="$ATPROTO_APP_PASSWORD" \\
+  wispctl login alice.bsky.social`}
+	/>
+
+	<h2>upgrading</h2>
+
+	<CodeBlock lang="bash" code="npm install -g wispctl@1.3.0" />
+</Post>

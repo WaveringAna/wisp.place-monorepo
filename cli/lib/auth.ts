@@ -1,7 +1,4 @@
-import { mkdirSync } from 'node:fs'
 import { createServer } from 'node:net'
-import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
 import { cwd } from 'node:process'
 import { Agent, CredentialSession } from '@atproto/api'
 import {
@@ -14,113 +11,40 @@ import {
 } from '@atproto/oauth-client-node'
 import { log } from '@clack/prompts'
 import { serve as honoNodeServe } from '@hono/node-server'
-import { resolveDid, resolvePdsFromHandle } from '@wispplace/atproto-utils'
+import { resolvePdsFromHandle } from '@wispplace/atproto-utils'
 import { isBun } from '@wispplace/bun-firehose'
 import { Hono } from 'hono'
 import open from 'open'
+import {
+	type AuthMethod,
+	backfillHandle,
+	clearDirDid,
+	deleteAccount,
+	deleteStoredAppPassword,
+	deleteStoredOAuthSession,
+	describeUnavailableKeychain,
+	getDirDid,
+	getStoredAppPassword,
+	getStoredOAuthSession,
+	type KvAdapter,
+	kvGet,
+	kvSet,
+	listAccounts,
+	listDirsForDid,
+	normalizeHandle,
+	openAccountStore,
+	probeKeychain,
+	readAccount,
+	resolveAccountForDir,
+	resolveIdentifierToDid,
+	type StoredAccount,
+	setDefaultDid,
+	setDirDid,
+	setStoredAppPassword,
+	setStoredOAuthSession,
+	upsertAccount,
+} from './account-store.ts'
 import { WISP_OAUTH_SCOPE } from './wisp-service'
-
-const KEYCHAIN_SERVICE = 'wispctl'
-
-interface KeyringEntryLike {
-	setPassword(password: string): void
-	getPassword(): string | null
-	deletePassword(): void
-}
-
-type KeyringEntryConstructor = new (service: string, account: string) => KeyringEntryLike
-
-interface KeychainProbeResult {
-	available: boolean
-	detail?: string
-	moduleAvailable: boolean
-}
-
-let keyringEntryConstructor: KeyringEntryConstructor | null | undefined
-
-async function getKeyringEntryConstructor(): Promise<KeyringEntryConstructor | null> {
-	if (keyringEntryConstructor !== undefined) {
-		return keyringEntryConstructor
-	}
-	try {
-		const module = await import('@napi-rs/keyring')
-		keyringEntryConstructor = module.Entry as KeyringEntryConstructor
-	} catch {
-		keyringEntryConstructor = null
-	}
-	return keyringEntryConstructor
-}
-
-function formatProbeError(error: unknown): string | undefined {
-	if (error instanceof Error) {
-		return error.message
-	}
-	if (typeof error === 'string') {
-		return error
-	}
-	return undefined
-}
-
-function describeUnavailableKeychain(result: KeychainProbeResult): string {
-	if (process.platform === 'darwin') {
-		if (!result.moduleAvailable) {
-			return 'macOS Keychain support is unavailable in this build.'
-		}
-		if (result.detail?.toLowerCase().includes('authorization')) {
-			return 'macOS Keychain access could not be authorized.'
-		}
-		return result.detail ? `macOS Keychain access failed: ${result.detail}` : 'macOS Keychain access is unavailable.'
-	}
-
-	if (process.platform === 'linux') {
-		if (!result.moduleAvailable) {
-			return 'System keychain support is unavailable in this build.'
-		}
-		if (result.detail?.toLowerCase().includes('secret service')) {
-			return 'System keychain is unavailable (no Secret Service daemon or equivalent).'
-		}
-		return result.detail ? `System keychain access failed: ${result.detail}` : 'System keychain is unavailable.'
-	}
-
-	if (process.platform === 'win32') {
-		if (!result.moduleAvailable) {
-			return 'Windows Credential Manager support is unavailable in this build.'
-		}
-		return result.detail
-			? `Windows Credential Manager access failed: ${result.detail}`
-			: 'Windows Credential Manager is unavailable.'
-	}
-
-	if (!result.moduleAvailable) {
-		return 'Secure OS credential storage is unavailable in this build.'
-	}
-	return result.detail
-		? `Secure OS credential storage failed: ${result.detail}`
-		: 'Secure OS credential storage is unavailable.'
-}
-
-async function probeKeychain(): Promise<KeychainProbeResult> {
-	const KeyringEntry = await getKeyringEntryConstructor()
-	if (!KeyringEntry) {
-		return { available: false, moduleAvailable: false }
-	}
-
-	const testKey = '__wispctl_probe__'
-	try {
-		const entry = new KeyringEntry(KEYCHAIN_SERVICE, testKey)
-		entry.setPassword('1')
-		entry.deletePassword()
-		return { available: true, moduleAvailable: true }
-	} catch (error) {
-		return {
-			available: false,
-			detail: formatProbeError(error),
-			moduleAvailable: true,
-		}
-	}
-}
-
-const DEFAULT_DB_PATH = join(homedir(), '.config', 'wispctl', 'state.sqlite')
 
 const LOOPBACK_PORT = 4000
 const LOOPBACK_HOST = '127.0.0.1'
@@ -201,90 +125,6 @@ async function resolveLoopbackPort(preferredPort: number, host: string): Promise
 	return { port, usedFallback: true }
 }
 
-// Runtime-agnostic KV adapter — all SQL is baked in so return types are known
-
-interface KvRow {
-	value: string
-	expires_at: number | null
-}
-
-interface KvAdapter {
-	get(key: string): KvRow | undefined
-	set(key: string, value: string, expiresAt: number | null): void
-	del(key: string): void
-	clear(): void
-	valuesByPrefix(prefix: string): string[]
-}
-
-const SCHEMA = `
-	CREATE TABLE IF NOT EXISTS kv (
-		key        TEXT PRIMARY KEY,
-		value      TEXT NOT NULL,
-		expires_at INTEGER
-	)
-`
-
-async function openKv(dbPath: string): Promise<KvAdapter> {
-	mkdirSync(dirname(dbPath), { recursive: true })
-
-	if (isBun) {
-		const { Database } = await import('bun:sqlite')
-		const db = new Database(dbPath)
-		db.run('PRAGMA journal_mode = WAL')
-		db.run(SCHEMA)
-		const getStmt = db.query<KvRow, [string]>('SELECT value, expires_at FROM kv WHERE key = ?')
-		const setStmt = db.query('INSERT OR REPLACE INTO kv (key, value, expires_at) VALUES (?, ?, ?)')
-		const delStmt = db.query('DELETE FROM kv WHERE key = ?')
-		const prefixStmt = db.query<{ value: string }, [string]>('SELECT value FROM kv WHERE key LIKE ?')
-		return {
-			get: (key) => getStmt.get(key) ?? undefined,
-			set: (key, value, expiresAt) => {
-				setStmt.run(key, value, expiresAt)
-			},
-			del: (key) => {
-				delStmt.run(key)
-			},
-			clear: () => db.run('DELETE FROM kv'),
-			valuesByPrefix: (prefix) => prefixStmt.all(`${prefix}%`).map((r) => r.value),
-		}
-	} else {
-		const { DatabaseSync } = await import('node:sqlite')
-		const db = new DatabaseSync(dbPath)
-		db.exec('PRAGMA journal_mode = WAL')
-		db.exec(SCHEMA)
-		const getStmt = db.prepare('SELECT value, expires_at FROM kv WHERE key = ?')
-		const setStmt = db.prepare('INSERT OR REPLACE INTO kv (key, value, expires_at) VALUES (?, ?, ?)')
-		const delStmt = db.prepare('DELETE FROM kv WHERE key = ?')
-		const prefixStmt = db.prepare('SELECT value FROM kv WHERE key LIKE ?')
-		return {
-			get: (key) => getStmt.get(key) as KvRow | undefined,
-			set: (key, value, expiresAt) => {
-				setStmt.run(key, value, expiresAt)
-			},
-			del: (key) => {
-				delStmt.run(key)
-			},
-			clear: () => db.exec('DELETE FROM kv'),
-			valuesByPrefix: (prefix) => (prefixStmt.all(`${prefix}%`) as { value: string }[]).map((r) => r.value),
-		}
-	}
-}
-
-function kvGet(kv: KvAdapter, key: string): string | undefined {
-	const row = kv.get(key)
-	if (!row) return undefined
-	if (row.expires_at !== null && row.expires_at <= Date.now()) {
-		kv.del(key)
-		return undefined
-	}
-	return row.value
-}
-
-function kvSet(kv: KvAdapter, key: string, value: string, ttlSeconds?: number): void {
-	const expiresAt = ttlSeconds !== undefined ? Date.now() + ttlSeconds * 1000 : null
-	kv.set(key, value, expiresAt)
-}
-
 function createStateStore(kv: KvAdapter): NodeSavedStateStore {
 	return {
 		async set(key: string, state: NodeSavedState) {
@@ -301,28 +141,23 @@ function createStateStore(kv: KvAdapter): NodeSavedStateStore {
 	}
 }
 
-function createSessionStore(
-	kv: KvAdapter,
-	keyringEntryConstructor: KeyringEntryConstructor | null,
-): NodeSavedSessionStore {
-	if (keyringEntryConstructor) {
+function createSessionStore(kv: KvAdapter, useKeychain: boolean): NodeSavedSessionStore {
+	if (useKeychain) {
 		return {
 			async set(sub, session) {
-				new keyringEntryConstructor(KEYCHAIN_SERVICE, sub).setPassword(JSON.stringify(session))
+				await setStoredOAuthSession(sub, JSON.stringify(session))
 			},
 			async get(sub) {
+				const raw = await getStoredOAuthSession(sub)
+				if (!raw) return undefined
 				try {
-					const raw = new keyringEntryConstructor(KEYCHAIN_SERVICE, sub).getPassword()
-					if (!raw) return undefined
 					return JSON.parse(raw) as NodeSavedSession
 				} catch {
 					return undefined
 				}
 			},
 			async del(sub) {
-				try {
-					new keyringEntryConstructor(KEYCHAIN_SERVICE, sub).deletePassword()
-				} catch {}
+				await deleteStoredOAuthSession(sub)
 			},
 		}
 	}
@@ -365,14 +200,16 @@ function emitWarning(options: AuthOptions | undefined, message: string) {
 }
 
 /**
- * Check whether the current directory has a stored session
+ * The account a bare command in this directory would authenticate as, if any.
+ *
+ * Used by callers to decide whether they still need to prompt for a handle.
  */
-export async function hasDirSession(dbPath?: string): Promise<boolean> {
+export async function resolveAccountForCwd(dbPath?: string): Promise<StoredAccount | undefined> {
 	try {
-		const kv = await openKv(dbPath || DEFAULT_DB_PATH)
-		return kvGet(kv, `dir:${cwd()}`) !== undefined
+		const kv = await openAccountStore(dbPath)
+		return resolveAccountForDir(kv)
 	} catch {
-		return false
+		return undefined
 	}
 }
 
@@ -394,13 +231,12 @@ export async function authenticateOAuth(
 	handle?: string,
 	options: AuthOptions = {},
 ): Promise<{ agent: Agent; did: string }> {
-	const kv = await openKv(options.dbPath || DEFAULT_DB_PATH)
+	const kv = await openAccountStore(options.dbPath)
 
 	const keychainProbe = await probeKeychain()
 	const useKeychain = keychainProbe.available
-	const keyringEntryConstructor = useKeychain ? await getKeyringEntryConstructor() : null
 	const stateStore = createStateStore(kv)
-	const sessionStore = createSessionStore(kv, keyringEntryConstructor)
+	const sessionStore = createSessionStore(kv, useKeychain)
 	const createOAuthClient = (redirectUri: string): NodeOAuthClient => {
 		const clientIdParams = new URLSearchParams()
 		clientIdParams.append('redirect_uri', redirectUri)
@@ -424,61 +260,106 @@ export async function authenticateOAuth(
 		})
 	}
 
-	// Try to restore the session mapped to the current directory
-	const dirKey = `dir:${cwd()}`
+	// Work out which account this invocation is for. An explicit handle or DID
+	// wins; otherwise fall back to the directory mapping, then the chosen
+	// default, then a lone stored account.
 	const dirOAuthPortKey = `dir_oauth_port:${cwd()}`
 	let oauthPort = parsePort(kvGet(kv, dirOAuthPortKey)) ?? LOOPBACK_PORT
 	let redirectUri = `http://${LOOPBACK_HOST}:${oauthPort}/oauth/callback`
 	let client = createOAuthClient(redirectUri)
-	const storedDid = kvGet(kv, dirKey)
-	// Identifier to pass to `client.authorize`. Falls back to the stored DID so a
+
+	let targetDid: string | undefined
+	// Identifier to pass to `client.authorize`. Falls back to the known DID so a
 	// transparent re-auth (missing scopes) never prompts the user for a handle.
 	let loginIdentifier = handle
-	if (storedDid && options.forceReauth) {
-		kv.del(dirKey)
-	} else if (storedDid) {
-		let canRestore = true
-		if (handle) {
-			const resolvedDid = await resolveDid(handle)
-			if (resolvedDid && resolvedDid !== storedDid) {
-				emitStatus(
-					options,
-					`Stored session is for ${storedDid}, but ${handle} resolves to ${resolvedDid}. Re-authenticating.`,
-				)
-				kv.del(dirKey)
-				canRestore = false
-			}
-		}
-		if (canRestore) {
+
+	if (handle) {
+		// A failed resolve is not fatal: the OAuth authorization server resolves
+		// the identifier itself. Losing the lookup only costs us the chance to
+		// reuse a stored session, so fall through to the browser flow instead of
+		// blocking login on our own identity resolver.
+		targetDid = (await resolveIdentifierToDid(kv, handle)) ?? undefined
+	} else {
+		const dirAccount = resolveAccountForDir(kv)
+		targetDid = dirAccount?.did
+		loginIdentifier = dirAccount?.handle ?? dirAccount?.did
+	}
+
+	// Record the account against this directory so the next bare command here
+	// resolves without a handle, and remember the handle for display.
+	const finish = async (agent: Agent, did: string, method: AuthMethod): Promise<{ agent: Agent; did: string }> => {
+		const explicitHandle = handle && !handle.startsWith('did:') ? normalizeHandle(handle) : undefined
+		upsertAccount(kv, did, {
+			handle: explicitHandle,
+			handleChecked: explicitHandle ? true : undefined,
+			method,
+		})
+		setDirDid(kv, did)
+		await backfillHandle(kv, did)
+		return { agent, did }
+	}
+
+	if (targetDid && options.forceReauth) {
+		loginIdentifier = handle ?? targetDid
+	} else if (targetDid) {
+		const accountDid = targetDid
+		const account = readAccount(kv, accountDid)
+		const label = account?.handle ?? accountDid
+
+		const tryOAuth = async (): Promise<{ agent: Agent; did: string } | undefined> => {
 			try {
-				const session = await client.restore(storedDid)
-				if (session) {
-					// A stored token may predate an expanded scope set (e.g. the
-					// privateSite/domain.verify scopes). Re-auth transparently so the
-					// subsequent XRPC call doesn't fail with a scope error.
-					const tokenInfo = await session.getTokenInfo(false)
-					const missingScopes = missingScopesFor(tokenInfo.scope)
-					if (missingScopes.length > 0) {
-						emitStatus(options, `Stored session is missing ${missingScopes.length} scope(s). Re-authenticating...`)
-						kv.del(dirKey)
-						canRestore = false
-						// Re-auth for the same account without re-prompting.
-						loginIdentifier = storedDid
-					} else {
-						emitStatus(options, `Restored session for ${storedDid}`)
-						return { agent: new Agent(session), did: storedDid }
-					}
+				const session = await client.restore(accountDid)
+				if (!session) return undefined
+				// A stored token may predate an expanded scope set (e.g. the
+				// privateSite/domain.verify scopes). Re-auth transparently so the
+				// subsequent XRPC call doesn't fail with a scope error.
+				const tokenInfo = await session.getTokenInfo(false)
+				const missingScopes = missingScopesFor(tokenInfo.scope)
+				if (missingScopes.length > 0) {
+					emitStatus(options, `Stored session is missing ${missingScopes.length} scope(s). Re-authenticating...`)
+					return undefined
 				}
+				emitStatus(options, `Restored session for ${label}`)
+				return await finish(new Agent(session), accountDid, 'oauth')
 			} catch {
-				// Session invalid or expired — clear mapping and re-auth
-				kv.del(dirKey)
+				// Session invalid or expired — fall through to the next credential.
+				return undefined
 			}
 		}
+
+		const tryAppPassword = async (): Promise<{ agent: Agent; did: string } | undefined> => {
+			const password = await getStoredAppPassword(accountDid)
+			if (!password) return undefined
+			try {
+				const { agent, did } = await authenticateAppPassword(account?.handle ?? accountDid, password, account?.pdsUrl, {
+					...options,
+					onStatus: () => {},
+				})
+				if (did !== accountDid) {
+					emitWarning(options, `Stored app password authenticated as ${did}, expected ${accountDid}; ignoring it.`)
+					return undefined
+				}
+				emitStatus(options, `Restored app password session for ${label}`)
+				return await finish(agent, did, 'app-password')
+			} catch {
+				emitWarning(options, `Stored app password for ${label} was rejected.`)
+				return undefined
+			}
+		}
+
+		const attempts = account?.method === 'app-password' ? [tryAppPassword, tryOAuth] : [tryOAuth, tryAppPassword]
+		for (const attempt of attempts) {
+			const restored = await attempt()
+			if (restored) return restored
+		}
+
+		// Nothing stored worked — re-auth for the same account without re-prompting.
+		loginIdentifier = handle ?? accountDid
 	}
 
 	// Need an identifier to start a new OAuth flow
 	if (!loginIdentifier) {
-		throw new Error('No active session for this directory. Run `wispctl login <handle>` first.')
+		throw new Error('No stored account. Run `wispctl login <handle>` first.')
 	}
 
 	if (!useKeychain) {
@@ -634,18 +515,22 @@ export async function authenticateOAuth(
 
 	const agent = new Agent(session)
 	const did = session.did
+	if (targetDid && did !== targetDid) {
+		await sessionStore.del(did)
+		throw new Error(`Authenticated account ${did} does not match the requested account ${targetDid}`)
+	}
 
-	// Map the current directory to this DID for future restores
-	kvSet(kv, dirKey, did)
 	if (oauthPort === LOOPBACK_PORT) {
 		kv.del(dirOAuthPortKey)
 	} else {
 		kvSet(kv, dirOAuthPortKey, String(oauthPort))
 	}
 
+	const result = await finish(agent, did, 'oauth')
+
 	emitStatus(options, `Authenticated as ${did}`)
 
-	return { agent, did }
+	return result
 }
 
 /**
@@ -656,7 +541,7 @@ export async function authenticateAppPassword(
 	password: string,
 	pdsUrl?: string,
 	options: AuthOptions = {},
-): Promise<{ agent: Agent; did: string }> {
+): Promise<{ agent: Agent; did: string; serviceUrl: string }> {
 	let serviceUrl = pdsUrl
 
 	if (!serviceUrl) {
@@ -673,7 +558,7 @@ export async function authenticateAppPassword(
 
 	emitStatus(options, `Authenticated as ${did}`)
 
-	return { agent, did }
+	return { agent, did, serviceUrl }
 }
 
 /**
@@ -688,40 +573,154 @@ export async function authenticate(handle?: string, options: AuthOptions = {}): 
 		if (!handle) throw new Error('Handle required with app password authentication')
 		return authenticateAppPassword(handle, trimmedPassword, undefined, options)
 	}
+
+	// Env fallback keeps the secret out of argv (and the process table) in CI.
+	// Unlike `--password` it is opportunistic: with no handle to log in as, fall
+	// through to the normal stored-credential cascade.
+	const envPassword = process.env.WISPCTL_APP_PASSWORD?.trim()
+	if (envPassword && handle) {
+		return authenticateAppPassword(handle, envPassword, undefined, options)
+	}
+
 	return authenticateOAuth(handle, options)
 }
 
 /**
- * Clear the session mapping for the current directory (local logout)
+ * Log in with an app password and persist it for use from any directory.
+ */
+export async function loginWithAppPassword(
+	handle: string,
+	password: string,
+	options: AuthOptions = {},
+): Promise<{ did: string; handle: string; stored: boolean; keychainDetail?: string }> {
+	const trimmed = password.trim()
+	if (!trimmed) {
+		throw new Error('App password is required')
+	}
+
+	const kv = await openAccountStore(options.dbPath)
+	const { did, serviceUrl } = await authenticateAppPassword(handle, trimmed, undefined, options)
+
+	upsertAccount(kv, did, {
+		handle: handle.startsWith('did:') ? undefined : normalizeHandle(handle),
+		handleChecked: handle.startsWith('did:') ? undefined : true,
+		method: 'app-password',
+		pdsUrl: serviceUrl,
+	})
+	setDirDid(kv, did)
+	const stored = await setStoredAppPassword(did, trimmed)
+	const resolvedHandle = (await backfillHandle(kv, did)) ?? handle
+
+	let keychainDetail: string | undefined
+	if (!stored) {
+		keychainDetail = describeUnavailableKeychain(await probeKeychain())
+	}
+
+	return { did, handle: resolvedHandle, stored, keychainDetail }
+}
+
+/** Find a stored account by handle or DID, refreshing stale handle aliases. */
+async function findAccount(kv: KvAdapter, identifier: string): Promise<StoredAccount | undefined> {
+	if (identifier.startsWith('did:')) {
+		return readAccount(kv, identifier)
+	}
+
+	const did = await resolveIdentifierToDid(kv, normalizeHandle(identifier))
+	return did ? readAccount(kv, did) : undefined
+}
+
+export interface AccountListing extends StoredAccount {
+	hasCredential: boolean
+	dirs: string[]
+	isDefault: boolean
+	isCurrentDir: boolean
+}
+
+async function hasStoredCredential(kv: KvAdapter, did: string): Promise<boolean> {
+	if (await getStoredOAuthSession(did)) return true
+	if (await getStoredAppPassword(did)) return true
+	return kvGet(kv, `oauth_session:${did}`) !== undefined
+}
+
+export async function listStoredAccounts(dbPath?: string): Promise<AccountListing[]> {
+	const kv = await openAccountStore(dbPath)
+	const defaultDid = kvGet(kv, 'default_account')
+	const currentDirDid = getDirDid(kv)
+
+	return await Promise.all(
+		listAccounts(kv).map(async (account) => ({
+			...account,
+			// Accounts carried over from directory-only mappings have no handle
+			// yet. Resolve it once here so the listing reads as names rather than
+			// DIDs; a failure just leaves the DID showing.
+			handle: account.handle ?? (await backfillHandle(kv, account.did)),
+			hasCredential: await hasStoredCredential(kv, account.did),
+			dirs: listDirsForDid(kv, account.did),
+			isDefault: account.did === defaultDid,
+			isCurrentDir: account.did === currentDirDid,
+		})),
+	)
+}
+
+/** Choose the account used by bare commands in directories with no mapping. */
+export async function setDefaultAccount(identifier: string, dbPath?: string): Promise<StoredAccount> {
+	const kv = await openAccountStore(dbPath)
+	const account = await findAccount(kv, identifier)
+	if (!account) {
+		throw new Error(`No stored account for ${identifier}. Run \`wispctl login ${identifier}\` first.`)
+	}
+	setDefaultDid(kv, account.did)
+	return account
+}
+
+/**
+ * Forget one account everywhere: keychain credentials, the account record, and
+ * every directory still pointing at it.
+ */
+export async function logoutAccount(identifier: string, dbPath?: string): Promise<StoredAccount | undefined> {
+	const kv = await openAccountStore(dbPath)
+	const account = await findAccount(kv, identifier)
+	if (!account) return undefined
+
+	await deleteStoredOAuthSession(account.did)
+	await deleteStoredAppPassword(account.did)
+	kv.del(`oauth_session:${account.did}`)
+	deleteAccount(kv, account.did)
+
+	return account
+}
+
+/**
+ * Unlink the current directory from its account (credentials stay in the
+ * keychain for use elsewhere).
  */
 export async function clearDirSession(dbPath?: string) {
 	try {
-		const kv = await openKv(dbPath || DEFAULT_DB_PATH)
-		kv.del(`dir:${cwd()}`)
-		console.log('Cleared session for current directory')
+		const kv = await openAccountStore(dbPath)
+		clearDirDid(kv)
+		console.log('Unlinked the current directory (stored credentials kept)')
 	} catch {
 		// db doesn't exist yet
 	}
 }
 
 /**
- * Clear all stored OAuth sessions and directory mappings
+ * Clear every stored account and credential
  */
 export async function clearSessions(dbPath?: string) {
 	try {
-		const kv = await openKv(dbPath || DEFAULT_DB_PATH)
-		// Delete any keychain entries for DIDs we know about via dir mappings
-		const dids = kv.valuesByPrefix('dir:')
-		const KeyringEntry = await getKeyringEntryConstructor()
-		if (KeyringEntry) {
-			for (const did of dids) {
-				try {
-					new KeyringEntry(KEYCHAIN_SERVICE, did).deletePassword()
-				} catch {}
-			}
+		const kv = await openAccountStore(dbPath)
+		const dids = new Set(listAccounts(kv).map((account) => account.did))
+		// Legacy installs may have directory mappings with no account record yet.
+		for (const { value } of kv.entriesByPrefix('dir:')) {
+			if (value.startsWith('did:')) dids.add(value)
+		}
+		for (const did of dids) {
+			await deleteStoredOAuthSession(did)
+			await deleteStoredAppPassword(did)
 		}
 		kv.clear()
-		console.log('Cleared all stored OAuth sessions')
+		console.log('Cleared all stored accounts and credentials')
 	} catch {
 		// db doesn't exist yet
 	}

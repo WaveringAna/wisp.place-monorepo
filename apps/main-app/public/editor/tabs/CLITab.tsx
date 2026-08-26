@@ -9,27 +9,27 @@ const BINARIES = [
 	{
 		platform: 'macOS (Apple Silicon)',
 		filename: 'wisp-cli-aarch64-darwin',
-		sha256: '67c7552645d8006daa41fc6c62d7412f9a6aef50cdd04cc2e815189c6d5fa7af',
+		sha256: 'af91f58c37957bf9ce28da443a536ee0267b4f8deb04fe220c585b8d9b9b43e5',
 	},
 	{
 		platform: 'macOS (Intel)',
 		filename: 'wisp-cli-x86_64-darwin',
-		sha256: '5a0b09c00eac6a8d2b1a8d8c2e54a16cf173cc6c38cc631bf19b0483d093a7f5',
+		sha256: 'ec1529bf74f594e25390c066b06525c483a4d8bf664e4f1c14738d6d27554171',
 	},
 	{
 		platform: 'Linux (ARM64)',
 		filename: 'wisp-cli-aarch64-linux',
-		sha256: 'b23fe58b8c53a670414a2f0cebe38f31630fd8b5ecca099cd85d543ea0c3f2d1',
+		sha256: '037521ce5fc756891a67dffb87d98c52c9112358ad1dd78adad05861fddf1d39',
 	},
 	{
 		platform: 'Linux (x86_64)',
 		filename: 'wisp-cli-x86_64-linux',
-		sha256: 'f1d4d655f2714879f44bb23318b30aab79f78cb329bbf6b51abe1fd7a6a5bd84',
+		sha256: '960364c5530b23660fe7d787a349b8a3c10472d1e85ea7f423173e4b18817a98',
 	},
 	{
 		platform: 'Windows (x86_64)',
 		filename: 'wisp-cli-x86_64-windows.exe',
-		sha256: 'df9660b27a9d6f8bcebcafab4622be88639d15dbe74649bdb16e5001d8abe041',
+		sha256: 'd1aaa70fbc805b1b352dcfbc42c46b46e43c8a15725ca9f52cff92a45be1c0f0',
 	},
 ] as const
 
@@ -58,7 +58,7 @@ export const CLITab = memo(function CLITab() {
 				<div className="flex items-center gap-2">
 					<span className="text-sm font-semibold">Wisp CLI</span>
 					<Badge variant="secondary" className="text-xs">
-						v1.1.1
+						v1.3.0
 					</Badge>
 				</div>
 				<div className="flex items-center gap-4">
@@ -100,7 +100,7 @@ export const CLITab = memo(function CLITab() {
 
 				{/* Binary downloads */}
 				<div className="p-4 border-b border-border/50">
-					<SectionLabel>Binary Downloads v1.1.1</SectionLabel>
+					<SectionLabel>Binary Downloads v1.3.0</SectionLabel>
 					<div className="grid grid-cols-2 gap-2">
 						{BINARIES.map(({ platform, filename, sha256 }) => (
 							<a
