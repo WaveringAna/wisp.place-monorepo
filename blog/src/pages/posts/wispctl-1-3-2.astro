@@ -1,0 +1,35 @@
+---
+import Callout from "../../components/Callout.astro";
+import CodeBlock from "../../components/CodeBlock.astro";
+import Terminal from "../../components/Terminal.astro";
+import Post from "../../layouts/Post.astro";
+---
+
+<Post slug="wispctl-1-3-2">
+	<p>
+		wispctl 1.3.2 is a very minor update that updates the oauth to use
+		permission sets to make the oauth links 79% smaller.
+	</p>
+
+	<figure>
+		<img src="/images/oauth.png" />
+	</figure>
+
+	<p>
+		another bonus is that the consent screen better explains what the cli is
+		requesting out of your account
+	</p>
+
+	<figure>
+		<img
+			src="/images/consent-screen.png"
+			alt="a wispctl consent screen asking for Manage your wisp.place sites
+			Create, update, and delete your site files and settings. and Use wisp.place hosting features
+			Manage your sites, custom domains, and private site links."
+		/>
+	</figure>
+
+	<h2>upgrading</h2>
+
+	<CodeBlock lang="bash" code="npm install -g wispctl@1.3.2" />
+</Post>
