@@ -16,6 +16,32 @@ const writeSql = readDatabaseUrl === writeDatabaseUrl ? sql : postgres(writeData
 // Cache-only mode: skip all DB writes and only use tiered storage
 export const CACHE_ONLY = process.env.CACHE_ONLY === 'true'
 
+export interface SiteAnalyticsBucket {
+	ownerDid: string
+	siteRkey: string
+	bucketStart: number
+	requests: number
+	htmlResponses: number
+	status2xx: number
+	status3xx: number
+	status4xx: number
+	status5xx: number
+}
+
+export interface SiteAnalyticsBatch {
+	batchId: string
+	instanceId: string
+	buckets: readonly SiteAnalyticsBucket[]
+}
+
+export interface SiteAnalyticsCommitResult {
+	duplicate: boolean
+	acceptedBuckets: number
+	acceptedRequests: number
+	skippedBuckets: number
+	skippedRequests: number
+}
+
 // Short TTL for negative / unmapped lookups so newly-mapped domains appear quickly.
 const NEGATIVE_TTL_MS = 10_000
 
@@ -163,6 +189,106 @@ export async function releaseLock(key: string): Promise<void> {
 		// Still remove from tracking even if unlock fails
 		activeLocks.delete(key)
 	}
+}
+
+export async function commitSiteAnalyticsBatch(batch: SiteAnalyticsBatch): Promise<SiteAnalyticsCommitResult> {
+	if (CACHE_ONLY) {
+		throw new Error('analytics writes are disabled in cache-only mode')
+	}
+	if (batch.buckets.length === 0) {
+		return {
+			duplicate: false,
+			acceptedBuckets: 0,
+			acceptedRequests: 0,
+			skippedBuckets: 0,
+			skippedRequests: 0,
+		}
+	}
+
+	return await writeSql.begin(async (tx) => {
+		const inserted = await tx<Array<{ batch_id: string }>>`
+			INSERT INTO analytics_ingest_batches (batch_id, instance_id)
+			VALUES (${batch.batchId}, ${batch.instanceId})
+			ON CONFLICT (batch_id) DO NOTHING
+			RETURNING batch_id
+		`
+		if (inserted.length === 0) {
+			return {
+				duplicate: true,
+				acceptedBuckets: 0,
+				acceptedRequests: 0,
+				skippedBuckets: 0,
+				skippedRequests: 0,
+			}
+		}
+
+		const accepted = await Promise.all(
+			batch.buckets.map(async (bucket) => {
+				const rows = await tx`
+					INSERT INTO site_analytics_hourly (
+						owner_did,
+						site_rkey,
+						bucket_start,
+						requests,
+						html_responses,
+						status_2xx,
+						status_3xx,
+						status_4xx,
+						status_5xx
+					)
+					SELECT
+						${bucket.ownerDid},
+						${bucket.siteRkey},
+						${new Date(bucket.bucketStart)},
+						${bucket.requests},
+						${bucket.htmlResponses},
+						${bucket.status2xx},
+						${bucket.status3xx},
+						${bucket.status4xx},
+						${bucket.status5xx}
+					WHERE EXISTS (
+						SELECT 1
+						FROM site_cache
+						WHERE did = ${bucket.ownerDid}
+							AND rkey = ${bucket.siteRkey}
+					)
+					ON CONFLICT (owner_did, site_rkey, bucket_start)
+					DO UPDATE SET
+						requests = site_analytics_hourly.requests + EXCLUDED.requests,
+						html_responses = site_analytics_hourly.html_responses + EXCLUDED.html_responses,
+						status_2xx = site_analytics_hourly.status_2xx + EXCLUDED.status_2xx,
+						status_3xx = site_analytics_hourly.status_3xx + EXCLUDED.status_3xx,
+						status_4xx = site_analytics_hourly.status_4xx + EXCLUDED.status_4xx,
+						status_5xx = site_analytics_hourly.status_5xx + EXCLUDED.status_5xx,
+						updated_at = NOW()
+					RETURNING owner_did
+				`
+				return rows.length > 0
+			}),
+		)
+
+		let acceptedBuckets = 0
+		let acceptedRequests = 0
+		let skippedRequests = 0
+		for (let index = 0; index < accepted.length; index++) {
+			const bucket = batch.buckets[index]
+			if (!bucket) continue
+			if (accepted[index]) {
+				acceptedBuckets++
+				acceptedRequests += bucket.requests
+			} else {
+				skippedRequests += bucket.requests
+			}
+		}
+
+		return {
+			duplicate: false,
+			acceptedBuckets,
+			acceptedRequests,
+			skippedBuckets: batch.buckets.length - acceptedBuckets,
+			skippedRequests,
+		}
+	})
 }
 
 /**

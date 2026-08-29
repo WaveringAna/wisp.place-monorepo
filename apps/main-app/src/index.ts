@@ -10,7 +10,7 @@ import type { Context } from 'elysia'
 import { Elysia } from 'elysia'
 import { promptAdminSetup } from './lib/admin-auth'
 import { csrfProtection } from './lib/csrf'
-import { closeDatabase, getCookieSecret } from './lib/db'
+import { closeDatabase, getCookieSecret, pruneAnalyticsData } from './lib/db'
 import { DNSVerificationWorker } from './lib/dns-verification-worker'
 import {
 	cleanupExpiredSessions,
@@ -89,6 +89,7 @@ const runMaintenance = async () => {
 	await rotateKeysIfNeeded()
 	await pruneHandoffs()
 	await pruneSessions()
+	await pruneAnalyticsData()
 }
 
 // Run maintenance on startup

@@ -15,8 +15,25 @@ import { serveFromCache, serveFromCacheWithRewrite } from './lib/file-serving'
 import { privateNotFound, servePrivateSite } from './lib/private-serving'
 import { decodeRequestPathname, extractHeaders, isValidRkey } from './lib/request-utils'
 import { resolveDid } from './lib/utils'
+import { siteAnalytics } from './lib/site-analytics'
 
 const logger = createLogger('hosting-service')
+
+async function trackPublicSiteResponse(
+	ownerDid: string,
+	siteRkey: string,
+	method: string,
+	responsePromise: Promise<Response>,
+): Promise<Response> {
+	try {
+		const response = await responsePromise
+		siteAnalytics.record(ownerDid, siteRkey, method, response.status, response.headers.get('content-type'))
+		return response
+	} catch (error) {
+		siteAnalytics.record(ownerDid, siteRkey, method, 500, null)
+		throw error
+	}
+}
 
 async function resolveDidCached(identifier: string): Promise<string | null> {
 	if (identifier.startsWith('did:')) return identifier
@@ -125,7 +142,12 @@ app.get('/*', async (c) => {
 		const basePath = `/${identifier}/${site}/`
 		logger.debug(`Serving with basePath: ${basePath}`)
 		const headers = extractHeaders(c.req.raw.headers)
-		return serveFromCacheWithRewrite(did, site, filePath, basePath, c.req.url, headers)
+		return trackPublicSiteResponse(
+			did,
+			site,
+			c.req.method,
+			serveFromCacheWithRewrite(did, site, filePath, basePath, c.req.url, headers),
+		)
 	}
 
 	// Check if this is a DNS hash subdomain
@@ -157,7 +179,12 @@ app.get('/*', async (c) => {
 		}
 
 		const headers = extractHeaders(c.req.raw.headers)
-		return serveFromCache(customDomain.did, rkey, path, c.req.url, headers)
+		return trackPublicSiteResponse(
+			customDomain.did,
+			rkey,
+			c.req.method,
+			serveFromCache(customDomain.did, rkey, path, c.req.url, headers),
+		)
 	}
 
 	// Route 2: Registered subdomains - /*.wisp.place/*
@@ -177,7 +204,12 @@ app.get('/*', async (c) => {
 		}
 
 		const headers = extractHeaders(c.req.raw.headers)
-		return serveFromCache(domainInfo.did, rkey, path, c.req.url, headers)
+		return trackPublicSiteResponse(
+			domainInfo.did,
+			rkey,
+			c.req.method,
+			serveFromCache(domainInfo.did, rkey, path, c.req.url, headers),
+		)
 	}
 
 	// Route 1: Custom domains - /*
@@ -196,7 +228,12 @@ app.get('/*', async (c) => {
 	}
 
 	const headers = extractHeaders(c.req.raw.headers)
-	return serveFromCache(customDomain.did, rkey, path, c.req.url, headers)
+	return trackPublicSiteResponse(
+		customDomain.did,
+		rkey,
+		c.req.method,
+		serveFromCache(customDomain.did, rkey, path, c.req.url, headers),
+	)
 })
 
 export default app

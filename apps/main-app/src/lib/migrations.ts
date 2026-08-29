@@ -193,6 +193,41 @@ export const runDatabaseMigrations = async (db: SQL): Promise<void> => {
 		{ ignoreAlreadyExists: true },
 	)
 
+	// Owner-visible analytics are stored as aggregate counters only. The site
+	// cache foreign key makes site deletion the lifecycle boundary for all rows.
+	await runMigration('create site_analytics_hourly', async () => {
+		await db`
+			CREATE TABLE IF NOT EXISTS site_analytics_hourly (
+				owner_did TEXT NOT NULL,
+				site_rkey TEXT NOT NULL,
+				bucket_start TIMESTAMPTZ NOT NULL,
+				requests BIGINT NOT NULL DEFAULT 0 CHECK (requests >= 0),
+				html_responses BIGINT NOT NULL DEFAULT 0 CHECK (html_responses >= 0),
+				status_2xx BIGINT NOT NULL DEFAULT 0 CHECK (status_2xx >= 0),
+				status_3xx BIGINT NOT NULL DEFAULT 0 CHECK (status_3xx >= 0),
+				status_4xx BIGINT NOT NULL DEFAULT 0 CHECK (status_4xx >= 0),
+				status_5xx BIGINT NOT NULL DEFAULT 0 CHECK (status_5xx >= 0),
+				updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				PRIMARY KEY (owner_did, site_rkey, bucket_start),
+				CONSTRAINT fk_site_analytics_owner
+					FOREIGN KEY (owner_did, site_rkey)
+					REFERENCES site_cache(did, rkey)
+					ON UPDATE CASCADE
+					ON DELETE CASCADE
+			)
+		`
+	})
+
+	await runMigration('create analytics_ingest_batches', async () => {
+		await db`
+			CREATE TABLE IF NOT EXISTS analytics_ingest_batches (
+				batch_id UUID PRIMARY KEY,
+				instance_id TEXT NOT NULL,
+				received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+			)
+		`
+	})
+
 	// Seed initial supporter DID
 	await runMigration('seed initial supporter', async () => {
 		await db`
@@ -232,6 +267,16 @@ export const runDatabaseMigrations = async (db: SQL): Promise<void> => {
 		[
 			'idx_site_cache_updated',
 			async () => db`CREATE INDEX IF NOT EXISTS idx_site_cache_updated ON site_cache(updated_at)`,
+		],
+		[
+			'idx_site_analytics_hourly_bucket_start',
+			async () =>
+				db`CREATE INDEX IF NOT EXISTS idx_site_analytics_hourly_bucket_start ON site_analytics_hourly(bucket_start)`,
+		],
+		[
+			'idx_analytics_ingest_batches_received_at',
+			async () =>
+				db`CREATE INDEX IF NOT EXISTS idx_analytics_ingest_batches_received_at ON analytics_ingest_batches(received_at)`,
 		],
 		[
 			'idx_private_sites_owner',

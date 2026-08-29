@@ -5,6 +5,7 @@ import { cache } from './lib/cache-manager'
 import { CACHE_ONLY, closeDatabase } from './lib/db'
 import { closeRevalidateQueue } from './lib/revalidate-queue'
 import { getStorageConfig, storage } from './lib/storage'
+import { siteAnalytics } from './lib/site-analytics'
 import app from './server'
 
 const logger = createLogger('hosting-service')
@@ -26,6 +27,7 @@ if (!existsSync(CACHE_DIR)) {
 
 // Start in-memory cache cleanup
 cache.startCleanup()
+siteAnalytics.start()
 
 // Start cache invalidation subscriber (listens for firehose-service updates via Redis pub/sub)
 startCacheInvalidationSubscriber()
@@ -53,6 +55,7 @@ app.get('/health', async (c) => {
 	return c.json({
 		status: 'ok',
 		storage: storageStats,
+		analytics: siteAnalytics.getStats(),
 	})
 })
 
@@ -88,6 +91,11 @@ process.on('SIGINT', async () => {
 	cache.stopCleanup()
 	await stopCacheInvalidationSubscriber()
 	await closeRevalidateQueue()
+	try {
+		await siteAnalytics.stop()
+	} catch (err) {
+		logger.error('Final analytics flush failed', err)
+	}
 	await closeDatabase()
 	server.stop(true)
 	process.exit(0)
@@ -98,6 +106,11 @@ process.on('SIGTERM', async () => {
 	cache.stopCleanup()
 	await stopCacheInvalidationSubscriber()
 	await closeRevalidateQueue()
+	try {
+		await siteAnalytics.stop()
+	} catch (err) {
+		logger.error('Final analytics flush failed', err)
+	}
 	await closeDatabase()
 	server.stop(true)
 	process.exit(0)

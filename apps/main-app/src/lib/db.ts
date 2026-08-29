@@ -203,6 +203,13 @@ await db`
 
 await runDatabaseMigrations(db)
 
+export const pruneAnalyticsData = async (): Promise<void> => {
+	await Promise.all([
+		db`DELETE FROM site_analytics_hourly WHERE bucket_start < NOW() - INTERVAL '90 days'`,
+		db`DELETE FROM analytics_ingest_batches WHERE received_at < NOW() - INTERVAL '7 days'`,
+	])
+}
+
 export const getDomainByDid = async (did: string): Promise<string | null> => {
 	const rows = await db`SELECT domain FROM domains WHERE did = ${did} ORDER BY created_at ASC LIMIT 1`
 	return rows[0]?.domain ?? null
