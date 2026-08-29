@@ -1,0 +1,25 @@
+{
+  "lexicon": 1,
+  "id": "place.wisp.authWebhooks",
+  "defs": {
+    "main": {
+      "type": "permission-set",
+      "title": "Manage your wisp.place webhooks",
+      "detail": "Create, update, and delete your webhook subscriptions.",
+      "permissions": [
+        {
+          "type": "permission",
+          "resource": "repo",
+          "collection": [
+            "place.wisp.v2.wh"
+          ],
+          "action": [
+            "create",
+            "update",
+            "delete"
+          ]
+        }
+      ]
+    }
+  }
+}

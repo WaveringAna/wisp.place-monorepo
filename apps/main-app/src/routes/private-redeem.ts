@@ -2,6 +2,7 @@ import type { NodeOAuthClient } from '@atproto/oauth-client-node'
 import { createLogger } from '@wispplace/observability'
 import { PRIVATE_ACCESS_PAGE_STYLES } from '@wispplace/private-sites'
 import { Elysia } from 'elysia'
+import { authorizeWisp } from '../lib/oauth-authorize'
 import { openPrivateSiteForAccount, redeemScopedShare, resolveShareLink } from '../lib/private-sites-service'
 import { authenticateRequest, SESSION_COOKIE_NAME } from '../lib/wisp-auth'
 
@@ -156,7 +157,7 @@ export const privateRedeemRoutes = (client: NodeOAuthClient, cookieSecret: strin
 			}
 			try {
 				const state = JSON.stringify({ kind: token ? 'privateShare' : 'privateOpen', siteId, token })
-				return { url: (await client.authorize(handle, { state })).toString() }
+				return { url: (await authorizeWisp(client, handle, { state })).toString() }
 			} catch (err) {
 				logger.error('[PrivateSite] Sign-in failed', err)
 				set.status = 400

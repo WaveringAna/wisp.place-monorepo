@@ -2,6 +2,13 @@ import type { NodeOAuthClient } from '@atproto/oauth-client-node'
 import { createLogger } from '@wispplace/observability'
 import { Elysia } from 'elysia'
 import { getDomainByDid, getSitesByDid } from '../lib/db'
+import {
+	authorizeWisp,
+	authorizeWispLegacy,
+	isLegacyScopeState,
+	missingGrantedCapabilities,
+	unmarkLegacyScopeState,
+} from '../lib/oauth-authorize'
 import { authenticateRequest, SESSION_COOKIE_NAME } from '../lib/wisp-auth'
 import { resolvePrivateShareState } from './private-redeem'
 
@@ -37,7 +44,7 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 
 				logger.info('Login attempt via entryway', { identifier })
 				const state = crypto.randomUUID()
-				const url = await client.authorize(identifier, { state })
+				const url = await authorizeWisp(client, identifier, { state })
 				logger.info('Authorization URL generated', { identifier })
 
 				// Redirect to the OAuth authorization URL
@@ -60,7 +67,7 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				handle = body.handle
 				logger.info('Sign-in attempt', { handle })
 				const state = crypto.randomUUID()
-				const url = await client.authorize(handle, { state })
+				const url = await authorizeWisp(client, handle, { state })
 				logger.info('Authorization URL generated', { handle })
 				return { url: url.toString() }
 			} catch (err) {
@@ -99,8 +106,24 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 					maxAge: 30 * 24 * 60 * 60, // 30 days
 				})
 
+				// An authorization server that predates permission sets accepts the
+				// `include:place.wisp.*` values and then drops them, leaving a session
+				// that can not write records. Retry once with the granular expansion.
+				const missing = await missingGrantedCapabilities(session)
+				if (missing.length > 0) {
+					if (!isLegacyScopeState(state)) {
+						logger.warn('[Auth] Permission sets were not granted, retrying with granular scopes', {
+							did: session.did,
+							missing,
+						})
+						const retryUrl = await authorizeWispLegacy(client, session.did, state)
+						return c.redirect(retryUrl.toString())
+					}
+					logger.error('[Auth] Session is missing required permissions', { did: session.did, missing })
+				}
+
 				// Revalidate the OAuth state token before returning a share visitor to its site.
-				const redeem = await resolvePrivateShareState(state, session.did)
+				const redeem = await resolvePrivateShareState(unmarkLegacyScopeState(state), session.did)
 				if (redeem) {
 					return c.redirect(redeem.url ?? '/private/denied')
 				}

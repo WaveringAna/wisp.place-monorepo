@@ -1,0 +1,36 @@
+{
+  "lexicon": 1,
+  "id": "place.wisp.authHosting",
+  "defs": {
+    "main": {
+      "type": "permission-set",
+      "title": "Use wisp.place hosting features",
+      "detail": "Manage your sites, custom domains, and private site links.",
+      "permissions": [
+        {
+          "type": "permission",
+          "resource": "rpc",
+          "aud": "*",
+          "lxm": [
+            "place.wisp.v2.domain.addSite",
+            "place.wisp.v2.domain.claim",
+            "place.wisp.v2.domain.claimSubdomain",
+            "place.wisp.v2.domain.delete",
+            "place.wisp.v2.domain.getList",
+            "place.wisp.v2.domain.getStatus",
+            "place.wisp.v2.domain.verify",
+            "place.wisp.v2.privateSite.create",
+            "place.wisp.v2.privateSite.createShare",
+            "place.wisp.v2.privateSite.delete",
+            "place.wisp.v2.privateSite.list",
+            "place.wisp.v2.privateSite.listShares",
+            "place.wisp.v2.privateSite.revokeShare",
+            "place.wisp.v2.site.delete",
+            "place.wisp.v2.site.getDomains",
+            "place.wisp.v2.site.getList"
+          ]
+        }
+      ]
+    }
+  }
+}

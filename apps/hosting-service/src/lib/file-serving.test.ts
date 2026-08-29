@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { getCacheControlForPath, hasFileExtension } from './file-serving'
+import { hasFileExtension } from './file-serving'
 
 describe('hasFileExtension', () => {
 	describe('paths with extensions', () => {
@@ -85,27 +85,5 @@ describe('hasFileExtension', () => {
 			// "file." has a dot but no alphanumeric chars after it
 			expect(hasFileExtension('file.')).toBe(false)
 		})
-	})
-})
-
-describe('getCacheControlForPath', () => {
-	test('uses immutable caching for vite-style hashed javascript assets', () => {
-		expect(getCacheControlForPath('assets/typescript-COf36OFD.js')).toBe('public, max-age=31536000, immutable')
-	})
-
-	test('uses immutable caching for dotted hashed assets', () => {
-		expect(getCacheControlForPath('assets/admin.na06kbvm.js')).toBe('public, max-age=31536000, immutable')
-	})
-
-	test('uses immutable caching for source maps of hashed assets', () => {
-		expect(getCacheControlForPath('assets/typescript-COf36OFD.js.map')).toBe('public, max-age=31536000, immutable')
-	})
-
-	test('keeps ordinary mutable javascript on the standard cache policy', () => {
-		expect(getCacheControlForPath('assets/app.js')).toBe('public, max-age=600')
-	})
-
-	test('keeps html on the standard cache policy even if the basename contains a hash-like suffix', () => {
-		expect(getCacheControlForPath('pages/index-COf36OFD.html')).toBe('public, max-age=600')
 	})
 })

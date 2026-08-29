@@ -39,7 +39,18 @@ export interface StoredAccount {
 	lastUsedAt: number
 	/** When `handle` was last confirmed against the network. */
 	handleCheckedAt?: number
+	/**
+	 * Which OAuth scope strategy minted this session.
+	 *
+	 * A loopback client declares its scopes inside the `client_id`, so the two
+	 * strategies are two different client identities. Restoring a session has to
+	 * rebuild the same one or the token refresh is rejected.
+	 */
+	oauthScope?: OAuthScopeStrategy
 }
+
+/** `sets` requests `include:place.wisp.*`; `granular` requests their expansion. */
+export type OAuthScopeStrategy = 'sets' | 'granular'
 
 // ---------------------------------------------------------------------------
 // Keychain access
@@ -430,7 +441,13 @@ function detachHandle(kv: KvAdapter, did: string, handle: string): void {
 export function upsertAccount(
 	kv: KvAdapter,
 	did: string,
-	updates: { handle?: string; method?: AuthMethod; pdsUrl?: string; handleChecked?: boolean } = {},
+	updates: {
+		handle?: string
+		method?: AuthMethod
+		pdsUrl?: string
+		handleChecked?: boolean
+		oauthScope?: OAuthScopeStrategy
+	} = {},
 ): StoredAccount {
 	const now = Date.now()
 	const existing = readAccount(kv, did)
@@ -454,6 +471,7 @@ export function upsertAccount(
 		addedAt: existing?.addedAt ?? now,
 		lastUsedAt: now,
 		handleCheckedAt: updates.handleChecked ? now : handle !== existing?.handle ? undefined : existing?.handleCheckedAt,
+		oauthScope: updates.oauthScope ?? existing?.oauthScope,
 	}
 	writeAccount(kv, account)
 	return account

@@ -1,5 +1,6 @@
 import { JoseKey } from '@atproto/jwk-jose'
 import { type ClientMetadata, NodeOAuthClient, type RuntimeLock } from '@atproto/oauth-client-node'
+import { buildWispScopes, WISP_APP_PERMISSION_SETS } from '@wispplace/constants'
 import { SQL } from 'bun'
 import { db } from './db'
 import { logger } from './logger'
@@ -51,9 +52,19 @@ const requestPgLock: RuntimeLock = async (name, fn) => {
 	}
 }
 
-// OAuth scope for all client types
-const OAUTH_SCOPE =
-	'atproto repo:place.wisp.fs repo:place.wisp.domain repo:place.wisp.subfs repo:place.wisp.settings repo:place.wisp.v2.wh blob:*/*'
+// OAuth scopes for all client types.
+//
+// `OAUTH_SCOPE` names the published `place.wisp.*` permission sets, so the
+// consent screen reads "Manage your wisp.place sites" rather than listing six
+// raw `repo:` values. `OAUTH_LEGACY_SCOPE` is the granular expansion of those
+// same sets, used when an authorization server does not resolve permission
+// sets. `OAUTH_CLIENT_SCOPE` is the union: a server rejects any requested scope
+// value the client did not declare in its metadata, so both strategies have to
+// be declared up front.
+const wispScopes = buildWispScopes([...WISP_APP_PERMISSION_SETS])
+export const OAUTH_SCOPE = wispScopes.preferred
+export const OAUTH_LEGACY_SCOPE = wispScopes.legacy
+const OAUTH_CLIENT_SCOPE = wispScopes.metadata
 
 const oauthNetworkOptions = () => {
 	const allowHttp = Bun.env.OAUTH_ALLOW_HTTP === 'true'
@@ -186,7 +197,7 @@ export const createClientMetadata = (
 		const redirectUri = 'http://127.0.0.1:8000/api/auth/callback'
 		const params = new URLSearchParams()
 		params.append('redirect_uri', redirectUri)
-		params.append('scope', OAUTH_SCOPE)
+		params.append('scope', OAUTH_CLIENT_SCOPE)
 
 		return {
 			client_id: `http://localhost?${params.toString()}`,
@@ -197,7 +208,7 @@ export const createClientMetadata = (
 			response_types: ['code'],
 			application_type: 'web',
 			token_endpoint_auth_method: 'none',
-			scope: OAUTH_SCOPE,
+			scope: OAUTH_CLIENT_SCOPE,
 			dpop_bound_access_tokens: false,
 			subject_type: 'public',
 			authorization_signed_response_alg: 'ES256',
@@ -218,7 +229,7 @@ export const createClientMetadata = (
 		application_type: 'web',
 		token_endpoint_auth_method: 'private_key_jwt',
 		token_endpoint_auth_signing_alg: 'ES256',
-		scope: OAUTH_SCOPE,
+		scope: OAUTH_CLIENT_SCOPE,
 		dpop_bound_access_tokens: true,
 		jwks_uri: `${config.domain}/jwks.json`,
 		subject_type: 'public',

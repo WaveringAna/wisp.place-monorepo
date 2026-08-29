@@ -13,6 +13,7 @@ import { log } from '@clack/prompts'
 import { serve as honoNodeServe } from '@hono/node-server'
 import { resolvePdsFromHandle } from '@wispplace/atproto-utils'
 import { isBun } from '@wispplace/bun-firehose'
+import { describeCapability, missingCapabilities, wispCliRequiredCapabilities } from '@wispplace/constants'
 import { Hono } from 'hono'
 import open from 'open'
 import {
@@ -32,6 +33,7 @@ import {
 	listAccounts,
 	listDirsForDid,
 	normalizeHandle,
+	type OAuthScopeStrategy,
 	openAccountStore,
 	probeKeychain,
 	readAccount,
@@ -44,7 +46,10 @@ import {
 	setStoredOAuthSession,
 	upsertAccount,
 } from './account-store.ts'
-import { WISP_OAUTH_SCOPE } from './wisp-service'
+import { WISP_OAUTH_LEGACY_SCOPE, WISP_OAUTH_SCOPE } from './wisp-service'
+
+/** Public resolvers used only when the system nameservers fail to answer. */
+const FALLBACK_NAMESERVERS = ['1.1.1.1', '8.8.8.8']
 
 const LOOPBACK_PORT = 4000
 const LOOPBACK_HOST = '127.0.0.1'
@@ -214,14 +219,17 @@ export async function resolveAccountForCwd(dbPath?: string): Promise<StoredAccou
 }
 
 /**
- * Return the subset of `WISP_OAUTH_SCOPE` not present in a token's granted scope.
+ * Return the capabilities the CLI needs that a token's granted scope lacks.
  *
- * Reused both after a fresh OAuth callback (to warn) and at session restore (to
- * transparently re-auth when a stored token predates an expanded scope set).
+ * The granted scope is always the *expanded* granular form — an authorization
+ * server rewrites `include:place.wisp.authSites` into the `repo:`/`rpc:` values
+ * the permission set contains before minting the token — so this compares
+ * meaning rather than scope strings. Reused after a fresh OAuth callback (to
+ * detect a server that ignored the permission sets) and at session restore (to
+ * transparently re-auth when a stored token predates a widened scope set).
  */
-function missingScopesFor(grantedScope: string | undefined): string[] {
-	const granted = new Set((grantedScope || '').split(/\s+/).filter(Boolean))
-	return WISP_OAUTH_SCOPE.split(' ').filter((s) => !granted.has(decodeURIComponent(s)))
+function missingScopesFor(grantedScope: string | undefined) {
+	return missingCapabilities(grantedScope, wispCliRequiredCapabilities())
 }
 
 /**
@@ -237,10 +245,18 @@ export async function authenticateOAuth(
 	const useKeychain = keychainProbe.available
 	const stateStore = createStateStore(kv)
 	const sessionStore = createSessionStore(kv, useKeychain)
-	const createOAuthClient = (redirectUri: string): NodeOAuthClient => {
+	// A loopback client declares its scopes inside the `client_id`, so declaring
+	// both strategies at once would double the length of every authorization URL
+	// the user sees. Build one client per strategy instead and only reach for the
+	// granular one if the permission sets are refused.
+	const scopeFor = (strategy: OAuthScopeStrategy) =>
+		strategy === 'granular' ? WISP_OAUTH_LEGACY_SCOPE : WISP_OAUTH_SCOPE
+
+	const createOAuthClient = (redirectUri: string, strategy: OAuthScopeStrategy = 'sets'): NodeOAuthClient => {
+		const scope = scopeFor(strategy)
 		const clientIdParams = new URLSearchParams()
 		clientIdParams.append('redirect_uri', redirectUri)
-		clientIdParams.append('scope', WISP_OAUTH_SCOPE)
+		clientIdParams.append('scope', scope)
 		return new NodeOAuthClient({
 			clientMetadata: {
 				client_id: `http://localhost?${clientIdParams.toString()}`,
@@ -251,12 +267,16 @@ export async function authenticateOAuth(
 				response_types: ['code'],
 				application_type: 'web',
 				token_endpoint_auth_method: 'none',
-				scope: WISP_OAUTH_SCOPE,
+				scope,
 				dpop_bound_access_tokens: false,
 			},
 			stateStore,
 			sessionStore,
 			requestLock: requestLocalLock,
+			// A handle with no /.well-known/atproto-did has DNS as its only route,
+			// so one flaky system resolver is enough to fail a login outright.
+			// These are consulted only after the system resolver gives nothing.
+			fallbackNameservers: FALLBACK_NAMESERVERS,
 		})
 	}
 
@@ -287,12 +307,18 @@ export async function authenticateOAuth(
 
 	// Record the account against this directory so the next bare command here
 	// resolves without a handle, and remember the handle for display.
-	const finish = async (agent: Agent, did: string, method: AuthMethod): Promise<{ agent: Agent; did: string }> => {
+	const finish = async (
+		agent: Agent,
+		did: string,
+		method: AuthMethod,
+		oauthScope?: OAuthScopeStrategy,
+	): Promise<{ agent: Agent; did: string }> => {
 		const explicitHandle = handle && !handle.startsWith('did:') ? normalizeHandle(handle) : undefined
 		upsertAccount(kv, did, {
 			handle: explicitHandle,
 			handleChecked: explicitHandle ? true : undefined,
 			method,
+			oauthScope,
 		})
 		setDirDid(kv, did)
 		await backfillHandle(kv, did)
@@ -308,7 +334,14 @@ export async function authenticateOAuth(
 
 		const tryOAuth = async (): Promise<{ agent: Agent; did: string } | undefined> => {
 			try {
-				const session = await client.restore(accountDid)
+				// The stored session belongs to whichever client_id minted it, and a
+				// loopback client_id contains its scopes — so restore through the same
+				// strategy or the refresh is rejected as a different client.
+				const restoreClient =
+					account?.oauthScope && account.oauthScope !== 'sets'
+						? createOAuthClient(redirectUri, account.oauthScope)
+						: client
+				const session = await restoreClient.restore(accountDid)
 				if (!session) return undefined
 				// A stored token may predate an expanded scope set (e.g. the
 				// privateSite/domain.verify scopes). Re-auth transparently so the
@@ -386,130 +419,172 @@ export async function authenticateOAuth(
 	// Start new OAuth flow
 	emitStatus(options, `Starting OAuth flow for ${loginIdentifier}...`)
 
-	const callbackPromise = new Promise<{ params: URLSearchParams }>((resolve, reject) => {
-		const app = new Hono()
-		let serverHandle: { close: () => void } | null = null
-		let timeoutHandle: ReturnType<typeof setTimeout> | undefined
-		let settled = false
+	const createCallbackServer = (): Promise<{ params: URLSearchParams }> =>
+		new Promise<{ params: URLSearchParams }>((resolve, reject) => {
+			const app = new Hono()
+			let serverHandle: { close: () => void } | null = null
+			let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+			let settled = false
 
-		const successHtml = `
-      <html>
-        <head>
-          <title>Wisp CLI - Authentication Successful</title>
-          <meta name="viewport" content="width=device-width, initial-scale=1" />
-          <style>
-            :root {
-              color-scheme: light dark;
-            }
+			const successHtml = `
+	      <html>
+	        <head>
+	          <title>Wisp CLI - Authentication Successful</title>
+	          <meta name="viewport" content="width=device-width, initial-scale=1" />
+	          <style>
+	            :root {
+	              color-scheme: light dark;
+	            }
 
-            body {
-              margin: 0;
-              min-height: 100vh;
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              font-family: system-ui, -apple-system, Segoe UI, sans-serif;
-              background: #f4f5f7;
-              color: #111827;
-              text-align: center;
-              padding: 24px;
-            }
+	            body {
+	              margin: 0;
+	              min-height: 100vh;
+	              display: flex;
+	              align-items: center;
+	              justify-content: center;
+	              font-family: system-ui, -apple-system, Segoe UI, sans-serif;
+	              background: #f4f5f7;
+	              color: #111827;
+	              text-align: center;
+	              padding: 24px;
+	            }
 
-            .content {
-              max-width: 560px;
-            }
+	            .content {
+	              max-width: 560px;
+	            }
 
-            h1 {
-              margin: 0 0 10px;
-              font-size: 22px;
-            }
+	            h1 {
+	              margin: 0 0 10px;
+	              font-size: 22px;
+	            }
 
-            p {
-              margin: 0;
-              color: #4b5563;
-              line-height: 1.5;
-            }
+	            p {
+	              margin: 0;
+	              color: #4b5563;
+	              line-height: 1.5;
+	            }
 
-            @media (prefers-color-scheme: dark) {
-              body {
-                background: #1e1e1e;
-                color: #f3f4f6;
-              }
+	            @media (prefers-color-scheme: dark) {
+	              body {
+	                background: #1e1e1e;
+	                color: #f3f4f6;
+	              }
 
-              p {
-                color: #d1d5db;
-              }
-            }
-          </style>
-        </head>
-        <body>
-          <div class="content">
-            <h1>Authentication Successful</h1>
-            <p>You can close this window and return to the CLI.</p>
-          </div>
-        </body>
-      </html>
-    `
+	              p {
+	                color: #d1d5db;
+	              }
+	            }
+	          </style>
+	        </head>
+	        <body>
+	          <div class="content">
+	            <h1>Authentication Successful</h1>
+	            <p>You can close this window and return to the CLI.</p>
+	          </div>
+	        </body>
+	      </html>
+	    `
 
-		app.get('/oauth/callback', (c) => {
-			const params = new URLSearchParams(c.req.url.split('?')[1] || '')
-			if (timeoutHandle) {
-				clearTimeout(timeoutHandle)
+			app.get('/oauth/callback', (c) => {
+				const params = new URLSearchParams(c.req.url.split('?')[1] || '')
+				if (timeoutHandle) {
+					clearTimeout(timeoutHandle)
+				}
+				settled = true
+				setTimeout(() => serverHandle?.close(), 100)
+				resolve({ params })
+				return c.html(successHtml)
+			})
+
+			app.all('*', (c) => c.text('Not found', 404))
+
+			if (isBun) {
+				const bunServer = Bun.serve({
+					port: oauthPort,
+					hostname: LOOPBACK_HOST,
+					fetch: app.fetch,
+				})
+				serverHandle = { close: () => bunServer.stop() }
+			} else {
+				const nodeServer = honoNodeServe({
+					fetch: app.fetch,
+					port: oauthPort,
+					hostname: LOOPBACK_HOST,
+				})
+				serverHandle = { close: () => nodeServer.close() }
 			}
-			settled = true
-			setTimeout(() => serverHandle?.close(), 100)
-			resolve({ params })
-			return c.html(successHtml)
+
+			timeoutHandle = setTimeout(
+				() => {
+					if (settled) return
+					settled = true
+					serverHandle?.close()
+					reject(new Error('OAuth callback timeout'))
+				},
+				5 * 60 * 1000,
+			)
+
+			if (typeof (timeoutHandle as { unref?: () => void }).unref === 'function') {
+				;(timeoutHandle as { unref: () => void }).unref()
+			}
 		})
 
-		app.all('*', (c) => c.text('Not found', 404))
+	// `loginIdentifier` is checked above; capture it so the closures below keep
+	// the narrowed type.
+	const identifier = loginIdentifier
 
-		if (isBun) {
-			const bunServer = Bun.serve({
-				port: oauthPort,
-				hostname: LOOPBACK_HOST,
-				fetch: app.fetch,
-			})
-			serverHandle = { close: () => bunServer.stop() }
-		} else {
-			const nodeServer = honoNodeServe({
-				fetch: app.fetch,
-				port: oauthPort,
-				hostname: LOOPBACK_HOST,
-			})
-			serverHandle = { close: () => nodeServer.close() }
-		}
+	const completeFlow = async (authUrl: URL) => {
+		const callbackPromise = createCallbackServer()
+		emitStatus(options, 'Opening browser for authentication...')
+		emitStatus(options, `If browser does not open, visit: ${authUrl}`)
+		await open(authUrl.toString())
+		const { params } = await callbackPromise
+		return await client.callback(params)
+	}
 
-		timeoutHandle = setTimeout(
-			() => {
-				if (settled) return
-				settled = true
-				serverHandle?.close()
-				reject(new Error('OAuth callback timeout'))
-			},
-			5 * 60 * 1000,
+	// Prefer the published permission sets. A server that cannot resolve them
+	// rejects the pushed authorization request outright, so fall straight back
+	// to the granular expansion.
+	let strategy: OAuthScopeStrategy = 'sets'
+	const useGranular = async (): Promise<URL> => {
+		strategy = 'granular'
+		client = createOAuthClient(redirectUri, 'granular')
+		return await client.authorize(identifier, { scope: scopeFor('granular') })
+	}
+
+	let authUrl: URL
+	try {
+		authUrl = await client.authorize(identifier, { scope: scopeFor('sets') })
+	} catch (err) {
+		emitWarning(
+			options,
+			`Authorization server rejected the wisp.place permission sets (${err instanceof Error ? err.message : String(err)}). Falling back to granular scopes.`,
 		)
+		authUrl = await useGranular()
+	}
 
-		if (typeof (timeoutHandle as { unref?: () => void }).unref === 'function') {
-			;(timeoutHandle as { unref: () => void }).unref()
-		}
-	})
+	let { session } = await completeFlow(authUrl)
+	let tokenInfo = await session.getTokenInfo(false)
+	let missingScopes = missingScopesFor(tokenInfo.scope)
 
-	const authUrl = await client.authorize(loginIdentifier, { scope: WISP_OAUTH_SCOPE })
+	// An older authorization server accepts the request but silently drops the
+	// `include:` values it does not understand, leaving a session that can not
+	// write anything. That only shows up in the granted scope.
+	if (missingScopes.length > 0 && strategy === 'sets') {
+		emitWarning(
+			options,
+			'Authorization server ignored the wisp.place permission sets. Retrying with granular scopes...',
+		)
+		await sessionStore.del(session.did)
+		;({ session } = await completeFlow(await useGranular()))
+		tokenInfo = await session.getTokenInfo(false)
+		missingScopes = missingScopesFor(tokenInfo.scope)
+	}
 
-	emitStatus(options, 'Opening browser for authentication...')
-	emitStatus(options, `If browser does not open, visit: ${authUrl}`)
-	await open(authUrl.toString())
-
-	const { params } = await callbackPromise
-	const { session } = await client.callback(params)
-
-	const tokenInfo = await session.getTokenInfo(false)
-	const missingScopes = missingScopesFor(tokenInfo.scope)
 	if (missingScopes.length > 0) {
 		emitWarning(
 			options,
-			`OAuth token is missing ${missingScopes.length} requested scope(s). First missing: ${missingScopes[0]}`,
+			`OAuth token is missing ${missingScopes.length} requested permission(s). First missing: ${describeCapability(missingScopes[0])}`,
 		)
 	}
 
@@ -526,7 +601,7 @@ export async function authenticateOAuth(
 		kvSet(kv, dirOAuthPortKey, String(oauthPort))
 	}
 
-	const result = await finish(agent, did, 'oauth')
+	const result = await finish(agent, did, 'oauth', strategy)
 
 	emitStatus(options, `Authenticated as ${did}`)
 

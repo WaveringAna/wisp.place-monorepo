@@ -46,14 +46,13 @@ export const authors = {
 
 const posts: Post[] = [
 	{
-		slug: 'wispctl-1-3',
-		title: 'wispctl 1.3	',
+		slug: 'wispctl-1-3-1',
+		title: 'wispctl 1.3.1',
 		description:
 			'Making wispctl\'s auth more ergonomic to use',
 		date: '2026-08-26',
 		author: authors.nekomimi,
 		tags: ['release', 'cli'],
-		draft: true,
 	},
 	{
 		slug: 'hello-world',

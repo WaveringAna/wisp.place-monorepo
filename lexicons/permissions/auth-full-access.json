@@ -1,0 +1,56 @@
+{
+  "lexicon": 1,
+  "id": "place.wisp.authFullAccess",
+  "defs": {
+    "main": {
+      "type": "permission-set",
+      "title": "Full wisp.place access",
+      "detail": "Full control of your sites, domains, and webhooks.",
+      "permissions": [
+        {
+          "type": "permission",
+          "resource": "repo",
+          "collection": [
+            "place.wisp.fs",
+            "place.wisp.subfs",
+            "place.wisp.settings",
+            "place.wisp.domain",
+            "place.wisp.v2.wh"
+          ],
+          "action": [
+            "create",
+            "update",
+            "delete"
+          ]
+        },
+        {
+          "type": "permission",
+          "resource": "rpc",
+          "aud": "*",
+          "lxm": [
+            "place.wisp.v2.domain.addSite",
+            "place.wisp.v2.domain.claim",
+            "place.wisp.v2.domain.claimSubdomain",
+            "place.wisp.v2.domain.delete",
+            "place.wisp.v2.domain.getList",
+            "place.wisp.v2.domain.getStatus",
+            "place.wisp.v2.domain.verify",
+            "place.wisp.v2.privateSite.create",
+            "place.wisp.v2.privateSite.createShare",
+            "place.wisp.v2.privateSite.delete",
+            "place.wisp.v2.privateSite.list",
+            "place.wisp.v2.privateSite.listShares",
+            "place.wisp.v2.privateSite.revokeShare",
+            "place.wisp.v2.site.delete",
+            "place.wisp.v2.site.getDomains",
+            "place.wisp.v2.site.getList",
+            "place.wisp.v2.secret.create",
+            "place.wisp.v2.secret.delete",
+            "place.wisp.v2.secret.list",
+            "place.wisp.v2.secret.rotate"
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -17,6 +17,8 @@ Wisp.place uses three custom AT Protocol lexicons to store site data in your PDS
 
 **place.wisp.v2.secret.{create,list,delete,rotate}** — server-managed signing secrets for webhooks. Tokens are returned once at creation and never stored in plaintext. See the [webhooks doc](/lexicons/place-wisp-wh#signing-secrets-api) for usage.
 
+**[place.wisp.auth*](/lexicons/permission-sets)** — OAuth permission sets that bundle the granular scopes clients request during login.
+
 ## Storage Model
 
 Sites are stored as `place.wisp.fs` records in your AT Protocol repository:

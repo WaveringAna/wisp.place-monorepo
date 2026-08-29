@@ -1,31 +1,10 @@
+import { buildWispScopes, WISP_CLI_PERMISSION_SETS, WISP_HOSTING_LXMS } from '@wispplace/constants'
+
 export const DEFAULT_WISP_SERVICE_DID = 'did:web:wisp.place'
 export const WISP_PROXY_SERVICE_ID = 'wisp_xrpc'
 
-export const WISP_OAUTH_BASE_SCOPES = [
-	'atproto',
-	'repo:place.wisp.fs',
-	'repo:place.wisp.subfs',
-	'repo:place.wisp.settings',
-	'blob:*/*',
-] as const
-
-export const WISP_SERVICE_LXMS = [
-	'place.wisp.v2.domain.addSite',
-	'place.wisp.v2.domain.claim',
-	'place.wisp.v2.domain.claimSubdomain',
-	'place.wisp.v2.domain.delete',
-	'place.wisp.v2.domain.getList',
-	'place.wisp.v2.domain.getStatus',
-	'place.wisp.v2.domain.verify',
-	'place.wisp.v2.privateSite.create',
-	'place.wisp.v2.privateSite.createShare',
-	'place.wisp.v2.privateSite.delete',
-	'place.wisp.v2.privateSite.list',
-	'place.wisp.v2.privateSite.listShares',
-	'place.wisp.v2.privateSite.revokeShare',
-	'place.wisp.v2.site.delete',
-	'place.wisp.v2.site.getList',
-] as const
+/** XRPC methods the CLI reaches through the hosting service proxy. */
+export const WISP_SERVICE_LXMS = WISP_HOSTING_LXMS
 
 function isDid(value: string): value is `did:${string}:${string}` {
 	if (!value.startsWith('did:')) {
@@ -58,16 +37,19 @@ export function parseServiceDid(input?: string): `did:${string}:${string}` {
 	return value
 }
 
-function buildRpcScope(aud: string, lxm: string): string {
-	return `rpc:${lxm}?aud=${aud}`
-}
+const WISP_CLI_SCOPES = buildWispScopes([...WISP_CLI_PERMISSION_SETS])
 
-export function buildWispRpcScopes(): string[] {
-	return WISP_SERVICE_LXMS.map((lxm) => buildRpcScope('*', lxm))
-}
+/**
+ * Scope the CLI asks for: one `include:` per published permission set, so the
+ * consent screen shows "Manage your wisp.place sites" instead of a wall of
+ * `repo:`/`rpc:` values.
+ */
+export const WISP_OAUTH_SCOPE = WISP_CLI_SCOPES.preferred
 
-export function buildWispOAuthScopes(): string[] {
-	return [...WISP_OAUTH_BASE_SCOPES, ...buildWispRpcScopes()]
-}
-
-export const WISP_OAUTH_SCOPE = buildWispOAuthScopes().join(' ')
+/**
+ * The granular expansion of those sets. Authorization servers that support
+ * granular scopes but not permission sets ignore an unknown `include:` value
+ * and hand back a session with no permissions at all, so the login flow falls
+ * back to this.
+ */
+export const WISP_OAUTH_LEGACY_SCOPE = WISP_CLI_SCOPES.legacy

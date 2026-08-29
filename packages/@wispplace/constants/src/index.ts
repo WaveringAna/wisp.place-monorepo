@@ -95,3 +95,6 @@ export const CLI_BINARIES = {
 	'linux-arm64': `${CLI_BINARY_BASE_URL}/wisp-cli-aarch64-linux`,
 	'linux-x86_64': `${CLI_BINARY_BASE_URL}/wisp-cli-x86_64-linux`,
 } as const
+
+// AT Protocol OAuth permission sets for the place.wisp.* namespace
+export * from './oauth-scopes'

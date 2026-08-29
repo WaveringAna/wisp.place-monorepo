@@ -1,0 +1,28 @@
+{
+  "lexicon": 1,
+  "id": "place.wisp.authSites",
+  "defs": {
+    "main": {
+      "type": "permission-set",
+      "title": "Manage your wisp.place sites",
+      "detail": "Create, update, and delete your site files and settings.",
+      "permissions": [
+        {
+          "type": "permission",
+          "resource": "repo",
+          "collection": [
+            "place.wisp.fs",
+            "place.wisp.subfs",
+            "place.wisp.settings",
+            "place.wisp.domain"
+          ],
+          "action": [
+            "create",
+            "update",
+            "delete"
+          ]
+        }
+      ]
+    }
+  }
+}

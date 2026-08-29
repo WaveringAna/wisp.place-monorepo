@@ -216,13 +216,13 @@ describe('serveFileInternal directory-index fallback for extensioned paths', () 
 		expect(storageGetWithMetadataKeys).toContain(`${DID}/${RKEY}/modelapp.html`)
 	})
 
-	test('serves fingerprinted javascript assets with immutable cache headers', async () => {
+	test('keeps fingerprinted javascript assets on the standard cache policy', async () => {
 		storeFile('assets/typescript-COf36OFD.js', 'export const ts = true', 'text/javascript')
 
 		const response = await serveFileInternal(DID, RKEY, 'assets/typescript-COf36OFD.js')
 
 		expect(response.status).toBe(200)
-		expect(response.headers.get('Cache-Control')).toBe('public, max-age=31536000, immutable')
+		expect(response.headers.get('Cache-Control')).toBe('public, max-age=600')
 	})
 
 	test('keeps non-fingerprinted javascript assets on the standard cache policy', async () => {
@@ -234,7 +234,7 @@ describe('serveFileInternal directory-index fallback for extensioned paths', () 
 		expect(response.headers.get('Cache-Control')).toBe('public, max-age=600')
 	})
 
-	test('returns immutable cache headers on fingerprinted asset 304 responses', async () => {
+	test('returns standard cache headers on fingerprinted asset 304 responses', async () => {
 		storeFile('assets/typescript-COf36OFD.js', 'export const ts = true', 'text/javascript')
 
 		const response = await serveFileInternal(DID, RKEY, 'assets/typescript-COf36OFD.js', null, {
@@ -243,7 +243,7 @@ describe('serveFileInternal directory-index fallback for extensioned paths', () 
 
 		expect(response.status).toBe(304)
 		expect(response.headers.get('ETag')).toBe('"test-checksum"')
-		expect(response.headers.get('Cache-Control')).toBe('public, max-age=31536000, immutable')
+		expect(response.headers.get('Cache-Control')).toBe('public, max-age=600')
 	})
 
 	test('rejects absolute 200 rewrite targets without proxying them', async () => {

@@ -39,6 +39,7 @@
     "e2e:harness:down": "docker compose -p wispplace-monorepo-e2e -f docker-compose.dev.yml -f docker-compose.e2e.yml --profile dev down -v --remove-orphans",
     "codegen": "./scripts/codegen.sh",
     "download:aturi": "bun run scripts/download-place-wisp-fs.ts",
+    "publish:permission-sets": "bun run scripts/publish-permission-sets.ts",
     "publish:cli": "cd cli && bun run build && npm publish && cd ../packages/create-wisp && npm publish"
   },
   "trustedDependencies": [
