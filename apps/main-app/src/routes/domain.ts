@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { Agent } from '@atproto/api'
 import type { NodeOAuthClient } from '@atproto/oauth-client-node'
 import { createLogger } from '@wispplace/observability'
+import { isValidSiteId, siteIdFromHostname } from '@wispplace/private-sites'
 import { Elysia } from 'elysia'
 import { publishDomainCacheInvalidation } from '../lib/cache-invalidation'
 import {
@@ -22,6 +23,8 @@ import {
 } from '../lib/db'
 import { verifyCustomDomain } from '../lib/dns-verify'
 import { extractWispHandle, isValidHandle, normalizeDomain, toDomain, validateCustomDomain } from '../lib/domain-utils'
+import { privateHostname } from '../lib/private-site-origin'
+import { hasLivePrivateSite } from '../lib/private-sites-db'
 import { requireAuth, SESSION_COOKIE_NAME } from '../lib/wisp-auth'
 
 const logger = createLogger('main-app')
@@ -65,7 +68,7 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		})
 		/**
 		 * GET /api/domain/registered
-		 * 200: { registered: true, type: 'wisp' | 'custom', domain, did, rkey, verified? }
+		 * 200: public domain registration, or { registered: true, type: 'private', domain } for a live private site.
 		 * 404: { registered: false }
 		 * 400: { error: 'Domain parameter required' }
 		 */
@@ -76,6 +79,23 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				if (!domain) {
 					set.status = 400
 					return { error: 'Domain parameter required' }
+				}
+
+				const configuredPrivateHost = privateHostname()
+				const isPrivateDomain = domain === configuredPrivateHost || domain.endsWith(`.${configuredPrivateHost}`)
+
+				if (isPrivateDomain) {
+					// Private hostnames are reserved. Only one generated site-id label may
+					// receive a certificate. The helper performs a direct, uncached primary
+					// database lookup so readiness and expiry cannot use a lagging replica.
+					const siteId = siteIdFromHostname(domain, configuredPrivateHost)
+					if (!siteId || !isValidSiteId(siteId) || !(await hasLivePrivateSite(siteId))) {
+						set.status = 404
+						return { registered: false }
+					}
+
+					set.status = 200
+					return { registered: true, type: 'private' as const, domain }
 				}
 
 				const result = await isDomainRegistered(domain)

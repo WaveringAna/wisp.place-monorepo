@@ -9,6 +9,7 @@ const OTHER = 'did:plc:other'
 const TOKEN = 'wss_valid'
 const site = (values: Partial<PrivateSite> = {}): PrivateSite => ({
 	siteId: 'bright-brook-fox-1234',
+	state: 'ready',
 	ownerDid: OWNER,
 	name: 'secret plans',
 	fileCount: 1,
@@ -50,7 +51,7 @@ describe('evaluateAccess', () => {
 			'expired owner',
 			{ kind: 'owner', did: OWNER } as const,
 			{ site: site({ expiresAt: new Date(NOW.getTime() - 1) }) },
-			{ allowed: true, reason: 'owner' },
+			{ allowed: false, reason: 'siteExpired' },
 		],
 		[
 			'live session',
@@ -93,6 +94,21 @@ describe('evaluateAccess', () => {
 		],
 	])('%s share', (_name, candidate, principal, expected) =>
 		expect(decide(principal, { shares: [candidate] }) as unknown).toEqual(expected))
+
+	it('hides staging and deleting rows from every principal', () => {
+		for (const state of ['staging', 'deleting'] as const) {
+			for (const principal of [
+				{ kind: 'owner', did: OWNER } as const,
+				{ kind: 'sessionShare', shareId: 'share-1' } as const,
+				{ kind: 'shareToken', token: TOKEN } as const,
+			]) {
+				expect(decide(principal, { site: site({ state }), shares: [share()] })).toEqual({
+					allowed: false,
+					reason: 'notFound',
+				})
+			}
+		}
+	})
 
 	it('closes shares and share sessions when the site expires', () => {
 		const expired = site({ expiresAt: NOW })

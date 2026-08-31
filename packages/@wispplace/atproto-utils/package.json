@@ -21,6 +21,10 @@
     "./subfs": {
       "types": "./src/subfs.ts",
       "default": "./src/subfs.ts"
+    },
+    "./webhook-secret-encryption": {
+      "types": "./src/webhook-secret-encryption.ts",
+      "default": "./src/webhook-secret-encryption.ts"
     }
   },
   "dependencies": {

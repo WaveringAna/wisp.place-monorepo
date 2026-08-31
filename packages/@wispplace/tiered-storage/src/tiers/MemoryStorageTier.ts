@@ -144,18 +144,38 @@ export class MemoryStorageTier implements StorageTier {
 	 */
 	async setStream(key: string, stream: NodeJS.ReadableStream, metadata: StorageMetadata): Promise<void> {
 		const chunks: Uint8Array[] = []
+		let totalLength = 0
+		let exceedsSizeLimit = metadata.size > this.config.maxSizeBytes
 
 		for await (const chunk of stream) {
+			let data: Uint8Array | undefined
 			if (Buffer.isBuffer(chunk)) {
-				chunks.push(new Uint8Array(chunk))
+				data = new Uint8Array(chunk)
 			} else if (ArrayBuffer.isView(chunk)) {
-				chunks.push(new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength))
+				data = new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength)
 			} else if (typeof chunk === 'string') {
-				chunks.push(new TextEncoder().encode(chunk))
+				data = new TextEncoder().encode(chunk)
+			}
+			if (!data) continue
+
+			totalLength += data.byteLength
+			if (totalLength > this.config.maxSizeBytes) {
+				exceedsSizeLimit = true
+				chunks.length = 0
+				continue
+			}
+			if (!exceedsSizeLimit) {
+				chunks.push(data)
 			}
 		}
 
-		const totalLength = chunks.reduce((acc, chunk) => acc + chunk.length, 0)
+		if (exceedsSizeLimit) {
+			// Consume the whole stream, but never retain an oversize value or an old
+			// value for the same key after its replacement was skipped.
+			this.deleteEntry(key)
+			return
+		}
+
 		const data = new Uint8Array(totalLength)
 		let offset = 0
 		for (const chunk of chunks) {
@@ -168,28 +188,45 @@ export class MemoryStorageTier implements StorageTier {
 
 	async set(key: string, data: Uint8Array, metadata: StorageMetadata): Promise<void> {
 		const size = data.byteLength
-
-		// Check existing entry for size accounting
-		const existing = this.cache.get(key)
-		if (existing) {
-			this.currentSize -= existing.size
-		}
-
-		// Evict entries until we have space for the new entry
-		await this.evictIfNeeded(size)
-
-		// Add new entry
 		const entry: CacheEntry = { data, metadata, size }
-		this.cache.set(key, entry)
-		this.currentSize += size
+
+		// All cache operations below are synchronous. Keeping the bookkeeping in the
+		// same turn prevents two callers that both await set() from accounting for the
+		// same replaced entry.
+		try {
+			// A single oversized value can never fit. Do not evict unrelated cache
+			// entries just to exceed the configured hard cap. Remove a prior value for
+			// this key so callers cannot receive stale data after a skipped write.
+			if (size > this.config.maxSizeBytes) {
+				this.deleteEntry(key)
+				return
+			}
+
+			const existing = this.cache.items[key]?.value
+			if (existing) {
+				this.cache.delete(key)
+				this.currentSize -= existing.size
+			}
+
+			this.evictIfNeeded(size)
+
+			// TinyLRU evicts automatically when maxItems is reached. setWithEvicted
+			// exposes that victim so byte accounting stays in lockstep with the cache.
+			const evicted = this.cache.setWithEvicted(key, entry)
+			if (evicted) {
+				this.currentSize -= evicted.value.size
+				this.stats.evictions++
+			}
+			this.currentSize += size
+		} catch (error) {
+			// Keep stats correct if TinyLRU throws after changing its state.
+			this.synchronizeSize()
+			throw error
+		}
 	}
 
 	async delete(key: string): Promise<void> {
-		const entry = this.cache.get(key)
-		if (entry) {
-			this.cache.delete(key)
-			this.currentSize -= entry.size
-		}
+		this.deleteEntry(key)
 	}
 
 	async exists(key: string): Promise<boolean> {
@@ -197,7 +234,7 @@ export class MemoryStorageTier implements StorageTier {
 	}
 
 	async *listKeys(prefix?: string): AsyncIterableIterator<string> {
-		// TinyLRU returns keys as any[] but they are strings in our usage
+		// TinyLRU returns keys as any[] but they are strings in our usage.
 		const keys = this.cache.keys() as string[]
 		for (const key of keys) {
 			if (!prefix || key.startsWith(prefix)) {
@@ -208,7 +245,7 @@ export class MemoryStorageTier implements StorageTier {
 
 	async deleteMany(keys: string[]): Promise<void> {
 		for (const key of keys) {
-			await this.delete(key)
+			this.deleteEntry(key)
 		}
 	}
 
@@ -220,14 +257,26 @@ export class MemoryStorageTier implements StorageTier {
 	async setMetadata(key: string, metadata: StorageMetadata): Promise<void> {
 		const entry = this.cache.get(key)
 		if (entry) {
-			// Update metadata in place
+			// Update metadata in place and mark the entry as recently used.
 			entry.metadata = metadata
-			// Re-set to mark as recently used
 			this.cache.set(key, entry)
 		}
 	}
 
+	async setMetadataIfChecksumMatches(
+		key: string,
+		expectedChecksum: string,
+		metadata: StorageMetadata,
+	): Promise<boolean> {
+		const entry = this.cache.get(key)
+		if (!entry || entry.metadata.checksum !== expectedChecksum) return false
+		entry.metadata = metadata
+		this.cache.set(key, entry)
+		return true
+	}
+
 	async getStats(): Promise<TierStats> {
+		this.synchronizeSize()
 		return {
 			bytes: this.currentSize,
 			items: this.cache.size,
@@ -243,31 +292,40 @@ export class MemoryStorageTier implements StorageTier {
 	}
 
 	/**
-	 * Evict least-recently-used entries until there's space for new data.
-	 *
-	 * @param incomingSize - Size of data being added
-	 *
-	 * @remarks
-	 * TinyLRU handles count-based eviction automatically.
-	 * This method handles size-based eviction by using TinyLRU's built-in evict() method,
-	 * which properly removes the LRU item without updating access order.
+	 * Recalculate byte usage from the entries that TinyLRU actually retains.
 	 */
-	private async evictIfNeeded(incomingSize: number): Promise<void> {
-		// Keep evicting until we have enough space
+	private synchronizeSize(): void {
+		let size = 0
+		for (const key of this.cache.keys() as string[]) {
+			const entry = this.cache.items[key]?.value
+			if (entry) {
+				size += entry.size
+			}
+		}
+		this.currentSize = size
+	}
+
+	/**
+	 * Delete one entry while maintaining byte accounting.
+	 */
+	private deleteEntry(key: string): void {
+		const entry = this.cache.items[key]?.value
+		if (!entry) return
+
+		this.cache.delete(key)
+		this.currentSize -= entry.size
+	}
+
+	/**
+	 * Evict least-recently-used entries until there is space for new data.
+	 *
+	 * @param incomingSize Size of data being added
+	 */
+	private evictIfNeeded(incomingSize: number): void {
 		while (this.currentSize + incomingSize > this.config.maxSizeBytes && this.cache.size > 0) {
-			// Get the LRU key (first in the list) without accessing it
-			const keys = this.cache.keys() as string[]
-			if (keys.length === 0) break
-
-			const lruKey = keys[0]
-			if (!lruKey) break
-
-			// Access the entry directly from internal items without triggering LRU update
-			// items is a public property in LRU interface for this purpose
-			const entry = this.cache.items[lruKey]?.value
+			const entry = this.cache.first?.value
 			if (!entry) break
 
-			// Use TinyLRU's built-in evict() which properly removes the LRU item
 			this.cache.evict()
 			this.currentSize -= entry.size
 			this.stats.evictions++

@@ -1,5 +1,5 @@
 import { createReadStream, createWriteStream, existsSync } from 'node:fs'
-import { mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, open, readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import type { StorageMetadata, StorageTier, TierGetResult, TierStats, TierStreamResult } from '../types/index.js'
@@ -122,6 +122,8 @@ export class DiskStorageTier implements StorageTier {
 	private metadataIndex = new Map<string, { size: number; createdAt: Date; lastAccessed: Date; ttl?: Date }>()
 	private currentSize = 0
 	private readonly encodeColons: boolean
+	private readonly initialization: Promise<void>
+	private mutationQueue: Promise<void> = Promise.resolve()
 	private gcTimer: ReturnType<typeof setInterval> | null = null
 
 	constructor(private config: DiskStorageTierConfig) {
@@ -135,14 +137,48 @@ export class DiskStorageTier implements StorageTier {
 		// Default: encode colons on Windows, preserve on Unix/macOS
 		const platform = process.platform
 		this.encodeColons = config.encodeColons ?? platform === 'win32'
-
-		void this.ensureDirectory()
-		void rm(join(resolve(this.config.directory), '.invalidated'), { recursive: true, force: true })
-		void this.rebuildIndex()
+		this.initialization = this.initialize()
 
 		if (config.gcIntervalMs) {
 			this.gcTimer = setInterval(() => void this.gc(), config.gcIntervalMs)
 			if (this.gcTimer.unref) this.gcTimer.unref()
+		}
+	}
+
+	/**
+	 * Create the cache directory, remove stale invalidation work, and build the
+	 * in-memory index before any public operation can observe or mutate it.
+	 */
+	private async initialize(): Promise<void> {
+		await this.ensureDirectory()
+		await rm(join(resolve(this.config.directory), '.invalidated'), { recursive: true, force: true })
+		this.metadataIndex.clear()
+		this.currentSize = 0
+		await this.rebuildIndex()
+		// Enforce the cap for entries written before this process rebuilt its index.
+		await this.evictIfNeeded(0)
+	}
+
+	/**
+	 * Serialize filesystem mutations that also change the shared size/index state.
+	 *
+	 * @param operation Mutation to run after initialization and earlier mutations
+	 * @returns The mutation result
+	 */
+	private async withMutation<T>(operation: () => Promise<T>): Promise<T> {
+		const previous = this.mutationQueue
+		let release!: () => void
+		const current = new Promise<void>((resolve) => {
+			release = resolve
+		})
+		this.mutationQueue = current
+
+		await previous
+		try {
+			await this.initialization
+			return await operation()
+		} finally {
+			release()
 		}
 	}
 
@@ -187,6 +223,7 @@ export class DiskStorageTier implements StorageTier {
 	}
 
 	async get(key: string): Promise<Uint8Array | null> {
+		await this.initialization
 		const filePath = this.getFilePath(key)
 
 		try {
@@ -211,6 +248,7 @@ export class DiskStorageTier implements StorageTier {
 	 * Reads data and metadata files in parallel for better performance.
 	 */
 	async getWithMetadata(key: string): Promise<TierGetResult | null> {
+		await this.initialization
 		const filePath = this.getFilePath(key)
 		const metaPath = this.getMetaPath(key)
 
@@ -254,6 +292,7 @@ export class DiskStorageTier implements StorageTier {
 	 * The stream must be consumed or destroyed by the caller.
 	 */
 	async getStream(key: string): Promise<TierStreamResult | null> {
+		await this.initialization
 		const filePath = this.getFilePath(key)
 		const metaPath = this.getMetaPath(key)
 
@@ -272,16 +311,25 @@ export class DiskStorageTier implements StorageTier {
 				metadata.ttl = new Date(metadata.ttl)
 			}
 
-			// Guard against directories being treated as files (causes EISDIR at read time).
-			const dataStat = await stat(filePath)
-			if (!dataStat.isFile()) {
-				return null
+			// Open before returning the stream. A cache invalidation can unlink the
+			// path after metadata is read; retaining this descriptor makes a valid
+			// result readable instead of exposing a delayed ENOENT on the stream.
+			const fileHandle = await open(filePath, 'r')
+			try {
+				// Guard against directories being treated as files (causes EISDIR at read time).
+				const dataStat = await fileHandle.stat()
+				if (!dataStat.isFile()) {
+					await fileHandle.close()
+					return null
+				}
+
+				// createReadStream owns and closes this descriptor when the consumer is done.
+				const stream = createReadStream(filePath, { fd: fileHandle.fd, autoClose: true })
+				return { stream, metadata }
+			} catch (error) {
+				await fileHandle.close().catch(() => {})
+				throw error
 			}
-
-			// Create stream - will throw if file doesn't exist
-			const stream = createReadStream(filePath)
-
-			return { stream, metadata }
 		} catch (error) {
 			const code = getErrnoCode(error)
 			if (code === 'ENOENT' || code === 'ENOTDIR' || code === 'EISDIR') {
@@ -306,70 +354,112 @@ export class DiskStorageTier implements StorageTier {
 	 * The stream will be fully consumed by this operation.
 	 */
 	async setStream(key: string, stream: NodeJS.ReadableStream, metadata: StorageMetadata): Promise<void> {
+		await this.withMutation(() => this.setStreamUnlocked(key, stream, metadata))
+	}
+
+	private async setStreamUnlocked(
+		key: string,
+		stream: NodeJS.ReadableStream,
+		metadata: StorageMetadata,
+	): Promise<void> {
 		const filePath = this.getFilePath(key)
 		const metaPath = this.getMetaPath(key)
 
-		const dir = dirname(filePath)
-		if (!existsSync(dir)) {
-			await mkdir(dir, { recursive: true })
+		if (this.exceedsSizeLimit(metadata.size)) {
+			// Drain the caller's stream so sibling tier writes can still complete, then
+			// remove an older value for this key without evicting unrelated entries.
+			await this.discardStream(stream)
+			await this.deleteUnlocked(key)
+			return
 		}
 
 		const existingEntry = this.metadataIndex.get(key)
 		if (existingEntry) {
 			this.currentSize -= existingEntry.size
+			this.metadataIndex.delete(key)
 		}
 
 		if (this.config.maxSizeBytes) {
 			await this.evictIfNeeded(metadata.size)
 		}
 
-		// Write metadata first atomically so readers never observe partial JSON.
-		await this.writeMetadataAtomically(metaPath, metadata)
-
-		// Stream data to file
-		const writeStream = createWriteStream(filePath)
-		await pipeline(stream, writeStream)
-
-		this.metadataIndex.set(key, {
-			size: metadata.size,
-			createdAt: metadata.createdAt,
-			lastAccessed: metadata.lastAccessed,
-			...(metadata.ttl && { ttl: metadata.ttl }),
-		})
-		this.currentSize += metadata.size
-	}
-
-	async set(key: string, data: Uint8Array, metadata: StorageMetadata): Promise<void> {
-		const filePath = this.getFilePath(key)
-		const metaPath = this.getMetaPath(key)
-
+		// Eviction may have removed this newly empty nested directory.
 		const dir = dirname(filePath)
 		if (!existsSync(dir)) {
 			await mkdir(dir, { recursive: true })
 		}
 
+		try {
+			// Write metadata first atomically so readers never observe partial JSON.
+			if (!(await this.writeMetadataAtomically(metaPath, metadata))) return
+
+			const writeStream = createWriteStream(filePath)
+			await pipeline(stream, writeStream)
+		} catch (error) {
+			// A failed stream may leave a truncated data file. Remove both halves so
+			// the cache cannot serve mismatched data and metadata after the failure.
+			await Promise.all([unlink(filePath).catch(() => {}), unlink(metaPath).catch(() => {})])
+			throw error
+		}
+
+		const storedSize = (await stat(filePath)).size
+		if (this.exceedsSizeLimit(storedSize)) {
+			await Promise.all([unlink(filePath).catch(() => {}), unlink(metaPath).catch(() => {})])
+			await this.cleanupEmptyDirectories(dirname(filePath))
+			return
+		}
+		if (this.config.maxSizeBytes) {
+			await this.evictIfNeeded(storedSize)
+		}
+		this.metadataIndex.set(key, {
+			size: storedSize,
+			createdAt: metadata.createdAt,
+			lastAccessed: metadata.lastAccessed,
+			...(metadata.ttl && { ttl: metadata.ttl }),
+		})
+		this.currentSize += storedSize
+	}
+
+	async set(key: string, data: Uint8Array, metadata: StorageMetadata): Promise<void> {
+		await this.withMutation(() => this.setUnlocked(key, data, metadata))
+	}
+
+	private async setUnlocked(key: string, data: Uint8Array, metadata: StorageMetadata): Promise<void> {
+		const filePath = this.getFilePath(key)
+		const metaPath = this.getMetaPath(key)
+
+		if (this.exceedsSizeLimit(data.byteLength)) {
+			// Preserve unrelated cached entries, but never serve a stale value for a
+			// key whose replacement is too large for this tier.
+			await this.deleteUnlocked(key)
+			return
+		}
+
 		const existingEntry = this.metadataIndex.get(key)
 		if (existingEntry) {
 			this.currentSize -= existingEntry.size
+			this.metadataIndex.delete(key)
 		}
 
 		if (this.config.maxSizeBytes) {
 			await this.evictIfNeeded(data.byteLength)
 		}
 
-		await this.writeMetadataAtomically(metaPath, metadata)
+		// Eviction may have removed this newly empty nested directory.
+		const dir = dirname(filePath)
+		if (!existsSync(dir)) {
+			await mkdir(dir, { recursive: true })
+		}
+
 		try {
+			if (!(await this.writeMetadataAtomically(metaPath, metadata))) return
 			await writeFile(filePath, data)
 		} catch (error) {
-			// Mirror writeMetadataAtomically: deletePrefix()/clear can rename this key's
-			// directory away between the existsSync check above and this write, so the
-			// open fails with ENOENT. Don't recreate the directory — the invalidation that
-			// removed it may be newer than `data`, and resurrecting the path would restore
-			// content the caller just invalidated. Drop the entry instead and let the next
-			// read miss and re-fetch from the source of truth.
-			if (getErrnoCode(error) !== 'ENOENT') throw error
-			this.metadataIndex.delete(key)
-			return
+			// Do not recreate a directory that an external invalidation removed. The
+			// entry stays absent and will be re-fetched from the source of truth.
+			await Promise.all([unlink(filePath).catch(() => {}), unlink(metaPath).catch(() => {})])
+			if (getErrnoCode(error) === 'ENOENT') return
+			throw error
 		}
 
 		this.metadataIndex.set(key, {
@@ -382,6 +472,10 @@ export class DiskStorageTier implements StorageTier {
 	}
 
 	async delete(key: string): Promise<void> {
+		await this.withMutation(() => this.deleteUnlocked(key))
+	}
+
+	private async deleteUnlocked(key: string): Promise<void> {
 		const filePath = this.getFilePath(key)
 		const metaPath = this.getMetaPath(key)
 
@@ -393,11 +487,12 @@ export class DiskStorageTier implements StorageTier {
 
 		await Promise.all([unlink(filePath).catch(() => {}), unlink(metaPath).catch(() => {})])
 
-		// Clean up empty parent directories
+		// Clean up empty parent directories.
 		await this.cleanupEmptyDirectories(dirname(filePath))
 	}
 
 	async exists(key: string): Promise<boolean> {
+		await this.initialization
 		const filePath = this.getFilePath(key)
 		try {
 			const fileStat = await stat(filePath)
@@ -412,6 +507,7 @@ export class DiskStorageTier implements StorageTier {
 	}
 
 	async *listKeys(prefix?: string): AsyncIterableIterator<string> {
+		await this.initialization
 		if (!existsSync(this.config.directory)) {
 			return
 		}
@@ -458,16 +554,26 @@ export class DiskStorageTier implements StorageTier {
 	}
 
 	async deleteMany(keys: string[]): Promise<void> {
-		await Promise.all(keys.map((key) => this.delete(key)))
+		await this.withMutation(async () => {
+			for (const key of keys) {
+				await this.deleteUnlocked(key)
+			}
+		})
 	}
 
 	async deletePrefix(prefix: string): Promise<number> {
+		return await this.withMutation(() => this.deletePrefixUnlocked(prefix))
+	}
+
+	private async deletePrefixUnlocked(prefix: string): Promise<number> {
 		if (!prefix.endsWith('/')) {
 			const keys: string[] = []
 			for await (const key of this.listKeys(prefix)) {
 				keys.push(key)
 			}
-			await this.deleteMany(keys)
+			for (const key of keys) {
+				await this.deleteUnlocked(key)
+			}
 			return keys.length
 		}
 
@@ -501,6 +607,7 @@ export class DiskStorageTier implements StorageTier {
 	}
 
 	async getMetadata(key: string): Promise<StorageMetadata | null> {
+		await this.initialization
 		const metaPath = this.getMetaPath(key)
 
 		try {
@@ -531,32 +638,48 @@ export class DiskStorageTier implements StorageTier {
 	}
 
 	async setMetadata(key: string, metadata: StorageMetadata): Promise<void> {
-		const metaPath = this.getMetaPath(key)
+		await this.withMutation(() => this.setMetadataUnlocked(key, metadata))
+	}
 
-		// Ensure parent directory exists
-		const dir = dirname(metaPath)
-		if (!existsSync(dir)) {
-			await mkdir(dir, { recursive: true })
-		}
+	async setMetadataIfChecksumMatches(
+		key: string,
+		expectedChecksum: string,
+		metadata: StorageMetadata,
+	): Promise<boolean> {
+		return await this.withMutation(async () => {
+			const current = await this.getMetadata(key)
+			if (!current || current.checksum !== expectedChecksum) return false
+			await this.setMetadataUnlocked(key, metadata)
+			return true
+		})
+	}
 
-		await this.writeMetadataAtomically(metaPath, metadata)
-
-		// Keep in-memory index in sync so eviction (LRU sort) sees updated lastAccessed
+	private async setMetadataUnlocked(key: string, metadata: StorageMetadata): Promise<void> {
+		// Match other tiers: metadata updates are a no-op for absent data. This also
+		// prevents a skipped oversized stream write from leaving an orphan .meta file.
 		const entry = this.metadataIndex.get(key)
-		if (entry) {
-			entry.lastAccessed = metadata.lastAccessed
-			if (metadata.ttl) {
-				entry.ttl = metadata.ttl
-			}
+		if (!entry) return
+
+		const metaPath = this.getMetaPath(key)
+		if (!(await this.writeMetadataAtomically(metaPath, metadata))) return
+
+		// Keep the in-memory index in sync so eviction sees updated access data.
+		entry.lastAccessed = metadata.lastAccessed
+		if (metadata.ttl) {
+			entry.ttl = metadata.ttl
+		} else {
+			delete entry.ttl
 		}
 	}
 
 	async getStats(): Promise<TierStats> {
-		if (!existsSync(this.config.directory)) {
-			return { bytes: 0, items: 0 }
-		}
+		return await this.withMutation(async () => {
+			if (!existsSync(this.config.directory)) {
+				return { bytes: 0, items: 0 }
+			}
 
-		return this.getStatsRecursive(this.config.directory)
+			return await this.getStatsRecursive(this.config.directory)
+		})
 	}
 
 	/**
@@ -592,20 +715,22 @@ export class DiskStorageTier implements StorageTier {
 	 * @returns Number of expired entries deleted
 	 */
 	async gc(): Promise<number> {
-		const now = Date.now()
-		const expired: string[] = []
+		return await this.withMutation(async () => {
+			const now = Date.now()
+			const expired: string[] = []
 
-		for (const [key, entry] of this.metadataIndex) {
-			if (entry.ttl && now > entry.ttl.getTime()) {
-				expired.push(key)
+			for (const [key, entry] of this.metadataIndex) {
+				if (entry.ttl && now > entry.ttl.getTime()) {
+					expired.push(key)
+				}
 			}
-		}
 
-		for (const key of expired) {
-			await this.delete(key)
-		}
+			for (const key of expired) {
+				await this.deleteUnlocked(key)
+			}
 
-		return expired.length
+			return expired.length
+		})
 	}
 
 	/**
@@ -619,12 +744,12 @@ export class DiskStorageTier implements StorageTier {
 	}
 
 	async clear(): Promise<void> {
-		if (existsSync(this.config.directory)) {
+		await this.withMutation(async () => {
 			await rm(this.config.directory, { recursive: true, force: true })
 			await this.ensureDirectory()
 			this.metadataIndex.clear()
 			this.currentSize = 0
-		}
+		})
 	}
 
 	/**
@@ -658,16 +783,18 @@ export class DiskStorageTier implements StorageTier {
 	/**
 	 * Atomically write metadata to avoid readers seeing partial JSON.
 	 */
-	private async writeMetadataAtomically(metaPath: string, metadata: StorageMetadata): Promise<void> {
+	private async writeMetadataAtomically(metaPath: string, metadata: StorageMetadata): Promise<boolean> {
 		const tempMetaPath = `${metaPath}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`
 		try {
 			await writeFile(tempMetaPath, JSON.stringify(metadata, null, 2))
 			await rename(tempMetaPath, metaPath)
+			return true
 		} catch (error) {
 			await unlink(tempMetaPath).catch(() => {})
-			// If the directory was removed (e.g. concurrent clear/cleanup), don't propagate
+			// An external invalidation may remove the directory between path creation
+			// and this write. Do not recreate it and accidentally resurrect stale data.
 			const code = getErrnoCode(error)
-			if (code === 'ENOENT' || code === 'EINVAL') return
+			if (code === 'ENOENT' || code === 'EINVAL') return false
 			throw error
 		}
 	}
@@ -706,8 +833,18 @@ export class DiskStorageTier implements StorageTier {
 		return `${this.getFilePath(key)}.meta`
 	}
 
+	private exceedsSizeLimit(size: number): boolean {
+		return this.config.maxSizeBytes !== undefined && size > this.config.maxSizeBytes
+	}
+
+	private async discardStream(stream: NodeJS.ReadableStream): Promise<void> {
+		for await (const _chunk of stream) {
+			// Consume skipped cache data so other tee destinations are not backpressured.
+		}
+	}
+
 	private async ensureDirectory(): Promise<void> {
-		await mkdir(this.config.directory, { recursive: true }).catch(() => {})
+		await mkdir(this.config.directory, { recursive: true })
 	}
 
 	private async evictIfNeeded(incomingSize: number): Promise<void> {
@@ -743,7 +880,7 @@ export class DiskStorageTier implements StorageTier {
 				break
 			}
 
-			await this.delete(entry.key)
+			await this.deleteUnlocked(entry.key)
 		}
 	}
 }

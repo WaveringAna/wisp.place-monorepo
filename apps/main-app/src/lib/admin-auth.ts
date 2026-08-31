@@ -42,18 +42,9 @@ function generatePassword(length: number = 20): string {
 }
 
 export const adminAuth = {
-	// Initialize admin table
-	async init() {
-		await db`
-			CREATE TABLE IF NOT EXISTS admin_users (
-				id SERIAL PRIMARY KEY,
-				username TEXT UNIQUE NOT NULL,
-				password_hash TEXT NOT NULL,
-				salt TEXT NOT NULL,
-				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-			)
-		`
-	},
+	// The schema is created by the primary advisory-lock migration runner before
+	// this module is used. Keep this method for the existing startup API.
+	async init(): Promise<void> {},
 
 	// Check if any admin exists
 	async hasAdmin(): Promise<boolean> {

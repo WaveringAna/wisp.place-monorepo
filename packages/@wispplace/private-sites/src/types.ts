@@ -1,4 +1,8 @@
+export type PrivateSiteState = 'staging' | 'ready' | 'deleting'
+
 export interface PrivateSite {
+	/** Durable lifecycle state. Public-facing repositories only return ready sites. */
+	state: PrivateSiteState
 	siteId: string
 	ownerDid: string
 	name: string

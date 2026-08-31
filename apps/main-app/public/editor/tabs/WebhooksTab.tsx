@@ -24,6 +24,7 @@ import {
 import { type ChangeEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { SecretMeta } from '../hooks/useSecretData'
 import type { WebhookEventLog, WebhookRecord } from '../hooks/useWebhookData'
+import { canUseLocalLoopbackWebhookHttp, validateEditorWebhookEndpointUrl } from '../webhook-url-policy'
 
 const APPS = [
 	{ id: 'bluesky', label: 'Bluesky', path: 'app.bsky.*' },
@@ -51,7 +52,7 @@ interface WebhooksTabProps {
 		url: string
 		backlinks: boolean
 		events: string[]
-		secret: string
+		secret?: string
 		secretId?: string
 		enabled: boolean
 	}) => Promise<any>
@@ -230,11 +231,15 @@ export const WebhooksTab = memo(function WebhooksTab({
 		setError(null)
 		setSuccess(null)
 
-		if (!url.startsWith('http://') && !url.startsWith('https://')) {
-			setError('URL must start with http:// or https://')
+		const pageUrl = typeof window === 'undefined' ? '' : window.location.href
+		const endpointValidation = validateEditorWebhookEndpointUrl(url, {
+			allowLoopbackDev: canUseLocalLoopbackWebhookHttp(pageUrl),
+		})
+		if (!endpointValidation.ok) {
+			setError(endpointValidation.error)
 			return
 		}
-		if (!scopeAturi || !scopeAturi.startsWith('at://')) {
+		if (!scopeAturi?.startsWith('at://')) {
 			setError('Please select an app scope above')
 			return
 		}
@@ -250,8 +255,7 @@ export const WebhooksTab = memo(function WebhooksTab({
 				scopeAturi,
 				backlinks,
 				events: events.length === 3 ? [] : events,
-				secret: '',
-				secretId: selectedSecretId || undefined,
+				...(selectedSecretId ? { secretId: selectedSecretId } : {}),
 				enabled: true,
 			})
 			setSuccess('Webhook created successfully')
@@ -430,10 +434,14 @@ export const WebhooksTab = memo(function WebhooksTab({
 										value={url}
 										onChange={(e: ChangeEvent<HTMLInputElement>) => setUrl(e.target.value)}
 										placeholder="https://example.com/webhook"
+										maxLength={2048}
 										required
 										className="h-8 text-sm font-mono"
 										autoFocus
 									/>
+									<p className="text-[10px] text-muted-foreground">
+										HTTPS is required. HTTP is allowed only for a local loopback development endpoint.
+									</p>
 								</div>
 
 								{/* App picker */}
@@ -815,6 +823,9 @@ export const WebhooksTab = memo(function WebhooksTab({
 									value={newSecretName}
 									onChange={(e: ChangeEvent<HTMLInputElement>) => setNewSecretName(e.target.value)}
 									placeholder="secret name (e.g. my-server)"
+									maxLength={64}
+									pattern="[A-Za-z0-9._-]+"
+									title="Use 1–64 ASCII letters, digits, dots, underscores, or hyphens"
 									className="h-8 text-xs font-mono flex-1"
 								/>
 								<Button

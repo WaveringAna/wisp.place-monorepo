@@ -20,15 +20,24 @@ COPY cli/package.json ./cli/package.json
 RUN bun install --frozen-lockfile
 
 # Compile to a single binary
-RUN bun build --compile --minify apps/webhook-service/src/index.ts --outfile /app/webhook
+RUN NODE_ENV=production bun build --compile --minify apps/webhook-service/src/index.ts --outfile /app/webhook
 
 # Stage 2: Minimal runtime
 FROM alpine:3.22
 
-RUN apk add --no-cache libstdc++ libgcc
+RUN apk add --no-cache libstdc++ libgcc ca-certificates
 
 COPY --from=builder /app/webhook /usr/local/bin/webhook
 
 ENV NODE_ENV=production
+# The service itself defaults to loopback. Containers opt in to an unspecified
+# bind address so an orchestrator can reach the single bounded health endpoint.
+ENV HEALTH_HOST=0.0.0.0
+ENV HEALTH_PORT=3003
+
+EXPOSE 3003
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD wget --no-verbose --tries=1 --spider http://127.0.0.1:3003/health || exit 1
 
 CMD ["webhook"]

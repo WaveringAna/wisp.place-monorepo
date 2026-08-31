@@ -19,4 +19,4 @@ steps:
   - name: run all tests
     command: |
       export PATH="$HOME/.nix-profile/bin:$PATH"
-      bun test
+      bun test --isolate

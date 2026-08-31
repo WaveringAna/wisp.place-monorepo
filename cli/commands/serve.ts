@@ -3,9 +3,15 @@ import { join } from 'node:path'
 import { IdResolver } from '@atproto/identity'
 import { Firehose } from '@atproto/sync'
 import { serve as honoNodeServe } from '@hono/node-server'
-import { getPdsForDid, resolveDid } from '@wispplace/atproto-utils'
+import { getPdsForDid, resolveDid, unsafeRawIdentityGet } from '@wispplace/atproto-utils'
 import { BunFirehose, type BunFirehoseOptions, isBun } from '@wispplace/bun-firehose'
-import { matchRedirectRule, parseQueryString, parseRedirectsFile, type RedirectRule } from '@wispplace/fs-utils'
+import {
+	matchRedirectRule,
+	normalizeSitePath,
+	parseQueryString,
+	parseRedirectsFile,
+	type RedirectRule,
+} from '@wispplace/fs-utils'
 import type { Record as SettingsRecord } from '@wispplace/lexicons/types/place/wisp/settings'
 import { generate404Page, generateDirectoryListing } from '@wispplace/page-generators'
 import { Hono } from 'hono'
@@ -83,14 +89,44 @@ function serveFile(filePath: string): Response {
 	})
 }
 
+function isSafeLocalFilePath(path: string): boolean {
+	return !path.split('/').some((segment) => segment.includes(':') || /[. ]$/.test(segment))
+}
+
+export function normalizeServeRequestPath(pathname: string): string | null {
+	if (!pathname.startsWith('/')) return null
+
+	const rawPath = pathname.slice(1)
+	const normalized = normalizeSitePath(rawPath, { allowTrailingSlash: true })
+	if (normalized === null || !isSafeLocalFilePath(normalized)) return null
+	return normalized ? `/${normalized}${rawPath.endsWith('/') ? '/' : ''}` : '/'
+}
+
+function normalizeConfiguredSitePath(path: string): string | null {
+	const candidate = path.startsWith('/') ? path.slice(1) : path
+	const normalized = normalizeSitePath(candidate)
+	return normalized && normalized === candidate && isSafeLocalFilePath(normalized) ? normalized : null
+}
+
+function normalizeRewritePath(path: string): string | null {
+	const requestPath = normalizeServeRequestPath(path)
+	if (requestPath) return requestPath
+
+	const relativePath = normalizeConfiguredSitePath(path)
+	return relativePath ? `/${relativePath}` : null
+}
+
 function handleRequest(req: Request, state: SiteState): Response {
 	const url = new URL(req.url)
-	let urlPath = decodeURIComponent(url.pathname)
-
-	// Prevent directory traversal
-	if (urlPath.includes('..')) {
-		return new Response('Forbidden', { status: 403 })
+	let decodedPathname: string
+	try {
+		decodedPathname = decodeURIComponent(url.pathname)
+	} catch {
+		return new Response('Invalid path', { status: 400 })
 	}
+
+	let urlPath = normalizeServeRequestPath(decodedPathname)
+	if (urlPath === null) return new Response('Invalid path', { status: 400 })
 
 	// Check redirect rules first
 	const queryParams = parseQueryString(url.search)
@@ -98,8 +134,10 @@ function handleRequest(req: Request, state: SiteState): Response {
 
 	if (redirectMatch) {
 		if (redirectMatch.status === 200) {
-			// Rewrite - serve the target path instead
-			urlPath = redirectMatch.targetPath
+			// Rewrites are local filesystem reads, so validate them just like the request.
+			const rewrittenPath = normalizeRewritePath(redirectMatch.targetPath)
+			if (rewrittenPath === null) return new Response('Invalid rewrite path', { status: 400 })
+			urlPath = rewrittenPath
 		} else if ([301, 302, 307, 308].includes(redirectMatch.status)) {
 			// Redirect
 			return new Response(null, {
@@ -107,14 +145,16 @@ function handleRequest(req: Request, state: SiteState): Response {
 				headers: { Location: redirectMatch.targetPath },
 			})
 		} else if (redirectMatch.status === 404) {
-			// Custom 404
-			const custom404Path = join(state.siteDir, redirectMatch.targetPath)
-			if (existsSync(custom404Path)) {
-				const content = readFileSync(custom404Path)
-				return new Response(content, {
-					status: 404,
-					headers: { 'Content-Type': 'text/html' },
-				})
+			const custom404File = normalizeConfiguredSitePath(redirectMatch.targetPath)
+			if (custom404File) {
+				const custom404Path = join(state.siteDir, custom404File)
+				if (existsSync(custom404Path)) {
+					const content = readFileSync(custom404Path)
+					return new Response(content, {
+						status: 404,
+						headers: { 'Content-Type': 'text/html' },
+					})
+				}
 			}
 		}
 	}
@@ -136,7 +176,9 @@ function handleRequest(req: Request, state: SiteState): Response {
 		// Try index files
 		const indexFiles = getIndexFiles(state.settings)
 		for (const indexFile of indexFiles) {
-			const indexPath = join(filePath, indexFile)
+			const normalizedIndexFile = normalizeConfiguredSitePath(indexFile)
+			if (!normalizedIndexFile) continue
+			const indexPath = join(filePath, normalizedIndexFile)
 			if (existsSync(indexPath)) {
 				return serveFile(indexPath)
 			}
@@ -172,21 +214,27 @@ function handleRequest(req: Request, state: SiteState): Response {
 
 	// SPA mode - serve the SPA file for all unmatched routes
 	if (spaFile) {
-		const spaPath = join(state.siteDir, spaFile)
-		if (existsSync(spaPath)) {
-			return serveFile(spaPath)
+		const normalizedSpaFile = normalizeConfiguredSitePath(spaFile)
+		if (normalizedSpaFile) {
+			const spaPath = join(state.siteDir, normalizedSpaFile)
+			if (existsSync(spaPath)) {
+				return serveFile(spaPath)
+			}
 		}
 	}
 
 	// Custom 404
 	if (state.settings?.custom404) {
-		const custom404Path = join(state.siteDir, state.settings.custom404)
-		if (existsSync(custom404Path)) {
-			const content = readFileSync(custom404Path)
-			return new Response(content, {
-				status: 404,
-				headers: { 'Content-Type': 'text/html' },
-			})
+		const custom404File = normalizeConfiguredSitePath(state.settings.custom404)
+		if (custom404File) {
+			const custom404Path = join(state.siteDir, custom404File)
+			if (existsSync(custom404Path)) {
+				const content = readFileSync(custom404Path)
+				return new Response(content, {
+					status: 404,
+					headers: { 'Content-Type': 'text/html' },
+				})
+			}
 		}
 	}
 
@@ -217,7 +265,7 @@ export async function serve(identifier: string, options: ServeOptions): Promise<
 
 	// 1. Resolve DID
 	const spinner = createSpinner('Resolving identity...').start()
-	const did = await resolveDid(identifier)
+	const did = await resolveDid(identifier, unsafeRawIdentityGet)
 
 	if (!did) {
 		spinner.fail('Failed to resolve identity')
@@ -228,7 +276,7 @@ export async function serve(identifier: string, options: ServeOptions): Promise<
 
 	// 2. Get PDS endpoint
 	const pdsSpinner = createSpinner('Getting PDS endpoint...').start()
-	const pdsEndpoint = await getPdsForDid(did)
+	const pdsEndpoint = await getPdsForDid(did, unsafeRawIdentityGet, { allowLoopback: true })
 
 	if (!pdsEndpoint) {
 		pdsSpinner.fail('Failed to get PDS endpoint')

@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'bun:test'
-import { matchRedirectRule, parseRedirectsFile } from './redirects'
+import {
+	MAX_REDIRECT_FILE_BYTES,
+	matchRedirectRule,
+	parseQueryString,
+	parseRedirectsFile,
+	parseRedirectsFileBytes,
+} from './redirects'
 
 describe('parseRedirectsFile', () => {
 	it('should parse simple redirects', () => {
@@ -86,6 +92,36 @@ describe('parseRedirectsFile', () => {
 		const content = `/* /legacy/:splat 200 Cookie=is_legacy,my_cookie`
 		const rules = parseRedirectsFile(content)
 		expect(rules[0]?.conditions?.cookie).toEqual(['is_legacy', 'my_cookie'])
+	})
+})
+
+describe('parseRedirectsFileBytes', () => {
+	it('rejects an oversized buffer before decoding or parsing it', () => {
+		const data = new Uint8Array(MAX_REDIRECT_FILE_BYTES + 1_024)
+		data.set(new TextEncoder().encode('/valid /target 301\n/partial /must-not-apply'))
+		let decodeCalls = 0
+
+		const rules = parseRedirectsFileBytes(data, () => {
+			decodeCalls++
+			return '/valid /target 301\n/partial /must-not-apply'
+		})
+
+		expect(rules).toBeNull()
+		expect(decodeCalls).toBe(0)
+	})
+
+	it('decodes and parses a buffer at the inclusive shared byte limit', () => {
+		const data = new Uint8Array(MAX_REDIRECT_FILE_BYTES)
+		let decodedBytes = 0
+
+		const rules = parseRedirectsFileBytes(data, (bytes) => {
+			decodedBytes = bytes.byteLength
+			return '/old /new 301'
+		})
+
+		expect(decodedBytes).toBe(MAX_REDIRECT_FILE_BYTES)
+		expect(rules).toHaveLength(1)
+		expect(rules?.[0]).toMatchObject({ from: '/old', to: '/new', status: 301 })
 	})
 })
 
@@ -233,5 +269,53 @@ describe('matchRedirectRule', () => {
 		const match3 = matchRedirectRule('/', rules)
 		expect(match3).toBeTruthy()
 		expect(match3?.targetPath).toBe('/index.html')
+	})
+})
+
+describe('redirect parser safety', () => {
+	it('rejects ambiguous adjacent placeholders and handles a long nonmatch within a practical bound', () => {
+		const adjacentPattern = `/${Array.from({ length: 32 }, (_, index) => `:part${index}`).join('')}/expected`
+		const boundedPattern = `/${Array.from({ length: 32 }, (_, index) => `:part${index}`).join('/')}/expected`
+		const longNonMatch = `/${Array.from({ length: 32 }, () => 'x'.repeat(180)).join('/')}/actual`
+
+		const startedAt = performance.now()
+		expect(parseRedirectsFile(`${adjacentPattern} /target`)).toHaveLength(0)
+
+		const rules = parseRedirectsFile(`${boundedPattern} /target`)
+		expect(rules).toHaveLength(1)
+		expect(matchRedirectRule(longNonMatch, rules)).toBeNull()
+		expect(performance.now() - startedAt).toBeLessThan(250)
+	})
+
+	it('does not accept a final rule from a truncated redirect file', () => {
+		const retainedRule = '/kept /target 301\n'
+		const finalRule = '/partial /must-not-apply 302'
+		const commentLength = MAX_REDIRECT_FILE_BYTES - retainedRule.length - finalRule.length - 2
+		const content = `${retainedRule}#${'x'.repeat(commentLength)}\n${finalRule} trailing bytes`
+
+		expect(content.indexOf(finalRule) + finalRule.length).toBe(MAX_REDIRECT_FILE_BYTES)
+		const rules = parseRedirectsFile(content)
+		expect(rules).toHaveLength(1)
+		expect(rules[0]).toMatchObject({ from: '/kept', to: '/target', status: 301 })
+	})
+})
+
+describe('parseQueryString', () => {
+	it('keeps malformed percent escapes verbatim and preserves values containing equals signs', () => {
+		const params = parseQueryString('/search?malformed=%E0%A4%A&value=a=b=c&flag&empty=&=ignored')
+
+		expect(params.malformed).toBe('%E0%A4%A')
+		expect(params.value).toBe('a=b=c')
+		expect(params.flag).toBe('')
+		expect(params.empty).toBe('')
+		expect(params['']).toBeUndefined()
+	})
+
+	it('uses the same total parsing behavior for inline redirect query conditions', () => {
+		const rules = parseRedirectsFile('/search?malformed=%E0%A4%A&value=a=b=c /target 404')
+		const queryParams = parseQueryString('/search?malformed=%E0%A4%A&value=a=b=c')
+
+		expect(rules).toHaveLength(1)
+		expect(matchRedirectRule('/search', rules, { queryParams })?.targetPath).toBe('/target')
 	})
 })

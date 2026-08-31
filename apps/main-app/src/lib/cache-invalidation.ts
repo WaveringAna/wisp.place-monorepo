@@ -1,5 +1,5 @@
 import { createLogger } from '@wispplace/observability'
-import { getRedisClient } from './redis'
+import { getConnectedRedisClient } from './redis'
 
 const logger = createLogger('main-app:cache-invalidation')
 const CHANNEL = 'wisp:cache-invalidate'
@@ -11,15 +11,16 @@ export async function publishDomainCacheInvalidation(
 	domainKind: DomainKind,
 	customDomainId?: string,
 ): Promise<void> {
-	const redis = getRedisClient()
-	if (!redis) return
-
 	const normalizedDomain = domain.trim().toLowerCase()
 	if (!normalizedDomain) return
 
 	try {
+		const redis = await getConnectedRedisClient()
+		if (!redis) return
+
 		const stream = process.env.WISP_CACHE_INVALIDATION_STREAM || 'wisp:cache-invalidate-stream'
-		const maxLen = process.env.WISP_CACHE_INVALIDATION_STREAM_MAXLEN || '10000'
+		const configuredMaxLen = Number.parseInt(process.env.WISP_CACHE_INVALIDATION_STREAM_MAXLEN || '', 10)
+		const maxLen = Number.isSafeInteger(configuredMaxLen) && configuredMaxLen > 0 ? `${configuredMaxLen}` : '10000'
 		const fields = [
 			'action',
 			'domain',
@@ -41,12 +42,12 @@ export async function publishDomainCacheInvalidation(
 			streamId,
 		})
 		await redis.publish(CHANNEL, message)
-	} catch (err) {
+	} catch (error) {
 		logger.warn('[CacheInvalidation] Failed to publish domain invalidation', {
 			domain: normalizedDomain,
 			domainKind,
 			customDomainId,
-			err,
+			errorKind: error instanceof Error ? error.name : 'UnknownError',
 		})
 	}
 }

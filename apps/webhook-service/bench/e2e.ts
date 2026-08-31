@@ -17,7 +17,8 @@
  *   TEST_DELIVERY_PORT default: 19876
  */
 
-import { createHmac } from 'node:crypto'
+import { createHmac, randomBytes } from 'node:crypto'
+import { encryptWebhookSecret, parseWebhookSecretEncryptionKeyring } from '@wispplace/atproto-utils'
 import type { Main as WhRecord } from '@wispplace/lexicons/types/place/wisp/v2/wh'
 import {
 	db,
@@ -27,9 +28,22 @@ import {
 	getWebhookSecretToken,
 	upsertWebhookRecord,
 } from '../src/lib/db'
-import { deliverWebhook } from '../src/lib/delivery'
+import { deliverWebhook, WebhookDeliveryWorker } from '../src/lib/delivery'
 import { JetstreamClient } from '../src/lib/jetstream'
 import { matchWebhooks } from '../src/lib/matcher'
+
+// ---------------------------------------------------------------------------
+// Local-only benchmark transport setup
+// ---------------------------------------------------------------------------
+
+// This benchmark intentionally receives deliveries over a local HTTP listener.
+// The pinned URL layer requires both gates; do not copy these settings to a
+// production process.
+process.env.NODE_ENV = 'development'
+process.env.WISP_ALLOW_LOCALHOST_FETCH = '1'
+// Keep direct test rows encrypted too. An operator-supplied key wins; otherwise
+// this one-process benchmark uses an ephemeral key that is never printed.
+process.env.WEBHOOK_SECRET_ENCRYPTION_KEY ??= randomBytes(32).toString('base64url')
 
 // ---------------------------------------------------------------------------
 // Config
@@ -163,6 +177,7 @@ function waitForDeliveries(n: number): Promise<void> {
 // ---------------------------------------------------------------------------
 
 const testDid: { value: string } = { value: '' }
+let deliveryWorker: WebhookDeliveryWorker | undefined
 let resolveWhRegistered: (() => void) | null = null
 const whRegistered = new Promise<void>((resolve) => {
 	resolveWhRegistered = resolve
@@ -213,6 +228,9 @@ async function handleEvent(event: {
 	for (const entry of matched) {
 		await deliverWebhook(entry, did, collection, rkey, op as any, cid, record)
 	}
+	// Legacy deliverWebhook enqueues. Drain it deterministically so this bench
+	// proves local registration and actual delivery, not only outbox insertion.
+	await deliveryWorker?.runOnce()
 }
 
 // ---------------------------------------------------------------------------
@@ -220,11 +238,15 @@ async function handleEvent(event: {
 // ---------------------------------------------------------------------------
 
 async function insertTestSecret(did: string, name: string): Promise<string> {
-	const bytes = crypto.getRandomValues(new Uint8Array(24))
-	const token = `wsk_${Buffer.from(bytes).toString('base64url')}`
+	const token = `wsk_${randomBytes(24).toString('base64url')}`
+	const keyring = parseWebhookSecretEncryptionKeyring({
+		WEBHOOK_SECRET_ENCRYPTION_KEY: process.env.WEBHOOK_SECRET_ENCRYPTION_KEY,
+		WEBHOOK_SECRET_ENCRYPTION_PREVIOUS_KEYS: process.env.WEBHOOK_SECRET_ENCRYPTION_PREVIOUS_KEYS,
+	})
+	const envelope = encryptWebhookSecret(token, keyring)
 	await db`
 		INSERT INTO webhook_secrets (did, name, token, created_at)
-		VALUES (${did}, ${name}, ${token}, NOW())
+		VALUES (${did}, ${name}, ${envelope}, NOW())
 		ON CONFLICT (did, name) DO UPDATE SET token = EXCLUDED.token, last_rotated_at = NOW()
 	`
 	return token
@@ -246,6 +268,10 @@ async function run() {
 	console.log(`Jetstream  : ${JETSTREAM_URL}`)
 	console.log(`Delivery   : http://localhost:${DELIVERY_PORT}/`)
 	console.log()
+
+	// The explicit loopback flag is still checked by pinnedWebhookFetch against
+	// NODE_ENV=development and WISP_ALLOW_LOCALHOST_FETCH=1 above.
+	deliveryWorker = new WebhookDeliveryWorker({ allowLoopback: true, requestTimeoutMs: 10_000 })
 
 	// 1. Auth
 	const pdsUrl = await derivePdsUrl(HANDLE)
@@ -345,7 +371,7 @@ async function run() {
 
 		// Verify getWebhookSecretToken can look it up
 		const lookedUp = await getWebhookSecretToken(session.did, secretName)
-		if (lookedUp !== secretToken) throw new Error(`getWebhookSecretToken mismatch: got ${lookedUp}`)
+		if (lookedUp !== secretToken) throw new Error('getWebhookSecretToken mismatch')
 		console.log(`  getWebhookSecretToken ✓`)
 
 		// Create a webhook with secretId, deliver manually, check signature
@@ -371,6 +397,8 @@ async function run() {
 			undefined,
 			{ text: 'signed test' },
 		)
+		const delivered = await deliveryWorker?.runOnce()
+		if (!delivered) throw new Error('Signed webhook was not claimed for delivery')
 
 		// Wait for it
 		await new Promise<void>((resolve, reject) => {
@@ -408,6 +436,7 @@ async function run() {
 			console.log(`  deleted ${collection}/${rkey}`)
 		}
 		js.destroy()
+		await deliveryWorker?.stop()
 		deliveryServer.stop(true)
 		await db.close()
 	}

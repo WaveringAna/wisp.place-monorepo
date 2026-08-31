@@ -1,4 +1,5 @@
 import { MAX_PRIVATE_SITE_FILE_COUNT, MAX_PRIVATE_SITE_SIZE } from '@wispplace/constants'
+import { normalizeSitePath } from '@wispplace/fs-utils'
 import type { UploadedPrivateFile } from './private-sites-service'
 
 export class PrivateSiteUploadError extends Error {
@@ -43,6 +44,15 @@ const withoutSharedRoot = (files: UploadedPrivateFile[]): UploadedPrivateFile[] 
 
 	return files.map((file, index) => ({ ...file, path: paths[index]!.slice(1).join('/') }))
 }
+
+const validatePrivateFilePaths = (files: UploadedPrivateFile[]): UploadedPrivateFile[] =>
+	files.map((file) => {
+		const path = normalizeSitePath(file.path)
+		if (!path || path !== file.path) {
+			throw new PrivateSiteUploadError('invalid file path', 400)
+		}
+		return { ...file, path }
+	})
 
 export const readPrivateSiteUpload = async (
 	request: Request,
@@ -90,9 +100,10 @@ export const readPrivateSiteUpload = async (
 		})
 	}
 
+	const selectedFiles = options.stripSharedRoot ? withoutSharedRoot(files) : files
 	return {
 		name,
 		expiryMinutes,
-		files: options.stripSharedRoot ? withoutSharedRoot(files) : files,
+		files: validatePrivateFilePaths(selectedFiles),
 	}
 }

@@ -7,7 +7,7 @@ Wisp.place splits into two microservices: the **firehose service** (write path) 
 
 ## Firehose Service
 
-The firehose service watches the AT Protocol relay for `place.wisp.fs` and `place.wisp.settings` record changes. When a site is created or updated, it downloads all blobs from the user's PDS, rewrites HTML for subdirectory serving, writes processed files to S3 (or disk) — keeping gzipped content as-is and serving it with the appropriate `Content-Encoding` header — then publishes a cache invalidation event to Redis.
+The firehose service watches the AT Protocol relay for `place.wisp.fs` and `place.wisp.settings` record changes. When a site is created or updated, it downloads all blobs from the user's PDS, rewrites HTML for subdirectory serving, writes processed files to shared S3 storage — keeping gzipped content as-is and serving it with the appropriate `Content-Encoding` header — then publishes a cache invalidation event to Redis. Disk storage is an explicit development/test fallback only.
 
 It's write-only — it never serves requests to end users.
 
@@ -28,7 +28,7 @@ Start with `--backfill` to do a one-time bulk sync of all existing sites into ca
 
 ## Hosting Service
 
-The hosting service is a read-only CDN built with Hono. It resolves sites from the request hostname or path, looks up files in tiered storage (hot → warm → cold), fetches directly from the user's PDS on a cache miss, applies HTML path rewriting and `_redirects` rules, and serves the file.
+The hosting service is a read-only CDN built with Hono. It resolves sites from the request hostname or path, looks up files in tiered storage (hot → warm → cold), applies HTML path rewriting and `_redirects` rules, and serves the file. A missing manifest or file returns a bounded 503 while durable firehose revalidation repairs storage; the request path never fetches from the user's PDS.
 
 It subscribes to Redis pub/sub for invalidation events from the firehose service. On invalidation, it evicts affected entries from hot and warm tiers so the next request fetches fresh content.
 
@@ -56,7 +56,7 @@ WARM_EVICTION_POLICY=lru      # lru, fifo, or size
 CACHE_DIR=./cache/sites
 ```
 
-The **cold tier** is S3 (or disk if S3 isn't configured). The firehose writes here; the hosting service reads. Without S3, disk serves as both warm and cold.
+The **cold tier** is shared S3 in production-like and multi-node deployments. The firehose writes there and the hosting service reads it. Disk is allowed only when `NODE_ENV` is exactly `development` or `test`, or for an explicitly opted-in single node with `HOSTING_ALLOW_DISK_SOURCE=true`; an unknown environment never silently falls back to local disk.
 
 ```bash
 S3_BUCKET="wisp-sites"
@@ -84,21 +84,20 @@ Firehose                            Hosting
      │                                 │  3. Next request fetches fresh
 ```
 
-Without Redis the hosting service still works — it falls back to TTL-based expiry (14 days default) and on-demand fetching.
+Without Redis the hosting service still works with bounded TTL-based expiry. A cache miss still returns a bounded 503 while the durable revalidation worker repairs it.
 
 ## Cache Misses
 
-The hosting service handles cache misses in two ways depending on whether it knows about the site.
-
-If a site **is in the database** but its files are missing from all storage tiers, the request returns 503 and a revalidation job is enqueued to Redis for the firehose service to re-sync from the PDS. No direct PDS fetch happens here.
-
-If a site **is not in the database at all**, the hosting service fetches it directly from the PDS: it resolves the DID, downloads the `place.wisp.fs` record, fetches all blobs, writes them to hot and warm tiers, and then enqueues a revalidation job so the firehose backfills S3.
+The hosting service is read-only. If a site manifest is missing from the database, or an expected file is missing from storage, the request returns 503 and enqueues durable revalidation for the firehose service to re-sync from the PDS. It never resolves a DID, downloads blobs, or writes site data on the request path.
 
 ## Deployment Scenarios
 
-**Disk only** — No S3 or Redis. The hosting service uses disk as both warm and cold. Good for small deployments and development.
+**Disk only** — A single node can use disk as both warm and cold storage. It is for development or a deliberately opted-in small deployment, never a replica pool.
 
 ```bash
+NODE_ENV=development             # or NODE_ENV=test
+# For a non-development single node only, with no S3_BUCKET or PRIVATE_S3_BUCKET:
+# HOSTING_ALLOW_DISK_SOURCE=true
 CACHE_DIR=./cache/sites
 HOT_CACHE_SIZE=104857600
 ```

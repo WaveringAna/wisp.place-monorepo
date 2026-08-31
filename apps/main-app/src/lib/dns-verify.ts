@@ -138,7 +138,6 @@ async function getAuthoritativeServers(name: string): Promise<string[]> {
  * goes direct to the NS with RD=0 for an authoritative answer.
  */
 async function authoritativeResolve(name: string, type: dnsPacket.RecordType): Promise<dnsPacket.Packet> {
-	console.log(`[DNS] Resolving ${type} ${name} via authoritative NS`)
 	const servers = await getAuthoritativeServers(name)
 	const shuffledServers = [...servers].sort(() => Math.random() - 0.5)
 
@@ -200,24 +199,17 @@ export interface VerificationResult {
 export const verifyDomainOwnership = async (domain: string, expectedDid: string): Promise<VerificationResult> => {
 	try {
 		const txtDomain = `_wisp.${domain}`
-		console.log(`[DNS Verify] Checking TXT ${txtDomain}, expected: ${expectedDid}`)
-
 		const records = await authoritativeResolveTxt(txtDomain)
 		const foundTxtValues = records.map((r) => r.join(''))
-		console.log(`[DNS Verify] Found TXT records:`, foundTxtValues)
-
 		if (foundTxtValues.some((v) => v === expectedDid)) {
-			console.log(`[DNS Verify] ✓ TXT record matches`)
 			const extras = foundTxtValues.filter((v) => v !== expectedDid)
 			const warning =
 				extras.length > 0
 					? `Multiple TXT records found at ${txtDomain}. Remove the extra record(s) to avoid issues: ${extras.join(', ')}`
 					: undefined
-			if (warning) console.log(`[DNS Verify] ⚠️  ${warning}`)
 			return { verified: true, warning, found: { txt: foundTxtValues } }
 		}
 
-		console.log(`[DNS Verify] ✗ TXT record does not match`)
 		return {
 			verified: false,
 			error: `TXT record at ${txtDomain} does not match expected DID. Expected: ${expectedDid}`,
@@ -225,7 +217,6 @@ export const verifyDomainOwnership = async (domain: string, expectedDid: string)
 		}
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err)
-		console.log(`[DNS Verify] ✗ TXT lookup error:`, message)
 		return {
 			verified: false,
 			error: `DNS lookup failed: ${message}`,
@@ -240,22 +231,16 @@ export const verifyDomainOwnership = async (domain: string, expectedDid: string)
 export const verifyCNAME = async (domain: string, expectedHash: string): Promise<VerificationResult> => {
 	try {
 		const expectedTarget = `${expectedHash}.dns.wisp.place`
-		console.log(`[DNS Verify] Checking CNAME ${domain}, expected: ${expectedTarget}`)
-
 		const cnames = await authoritativeResolveCname(domain)
 		const foundCname = cnames[0] ?? null
-		console.log(`[DNS Verify] Found CNAME:`, foundCname ?? 'none')
-
 		if (!foundCname) {
 			return { verified: false, error: `No CNAME record found for ${domain}`, found: { cname: '' } }
 		}
 
 		if (foundCname === expectedTarget.toLowerCase()) {
-			console.log(`[DNS Verify] ✓ CNAME record matches`)
 			return { verified: true, found: { cname: foundCname } }
 		}
 
-		console.log(`[DNS Verify] ✗ CNAME record does not match`)
 		return {
 			verified: false,
 			error: `CNAME for ${domain} points to ${foundCname}, expected ${expectedTarget}`,
@@ -263,7 +248,6 @@ export const verifyCNAME = async (domain: string, expectedHash: string): Promise
 		}
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err)
-		console.log(`[DNS Verify] ✗ CNAME lookup error:`, message)
 		return {
 			verified: false,
 			error: `DNS lookup failed: ${message}`,
@@ -287,9 +271,6 @@ export const verifyCustomDomain = async (
 	}
 
 	const cnameResult = await verifyCNAME(domain, expectedHash)
-	if (!cnameResult.verified) {
-		console.log(`[DNS Verify] ⚠️  CNAME verification failed (may be flattened):`, cnameResult.error)
-	}
 
 	return {
 		verified: true,

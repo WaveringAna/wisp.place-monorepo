@@ -1,166 +1,204 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { gunzipSync } from 'node:zlib'
-import { extractBlobCid, getPdsForDid, resolveDid } from '@wispplace/atproto-utils'
-import { sanitizePath } from '@wispplace/fs-utils'
-import type { Directory, Entry, File, Record as FsRecord } from '@wispplace/lexicons/types/place/wisp/fs'
-import type { Record as SubfsRecord } from '@wispplace/lexicons/types/place/wisp/subfs'
+import {
+	existsSync,
+	lstatSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	realpathSync,
+	renameSync,
+	rmSync,
+	writeFileSync,
+} from 'node:fs'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { promisify } from 'node:util'
+import { gunzip } from 'node:zlib'
+import {
+	expandSubfs,
+	extractBlobCid,
+	getPdsForDid,
+	resolveDid,
+	type SubfsSubject,
+	unsafeRawIdentityGet,
+} from '@wispplace/atproto-utils'
+import { MAX_BLOB_SIZE, MAX_FILE_COUNT } from '@wispplace/constants'
+import { normalizeSitePath } from '@wispplace/fs-utils'
+import { parseLexiconJson } from '@wispplace/lexicons/public-json'
+import type { Entry, Record as FsRecord } from '@wispplace/lexicons/types/place/wisp/fs'
+import { validateRecord as validateFsRecord } from '@wispplace/lexicons/types/place/wisp/fs'
 import { loadMetadata, type SiteMetadata, saveMetadata } from '../lib/metadata.ts'
 import { createSpinner, pc } from '../lib/progress.ts'
 
 const MAX_CONCURRENT_DOWNLOADS = 20
+const WINDOWS_RESERVED_NAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i
+const gunzipAsync = promisify(gunzip)
+
+/** Decompress one pulled site blob without accepting unbounded gzip output. */
+export async function decompressPulledGzip(content: Uint8Array, maxOutputBytes = MAX_BLOB_SIZE): Promise<Buffer> {
+	if (!Number.isSafeInteger(maxOutputBytes) || maxOutputBytes < 0 || maxOutputBytes > MAX_BLOB_SIZE) {
+		throw new RangeError('Pulled gzip output limit must be within the blob limit')
+	}
+	try {
+		return await gunzipAsync(content, { maxOutputLength: maxOutputBytes })
+	} catch {
+		throw new Error('Could not safely decompress gzip blob')
+	}
+}
+
+/** Buffer a remote site blob only until the shared per-file byte limit. */
+export async function readPulledBlob(response: Response, maxBytes = MAX_BLOB_SIZE): Promise<Buffer> {
+	if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes > MAX_BLOB_SIZE) {
+		throw new RangeError('Pulled blob limit must be within the blob limit')
+	}
+	const reader = response.body?.getReader()
+	if (!reader) return Buffer.alloc(0)
+
+	const chunks: Uint8Array[] = []
+	let totalBytes = 0
+	try {
+		while (true) {
+			const { done, value } = await reader.read()
+			if (done) break
+			totalBytes += value.byteLength
+			if (totalBytes > maxBytes) throw new Error(`Downloaded blob exceeds the ${maxBytes}-byte limit`)
+			chunks.push(value)
+		}
+	} catch (error) {
+		await reader.cancel(error).catch(() => undefined)
+		throw error
+	} finally {
+		reader.releaseLock()
+	}
+	return Buffer.concat(chunks, totalBytes)
+}
+
+function requireSiteFilePath(path: string): string {
+	const normalized = normalizeSitePath(path)
+	if (
+		!normalized ||
+		normalized !== path ||
+		normalized
+			.split('/')
+			.some((segment) => segment.includes(':') || /[. ]$/.test(segment) || WINDOWS_RESERVED_NAME.test(segment))
+	) {
+		throw new Error('Site contains an invalid file path')
+	}
+	return normalized
+}
+
+function isWithinRoot(root: string, target: string): boolean {
+	const fromRoot = relative(root, target)
+	return fromRoot !== '' && fromRoot !== '..' && !fromRoot.startsWith(`..${sep}`) && !isAbsolute(fromRoot)
+}
+
+function lstatOrNull(path: string): ReturnType<typeof lstatSync> | null {
+	try {
+		return lstatSync(path)
+	} catch {
+		return null
+	}
+}
+
+/** Resolve a validated site path without following untrusted child symlinks. */
+export function resolvePullFilePath(root: string, sitePath: string, createParents = false): string {
+	const relativePath = requireSiteFilePath(sitePath)
+	const rootInfo = lstatSync(root)
+	if (rootInfo.isSymbolicLink() || !rootInfo.isDirectory()) {
+		throw new Error('Pull root must be a directory, not a symbolic link')
+	}
+
+	const rootPath = realpathSync(root)
+	const parts = relativePath.split('/')
+	let directory = rootPath
+	for (const segment of parts.slice(0, -1)) {
+		directory = join(directory, segment)
+		let info = lstatOrNull(directory)
+		if (!info) {
+			if (!createParents) continue
+			mkdirSync(directory)
+			info = lstatOrNull(directory)
+		}
+		if (!info || info.isSymbolicLink() || !info.isDirectory()) {
+			throw new Error('Pull path contains an unsafe directory')
+		}
+	}
+
+	const target = resolve(rootPath, ...parts)
+	if (!isWithinRoot(rootPath, target)) {
+		throw new Error('Resolved pull path escapes its root')
+	}
+	if (lstatOrNull(target)?.isSymbolicLink()) {
+		throw new Error('Pull path resolves to a symbolic link')
+	}
+	return target
+}
 
 export interface PullOptions {
 	site: string
 	path: string
 }
 
-interface GetRecordResponse<T> {
-	value: T
+const SUBFS_EXPANSION_LIMITS = {
+	maxConcurrentFetches: 4,
+	maxDepth: 10,
+	maxEntries: MAX_FILE_COUNT * 4,
+	maxFiles: MAX_FILE_COUNT,
+	maxRecords: 100,
+} as const
+
+interface GetRecordResponse {
+	value: unknown
 	cid?: string
 }
 
-async function fetchRecord<T>(
+function isGetRecordResponse(value: unknown): value is GetRecordResponse {
+	if (typeof value !== 'object' || value === null || !('value' in value)) return false
+	return !('cid' in value) || value.cid === undefined || typeof value.cid === 'string'
+}
+
+async function fetchRecord(
 	pdsEndpoint: string,
 	did: string,
 	collection: string,
 	rkey: string,
-): Promise<GetRecordResponse<T>> {
-	const url = `${pdsEndpoint}/xrpc/com.atproto.repo.getRecord?repo=${encodeURIComponent(did)}&collection=${encodeURIComponent(collection)}&rkey=${encodeURIComponent(rkey)}`
-	const res = await fetch(url)
-	if (!res.ok) {
-		throw new Error(`Failed to fetch record: ${res.status}`)
-	}
-	return (await res.json()) as GetRecordResponse<T>
+): Promise<GetRecordResponse> {
+	const query = new URLSearchParams({ repo: did, collection, rkey })
+	const res = await fetch(`${pdsEndpoint}/xrpc/com.atproto.repo.getRecord?${query.toString()}`)
+	if (!res.ok) throw new Error(`Failed to fetch record: ${res.status}`)
+
+	const data: unknown = await res.json()
+	if (!isGetRecordResponse(data)) throw new Error('PDS returned an invalid record response')
+	return data
 }
 
-function extractSubfsUris(directory: Directory, currentPath: string = ''): Array<{ uri: string; path: string }> {
-	const uris: Array<{ uri: string; path: string }> = []
+type PdsEndpointResolver = (did: string) => Promise<string>
 
-	for (const entry of directory.entries) {
-		const fullPath = currentPath ? `${currentPath}/${entry.name}` : entry.name
+function createPdsEndpointResolver(rootDid: string, rootPdsEndpoint: string): PdsEndpointResolver {
+	const endpoints = new Map<string, Promise<string>>([[rootDid, Promise.resolve(rootPdsEndpoint)]])
 
-		if ('type' in entry.node) {
-			if (entry.node.type === 'subfs') {
-				const subfsNode = entry.node as any
-				if (subfsNode.subject) {
-					uris.push({ uri: subfsNode.subject, path: fullPath })
-				}
-			} else if (entry.node.type === 'directory') {
-				const subUris = extractSubfsUris(entry.node as Directory, fullPath)
-				uris.push(...subUris)
-			}
-		}
+	return (sourceDid) => {
+		const existing = endpoints.get(sourceDid)
+		if (existing) return existing
+
+		const pending = (async () => {
+			const endpoint = await getPdsForDid(sourceDid, unsafeRawIdentityGet, { allowLoopback: true })
+			if (!endpoint) throw new Error('Could not resolve a source PDS endpoint')
+			return endpoint
+		})()
+		endpoints.set(sourceDid, pending)
+		return pending
 	}
-
-	return uris
 }
 
-async function expandSubfsNodes(
-	directory: Directory,
-	pdsEndpoint: string,
-	depth: number = 0,
-	subfsCache: Map<string, SubfsRecord | null> = new Map(),
-): Promise<Directory> {
-	const MAX_DEPTH = 10
-
-	if (depth >= MAX_DEPTH) {
-		console.warn('Max subfs expansion depth reached')
-		return directory
-	}
-
-	const subfsUris = extractSubfsUris(directory)
-	if (subfsUris.length === 0) {
-		return directory
-	}
-
-	// Fetch uncached subfs records
-	const uncachedUris = subfsUris.filter(({ uri }) => !subfsCache.has(uri))
-
-	if (uncachedUris.length > 0) {
-		await Promise.all(
-			uncachedUris.map(async ({ uri }) => {
-				try {
-					const parts = uri.replace('at://', '').split('/')
-					const did = parts[0]!
-					const collection = parts[1]!
-					const rkey = parts[2]!
-
-					const data = await fetchRecord(pdsEndpoint, did, collection, rkey)
-					subfsCache.set(uri, data.value as SubfsRecord)
-				} catch {
-					subfsCache.set(uri, null)
-				}
-			}),
-		)
-	}
-
-	// Build map of path -> entries
-	const subfsMap = new Map<string, Entry[]>()
-	for (const { uri, path } of subfsUris) {
-		const record = subfsCache.get(uri)
-		if (record?.root?.entries) {
-			subfsMap.set(path, record.root.entries as unknown as Entry[])
-		}
-	}
-
-	// Replace subfs nodes with their content
-	function replaceSubfsInEntries(entries: Entry[], currentPath: string = ''): Entry[] {
-		const result: Entry[] = []
-
-		for (const entry of entries) {
-			const fullPath = currentPath ? `${currentPath}/${entry.name}` : entry.name
-			const node = entry.node
-
-			if ('type' in node && node.type === 'subfs') {
-				const subfsNode = node as any
-				const isFlat = subfsNode.flat !== false
-				const subfsEntries = subfsMap.get(fullPath)
-
-				if (subfsEntries) {
-					if (isFlat) {
-						const processedEntries = replaceSubfsInEntries(subfsEntries, currentPath)
-						result.push(...processedEntries)
-					} else {
-						const processedEntries = replaceSubfsInEntries(subfsEntries, fullPath)
-						result.push({
-							name: entry.name,
-							node: {
-								type: 'directory',
-								entries: processedEntries,
-							} as any,
-						})
-					}
-				} else {
-					result.push(entry)
-				}
-			} else if ('type' in node && node.type === 'directory' && 'entries' in node) {
-				result.push({
-					...entry,
-					node: {
-						...node,
-						entries: replaceSubfsInEntries(node.entries, fullPath),
-					},
-				})
-			} else {
-				result.push(entry)
-			}
-		}
-
-		return result
-	}
-
-	const partiallyExpanded = {
-		...directory,
-		entries: replaceSubfsInEntries(directory.entries),
-	}
-
-	return expandSubfsNodes(partiallyExpanded, pdsEndpoint, depth + 1, subfsCache)
+async function fetchSubfsRecord(subject: SubfsSubject, resolvePdsEndpoint: PdsEndpointResolver): Promise<unknown> {
+	const pdsEndpoint = await resolvePdsEndpoint(subject.repo)
+	const response = await fetchRecord(pdsEndpoint, subject.repo, subject.collection, subject.rkey)
+	return response.value
 }
 
 interface FileToDownload {
 	path: string
 	cid: string
+	ownerDid: string
 	encoding?: 'gzip'
 	mimeType?: string
 	base64?: boolean
@@ -168,34 +206,46 @@ interface FileToDownload {
 
 function collectFiles(
 	entries: Entry[],
+	ownerDidByFilePath: ReadonlyMap<string, string>,
 	pathPrefix: string,
 	existingCids: Record<string, string>,
 ): { toDownload: FileToDownload[]; toSkip: number } {
 	const toDownload: FileToDownload[] = []
+	const seenPaths = new Set<string>()
 	let toSkip = 0
+
+	function entryPath(parent: string, name: string): string {
+		const segment = requireSiteFilePath(name)
+		if (segment.includes('/')) throw new Error('Site entry names must be single path segments')
+		const path = parent ? `${parent}/${segment}` : segment
+		if (seenPaths.has(path)) throw new Error('Site contains duplicate file paths')
+		seenPaths.add(path)
+		return path
+	}
 
 	function collect(entries: Entry[], currentPath: string) {
 		for (const entry of entries) {
-			const fullPath = currentPath ? `${currentPath}/${entry.name}` : entry.name
+			const fullPath = entryPath(currentPath, entry.name)
 			const node = entry.node
 
 			if ('type' in node && node.type === 'directory' && 'entries' in node) {
 				collect(node.entries, fullPath)
 			} else if ('type' in node && node.type === 'file' && 'blob' in node) {
-				const fileNode = node as File
-				const cid = extractBlobCid(fileNode.blob)
-
+				const cid = extractBlobCid(node.blob)
 				if (!cid) continue
 
+				const ownerDid = ownerDidByFilePath.get(fullPath)
+				if (!ownerDid) throw new Error('Expanded file is missing its source repository')
 				if (existingCids[fullPath] === cid) {
 					toSkip++
 				} else {
 					toDownload.push({
 						path: fullPath,
 						cid,
-						encoding: fileNode.encoding,
-						mimeType: fileNode.mimeType,
-						base64: fileNode.base64,
+						ownerDid,
+						encoding: node.encoding,
+						mimeType: node.mimeType,
+						base64: node.base64,
 					})
 				}
 			}
@@ -206,15 +256,15 @@ function collectFiles(
 	return { toDownload, toSkip }
 }
 
-async function downloadBlob(pdsEndpoint: string, did: string, file: FileToDownload): Promise<Buffer> {
-	const url = `${pdsEndpoint}/xrpc/com.atproto.sync.getBlob?did=${encodeURIComponent(did)}&cid=${encodeURIComponent(file.cid)}`
+async function downloadBlob(pdsEndpoint: string, file: FileToDownload): Promise<Buffer> {
+	const url = `${pdsEndpoint}/xrpc/com.atproto.sync.getBlob?did=${encodeURIComponent(file.ownerDid)}&cid=${encodeURIComponent(file.cid)}`
 	const res = await fetch(url)
 
 	if (!res.ok) {
 		throw new Error(`Failed to download blob ${file.cid}: ${res.status}`)
 	}
 
-	let content = Buffer.from(await res.arrayBuffer())
+	let content: Buffer = await readPulledBlob(res)
 
 	// Decode base64 if needed
 	if (file.base64) {
@@ -222,13 +272,10 @@ async function downloadBlob(pdsEndpoint: string, did: string, file: FileToDownlo
 		content = Buffer.from(base64String, 'base64')
 	}
 
-	// Decompress gzip
+	// The CLI writes decoded site files, so malformed or oversized gzip must
+	// fail the pull rather than becoming an opaque canonical-looking output.
 	if (file.encoding === 'gzip' && content.length >= 2 && content[0] === 0x1f && content[1] === 0x8b) {
-		try {
-			content = gunzipSync(content)
-		} catch {
-			// Keep original content if decompression fails
-		}
+		content = await decompressPulledGzip(content)
 	}
 
 	return content
@@ -241,7 +288,7 @@ export async function pull(identifier: string, options: PullOptions): Promise<vo
 
 	// 1. Resolve DID
 	const spinner = createSpinner('Resolving identity...').start()
-	const did = await resolveDid(identifier)
+	const did = await resolveDid(identifier, unsafeRawIdentityGet)
 
 	if (!did) {
 		spinner.fail('Failed to resolve identity')
@@ -252,41 +299,71 @@ export async function pull(identifier: string, options: PullOptions): Promise<vo
 
 	// 2. Get PDS endpoint
 	const pdsSpinner = createSpinner('Getting PDS endpoint...').start()
-	const pdsEndpoint = await getPdsForDid(did)
+	const pdsEndpoint = await getPdsForDid(did, unsafeRawIdentityGet, { allowLoopback: true })
 
 	if (!pdsEndpoint) {
 		pdsSpinner.fail('Failed to get PDS endpoint')
 		throw new Error(`Could not get PDS for: ${did}`)
 	}
 
-	pdsSpinner.succeed(`PDS: ${pdsEndpoint}`)
+	pdsSpinner.succeed('Got PDS endpoint')
+	const resolveSourcePdsEndpoint = createPdsEndpointResolver(did, pdsEndpoint)
 
-	// 3. Fetch site record
+	// 3. Fetch and validate the site record
 	const recordSpinner = createSpinner('Fetching site record...').start()
-	let recordData: GetRecordResponse<FsRecord>
-
+	let recordData: GetRecordResponse
 	try {
-		recordData = await fetchRecord<FsRecord>(pdsEndpoint, did, 'place.wisp.fs', site)
+		recordData = await fetchRecord(pdsEndpoint, did, 'place.wisp.fs', site)
 	} catch {
 		recordSpinner.fail('Site not found')
 		throw new Error(`Site not found: ${site}`)
 	}
 
-	const record = recordData.value
+	let record: FsRecord
+	try {
+		record = parseLexiconJson<FsRecord>(recordData.value)
+		if (!validateFsRecord(record).success) throw new Error('Invalid site record')
+	} catch {
+		recordSpinner.fail('Site record is invalid')
+		throw new Error('Site record is invalid')
+	}
 	const recordCid = recordData.cid || ''
 	recordSpinner.succeed('Fetched site record')
 
-	// 4. Expand subfs nodes
+	// 4. Expand SubFS nodes. The shared helper validates children, preserves
+	// owner DID provenance, and fails closed on partial expansion.
 	const expandSpinner = createSpinner('Expanding subfs nodes...').start()
-	const expandedRoot = await expandSubfsNodes(record.root, pdsEndpoint)
-	expandSpinner.succeed('Expanded subfs nodes')
+	let expandedRoot: FsRecord['root']
+	let ownerDidByFilePath: ReadonlyMap<string, string>
+	try {
+		const expanded = await expandSubfs(record.root, {
+			rootOwnerDid: did,
+			fetchSubfsRecord: (subject) => fetchSubfsRecord(subject, resolveSourcePdsEndpoint),
+			limits: SUBFS_EXPANSION_LIMITS,
+		})
+		expandedRoot = expanded.root
+		ownerDidByFilePath = expanded.ownerDidByFilePath
+	} catch {
+		expandSpinner.fail('Could not expand SubFS nodes')
+		throw new Error('Could not expand SubFS nodes')
+	}
+	expandSpinner.succeed('Expanded SubFS nodes')
 
-	// 5. Load existing metadata for incremental updates
+	// 5. Load existing metadata for incremental updates.
 	const existingMetadata = loadMetadata(outputPath)
 	const existingCids = existingMetadata?.fileCids || {}
+	for (const filePath of Object.keys(existingCids)) {
+		requireSiteFilePath(filePath)
+	}
+	if (existsSync(outputPath)) {
+		const outputInfo = lstatSync(outputPath)
+		if (outputInfo.isSymbolicLink() || !outputInfo.isDirectory()) {
+			throw new Error('Output path must be a directory, not a symbolic link')
+		}
+	}
 
-	// 6. Collect files to download
-	const { toDownload, toSkip } = collectFiles(expandedRoot.entries, '', existingCids)
+	// 6. Collect files to download.
+	const { toDownload, toSkip } = collectFiles(expandedRoot.entries, ownerDidByFilePath, '', existingCids)
 
 	console.log(pc.dim(`Files to download: ${toDownload.length}, unchanged: ${toSkip}`))
 
@@ -295,11 +372,15 @@ export async function pull(identifier: string, options: PullOptions): Promise<vo
 		return
 	}
 
-	// 7. Create temp directory
-	const tempDir = `${outputPath}.tmp-${Date.now()}`
-	mkdirSync(tempDir, { recursive: true })
+	// 7. Create a non-symlink temp directory.
+	mkdirSync(dirname(outputPath), { recursive: true })
+	const tempDir = mkdtempSync(`${outputPath}.tmp-`)
+	const tempInfo = lstatSync(tempDir)
+	if (tempInfo.isSymbolicLink() || !tempInfo.isDirectory()) {
+		throw new Error('Temporary pull path must be a directory, not a symbolic link')
+	}
 
-	// 8. Download files
+	// 8. Download files.
 	const downloadSpinner = createSpinner(`Downloading ${toDownload.length} files...`).start()
 	const newFileCids: Record<string, string> = { ...existingCids }
 	let downloaded = 0
@@ -310,10 +391,9 @@ export async function pull(identifier: string, options: PullOptions): Promise<vo
 
 			await Promise.all(
 				batch.map(async (file) => {
-					const content = await downloadBlob(pdsEndpoint, did, file)
-					const filePath = join(tempDir, sanitizePath(file.path))
-
-					mkdirSync(dirname(filePath), { recursive: true })
+					const sourcePdsEndpoint = await resolveSourcePdsEndpoint(file.ownerDid)
+					const content = await downloadBlob(sourcePdsEndpoint, file)
+					const filePath = resolvePullFilePath(tempDir, file.path, true)
 					writeFileSync(filePath, content)
 
 					newFileCids[file.path] = file.cid
@@ -330,12 +410,11 @@ export async function pull(identifier: string, options: PullOptions): Promise<vo
 			const copySpinner = createSpinner(`Copying ${toSkip} unchanged files...`).start()
 
 			for (const [filePath, _cid] of Object.entries(existingCids)) {
-				if (!toDownload.find((f) => f.path === filePath)) {
-					const srcPath = join(outputPath, sanitizePath(filePath))
-					const destPath = join(tempDir, sanitizePath(filePath))
+				if (!toDownload.find((file) => file.path === filePath)) {
+					const srcPath = resolvePullFilePath(outputPath, filePath)
+					const destPath = resolvePullFilePath(tempDir, filePath, true)
 
 					if (existsSync(srcPath)) {
-						mkdirSync(dirname(destPath), { recursive: true })
 						const content = readFileSync(srcPath)
 						writeFileSync(destPath, content)
 					}

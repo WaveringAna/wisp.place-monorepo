@@ -44,17 +44,23 @@ const _mainSchema = /*#__PURE__*/ v.record(
     },
     /**
      * Optional raw secret used to sign the webhook payload with HMAC-SHA256. Prefer secretId to avoid embedding plaintext values in PDS records.
+     * @minLength 1
      * @maxLength 256
      */
     secret: /*#__PURE__*/ v.optional(
       /*#__PURE__*/ v.constrain(/*#__PURE__*/ v.string(), [
-        /*#__PURE__*/ v.stringLength(0, 256),
+        /*#__PURE__*/ v.stringLength(1, 256),
       ]),
     ),
     /**
-     * Name of a server-managed signing secret created via place.wisp.v2.secret.create. Takes precedence over secret if both are present.
+     * 1–64 character server-managed signing secret ID. Use ASCII letters, digits, dots, underscores, and hyphens only.
+     * @maxLength 64
      */
-    secretId: /*#__PURE__*/ v.optional(/*#__PURE__*/ v.recordKeyString()),
+    secretId: /*#__PURE__*/ v.optional(
+      /*#__PURE__*/ v.constrain(/*#__PURE__*/ v.recordKeyString(), [
+        /*#__PURE__*/ v.stringLength(0, 64),
+      ]),
+    ),
     /**
      * HTTPS endpoint to POST the webhook payload to.
      * @maxLength 2048

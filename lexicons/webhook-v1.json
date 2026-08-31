@@ -40,13 +40,15 @@
                     },
                     "secret": {
                         "type": "string",
+                        "minLength": 1,
                         "maxLength": 256,
                         "description": "Optional raw secret used to sign the webhook payload with HMAC-SHA256. Prefer secretId to avoid embedding plaintext values in PDS records."
                     },
                     "secretId": {
                         "type": "string",
                         "format": "record-key",
-                        "description": "Name of a server-managed signing secret created via place.wisp.v2.secret.create. Takes precedence over secret if both are present."
+                        "maxLength": 64,
+                        "description": "1–64 character server-managed signing secret ID. Use ASCII letters, digits, dots, underscores, and hyphens only."
                     },
                     "enabled": {
                         "type": "boolean",

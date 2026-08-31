@@ -464,7 +464,7 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 			<div className="p-4 pb-3 border-b border-border/30 flex-shrink-0">
 				<p className="text-sm font-semibold">Upload Site</p>
 				<p className="text-xs text-muted-foreground mt-0.5">
-					{siteMode === 'private' ? '100MB total · stored privately by wisp' : '100MB per file · 300MB total'}
+					{siteMode === 'private' ? '100MB total · stored privately by wisp' : '200MB per file · 300MB total'}
 				</p>
 			</div>
 

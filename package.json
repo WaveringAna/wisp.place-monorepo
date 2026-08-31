@@ -19,8 +19,8 @@
     "typescript": "^5.9.3"
   },
   "scripts": {
-    "test": "bun test",
-		"dev": "bun run build && bun run --watch apps/main-app/src/index.ts",
+    "test": "NODE_ENV=test bun test --isolate",
+		"dev": "NODE_ENV=development bun run build && NODE_ENV=development bun run --watch apps/main-app/src/index.ts",
     "dev:infra": "./scripts/dev-infra.sh up",
     "dev:infra:down": "./scripts/dev-infra.sh down",
     "start": "bun run apps/main-app/src/index.ts",

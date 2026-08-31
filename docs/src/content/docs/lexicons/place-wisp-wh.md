@@ -23,10 +23,14 @@ Enable **backlinks** to also fire when records in *any* repo reference your DID 
 
 **Events** can be filtered to `create`, `update`, `delete`, or any combination. Omit the filter to receive all three.
 
+**Endpoint safety** — webhook URLs must be HTTPS, must not contain credentials or fragments, and use a canonical DID (`did:plc` or `did:web`) in the scope AT-URI rather than a handle. HTTP is accepted only for an explicitly enabled local-development loopback endpoint (`localhost`, `.localhost`, or loopback IP); it is never enabled in production. A webhook can contain at most three unique event kinds. Use either `secret` or `secretId`, not both.
+
+The editor/API paginates webhook lists and limits each owner to 50 webhooks. Direct PDS writes are still checked by firehose intake, so clients should not depend on a main-app-only quota check.
+
 **Signing** — attach a signing secret to get an `X-Webhook-Signature` header on every delivery. Two options:
 
 - `secret` — embed a plaintext value directly in your PDS record. Simple, but the secret is stored in your public repo.
-- `secretId` — reference a server-managed secret by name (created via `place.wisp.v2.secret.create`). The token is never stored in your PDS record and can be rotated without updating the webhook. **Prefer this.**
+- `secretId` — reference a server-managed secret by name (created via `place.wisp.v2.secret.create`). The token is never stored in your PDS record and can be rotated without updating the webhook. IDs use 1–64 ASCII letters, digits, dots, underscores, or hyphens. **Prefer this.**
 
 ## Payload
 
@@ -119,5 +123,14 @@ HEALTH_PORT=3003
 DELIVERY_TIMEOUT_MS=10000
 DELIVERY_MAX_RETRIES=3
 REDIS_URL="redis://localhost:6379"
+
+# Required for server-managed secretId delivery. Must match main-app.
+WEBHOOK_SECRET_ENCRYPTION_KEY="..."
+# Optional decrypt-only old keys during rotation.
+WEBHOOK_SECRET_ENCRYPTION_PREVIOUS_KEYS=""
+
+# Local benchmark/development only. Enables HTTP loopback targets only when
+# the delivery worker explicitly requests allowLoopback too. Never set in production.
+WISP_ALLOW_LOCALHOST_FETCH=1
 WEBHOOK_EVENTS_CHANNEL="webhook:events"
 ```

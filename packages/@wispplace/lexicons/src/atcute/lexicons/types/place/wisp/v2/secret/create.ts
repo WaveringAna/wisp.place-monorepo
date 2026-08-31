@@ -8,9 +8,12 @@ const _mainSchema = /*#__PURE__*/ v.procedure("place.wisp.v2.secret.create", {
     type: "lex",
     schema: /*#__PURE__*/ v.object({
       /**
-       * Unique name for this secret, scoped to the caller DID.
+       * Unique 1–64 character secret ID scoped to the caller DID. Use ASCII letters, digits, dots, underscores, and hyphens only.
+       * @maxLength 64
        */
-      name: /*#__PURE__*/ v.recordKeyString(),
+      name: /*#__PURE__*/ v.constrain(/*#__PURE__*/ v.recordKeyString(), [
+        /*#__PURE__*/ v.stringLength(0, 64),
+      ]),
     }),
   },
   output: {

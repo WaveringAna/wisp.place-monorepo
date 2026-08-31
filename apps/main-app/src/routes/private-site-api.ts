@@ -110,6 +110,7 @@ export const privateSiteApiRoutes = (client: NodeOAuthClient, cookieSecret: stri
 			try {
 				const site = await requireOwnedSite(params.siteId, auth.did)
 				const handoff = await createOwnerHandoff(site.siteId, auth.did)
+				if (!handoff) throw new PrivateSiteError('private site not found', 'notFound')
 				return { success: true, url: privateOwnerUrl(site.siteId, handoff) }
 			} catch (err) {
 				logger.error('[PrivateSite] Owner open error', err)

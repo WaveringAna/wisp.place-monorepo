@@ -1,10 +1,15 @@
 import type { NodeOAuthClient } from '@atproto/oauth-client-node'
+import { isValidWebhookSecretId, WEBHOOK_SECRET_ENCRYPTION_ERROR } from '@wispplace/atproto-utils'
 import { createLogger } from '@wispplace/observability'
 import { Elysia, t } from 'elysia'
 import { createWebhookSecret, deleteWebhookSecret, listWebhookSecrets, rotateWebhookSecret } from '../lib/db'
 import { requireAuth, SESSION_COOKIE_NAME } from '../lib/wisp-auth'
 
 const logger = createLogger('main-app')
+const isWebhookSecretEncryptionUnavailable = (error: unknown): boolean =>
+	error instanceof Error && error.message === WEBHOOK_SECRET_ENCRYPTION_ERROR
+
+const invalidSecretNameResponse = { success: false, error: 'Invalid secret name' }
 
 export const secretRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 	new Elysia({
@@ -23,37 +28,47 @@ export const secretRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 			try {
 				const secrets = await listWebhookSecrets(auth.did)
 				return { success: true, secrets }
-			} catch (err) {
-				logger.error('[Secret] List error', err)
+			} catch {
+				logger.error('[Secret] List failed')
 				set.status = 500
 				return { success: false, error: 'Failed to list secrets' }
 			}
 		})
 		/**
 		 * POST /api/secret
-		 * Creates a new signing secret. Returns the token once — it is not stored in plaintext.
+		 * Creates a new signing secret. Returns the token once; the database keeps only an encrypted envelope.
 		 */
 		.post(
 			'/',
 			async ({ body, auth, set }) => {
+				if (!isValidWebhookSecretId(body.name)) {
+					set.status = 400
+					return invalidSecretNameResponse
+				}
 				try {
 					const { token, createdAt } = await createWebhookSecret(auth.did, body.name)
 					logger.info(`[Secret] Created secret "${body.name}" for ${auth.did}`)
 					return { success: true, name: body.name, token, createdAt }
-				} catch (err) {
-					const msg = err instanceof Error ? err.message : ''
-					if (msg === 'already_exists') {
+				} catch (error) {
+					const message = error instanceof Error ? error.message : ''
+					if (message === 'already_exists') {
 						set.status = 409
 						return { success: false, error: 'A secret with that name already exists' }
 					}
-					logger.error('[Secret] Create error', err)
+					if (isWebhookSecretEncryptionUnavailable(error)) {
+						set.status = 503
+						return { success: false, error: WEBHOOK_SECRET_ENCRYPTION_ERROR }
+					}
+					logger.error('[Secret] Create failed')
 					set.status = 500
 					return { success: false, error: 'Failed to create secret' }
 				}
 			},
 			{
 				body: t.Object({
-					name: t.String({ minLength: 1 }),
+					// Canonical size/character validation is performed in the handler so
+					// every invalid name receives the same generic 400 response.
+					name: t.String(),
 				}),
 			},
 		)
@@ -62,6 +77,10 @@ export const secretRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		 * Deletes a signing secret by name.
 		 */
 		.delete('/:name', async ({ params, auth, set }) => {
+			if (!isValidWebhookSecretId(params.name)) {
+				set.status = 400
+				return invalidSecretNameResponse
+			}
 			try {
 				const deleted = await deleteWebhookSecret(auth.did, params.name)
 				if (!deleted) {
@@ -70,8 +89,8 @@ export const secretRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				}
 				logger.info(`[Secret] Deleted secret "${params.name}" for ${auth.did}`)
 				return { success: true }
-			} catch (err) {
-				logger.error('[Secret] Delete error', err)
+			} catch {
+				logger.error('[Secret] Delete failed')
 				set.status = 500
 				return { success: false, error: 'Failed to delete secret' }
 			}
@@ -81,6 +100,10 @@ export const secretRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		 * Rotates a signing secret, returning the new token once.
 		 */
 		.post('/:name/rotate', async ({ params, auth, set }) => {
+			if (!isValidWebhookSecretId(params.name)) {
+				set.status = 400
+				return invalidSecretNameResponse
+			}
 			try {
 				const result = await rotateWebhookSecret(auth.did, params.name)
 				if (!result) {
@@ -89,8 +112,12 @@ export const secretRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				}
 				logger.info(`[Secret] Rotated secret "${params.name}" for ${auth.did}`)
 				return { success: true, name: params.name, token: result.token, rotatedAt: result.rotatedAt }
-			} catch (err) {
-				logger.error('[Secret] Rotate error', err)
+			} catch (error) {
+				if (isWebhookSecretEncryptionUnavailable(error)) {
+					set.status = 503
+					return { success: false, error: WEBHOOK_SECRET_ENCRYPTION_ERROR }
+				}
+				logger.error('[Secret] Rotate failed')
 				set.status = 500
 				return { success: false, error: 'Failed to rotate secret' }
 			}

@@ -12,6 +12,16 @@ function createTestCache() {
 	})
 }
 
+function createDeferred<T>() {
+	let resolve!: (value: T | PromiseLike<T>) => void
+	let reject!: (reason?: unknown) => void
+	const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+		resolve = resolvePromise
+		reject = rejectPromise
+	})
+	return { promise, resolve, reject }
+}
+
 describe('CacheManager', () => {
 	describe('get / set basics', () => {
 		test('returns undefined for missing key', () => {
@@ -48,11 +58,12 @@ describe('CacheManager', () => {
 			expect(c.get<string>('ttl', 'k')).toBe('fresh')
 		})
 
-		test('expires value after TTL', async () => {
+		test('expires stale entries after the safety TTL and releases their stats', async () => {
 			const c = createTestCache()
 			c.set('ttl', 'k', 'stale')
 			await Bun.sleep(150)
 			expect(c.get('ttl', 'k')).toBeUndefined()
+			expect(c.getStats().ttl).toMatchObject({ entries: 0, sizeBytes: 0, misses: 1 })
 		})
 	})
 
@@ -64,6 +75,7 @@ describe('CacheManager', () => {
 			c.set('lru', 'c', 3)
 			// At capacity (3). Adding a 4th should evict 'a' (oldest).
 			c.set('lru', 'd', 4)
+			expect(c.getStats().lru).toMatchObject({ entries: 3, sizeBytes: 0, evictions: 1 })
 			expect(c.get<number>('lru', 'a')).toBeUndefined()
 			expect(c.get<number>('lru', 'b')).toBe(2)
 			expect(c.get<number>('lru', 'd')).toBe(4)
@@ -92,6 +104,7 @@ describe('CacheManager', () => {
 			c.set('sized', 'c', 'x'.repeat(100))
 			// At 300 bytes. Adding 150 more should evict until it fits.
 			c.set('sized', 'd', 'x'.repeat(150))
+			expect(c.getStats().sized).toMatchObject({ entries: 2, sizeBytes: 250, evictions: 2 })
 			expect(c.get('sized', 'a')).toBeUndefined()
 			expect(c.get('sized', 'd')).toBeDefined()
 		})
@@ -122,6 +135,46 @@ describe('CacheManager', () => {
 			expect(c.get<number>('lru', 'b')).toBeUndefined()
 			// Other namespace untouched
 			expect(c.get<number>('ttl', 'x')).toBe(3)
+		})
+
+		test('clearAll clears every namespace while preserving cumulative stats', () => {
+			const c = createTestCache()
+			c.set('ttl', 'a', 1)
+			c.set('lru', 'b', 2)
+			c.set('sized', 'c', 'size')
+			c.get('lru', 'b')
+
+			c.clearAll()
+
+			const stats = c.getStats()
+			expect(stats.ttl).toMatchObject({ entries: 0, sizeBytes: 0, hits: 0, misses: 0 })
+			expect(stats.lru).toMatchObject({ entries: 0, sizeBytes: 0, hits: 1, misses: 0 })
+			expect(stats.sized).toMatchObject({ entries: 0, sizeBytes: 0, hits: 0, misses: 0 })
+		})
+
+		test('clearAll fences pending fetches so stale completions cannot repopulate a namespace', async () => {
+			const c = createTestCache()
+			const stale = createDeferred<string>()
+			const fresh = createDeferred<string>()
+			let calls = 0
+			const staleRequest = c.getOrFetch('ttl', 'pending', () => {
+				calls++
+				return stale.promise
+			})
+
+			c.clearAll()
+			const freshRequest = c.getOrFetch('ttl', 'pending', () => {
+				calls++
+				return fresh.promise
+			})
+			expect(calls).toBe(2)
+
+			stale.resolve('stale')
+			expect(await staleRequest).toBe('stale')
+			expect(c.get('ttl', 'pending')).toBeUndefined()
+			fresh.resolve('fresh')
+			expect(await freshRequest).toBe('fresh')
+			expect(c.get<string>('ttl', 'pending')).toBe('fresh')
 		})
 	})
 
@@ -158,6 +211,211 @@ describe('CacheManager', () => {
 			expect(val).toBe('async-result')
 			// Second call should be from cache
 			expect(c.get<string>('lru', 'k')).toBe('async-result')
+		})
+
+		test('shares one in-flight fetch across concurrent cache misses', async () => {
+			const c = createTestCache()
+			const deferred = createDeferred<string>()
+			let calls = 0
+			const first = c.getOrFetch('lru', 'k', () => {
+				calls++
+				return deferred.promise
+			})
+			const second = c.getOrFetch('lru', 'k', () => {
+				calls++
+				return 'second fetch should not run'
+			})
+
+			expect(calls).toBe(1)
+			deferred.resolve('shared')
+			expect(await first).toBe('shared')
+			expect(await second).toBe('shared')
+			expect(c.get<string>('lru', 'k')).toBe('shared')
+		})
+
+		test('keeps in-flight fetches isolated by namespace and key', async () => {
+			const c = createTestCache()
+			const firstValue = createDeferred<string>()
+			const secondValue = createDeferred<string>()
+			const thirdValue = createDeferred<string>()
+			let calls = 0
+			const first = c.getOrFetch('lru', 'same-key', () => {
+				calls++
+				return firstValue.promise
+			})
+			const second = c.getOrFetch('lru', 'other-key', () => {
+				calls++
+				return secondValue.promise
+			})
+			const third = c.getOrFetch('ttl', 'same-key', () => {
+				calls++
+				return thirdValue.promise
+			})
+
+			expect(calls).toBe(3)
+			firstValue.resolve('first')
+			secondValue.resolve('second')
+			thirdValue.resolve('third')
+			expect(await first).toBe('first')
+			expect(await second).toBe('second')
+			expect(await third).toBe('third')
+		})
+
+		test('shares a rejected fetch and removes it so a later request can retry', async () => {
+			const c = createTestCache()
+			const deferred = createDeferred<string>()
+			const error = new Error('fetch failed')
+			let calls = 0
+			const first = c.getOrFetch('lru', 'k', () => {
+				calls++
+				return deferred.promise
+			})
+			const second = c.getOrFetch('lru', 'k', () => {
+				calls++
+				return 'second fetch should not run'
+			})
+			const outcomes = Promise.allSettled([first, second])
+
+			expect(calls).toBe(1)
+			deferred.reject(error)
+			const [firstOutcome, secondOutcome] = await outcomes
+			expect(firstOutcome).toEqual({ status: 'rejected', reason: error })
+			expect(secondOutcome).toEqual({ status: 'rejected', reason: error })
+
+			expect(
+				await c.getOrFetch('lru', 'k', () => {
+					calls++
+					return 'retried'
+				}),
+			).toBe('retried')
+			expect(calls).toBe(2)
+		})
+
+		test('delete fences an in-flight fetch and keeps a newer pending fetch joinable', async () => {
+			const c = createTestCache()
+			const stale = createDeferred<string>()
+			const fresh = createDeferred<string>()
+			let calls = 0
+			const staleRequest = c.getOrFetch('lru', 'k', () => {
+				calls++
+				return stale.promise
+			})
+
+			c.delete('lru', 'k')
+			const freshRequest = c.getOrFetch('lru', 'k', () => {
+				calls++
+				return fresh.promise
+			})
+			expect(calls).toBe(2)
+
+			stale.resolve('stale')
+			expect(await staleRequest).toBe('stale')
+			expect(c.get('lru', 'k')).toBeUndefined()
+
+			const joinedFreshRequest = c.getOrFetch('lru', 'k', () => {
+				calls++
+				return 'third fetch should not run'
+			})
+			expect(calls).toBe(2)
+			fresh.resolve('fresh')
+			expect(await freshRequest).toBe('fresh')
+			expect(await joinedFreshRequest).toBe('fresh')
+			expect(c.get<string>('lru', 'k')).toBe('fresh')
+		})
+
+		test('deletePrefix fences matching in-flight fetches', async () => {
+			const c = createTestCache()
+			const stale = createDeferred<string>()
+			const fresh = createDeferred<string>()
+			let calls = 0
+			const staleRequest = c.getOrFetch('lru', 'site:page', () => {
+				calls++
+				return stale.promise
+			})
+
+			c.deletePrefix('lru', 'site:')
+			const freshRequest = c.getOrFetch('lru', 'site:page', () => {
+				calls++
+				return fresh.promise
+			})
+			expect(calls).toBe(2)
+
+			stale.resolve('stale')
+			expect(await staleRequest).toBe('stale')
+			expect(c.get('lru', 'site:page')).toBeUndefined()
+
+			const joinedFreshRequest = c.getOrFetch('lru', 'site:page', () => {
+				calls++
+				return 'third fetch should not run'
+			})
+			expect(calls).toBe(2)
+			fresh.resolve('fresh')
+			expect(await freshRequest).toBe('fresh')
+			expect(await joinedFreshRequest).toBe('fresh')
+			expect(c.get<string>('lru', 'site:page')).toBe('fresh')
+		})
+
+		test('clear fences all in-flight fetches in a namespace', async () => {
+			const c = createTestCache()
+			const staleFirst = createDeferred<string>()
+			const staleSecond = createDeferred<string>()
+			const fresh = createDeferred<string>()
+			let calls = 0
+			const firstRequest = c.getOrFetch('lru', 'first', () => {
+				calls++
+				return staleFirst.promise
+			})
+			const secondRequest = c.getOrFetch('lru', 'second', () => {
+				calls++
+				return staleSecond.promise
+			})
+
+			c.clear('lru')
+			const freshRequest = c.getOrFetch('lru', 'first', () => {
+				calls++
+				return fresh.promise
+			})
+			expect(calls).toBe(3)
+
+			staleFirst.resolve('stale first')
+			staleSecond.resolve('stale second')
+			expect(await firstRequest).toBe('stale first')
+			expect(await secondRequest).toBe('stale second')
+			expect(c.get('lru', 'first')).toBeUndefined()
+			expect(c.get('lru', 'second')).toBeUndefined()
+
+			const joinedFreshRequest = c.getOrFetch('lru', 'first', () => {
+				calls++
+				return 'fourth fetch should not run'
+			})
+			expect(calls).toBe(3)
+			fresh.resolve('fresh')
+			expect(await freshRequest).toBe('fresh')
+			expect(await joinedFreshRequest).toBe('fresh')
+			expect(c.get<string>('lru', 'first')).toBe('fresh')
+		})
+
+		test('explicit set fences an in-flight fetch without letting it overwrite the set value', async () => {
+			const c = createTestCache()
+			const stale = createDeferred<string>()
+			let calls = 0
+			const staleRequest = c.getOrFetch('lru', 'k', () => {
+				calls++
+				return stale.promise
+			})
+
+			c.set('lru', 'k', 'explicit')
+			expect(
+				await c.getOrFetch('lru', 'k', () => {
+					calls++
+					return 'fetch should not run'
+				}),
+			).toBe('explicit')
+			expect(calls).toBe(1)
+
+			stale.resolve('stale')
+			expect(await staleRequest).toBe('stale')
+			expect(c.get<string>('lru', 'k')).toBe('explicit')
 		})
 
 		test('cacheIf: false skips caching', async () => {
@@ -218,6 +476,15 @@ describe('CacheManager', () => {
 			expect(c.getStats().sized.sizeBytes).toBe(11)
 			c.delete('sized', 'a')
 			expect(c.getStats().sized.sizeBytes).toBe(6)
+		})
+
+		test('does not retain a value larger than the namespace byte cap', () => {
+			const c = createTestCache()
+			c.set('sized', 'key', 'small')
+			c.set('sized', 'key', 'x'.repeat(301))
+
+			expect(c.get('sized', 'key')).toBeUndefined()
+			expect(c.getStats().sized).toMatchObject({ entries: 0, sizeBytes: 0 })
 		})
 
 		test('returns independent stats per namespace', () => {

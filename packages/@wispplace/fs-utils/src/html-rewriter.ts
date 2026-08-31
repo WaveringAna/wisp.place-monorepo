@@ -18,7 +18,7 @@ const REWRITABLE_ATTRS: Record<string, 'url' | 'srcset'> = {
 const RAW_TEXT_TAGS = new Set(['script', 'style'])
 
 function isRootRelative(url: string): boolean {
-	if (!url || !url.startsWith('/')) return false
+	if (!url?.startsWith('/')) return false
 	// Protocol-relative (//cdn.example.com) — not a local path
 	if (url.startsWith('//')) return false
 	return true

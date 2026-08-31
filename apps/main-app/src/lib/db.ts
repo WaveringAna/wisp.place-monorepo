@@ -1,207 +1,273 @@
+import {
+	decryptWebhookSecret,
+	encryptWebhookSecret,
+	isValidWebhookSecretId,
+	parseWebhookSecretEncryptionKeyring,
+	type WebhookSecretEncryptionKeyring,
+} from '@wispplace/atproto-utils'
+import { DELETED_SITE_RECORD_CID } from '@wispplace/constants'
 import { SQL } from 'bun'
+import { resolveDatabaseConfiguration } from './database-config'
+import { createDatabaseReadCircuit, type DatabaseReadProbeResult } from './database-read-circuit'
+import { assessDatabaseReadReplication } from './database-read-replication'
 import { isValidHandle, toDomain } from './domain-utils'
 import { runDatabaseMigrations } from './migrations'
+import { withReservedOAuthLock } from './oauth-lock'
+import { createPresentationReadQueries } from './presentation-reads'
 import { waitForSiteCacheProjection } from './site-cache-wait'
+import { migrateWebhookSecretEnvelopes } from './webhook-secret-encryption'
 
 export { isValidHandle, toDomain } from './domain-utils'
 
-export const db = new SQL(
-	process.env.NODE_ENV === 'production'
-		? process.env.DATABASE_URL ||
-				(() => {
-					throw new Error('DATABASE_URL environment variable is required in production')
-				})()
-		: process.env.DATABASE_URL || 'postgres://postgres:postgres@localhost:5432/wisp',
-)
+/**
+ * The primary database client. This remains the backward-compatible strong-
+ * consistency client for every write and any read that affects security,
+ * authorization, or a mutation decision.
+ */
+export const databaseConfiguration = resolveDatabaseConfiguration(process.env)
 
-await db`
-    CREATE TABLE IF NOT EXISTS oauth_states (
-        key TEXT PRIMARY KEY,
-        data TEXT NOT NULL,
-        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())
-    )
-`
+const createPoolOptions = (pool: typeof databaseConfiguration.primaryPool) => ({
+	max: pool.max,
+	idleTimeout: pool.idleTimeoutSeconds,
+	connectionTimeout: pool.connectionTimeoutSeconds,
+	maxLifetime: 300,
+})
 
-await db`
-    CREATE TABLE IF NOT EXISTS oauth_sessions (
-        sub TEXT PRIMARY KEY,
-        data TEXT NOT NULL,
-        updated_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()),
-        expires_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW()) + 2592000
-    )
-`
+export const db = new SQL(databaseConfiguration.primaryUrl, createPoolOptions(databaseConfiguration.primaryPool))
 
-await db`
-    CREATE TABLE IF NOT EXISTS oauth_keys (
-        kid TEXT PRIMARY KEY,
-        jwk TEXT NOT NULL,
-        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())
-    )
-`
+// Do not create another pool unless the operator explicitly configured a
+// different endpoint. The raw replica client stays private so call sites must
+// opt into the named eventualRead repository below.
+const replicaReadDb = databaseConfiguration.hasSeparateReadPool
+	? new SQL(databaseConfiguration.readUrl, {
+			...createPoolOptions(databaseConfiguration.readPool),
+			connection: {
+				statement_timeout: databaseConfiguration.readQueryTimeoutMs,
+			},
+		})
+	: undefined
 
-// Cookie secrets table for signed cookies
-await db`
-    CREATE TABLE IF NOT EXISTS cookie_secrets (
-        id TEXT PRIMARY KEY DEFAULT 'default',
-        secret TEXT NOT NULL,
-        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())
-    )
-`
+/** True when presentation-only reads have a separately configured pool. */
+export const hasSeparateDatabaseReadPool = databaseConfiguration.hasSeparateReadPool
 
-// Service identity keys for did.json verificationMethod
-await db`
-    CREATE TABLE IF NOT EXISTS service_identity_keys (
-        id TEXT PRIMARY KEY DEFAULT 'default',
-        public_key_multibase TEXT NOT NULL,
-        private_key_multibase TEXT,
-        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()),
-        updated_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())
-    )
-`
+type ReadEndpointProbeRow = {
+	transaction_read_only: boolean | string
+	sensitive_data_restricted: boolean | string
+	write_privileges_restricted: boolean | string
+	in_recovery: boolean | string
+	received_lsn: string | null
+	replayed_lsn: string | null
+	last_replay_at_ms: number | string | null
+	receiver_streaming: boolean | string | null
+	receiver_last_message_receipt_at_ms: number | string | null
+	observed_at_ms: number | string
+}
 
-// Domains table maps subdomain -> DID (now supports up to 3 domains per user)
-await db`
-    CREATE TABLE IF NOT EXISTS domains (
-        domain TEXT PRIMARY KEY,
-        did TEXT NOT NULL,
-        rkey TEXT,
-        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())
-    )
-`
+const asBoolean = (value: boolean | string): boolean => value === true || value === 'true' || value === 't'
+const asFiniteNumberOrNull = (value: number | string | null): number | null => {
+	if (value === null) return null
+	const parsed = Number(value)
+	return Number.isFinite(parsed) ? parsed : null
+}
 
-// Custom domains table for BYOD (bring your own domain)
-await db`
-    CREATE TABLE IF NOT EXISTS custom_domains (
-        id TEXT PRIMARY KEY,
-        domain TEXT UNIQUE NOT NULL,
-        did TEXT NOT NULL,
-        rkey TEXT,
-        verified BOOLEAN DEFAULT false,
-        last_verified_at BIGINT,
-        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())
-    )
-`
+const probeReadEndpoint = async (): Promise<DatabaseReadProbeResult> => {
+	if (!replicaReadDb) throw new Error('No configured database read endpoint')
 
-// Site cache table - stores CIDs for cached sites (used by firehose/hosting services)
-await db`
-    CREATE TABLE IF NOT EXISTS site_cache (
-        did TEXT NOT NULL,
-        rkey TEXT NOT NULL,
-        record_cid TEXT NOT NULL,
-        file_cids JSONB NOT NULL DEFAULT '{}',
-        cached_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()),
-        updated_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()),
-        cold_synced BOOLEAN NOT NULL DEFAULT true,
-        PRIMARY KEY (did, rkey)
-    )
-`
+	const query = replicaReadDb<ReadEndpointProbeRow[]>`
+		SELECT
+			(current_setting('transaction_read_only', true) = 'on') AS transaction_read_only,
+			NOT EXISTS (
+				SELECT 1
+				FROM pg_catalog.pg_class relation
+				JOIN pg_catalog.pg_namespace schema ON schema.oid = relation.relnamespace
+				WHERE schema.nspname = 'public'
+					AND relation.relkind IN ('r', 'p', 'v', 'm', 'f')
+					AND relation.relname NOT IN ('domains', 'custom_domains', 'site_cache', 'supporter')
+					AND (
+						has_table_privilege(current_user, relation.oid, 'SELECT')
+						OR has_any_column_privilege(current_user, relation.oid, 'SELECT')
+					)
+			) AS sensitive_data_restricted,
+			NOT EXISTS (
+				SELECT 1
+				FROM pg_catalog.pg_class relation
+				JOIN pg_catalog.pg_namespace schema ON schema.oid = relation.relnamespace
+				WHERE schema.nspname = 'public'
+					AND relation.relkind IN ('r', 'p', 'v', 'm', 'f')
+					AND (
+						has_table_privilege(current_user, relation.oid, 'INSERT')
+						OR has_table_privilege(current_user, relation.oid, 'UPDATE')
+						OR has_table_privilege(current_user, relation.oid, 'DELETE')
+						OR has_table_privilege(current_user, relation.oid, 'TRUNCATE')
+						OR has_table_privilege(current_user, relation.oid, 'REFERENCES')
+						OR has_table_privilege(current_user, relation.oid, 'TRIGGER')
+						OR has_any_column_privilege(current_user, relation.oid, 'INSERT')
+						OR has_any_column_privilege(current_user, relation.oid, 'UPDATE')
+					)
+			) AS write_privileges_restricted,
+			pg_is_in_recovery() AS in_recovery,
+			pg_last_wal_receive_lsn()::TEXT AS received_lsn,
+			pg_last_wal_replay_lsn()::TEXT AS replayed_lsn,
+			EXTRACT(EPOCH FROM pg_last_xact_replay_timestamp()) * 1000 AS last_replay_at_ms,
+			receiver.receiver_streaming AS receiver_streaming,
+			EXTRACT(EPOCH FROM receiver.last_message_receipt_at) * 1000 AS receiver_last_message_receipt_at_ms,
+			EXTRACT(EPOCH FROM clock_timestamp()) * 1000 AS observed_at_ms
+		FROM (SELECT 1) AS probe
+		LEFT JOIN LATERAL public.wisp_replica_receiver_status() AS receiver ON true
+	`
+	let timeout: ReturnType<typeof setTimeout> | undefined
+	const timeoutResult = new Promise<never>((_, reject) => {
+		timeout = setTimeout(() => {
+			try {
+				query.cancel()
+			} catch {
+				// The circuit only needs the bounded timeout; never expose a driver error.
+			}
+			reject(new Error('Database read endpoint probe timed out'))
+		}, databaseConfiguration.readProbeTimeoutMs)
+	})
 
-// Site settings cache table - cached place.wisp.settings records
-await db`
-    CREATE TABLE IF NOT EXISTS site_settings_cache (
-        did TEXT NOT NULL,
-        rkey TEXT NOT NULL,
-        record_cid TEXT NOT NULL,
-        directory_listing BOOLEAN NOT NULL DEFAULT false,
-        spa_mode TEXT,
-        custom_404 TEXT,
-        index_files JSONB,
-        clean_urls BOOLEAN NOT NULL DEFAULT true,
-        headers JSONB,
-        cached_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()),
-        updated_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()),
-        PRIMARY KEY (did, rkey)
-    )
-`
+	try {
+		const rows = await Promise.race([query, timeoutResult])
+		const row = rows[0]
+		if (!row) throw new Error('Database read endpoint probe returned no rows')
 
-// Supporter table - list of supporter DIDs
-await db`
-    CREATE TABLE IF NOT EXISTS supporter (
-        did TEXT PRIMARY KEY,
-        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())
-    )
-`
+		const inRecovery = asBoolean(row.in_recovery)
+		const replication = assessDatabaseReadReplication(
+			{
+				inRecovery,
+				receivedLsn: row.received_lsn,
+				replayedLsn: row.replayed_lsn,
+				lastReplayAtMs: asFiniteNumberOrNull(row.last_replay_at_ms),
+				receiverStreaming: row.receiver_streaming === null ? false : asBoolean(row.receiver_streaming),
+				receiverLastMessageReceiptAtMs: asFiniteNumberOrNull(row.receiver_last_message_receipt_at_ms),
+			},
+			asFiniteNumberOrNull(row.observed_at_ms) ?? Date.now(),
+			databaseConfiguration.readReceiverFreshnessMs,
+		)
+		return {
+			transactionReadOnly: asBoolean(row.transaction_read_only),
+			sensitiveDataRestricted: asBoolean(row.sensitive_data_restricted),
+			writePrivilegesRestricted: asBoolean(row.write_privileges_restricted),
+			inRecovery,
+			replicationReceiverHealthy: replication.replicationReceiverHealthy,
+			replayLagMs: replication.replayLagMs,
+		}
+	} finally {
+		if (timeout) clearTimeout(timeout)
+	}
+}
 
-// Webhook signing secrets managed server-side; token never stored after creation
-await db`
-    CREATE TABLE IF NOT EXISTS webhook_secrets (
-        did TEXT NOT NULL,
-        name TEXT NOT NULL,
-        token TEXT NOT NULL,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        last_rotated_at TIMESTAMPTZ,
-        PRIMARY KEY (did, name)
-    )
-`
+const databaseReadCircuit = createDatabaseReadCircuit({
+	configured: hasSeparateDatabaseReadPool,
+	maxReplayLagMs: databaseConfiguration.readMaxReplayLagMs,
+	probeIntervalMs: databaseConfiguration.readProbeIntervalMs,
+	cooldownMs: databaseConfiguration.readCircuitCooldownMs,
+	probe: probeReadEndpoint,
+})
 
-// PDS blobs are public, so private sites live only in Wisp's database and storage.
-await db`
-    CREATE TABLE IF NOT EXISTS private_sites (
-        site_id TEXT PRIMARY KEY,
-        owner_did TEXT NOT NULL,
-        name TEXT NOT NULL,
-        file_count INTEGER NOT NULL DEFAULT 0,
-        total_bytes BIGINT NOT NULL DEFAULT 0,
-        expires_at TIMESTAMPTZ,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-`
-
-await db`
-    CREATE TABLE IF NOT EXISTS private_site_files (
-        site_id TEXT NOT NULL REFERENCES private_sites(site_id) ON DELETE CASCADE,
-        path TEXT NOT NULL,
-        size BIGINT NOT NULL,
-        mime_type TEXT,
-        sha256 TEXT NOT NULL,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        PRIMARY KEY (site_id, path)
-    )
-`
-
-await db`
-    CREATE TABLE IF NOT EXISTS private_site_shares (
-        share_id TEXT PRIMARY KEY,
-        site_id TEXT NOT NULL REFERENCES private_sites(site_id) ON DELETE CASCADE,
-        token_hash TEXT NOT NULL,
-        token_prefix TEXT NOT NULL,
-        label TEXT,
-        expires_at TIMESTAMPTZ,
-        revoked_at TIMESTAMPTZ,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        last_used_at TIMESTAMPTZ,
-        audience_did TEXT
-    )
-`
-
-await db`
-    CREATE TABLE IF NOT EXISTS private_site_sessions (
-        session_id TEXT PRIMARY KEY,
-        secret_hash TEXT NOT NULL,
-        site_id TEXT NOT NULL REFERENCES private_sites(site_id) ON DELETE CASCADE,
-        kind TEXT NOT NULL,
-        owner_did TEXT,
-        share_id TEXT REFERENCES private_site_shares(share_id) ON DELETE CASCADE,
-        expires_at TIMESTAMPTZ NOT NULL,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-`
-
-await db`
-    CREATE TABLE IF NOT EXISTS private_site_handoffs (
-        handoff_id TEXT PRIMARY KEY,
-        secret_hash TEXT NOT NULL,
-        site_id TEXT NOT NULL REFERENCES private_sites(site_id) ON DELETE CASCADE,
-        owner_did TEXT,
-        share_id TEXT REFERENCES private_site_shares(share_id) ON DELETE CASCADE,
-        expires_at TIMESTAMPTZ NOT NULL,
-        consumed_at TIMESTAMPTZ,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-`
-
+// Bootstrap DDL and every following migration run under the primary advisory lock.
 await runDatabaseMigrations(db)
+
+export interface WebhookSecretEncryptionHealth {
+	readonly status: 'ready' | 'degraded'
+	readonly encryptionAvailable: boolean
+	readonly legacySecretsRemaining: number | null
+}
+
+const getConfiguredWebhookSecretKeyring = (): WebhookSecretEncryptionKeyring =>
+	parseWebhookSecretEncryptionKeyring({
+		WEBHOOK_SECRET_ENCRYPTION_KEY: process.env.WEBHOOK_SECRET_ENCRYPTION_KEY,
+		WEBHOOK_SECRET_ENCRYPTION_PREVIOUS_KEYS: process.env.WEBHOOK_SECRET_ENCRYPTION_PREVIOUS_KEYS,
+	})
+
+// There is intentionally no development plaintext fallback. Developers who use
+// server-managed signing secrets must configure the same encryption key setup.
+let webhookSecretEncryptionHealth: WebhookSecretEncryptionHealth = {
+	status: 'degraded',
+	encryptionAvailable: false,
+	legacySecretsRemaining: null,
+}
+const startupWebhookSecretKeyring = (() => {
+	try {
+		return getConfiguredWebhookSecretKeyring()
+	} catch {
+		return null
+	}
+})()
+
+try {
+	const migration = await migrateWebhookSecretEnvelopes(db, startupWebhookSecretKeyring)
+	webhookSecretEncryptionHealth = {
+		status: migration.legacyRemaining === 0 ? 'ready' : 'degraded',
+		encryptionAvailable: migration.encryptionAvailable,
+		legacySecretsRemaining: migration.legacyRemaining,
+	}
+} catch {
+	// Do not log the error. Driver errors and bad configuration can include values
+	// which must not reach process logs. The health endpoint exposes only this state.
+	webhookSecretEncryptionHealth = {
+		status: 'degraded',
+		encryptionAvailable: startupWebhookSecretKeyring !== null,
+		legacySecretsRemaining: null,
+	}
+}
+
+export const getWebhookSecretEncryptionHealth = (): WebhookSecretEncryptionHealth => ({
+	...webhookSecretEncryptionHealth,
+})
+
+const startupReadHealth = await databaseReadCircuit.probeNow()
+if (
+	databaseConfiguration.requiresProductionSafety &&
+	hasSeparateDatabaseReadPool &&
+	(startupReadHealth.mode === 'writable' || startupReadHealth.mode === 'unsafe')
+) {
+	throw new Error(
+		'DATABASE_READ_URL must use a restricted role with default_transaction_read_only=on outside development and test',
+	)
+}
+
+const primaryPresentationRead = createPresentationReadQueries(db)
+const replicaPresentationRead = replicaReadDb ? createPresentationReadQueries(replicaReadDb) : undefined
+
+const withEventualPresentationRead = async <T>(
+	operation: (queries: typeof primaryPresentationRead) => Promise<T>,
+): Promise<T> => {
+	const replicaQueries = replicaPresentationRead
+	if (!replicaQueries) return await operation(primaryPresentationRead)
+	return await databaseReadCircuit.withRead(
+		async () => await operation(replicaQueries),
+		async () => await operation(primaryPresentationRead),
+	)
+}
+
+/**
+ * Explicitly eventual, presentation-only reads. A healthy separate read pool is
+ * used only after its probe confirms a read-only session and acceptable replay
+ * lag. The circuit falls back to primary on probe or query failures. Never use
+ * this facade for authentication, authorization, ownership, tokens, cache waits,
+ * private data, or mutations.
+ */
+export const eventualRead = {
+	getUserStatus: async (did: string) => await withEventualPresentationRead((queries) => queries.getUserStatus(did)),
+	getSupporterStatus: async (did: string) => await withEventualPresentationRead((queries) => queries.isSupporter(did)),
+	getSitesForDid: async (did: string) => await withEventualPresentationRead((queries) => queries.getSitesByDid(did)),
+	getSitesWithDomainsForDid: async (did: string) =>
+		await withEventualPresentationRead((queries) => queries.getSitesWithDomainsByDid(did)),
+	getDomainsForDid: async (did: string) =>
+		await withEventualPresentationRead((queries) => queries.getDomainsForDid(did)),
+	getDomainsForSite: async (did: string, rkey: string) =>
+		await withEventualPresentationRead((queries) => queries.getDomainsBySite(did, rkey)),
+	getDomainStatus: async (domain: string) =>
+		await withEventualPresentationRead((queries) => queries.getDomainStatus(domain)),
+	getAdminSites: async (limit: number, offset: number) =>
+		await withEventualPresentationRead((queries) => queries.getAdminSites(limit, offset)),
+	getAdminSupporters: async () => await withEventualPresentationRead((queries) => queries.getAllSupporters()),
+}
+
+/** Sanitized read-endpoint health; this never includes a connection URL. */
+export const getDatabaseReadHealth = async () => await databaseReadCircuit.health()
 
 export const pruneAnalyticsData = async (): Promise<void> => {
 	await Promise.all([
@@ -210,25 +276,20 @@ export const pruneAnalyticsData = async (): Promise<void> => {
 	])
 }
 
-export const getDomainByDid = async (did: string): Promise<string | null> => {
-	const rows = await db`SELECT domain FROM domains WHERE did = ${did} ORDER BY created_at ASC LIMIT 1`
-	return rows[0]?.domain ?? null
-}
+// These shared helpers intentionally keep their historic strong/primary semantics.
+export const getDomainByDid = primaryPresentationRead.getDomainByDid
+// Includes cache/configuration metadata that the replica role cannot access.
+export const getAdminDatabaseReport = primaryPresentationRead.getAdminDatabaseReport
+// Delivery history can contain operator-controlled URLs; keep it on primary.
+export const getWebhookEventHistory = primaryPresentationRead.getWebhookEventHistory
 
 export const getWispDomainInfo = async (did: string) => {
 	const rows = await db`SELECT domain, rkey FROM domains WHERE did = ${did} ORDER BY created_at ASC LIMIT 1`
 	return rows[0] ?? null
 }
 
-export const getAllWispDomains = async (did: string): Promise<Array<{ domain: string; rkey: string | null }>> => {
-	const rows = await db`SELECT domain, rkey FROM domains WHERE did = ${did} ORDER BY created_at ASC`
-	return rows
-}
-
-export const countWispDomains = async (did: string): Promise<number> => {
-	const rows = await db`SELECT COUNT(*) as count FROM domains WHERE did = ${did}`
-	return Number(rows[0]?.count ?? 0)
-}
+export const getAllWispDomains = primaryPresentationRead.getAllWispDomains
+export const countWispDomains = primaryPresentationRead.countWispDomains
 
 export const getDidByDomain = async (domain: string): Promise<string | null> => {
 	const rows = await db`SELECT did FROM domains WHERE domain = ${domain.toLowerCase()}`
@@ -243,42 +304,7 @@ export const isDomainAvailable = async (handle: string): Promise<boolean> => {
 	return rows.length === 0
 }
 
-export const isDomainRegistered = async (domain: string) => {
-	const domainLower = domain.toLowerCase().trim()
-
-	// Check wisp.place subdomains
-	const wispDomain = await db`
-        SELECT did, domain, rkey FROM domains WHERE domain = ${domainLower}
-    `
-
-	if (wispDomain.length > 0) {
-		return {
-			registered: true,
-			type: 'wisp' as const,
-			domain: wispDomain[0].domain,
-			did: wispDomain[0].did,
-			rkey: wispDomain[0].rkey,
-		}
-	}
-
-	// Check custom domains
-	const customDomain = await db`
-        SELECT id, domain, did, rkey, verified FROM custom_domains WHERE domain = ${domainLower}
-    `
-
-	if (customDomain.length > 0) {
-		return {
-			registered: true,
-			type: 'custom' as const,
-			domain: customDomain[0].domain,
-			did: customDomain[0].did,
-			rkey: customDomain[0].rkey,
-			verified: customDomain[0].verified,
-		}
-	}
-
-	return { registered: false }
-}
+export const isDomainRegistered = primaryPresentationRead.isDomainRegistered
 
 export const claimDomain = async (did: string, handle: string): Promise<string> => {
 	const h = handle.trim().toLowerCase()
@@ -342,15 +368,9 @@ export const deleteWispDomain = async (domain: string): Promise<void> => {
 	await db`DELETE FROM domains WHERE domain = ${domain}`
 }
 
-export const getCustomDomainsByDid = async (did: string) => {
-	const rows = await db`SELECT * FROM custom_domains WHERE did = ${did} ORDER BY created_at DESC`
-	return rows
-}
+export const getCustomDomainsByDid = primaryPresentationRead.getCustomDomainsByDid
 
-export const getCustomDomainInfo = async (domain: string) => {
-	const rows = await db`SELECT * FROM custom_domains WHERE domain = ${domain.toLowerCase()}`
-	return rows[0] ?? null
-}
+export const getCustomDomainInfo = primaryPresentationRead.getCustomDomainInfo
 
 export const getCustomDomainByHash = async (hash: string) => {
 	const rows = await db`SELECT * FROM custom_domains WHERE id = ${hash}`
@@ -414,84 +434,23 @@ export const deleteCustomDomain = async (id: string) => {
 	await db`DELETE FROM custom_domains WHERE id = ${id}`
 }
 
-export const getSitesByDid = async (did: string) => {
-	const rows = await db`
-        SELECT
-            did,
-            rkey,
-            rkey AS display_name,
-            cached_at AS created_at,
-            updated_at
-        FROM site_cache
-        WHERE did = ${did}
-        ORDER BY cached_at DESC
-    `
-	return rows
-}
+export const getSitesByDid = primaryPresentationRead.getSitesByDid
 
 export const waitForSiteCache = async (did: string, rkey: string): Promise<boolean> =>
 	waitForSiteCacheProjection(async () => {
-		const rows = await db`SELECT 1 FROM site_cache WHERE did = ${did} AND rkey = ${rkey} LIMIT 1`
+		const rows = await db`
+			SELECT 1 FROM site_cache
+			WHERE did = ${did} AND rkey = ${rkey} AND record_cid <> ${DELETED_SITE_RECORD_CID}
+			LIMIT 1
+		`
 		return rows.length > 0
 	})
 
 // Get all domains (wisp + custom) mapped to a specific site
-export const getDomainsBySite = async (did: string, rkey: string) => {
-	const domains: Array<{
-		type: 'wisp' | 'custom'
-		domain: string
-		verified?: boolean
-		id?: string
-	}> = []
-
-	// Check wisp domain
-	const wispDomain = await db`
-        SELECT domain, rkey FROM domains
-        WHERE did = ${did} AND rkey = ${rkey}
-    `
-	if (wispDomain.length > 0) {
-		domains.push({
-			type: 'wisp',
-			domain: wispDomain[0].domain,
-		})
-	}
-
-	// Check custom domains
-	const customDomains = await db`
-        SELECT id, domain, verified FROM custom_domains
-        WHERE did = ${did} AND rkey = ${rkey}
-        ORDER BY created_at DESC
-    `
-	for (const cd of customDomains) {
-		domains.push({
-			type: 'custom',
-			domain: cd.domain,
-			verified: cd.verified,
-			id: cd.id,
-		})
-	}
-
-	return domains
-}
+export const getDomainsBySite = primaryPresentationRead.getDomainsBySite
 
 // Get count of domains mapped to a specific site
-export const getDomainCountBySite = async (did: string, rkey: string) => {
-	const wispCount = await db`
-        SELECT COUNT(*) as count FROM domains
-        WHERE did = ${did} AND rkey = ${rkey}
-    `
-
-	const customCount = await db`
-        SELECT COUNT(*) as count FROM custom_domains
-        WHERE did = ${did} AND rkey = ${rkey}
-    `
-
-	return {
-		wisp: Number(wispCount[0]?.count || 0),
-		custom: Number(customCount[0]?.count || 0),
-		total: Number(wispCount[0]?.count || 0) + Number(customCount[0]?.count || 0),
-	}
-}
+export const getDomainCountBySite = primaryPresentationRead.getDomainCountBySite
 
 // Cookie secret management - ensure we have a secret for signing cookies
 export const getCookieSecret = async (): Promise<string> => {
@@ -550,10 +509,7 @@ export const setServiceIdentityKeypair = async (
 }
 
 // Supporter management functions
-export const isSupporter = async (did: string): Promise<boolean> => {
-	const rows = await db`SELECT 1 FROM supporter WHERE did = ${did} LIMIT 1`
-	return rows.length > 0
-}
+export const isSupporter = primaryPresentationRead.isSupporter
 
 export const addSupporter = async (did: string): Promise<void> => {
 	await db`
@@ -567,27 +523,45 @@ export const removeSupporter = async (did: string): Promise<void> => {
 	await db`DELETE FROM supporter WHERE did = ${did}`
 }
 
-export const getAllSupporters = async () => {
-	const rows = await db`SELECT * FROM supporter ORDER BY created_at ASC`
-	return rows
-}
+export const getAllSupporters = primaryPresentationRead.getAllSupporters
 
 function generateSecretToken(): string {
 	const bytes = crypto.getRandomValues(new Uint8Array(24))
 	return `wsk_${Buffer.from(bytes).toString('base64url')}`
 }
 
+/**
+ * Parse on every secret operation so a controlled process restart/env reload
+ * never leaves a stale active key in memory. This throws only the stable,
+ * non-secret encryption-unavailable error on missing or malformed config.
+ */
+const requireWebhookSecretKeyring = (): WebhookSecretEncryptionKeyring => getConfiguredWebhookSecretKeyring()
+
+const WEBHOOK_SECRET_STORAGE_ERROR = 'webhook_secret_storage_unavailable'
+const WEBHOOK_SECRET_ID_ERROR = 'invalid_webhook_secret_id'
+const assertValidWebhookSecretId = (name: string): void => {
+	if (!isValidWebhookSecretId(name)) throw new Error(WEBHOOK_SECRET_ID_ERROR)
+}
+const isUniqueConstraintViolation = (error: unknown): boolean =>
+	typeof error === 'object' && error !== null && 'code' in error && (error as { code?: unknown }).code === '23505'
+
 export const createWebhookSecret = async (did: string, name: string): Promise<{ token: string; createdAt: string }> => {
+	assertValidWebhookSecretId(name)
+	const keyring = requireWebhookSecretKeyring()
 	const token = generateSecretToken()
+	const envelope = encryptWebhookSecret(token, keyring)
+
 	try {
 		const rows = await db`
             INSERT INTO webhook_secrets (did, name, token, created_at)
-            VALUES (${did}, ${name}, ${token}, NOW())
+            VALUES (${did}, ${name}, ${envelope}, NOW())
             RETURNING created_at
         `
 		return { token, createdAt: new Date(rows[0].created_at).toISOString() }
-	} catch (_err) {
-		throw new Error('already_exists')
+	} catch (error) {
+		// Do not attach the driver error: it can contain query parameter values.
+		if (isUniqueConstraintViolation(error)) throw new Error('already_exists')
+		throw new Error(WEBHOOK_SECRET_STORAGE_ERROR)
 	}
 }
 
@@ -608,6 +582,7 @@ export const listWebhookSecrets = async (
 }
 
 export const deleteWebhookSecret = async (did: string, name: string): Promise<boolean> => {
+	assertValidWebhookSecretId(name)
 	const rows = await db`
         DELETE FROM webhook_secrets WHERE did = ${did} AND name = ${name} RETURNING name
     `
@@ -618,10 +593,13 @@ export const rotateWebhookSecret = async (
 	did: string,
 	name: string,
 ): Promise<{ token: string; rotatedAt: string } | null> => {
+	assertValidWebhookSecretId(name)
+	const keyring = requireWebhookSecretKeyring()
 	const token = generateSecretToken()
+	const envelope = encryptWebhookSecret(token, keyring)
 	const rows = await db`
         UPDATE webhook_secrets
-        SET token = ${token}, last_rotated_at = NOW()
+        SET token = ${envelope}, last_rotated_at = NOW()
         WHERE did = ${did} AND name = ${name}
         RETURNING last_rotated_at
     `
@@ -629,22 +607,123 @@ export const rotateWebhookSecret = async (
 	return { token, rotatedAt: new Date(rows[0].last_rotated_at).toISOString() }
 }
 
+/**
+ * Internal delivery-only lookup. A found value must be a valid encrypted
+ * envelope. Plaintext legacy values, malformed records, and unavailable keys
+ * all fail closed with the same retryable generic error.
+ */
 export const getWebhookSecretToken = async (did: string, name: string): Promise<string | null> => {
+	assertValidWebhookSecretId(name)
 	const rows = await db<Array<{ token: string }>>`
         SELECT token FROM webhook_secrets WHERE did = ${did} AND name = ${name} LIMIT 1
     `
-	return rows[0]?.token ?? null
+	const envelope = rows[0]?.token
+	if (envelope === undefined) return null
+	return decryptWebhookSecret(envelope, requireWebhookSecretKeyring())
+}
+
+export type WebhookMutationAction = 'create' | 'delete'
+
+const WEBHOOK_MUTATION_WINDOW_MS = 60_000
+const WEBHOOK_MUTATION_MAX_PER_WINDOW = 10
+
+/**
+ * Atomically consume one per-DID mutation slot. The backing table is created by
+ * the normal primary migration; failure to reach it is handled as a generic
+ * route failure, never a permissive rate-limit bypass.
+ */
+export const consumeWebhookMutationRateLimit = async (
+	did: string,
+	action: WebhookMutationAction,
+	now = Date.now(),
+): Promise<boolean> => {
+	const windowStart = now - WEBHOOK_MUTATION_WINDOW_MS
+	const rows = await db<Array<{ mutation_count: number }>>`
+		INSERT INTO webhook_mutation_rate_limits (did, action, window_started_at, mutation_count)
+		VALUES (${did}, ${action}, ${now}, 1)
+		ON CONFLICT (did, action) DO UPDATE
+		SET
+			window_started_at = CASE
+				WHEN webhook_mutation_rate_limits.window_started_at <= ${windowStart} THEN ${now}
+				ELSE webhook_mutation_rate_limits.window_started_at
+			END,
+			mutation_count = CASE
+				WHEN webhook_mutation_rate_limits.window_started_at <= ${windowStart} THEN 1
+				ELSE webhook_mutation_rate_limits.mutation_count + 1
+			END
+		WHERE webhook_mutation_rate_limits.window_started_at <= ${windowStart}
+			OR webhook_mutation_rate_limits.mutation_count < ${WEBHOOK_MUTATION_MAX_PER_WINDOW}
+		RETURNING mutation_count
+	`
+	return rows.length === 1
 }
 
 /**
- * Close database connection
- * Call this during graceful shutdown
+ * Serialize main-app PDS webhook mutations per owner across regions. The PDS
+ * has no multi-record transaction, so this is best-effort only for writes
+ * through this API; firehose intake remains the final enforcement point.
  */
-export const closeDatabase = async (): Promise<void> => {
+export const withWebhookOwnerMutationLock = async <T>(did: string, operation: () => Promise<T>): Promise<T> => {
+	let reserved: Awaited<ReturnType<typeof db.reserve>>
 	try {
-		await db.end()
-		console.log('[DB] Database connection closed')
-	} catch (err) {
-		console.error('[DB] Error closing database connection:', err)
+		reserved = await db.reserve()
+	} catch {
+		throw new Error('webhook_mutation_unavailable')
 	}
+
+	const lockName = `wisp-webhook-owner:${did}`
+	return await withReservedOAuthLock(
+		{
+			async acquire(): Promise<void> {
+				// Do not alter a pooled session setting around a long PDS request.
+				// A busy owner fails closed and the authenticated caller can retry.
+				const rows = await reserved<Array<{ locked: boolean }>>`
+					SELECT pg_try_advisory_lock(hashtextextended(${lockName}, 0)) AS locked
+				`
+				if (!rows[0]?.locked) throw new Error('webhook_mutation_unavailable')
+			},
+			async unlock(): Promise<void> {
+				const rows = await reserved<Array<{ unlocked: boolean }>>`
+					SELECT pg_advisory_unlock(hashtextextended(${lockName}, 0)) AS unlocked
+				`
+				if (!rows[0]?.unlocked) throw new Error('webhook_mutation_unavailable')
+			},
+			release(): void {
+				reserved.release()
+			},
+			async close(): Promise<void> {
+				await reserved.close({ timeout: 0 })
+			},
+		},
+		operation,
+		() => {
+			// Static only: a cleanup failure must not expose a DID, endpoint, or secret.
+			console.error('[Webhook] Owner mutation lock cleanup failed')
+		},
+	)
+}
+
+const closeDatabasePool = async (name: 'primary' | 'read', pool: typeof db): Promise<void> => {
+	try {
+		await pool.end()
+		console.log(`[DB] ${name} database connection closed`)
+	} catch {
+		// Do not include driver errors here; they can include a connection URL.
+		console.error(`[DB] Error closing ${name} database connection`)
+	}
+}
+
+let databaseClosePromise: Promise<void> | undefined
+
+/**
+ * Close the primary pool and, when configured, the separate eventual-read pool.
+ * Repeated shutdown signals share this promise so a pool is never ended twice.
+ */
+export const closeDatabase = (): Promise<void> => {
+	databaseClosePromise ??= Promise.all([
+		closeDatabasePool('primary', db),
+		...(replicaReadDb ? [closeDatabasePool('read', replicaReadDb)] : []),
+	]).then(() => undefined)
+
+	return databaseClosePromise
 }

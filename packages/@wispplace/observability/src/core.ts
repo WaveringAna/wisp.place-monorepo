@@ -4,6 +4,7 @@
  */
 
 import { lokiExporter, metricsExporter } from './exporters'
+import { sanitizeContext, sanitizeError, sanitizeForLog, sanitizeLogString } from './redact'
 
 // ============================================================================
 // Types
@@ -101,20 +102,36 @@ function extractEventType(message: string): string | undefined {
 }
 
 // ============================================================================
+// Helpers
+// ============================================================================
+
+function serializeContext(context: Record<string, any>): string {
+	try {
+		return JSON.stringify(context)
+	} catch {
+		return '{"context":"<unserializable>"}'
+	}
+}
+
+// ============================================================================
 // Log Collector
 // ============================================================================
 
 export const logCollector = {
 	log(level: LogEntry['level'], message: string, service: string, context?: Record<string, any>, traceId?: string) {
+		const safeMessage = sanitizeLogString(message)
+		const safeService = sanitizeLogString(service)
+		const safeContext = sanitizeContext(context)
+		const safeTraceId = traceId === undefined ? undefined : sanitizeLogString(traceId)
 		const entry: LogEntry = {
 			id: generateId('log', logCounter++),
 			timestamp: new Date(),
 			level,
-			message,
-			service,
-			context,
-			traceId,
-			eventType: extractEventType(message),
+			message: safeMessage,
+			service: safeService,
+			context: safeContext,
+			traceId: safeTraceId,
+			eventType: extractEventType(safeMessage),
 		}
 
 		logs.unshift(entry)
@@ -124,13 +141,13 @@ export const logCollector = {
 			logs.splice(MAX_LOGS)
 		}
 
-		// Send to Loki exporter
+		// Send only the sanitized entry to Loki.
 		lokiExporter.pushLog(entry)
 
-		// Also log to console for compatibility
-		const contextStr = context ? ` ${JSON.stringify(context)}` : ''
-		const traceStr = traceId ? ` [trace:${traceId}]` : ''
-		console[level === 'debug' ? 'log' : level](`[${service}] ${message}${contextStr}${traceStr}`)
+		// Also log only sanitized JSON to console for compatibility.
+		const contextStr = safeContext ? ` ${serializeContext(safeContext)}` : ''
+		const traceStr = safeTraceId ? ` [trace:${safeTraceId}]` : ''
+		console[level === 'debug' ? 'log' : level](`[${safeService}] ${safeMessage}${contextStr}${traceStr}`)
 	},
 
 	info(message: string, service: string, context?: Record<string, any>, traceId?: string) {
@@ -141,17 +158,21 @@ export const logCollector = {
 		this.log('warn', message, service, context, traceId)
 	},
 
-	error(message: string, service: string, error?: any, context?: Record<string, any>, traceId?: string) {
-		const ctx = { ...context }
-		if (error instanceof Error) {
-			ctx.error = error.message
-			ctx.stack = error.stack
-		} else if (error) {
-			ctx.error = String(error)
+	error(message: string, service: string, error?: unknown, context?: Record<string, any>, traceId?: string) {
+		const ctx = sanitizeContext(context) ?? {}
+		const safeError = sanitizeError(error)
+
+		if (safeError) {
+			ctx.error = safeError.message
+			ctx.errorName = safeError.name
+			if (safeError.stack) ctx.stack = safeError.stack
+		} else if (error !== undefined) {
+			ctx.error = sanitizeForLog(error)
 		}
+
 		this.log('error', message, service, ctx, traceId)
 
-		// Also track in errors
+		// Also track in errors. errorTracker repeats sanitization for direct callers.
 		errorTracker.track(message, service, error, context)
 	},
 
@@ -181,7 +202,7 @@ export const logCollector = {
 			filtered = filtered.filter(
 				(log) =>
 					log.message.toLowerCase().includes(search) ||
-					(log.context ? JSON.stringify(log.context).toLowerCase().includes(search) : false),
+					(log.context ? serializeContext(log.context).toLowerCase().includes(search) : false),
 			)
 		}
 
@@ -199,34 +220,46 @@ export const logCollector = {
 // ============================================================================
 
 export const errorTracker = {
-	track(message: string, service: string, error?: any, context?: Record<string, any>) {
-		const key = `${service}:${message}`
+	track(message: string, service: string, error?: unknown, context?: Record<string, any>) {
+		const safeMessage = sanitizeLogString(message)
+		const safeService = sanitizeLogString(service)
+		const safeContext = sanitizeContext(context)
+		const safeError = sanitizeError(error)
+		const safeErrorValue = safeError
+			? { name: safeError.name, message: safeError.message }
+			: error === undefined
+				? undefined
+				: sanitizeForLog(error)
+		const trackedContext =
+			safeErrorValue === undefined ? safeContext : { ...(safeContext ?? {}), error: safeErrorValue }
+		const key = `${safeService}:${safeMessage}`
 
 		const existing = errors.get(key)
 		if (existing) {
 			existing.count++
 			existing.lastSeen = new Date()
-			if (context) {
-				existing.context = { ...existing.context, ...context }
+			if (trackedContext) {
+				existing.context = { ...existing.context, ...trackedContext }
 			}
+			if (safeError?.stack) existing.stack = safeError.stack
 		} else {
 			const entry: ErrorEntry = {
 				id: generateId('error', errorCounter++),
 				timestamp: new Date(),
-				message,
-				service,
-				context,
+				message: safeMessage,
+				service: safeService,
+				context: trackedContext,
 				count: 1,
 				lastSeen: new Date(),
 			}
 
-			if (error instanceof Error) {
-				entry.stack = error.stack
+			if (safeError?.stack) {
+				entry.stack = safeError.stack
 			}
 
 			errors.set(key, entry)
 
-			// Send to Loki exporter
+			// Send only the sanitized entry to Loki.
 			lokiExporter.pushError(entry)
 
 			// Rotate if needed
@@ -266,11 +299,11 @@ export const metricsCollector = {
 	recordRequest(path: string, method: string, statusCode: number, duration: number, service: string) {
 		const entry: MetricEntry = {
 			timestamp: new Date(),
-			path,
-			method,
+			path: sanitizeLogString(path),
+			method: sanitizeLogString(method),
 			statusCode,
 			duration,
-			service,
+			service: sanitizeLogString(service),
 		}
 
 		metrics.unshift(entry)

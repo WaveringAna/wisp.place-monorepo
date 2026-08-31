@@ -48,8 +48,7 @@ const posts: Post[] = [
 	{
 		slug: 'wispctl-1-3-2',
 		title: 'wispctl 1.3.2',
-		description:
-			'wispctl uses permission sets now for friendlier oauth links',
+		description: 'wispctl uses permission sets now for friendlier oauth links',
 		date: '2026-08-29',
 		author: authors.nekomimi,
 		tags: ['release', 'cli'],
@@ -57,8 +56,7 @@ const posts: Post[] = [
 	{
 		slug: 'wispctl-1-3-1',
 		title: 'wispctl 1.3.1',
-		description:
-			'Making wispctl\'s auth more ergonomic to use',
+		description: "Making wispctl's auth more ergonomic to use",
 		date: '2026-08-26',
 		author: authors.nekomimi,
 		tags: ['release', 'cli'],

@@ -13,6 +13,7 @@ import { resourceFromAttributes } from '@opentelemetry/resources'
 import { PeriodicExportingMetricReader, MeterProvider as SdkMeterProvider } from '@opentelemetry/sdk-metrics'
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions'
 import type { ErrorEntry, LogEntry, MetricEntry } from './core'
+import { sanitizeContext, sanitizeForLog, sanitizeLogString } from './redact'
 
 // ============================================================================
 // Types
@@ -50,6 +51,29 @@ interface LokiBatch {
 
 function serviceInstance(serviceName: string): string {
 	return `${serviceName}-${os.hostname()}`
+}
+
+function sanitizeLogEntry(entry: LogEntry): LogEntry {
+	return {
+		...entry,
+		id: sanitizeLogString(entry.id),
+		message: sanitizeLogString(entry.message),
+		service: sanitizeLogString(entry.service),
+		context: sanitizeContext(entry.context),
+		traceId: entry.traceId === undefined ? undefined : sanitizeLogString(entry.traceId),
+		eventType: entry.eventType === undefined ? undefined : sanitizeLogString(entry.eventType),
+	}
+}
+
+function sanitizeErrorEntry(entry: ErrorEntry): ErrorEntry {
+	return {
+		...entry,
+		id: sanitizeLogString(entry.id),
+		message: sanitizeLogString(entry.message),
+		stack: entry.stack === undefined ? undefined : sanitizeLogString(entry.stack),
+		service: sanitizeLogString(entry.service),
+		context: sanitizeContext(entry.context),
+	}
 }
 
 // ============================================================================
@@ -130,12 +154,20 @@ class LokiExporter {
 	private buffer: LogEntry[] = []
 	private errorBuffer: ErrorEntry[] = []
 	private flushTimer?: NodeJS.Timeout
+	private flushPromise: Promise<void> = Promise.resolve()
+	private stopPromise?: Promise<void>
 	private config: GrafanaConfig = {}
 	private instance = serviceInstance('wisp-app')
 
 	initialize(config: GrafanaConfig) {
+		if (this.flushTimer) {
+			clearInterval(this.flushTimer)
+			this.flushTimer = undefined
+		}
+
 		this.config = config
 		this.instance = serviceInstance(config.serviceName || 'wisp-app')
+		this.stopPromise = undefined
 
 		if (this.config.enabled && this.config.lokiUrl) {
 			this.startBatching()
@@ -146,42 +178,56 @@ class LokiExporter {
 		const interval = this.config.flushIntervalMs || 5000
 
 		this.flushTimer = setInterval(() => {
-			this.flush()
+			void this.flush()
 		}, interval)
 	}
 
-	stop() {
+	async stop(): Promise<void> {
+		if (this.stopPromise) return this.stopPromise
+
 		if (this.flushTimer) {
 			clearInterval(this.flushTimer)
 			this.flushTimer = undefined
 		}
-		// Final flush
-		this.flush()
+
+		const stopPromise = this.flush()
+		this.stopPromise = stopPromise
+		try {
+			await stopPromise
+		} finally {
+			if (this.stopPromise === stopPromise) this.stopPromise = undefined
+		}
 	}
 
 	pushLog(entry: LogEntry) {
 		if (!this.config.enabled || !this.config.lokiUrl) return
 
-		this.buffer.push(entry)
+		this.buffer.push(sanitizeLogEntry(entry))
 
 		const batchSize = this.config.batchSize || 100
 		if (this.buffer.length >= batchSize) {
-			this.flush()
+			void this.flush()
 		}
 	}
 
 	pushError(entry: ErrorEntry) {
 		if (!this.config.enabled || !this.config.lokiUrl) return
 
-		this.errorBuffer.push(entry)
+		this.errorBuffer.push(sanitizeErrorEntry(entry))
 
 		const batchSize = this.config.batchSize || 100
 		if (this.errorBuffer.length >= batchSize) {
-			this.flush()
+			void this.flush()
 		}
 	}
 
-	private async flush() {
+	private flush(): Promise<void> {
+		const run = () => this.flushBuffer()
+		this.flushPromise = this.flushPromise.then(run, run)
+		return this.flushPromise
+	}
+
+	private async flushBuffer(): Promise<void> {
 		if (!this.config.lokiUrl) return
 
 		const logsToSend = [...this.buffer]
@@ -196,7 +242,7 @@ class LokiExporter {
 			const batch = this.createLokiBatch(logsToSend, errorsToSend)
 			await this.sendToLoki(batch)
 		} catch (error) {
-			console.error('[LokiExporter] Failed to send logs to Loki:', error)
+			console.error('[LokiExporter] Failed to send logs to Loki:', sanitizeForLog(error))
 			// Optionally re-queue failed logs
 		}
 	}
@@ -325,12 +371,14 @@ class MetricsExporter {
 	private requestDuration?: Histogram
 	private errorCounter?: Counter
 	private serviceInfo?: ObservableGauge
+	private shutdownPromise?: Promise<void>
 	private config: GrafanaConfig = {}
 
 	initialize(config: GrafanaConfig) {
 		this.config = config
 
 		if (!this.config.enabled || !this.config.prometheusUrl) return
+		this.shutdownPromise = undefined
 
 		// Get encoding preference (default to protobuf for VictoriaMetrics compatibility)
 		const encoding =
@@ -430,10 +478,12 @@ class MetricsExporter {
 		}
 	}
 
-	async shutdown() {
-		if (this.meterProvider && 'shutdown' in this.meterProvider) {
-			await (this.meterProvider as SdkMeterProvider).shutdown()
-		}
+	async shutdown(): Promise<void> {
+		if (this.shutdownPromise) return this.shutdownPromise
+		if (!this.meterProvider || !('shutdown' in this.meterProvider)) return
+
+		this.shutdownPromise = (this.meterProvider as SdkMeterProvider).shutdown()
+		return this.shutdownPromise
 	}
 }
 
@@ -474,7 +524,7 @@ export function initializeGrafanaExporters(config?: GrafanaConfig) {
 // ============================================================================
 
 export async function shutdownGrafanaExporters() {
-	lokiExporter.stop()
+	await lokiExporter.stop()
 	await metricsExporter.shutdown()
 }
 

@@ -8,7 +8,7 @@
  */
 
 // Main class
-export { TieredStorage } from './TieredStorage.js'
+export { TieredStorage, type UpperTierInvalidationFailure, type UpperTierInvalidationResult } from './TieredStorage.js'
 export {
 	DiskStorageTier,
 	type DiskStorageTierConfig,
@@ -41,8 +41,11 @@ export {
 	compress,
 	createCompressStream,
 	createDecompressStream,
+	DEFAULT_MAX_DECOMPRESSED_BYTES,
+	DecompressionLimitError,
 	decompress,
 	isGzipped,
+	measureDecompressedSize,
 } from './utils/compression.js'
 export { decodeKey, encodeKey } from './utils/path-encoding.js'
 export { defaultDeserialize, defaultSerialize } from './utils/serialization.js'

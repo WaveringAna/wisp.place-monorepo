@@ -41,7 +41,7 @@ export interface HandlerSuccess {
 export interface HandlerError {
   status: number
   message?: string
-  error?: 'AuthenticationRequired' | 'NotFound'
+  error?: 'AuthenticationRequired' | 'InvalidRequest' | 'NotFound'
 }
 
 export type HandlerOutput = HandlerError | HandlerSuccess

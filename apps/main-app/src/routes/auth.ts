@@ -51,7 +51,6 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				return c.redirect(url.toString())
 			} catch (err) {
 				logger.error('Login error', err)
-				console.error('[Auth] Full error:', err)
 				return c.redirect('/?error=auth_failed')
 			}
 		})
@@ -72,9 +71,8 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				return { url: url.toString() }
 			} catch (err) {
 				logger.error('Signin error', err, { handle })
-				console.error('[Auth] Full error:', err)
 				c.set.status = 401
-				return { error: 'Authentication failed', details: err instanceof Error ? err.message : String(err) }
+				return { error: 'Authentication failed', details: 'Unable to start authentication' }
 			}
 		})
 		/**

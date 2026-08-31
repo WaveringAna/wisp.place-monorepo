@@ -47,7 +47,7 @@ export function processUploadedFiles(files: UploadedFile[], options?: ProcessUpl
 
 	for (const file of files) {
 		// Skip undefined/null files (defensive)
-		if (!file || !file.name) {
+		if (!file?.name) {
 			console.error('Skipping undefined or invalid file in processUploadedFiles')
 			continue
 		}

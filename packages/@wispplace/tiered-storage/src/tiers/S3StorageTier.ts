@@ -3,11 +3,13 @@ import {
 	CopyObjectCommand,
 	DeleteObjectCommand,
 	DeleteObjectsCommand,
+	type DeleteObjectsCommandOutput,
 	GetObjectCommand,
 	type GetObjectCommandOutput,
 	HeadObjectCommand,
 	type HeadObjectCommandOutput,
 	ListObjectsV2Command,
+	type ListObjectsV2CommandOutput,
 	PutObjectCommand,
 	S3Client,
 	type S3ClientConfig,
@@ -74,6 +76,16 @@ export interface S3StorageTierConfig {
 	 * - false: `https://bucket.endpoint.com/key` (virtual-hosted-style)
 	 */
 	forcePathStyle?: boolean
+
+	/**
+	 * Maximum ListObjectsV2 pages consumed by one list, stats, or clear operation.
+	 *
+	 * @defaultValue 10000
+	 *
+	 * A finite cap prevents a malformed S3-compatible continuation token from
+	 * making a maintenance operation loop forever.
+	 */
+	maxListPages?: number
 }
 
 /**
@@ -112,9 +124,13 @@ export interface S3StorageTierConfig {
  * });
  * ```
  */
+const DEFAULT_MAX_LIST_PAGES = 10_000
+const S3_DELETE_BATCH_SIZE = 1_000
+
 export class S3StorageTier implements StorageTier {
 	private client: S3Client
 	private prefix: string
+	private readonly maxListPages: number
 
 	constructor(private config: S3StorageTierConfig) {
 		const clientConfig: S3ClientConfig = {
@@ -125,8 +141,14 @@ export class S3StorageTier implements StorageTier {
 			...(config.credentials && { credentials: config.credentials }),
 		}
 
+		const maxListPages = config.maxListPages ?? DEFAULT_MAX_LIST_PAGES
+		if (!Number.isSafeInteger(maxListPages) || maxListPages <= 0) {
+			throw new Error('Invalid S3 maxListPages')
+		}
+
 		this.client = new S3Client(clientConfig)
 		this.prefix = config.prefix ?? ''
+		this.maxListPages = maxListPages
 	}
 
 	async get(key: string): Promise<Uint8Array | null> {
@@ -277,6 +299,15 @@ export class S3StorageTier implements StorageTier {
 		return result
 	}
 
+	private isConditionalCopyFailure(error: unknown): boolean {
+		return (
+			typeof error === 'object' &&
+			error !== null &&
+			((error as { name?: unknown }).name === 'PreconditionFailed' ||
+				(error as { $metadata?: { httpStatusCode?: unknown } }).$metadata?.httpStatusCode === 412)
+		)
+	}
+
 	private isNoSuchKeyError(error: unknown): boolean {
 		return (
 			typeof error === 'object' &&
@@ -286,7 +317,13 @@ export class S3StorageTier implements StorageTier {
 		)
 	}
 
-	async set(key: string, data: Uint8Array, metadata: StorageMetadata): Promise<void> {
+	async set(
+		key: string,
+		data: Uint8Array,
+		metadata: StorageMetadata,
+		options?: { signal?: AbortSignal },
+	): Promise<void> {
+		const requestOptions = options?.signal ? { abortSignal: options.signal } : undefined
 		await this.client.send(
 			new PutObjectCommand({
 				Bucket: this.config.bucket,
@@ -295,6 +332,7 @@ export class S3StorageTier implements StorageTier {
 				ContentLength: data.byteLength,
 				Metadata: this.metadataToS3(metadata),
 			}),
+			requestOptions,
 		)
 	}
 
@@ -332,47 +370,32 @@ export class S3StorageTier implements StorageTier {
 
 	async *listKeys(prefix?: string): AsyncIterableIterator<string> {
 		const s3Prefix = prefix ? this.getS3Key(prefix) : this.prefix
-		let continuationToken: string | undefined
-
-		do {
-			const command = new ListObjectsV2Command({
-				Bucket: this.config.bucket,
-				Prefix: s3Prefix,
-				ContinuationToken: continuationToken,
-			})
-
-			const response = await this.client.send(command)
-
-			if (response.Contents) {
-				for (const object of response.Contents) {
-					if (object.Key) {
-						// Remove prefix to get original key
-						const key = this.removePrefix(object.Key)
-						yield key
-					}
+		for await (const response of this.listObjectPages(s3Prefix)) {
+			for (const object of response.Contents ?? []) {
+				if (object.Key) {
+					// Remove prefix to get original key.
+					yield this.removePrefix(object.Key)
 				}
 			}
-
-			continuationToken = response.NextContinuationToken
-		} while (continuationToken)
+		}
 	}
 
 	async deleteMany(keys: string[]): Promise<void> {
 		if (keys.length === 0) return
 
-		const batchSize = 1000
-
-		for (let i = 0; i < keys.length; i += batchSize) {
-			const batch = keys.slice(i, i + batchSize)
-
-			await this.client.send(
+		for (let index = 0; index < keys.length; index += S3_DELETE_BATCH_SIZE) {
+			const batch = keys.slice(index, index + S3_DELETE_BATCH_SIZE)
+			const response = (await this.client.send(
 				new DeleteObjectsCommand({
 					Bucket: this.config.bucket,
 					Delete: {
 						Objects: batch.map((key) => ({ Key: this.getS3Key(key) })),
 					},
 				}),
-			)
+			)) as DeleteObjectsCommandOutput
+			if (response.Errors?.length) {
+				throw new Error('S3 batch delete returned errors')
+			}
 		}
 	}
 
@@ -401,7 +424,7 @@ export class S3StorageTier implements StorageTier {
 		const command = new CopyObjectCommand({
 			Bucket: this.config.bucket,
 			Key: s3Key,
-			CopySource: `${this.config.bucket}/${s3Key}`,
+			CopySource: this.getEncodedCopySource(s3Key),
 			Metadata: this.metadataToS3(metadata),
 			MetadataDirective: 'REPLACE',
 		})
@@ -409,44 +432,116 @@ export class S3StorageTier implements StorageTier {
 		await this.client.send(command)
 	}
 
+	async setMetadataIfChecksumMatches(
+		key: string,
+		expectedChecksum: string,
+		metadata: StorageMetadata,
+	): Promise<boolean> {
+		const s3Key = this.getS3Key(key)
+		try {
+			const observed = await this.client.send(new HeadObjectCommand({ Bucket: this.config.bucket, Key: s3Key }))
+			const current = observed.Metadata
+				? this.s3ToMetadata(observed.Metadata)
+				: this.metadataFromObjectResponse(key, observed.ContentLength, observed)
+			// ETag is the version fence used by CopySourceIfMatch. Do not attempt a
+			// best-effort copy when a compatible backend omits it.
+			if (current.checksum !== expectedChecksum || !observed.ETag) return false
+
+			await this.client.send(
+				new CopyObjectCommand({
+					Bucket: this.config.bucket,
+					Key: s3Key,
+					CopySource: this.getEncodedCopySource(s3Key),
+					CopySourceIfMatch: observed.ETag,
+					Metadata: this.metadataToS3(metadata),
+					MetadataDirective: 'REPLACE',
+				}),
+			)
+			return true
+		} catch (error) {
+			if (this.isNoSuchKeyError(error) || this.isConditionalCopyFailure(error)) return false
+			throw error
+		}
+	}
+
 	async getStats(): Promise<TierStats> {
 		let bytes = 0
 		let items = 0
 
-		// List all objects and sum up sizes
-		let continuationToken: string | undefined
-
-		do {
-			const command = new ListObjectsV2Command({
-				Bucket: this.config.bucket,
-				Prefix: this.prefix,
-				ContinuationToken: continuationToken,
-			})
-
-			const response = await this.client.send(command)
-
-			if (response.Contents) {
-				for (const object of response.Contents) {
-					items++
-					bytes += object.Size ?? 0
-				}
+		// A result is returned only after every bounded page completes. A page-cap or
+		// continuation error rejects rather than presenting a partial total as exact.
+		for await (const response of this.listObjectPages(this.prefix)) {
+			for (const object of response.Contents ?? []) {
+				items++
+				bytes += object.Size ?? 0
 			}
-
-			continuationToken = response.NextContinuationToken
-		} while (continuationToken)
+		}
 
 		return { bytes, items }
 	}
 
 	async clear(): Promise<void> {
-		// List and delete all objects with the prefix
-		const keys: string[] = []
-
+		// Keep only one S3 delete batch in memory. Awaiting each batch before asking
+		// the list generator for another page bounds memory even for huge prefixes.
+		let batch: string[] = []
 		for await (const key of this.listKeys()) {
-			keys.push(key)
+			batch.push(key)
+			if (batch.length === S3_DELETE_BATCH_SIZE) {
+				await this.deleteMany(batch)
+				batch = []
+			}
 		}
+		if (batch.length > 0) {
+			await this.deleteMany(batch)
+		}
+	}
 
-		await this.deleteMany(keys)
+	/**
+	 * Fetch bounded S3 list pages and reject malformed continuation behavior.
+	 */
+	private async *listObjectPages(s3Prefix: string): AsyncIterableIterator<ListObjectsV2CommandOutput> {
+		let continuationToken: string | undefined
+		const seenContinuationTokens = new Set<string>()
+
+		for (let page = 0; ; page++) {
+			if (page >= this.maxListPages) {
+				throw new Error('S3 list page limit exceeded')
+			}
+
+			const response = await this.client.send(
+				new ListObjectsV2Command({
+					Bucket: this.config.bucket,
+					Prefix: s3Prefix,
+					ContinuationToken: continuationToken,
+				}),
+			)
+			yield response
+
+			const nextContinuationToken = response.NextContinuationToken
+			if (!nextContinuationToken) {
+				if (response.IsTruncated === true) {
+					throw new Error('S3 list response missing continuation token')
+				}
+				return
+			}
+			if (seenContinuationTokens.has(nextContinuationToken)) {
+				throw new Error('S3 list response repeated continuation token')
+			}
+			seenContinuationTokens.add(nextContinuationToken)
+			continuationToken = nextContinuationToken
+		}
+	}
+
+	/**
+	 * Encode an S3 CopySource while keeping object path separators intact.
+	 */
+	private getEncodedCopySource(s3Key: string): string {
+		const encodeSegment = (segment: string): string =>
+			encodeURIComponent(segment).replace(
+				/[!'()*]/g,
+				(character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+			)
+		return `${this.config.bucket}/${s3Key.split('/').map(encodeSegment).join('/')}`
 	}
 
 	/**

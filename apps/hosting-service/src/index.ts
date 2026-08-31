@@ -1,12 +1,14 @@
 import { existsSync, mkdirSync } from 'node:fs'
-import { createLogger, initializeGrafanaExporters } from '@wispplace/observability'
+import { createLogger, initializeGrafanaExporters, shutdownGrafanaExporters } from '@wispplace/observability'
 import { startCacheInvalidationSubscriber, stopCacheInvalidationSubscriber } from './lib/cache-invalidation'
 import { cache } from './lib/cache-manager'
-import { CACHE_ONLY, closeDatabase } from './lib/db'
+import { closeDatabase } from './lib/db'
+import { closePrivateSitesDatabase } from './lib/private-sites-db'
 import { closeRevalidateQueue } from './lib/revalidate-queue'
-import { getStorageConfig, storage } from './lib/storage'
 import { siteAnalytics } from './lib/site-analytics'
+import { getStorageConfig, storage } from './lib/storage'
 import app from './server'
+import { onceAsync, stopHttpServerWithGrace } from './shutdown'
 
 const logger = createLogger('hosting-service')
 
@@ -16,13 +18,25 @@ initializeGrafanaExporters({
 	serviceVersion: '1.0.0',
 })
 
-const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001
+const DEFAULT_PORT = 3001
+const DEFAULT_BOOTSTRAP_HOT_LIMIT = 100
+const MAX_BOOTSTRAP_HOT_LIMIT = 10_000
+const HTTP_SHUTDOWN_GRACE_PERIOD_MS = 10_000
+
+function parseBoundedInteger(value: string | undefined, fallback: number, minimum: number, maximum: number): number {
+	const normalized = value?.trim()
+	if (!normalized) return fallback
+	const parsed = Number(normalized)
+	return Number.isSafeInteger(parsed) && parsed >= minimum && parsed <= maximum ? parsed : fallback
+}
+
+const PORT = parseBoundedInteger(process.env.PORT, DEFAULT_PORT, 0, 65_535)
 const CACHE_DIR = process.env.CACHE_DIR || './cache/sites'
 
 // Ensure cache directory exists
 if (!existsSync(CACHE_DIR)) {
 	mkdirSync(CACHE_DIR, { recursive: true })
-	logger.info('Created cache directory', { CACHE_DIR })
+	logger.info('Created cache directory')
 }
 
 // Start in-memory cache cleanup
@@ -34,7 +48,12 @@ startCacheInvalidationSubscriber()
 
 // Optional: Bootstrap hot cache from warm tier on startup
 const BOOTSTRAP_HOT_ON_STARTUP = process.env.BOOTSTRAP_HOT_ON_STARTUP === 'true'
-const BOOTSTRAP_HOT_LIMIT = process.env.BOOTSTRAP_HOT_LIMIT ? parseInt(process.env.BOOTSTRAP_HOT_LIMIT, 10) : 100
+const BOOTSTRAP_HOT_LIMIT = parseBoundedInteger(
+	process.env.BOOTSTRAP_HOT_LIMIT,
+	DEFAULT_BOOTSTRAP_HOT_LIMIT,
+	1,
+	MAX_BOOTSTRAP_HOT_LIMIT,
+)
 
 if (BOOTSTRAP_HOT_ON_STARTUP) {
 	logger.info(`Bootstrapping hot cache (top ${BOOTSTRAP_HOT_LIMIT} items)...`)
@@ -43,21 +62,10 @@ if (BOOTSTRAP_HOT_ON_STARTUP) {
 		.then((loaded: number) => {
 			logger.info(`Bootstrapped ${loaded} items into hot cache`)
 		})
-		.catch((err: unknown) => {
-			logger.error('Hot cache bootstrap error', err)
+		.catch(() => {
+			logger.error('Hot cache bootstrap failed')
 		})
 }
-
-// Add health check endpoint
-app.get('/health', async (c) => {
-	const storageStats = await storage.getStats()
-
-	return c.json({
-		status: 'ok',
-		storage: storageStats,
-		analytics: siteAnalytics.getStats(),
-	})
-})
 
 // Start HTTP server with Bun's native server
 const server = Bun.serve({
@@ -65,53 +73,62 @@ const server = Bun.serve({
 	port: PORT,
 })
 
-// Get storage configuration for display
+// Log only safe storage mode and capacity fields. Bucket names, endpoints, and
+// prefixes can reveal deployment topology and are intentionally not emitted.
 const storageConfig = getStorageConfig()
+logger.info('Hosting storage configured', {
+	coldStorageMode: storageConfig.coldStorageMode,
+	diskSourceAllowed: storageConfig.diskSourceAllowed,
+	hotCacheCount: storageConfig.hotCacheCount,
+	hotCacheSize: storageConfig.hotCacheSize,
+	s3EndpointConfigured: storageConfig.s3EndpointConfigured,
+	warmCacheSize: storageConfig.warmCacheSize,
+	warmEvictionPolicy: storageConfig.warmEvictionPolicy,
+})
 
-console.log(`
-Wisp Hosting Service (Read-Only) with Tiered Storage
+// Graceful shutdown. The shared promise makes SIGINT/SIGTERM races idempotent.
+const shutdown = onceAsync(async (signal: 'SIGINT' | 'SIGTERM') => {
+	logger.info('Shutting down...', { signal })
 
-Server:       http://localhost:${PORT}
-Health:       http://localhost:${PORT}/health
+	// Stop the listener first. Keep backing services available until active work
+	// drains, then terminate any request that exceeded the bounded grace period.
+	const httpStop = await stopHttpServerWithGrace(server, HTTP_SHUTDOWN_GRACE_PERIOD_MS)
+	if (httpStop.forced) logger.warn('HTTP server did not stop gracefully; forced active connections closed')
+	if (httpStop.gracefulStopFailed) logger.error('HTTP server graceful stop failed')
+	if (httpStop.forceStopFailed) logger.error('HTTP server force stop failed')
 
-Mode:         ${CACHE_ONLY ? 'CACHE-ONLY (no DB writes)' : 'Standard (with DB writes)'}
-
-Tiered Storage Configuration:
-  Hot Cache:        ${storageConfig.hotCacheSize} (${storageConfig.hotCacheCount} items max)
-  Warm Cache:       ${storageConfig.warmCacheSize} (${storageConfig.warmEvictionPolicy} eviction)
-  Cold Storage:     S3 - ${storageConfig.s3Bucket}
-  S3 Region:        ${storageConfig.s3Region}
-  S3 Endpoint:      ${storageConfig.s3Endpoint}
-  S3 Prefix:        ${storageConfig.s3Prefix}
-`)
-
-// Graceful shutdown
-process.on('SIGINT', async () => {
-	logger.info('Shutting down...')
 	cache.stopCleanup()
-	await stopCacheInvalidationSubscriber()
-	await closeRevalidateQueue()
-	try {
-		await siteAnalytics.stop()
-	} catch (err) {
-		logger.error('Final analytics flush failed', err)
+	const tasks = [
+		{ name: 'cache invalidation subscriber', promise: stopCacheInvalidationSubscriber() },
+		{ name: 'revalidation queue', promise: closeRevalidateQueue() },
+		{ name: 'analytics', promise: siteAnalytics.stop() },
+	]
+	const results = await Promise.allSettled(tasks.map(({ promise }) => promise))
+
+	for (const [index, result] of results.entries()) {
+		if (result.status === 'rejected') {
+			// Shutdown errors can include connection strings, so log only the component name.
+			logger.error(`${tasks[index]?.name ?? 'component'} shutdown failed`)
+		}
 	}
-	await closeDatabase()
-	server.stop(true)
+
+	// Analytics must finish its final shared-database flush before either pool closes.
+	const [privateSitesDatabaseResult, databaseResult] = await Promise.allSettled([
+		closePrivateSitesDatabase(),
+		closeDatabase(),
+	])
+	if (privateSitesDatabaseResult?.status === 'rejected') logger.error('private sites database shutdown failed')
+	if (databaseResult?.status === 'rejected') logger.error('database shutdown failed')
+
+	const [observabilityResult] = await Promise.allSettled([shutdownGrafanaExporters()])
+	if (observabilityResult?.status === 'rejected') logger.error('observability exporter shutdown failed')
+
 	process.exit(0)
 })
 
-process.on('SIGTERM', async () => {
-	logger.info('Shutting down...')
-	cache.stopCleanup()
-	await stopCacheInvalidationSubscriber()
-	await closeRevalidateQueue()
-	try {
-		await siteAnalytics.stop()
-	} catch (err) {
-		logger.error('Final analytics flush failed', err)
-	}
-	await closeDatabase()
-	server.stop(true)
-	process.exit(0)
+process.once('SIGINT', () => {
+	void shutdown('SIGINT')
+})
+process.once('SIGTERM', () => {
+	void shutdown('SIGTERM')
 })

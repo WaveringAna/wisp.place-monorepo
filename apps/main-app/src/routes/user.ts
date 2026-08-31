@@ -1,20 +1,30 @@
 import type { NodeOAuthClient } from '@atproto/oauth-client-node'
-import { getHandleForDid } from '@wispplace/atproto-utils'
+import {
+	createCachedIdentityFetcher,
+	createPinnedIdentityFetcher,
+	getHandleForDid,
+	type IdentityGetFetcher,
+} from '@wispplace/atproto-utils'
 import { createLogger } from '@wispplace/observability'
 import { Elysia } from 'elysia'
-import {
-	getAllWispDomains,
-	getCustomDomainsByDid,
-	getDomainByDid,
-	getDomainsBySite,
-	getSitesByDid,
-	isSupporter,
-} from '../lib/db'
+import { eventualRead, getSitesByDid } from '../lib/db'
 import { requireAuth, SESSION_COOKIE_NAME } from '../lib/wisp-auth'
 
 const logger = createLogger('main-app')
+// Identity documents are remote, user-controlled data. Keep the pinned transport
+// at the server boundary rather than allowing the identity helper to use global fetch.
+const serverIdentityGet = createPinnedIdentityFetcher({ allowLoopback: true })
+const presentationIdentityCache = createCachedIdentityFetcher(serverIdentityGet)
+// Presentation may use a short stale fallback. Security and ownership callers
+// receive the uncached pinned fetcher instead.
+const presentationIdentityGet: IdentityGetFetcher = (url, options) =>
+	presentationIdentityCache.get(url, { staleIfError: true, signal: options?.signal })
 
-export const userRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
+export const userRoutes = (
+	client: NodeOAuthClient,
+	cookieSecret: string,
+	identityGet: IdentityGetFetcher = presentationIdentityGet,
+) =>
 	new Elysia({
 		prefix: '/api/user',
 		cookie: {
@@ -32,11 +42,8 @@ export const userRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		 */
 		.get('/status', async ({ auth }) => {
 			try {
-				// Check if user has any sites
-				const sites = await getSitesByDid(auth.did)
-
-				// Check if user has claimed a domain
-				const domain = await getDomainByDid(auth.did)
+				// Presentation-only status may be briefly stale when a replica is configured.
+				const { sites, domain } = await eventualRead.getUserStatus(auth.did)
 
 				return {
 					did: auth.did,
@@ -45,8 +52,8 @@ export const userRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 					domain: domain || null,
 					sitesCount: sites.length,
 				}
-			} catch (err) {
-				logger.error('[User] Status error', err)
+			} catch {
+				logger.error('[User] Status error')
 				throw new Error('Failed to get user status')
 			}
 		})
@@ -56,18 +63,16 @@ export const userRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		 */
 		.get('/info', async ({ auth }) => {
 			try {
-				let handle = 'unknown'
-				try {
-					const resolvedHandle = await getHandleForDid(auth.did)
-					if (resolvedHandle) {
-						handle = resolvedHandle
-					}
-				} catch (err) {
-					logger.error('[User] Failed to resolve DID', err)
-				}
+				const [resolvedHandle, supporter] = await Promise.all([
+					getHandleForDid(auth.did, identityGet).catch(() => {
+						logger.warn('[User] Identity lookup failed')
+						return null
+					}),
+					// This only controls the displayed badge. Domain-limit enforcement stays primary.
+					eventualRead.getSupporterStatus(auth.did),
+				])
+				const handle = resolvedHandle ?? 'unknown'
 
-				// Check if user is a supporter
-				const supporter = await isSupporter(auth.did)
 				logger.debug('[User] isSupporter check', { did: auth.did, supporter })
 
 				const response = {
@@ -77,8 +82,8 @@ export const userRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				}
 				logger.debug('[User] Returning info', response)
 				return response
-			} catch (err) {
-				logger.error('[User] Info error', err)
+			} catch {
+				logger.error('[User] Info error')
 				throw new Error('Failed to get user info')
 			}
 		})
@@ -88,10 +93,10 @@ export const userRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		 */
 		.get('/sites', async ({ auth }) => {
 			try {
-				const sites = await getSitesByDid(auth.did)
+				const sites = await eventualRead.getSitesForDid(auth.did)
 				return { sites }
-			} catch (err) {
-				logger.error('[User] Sites error', err)
+			} catch {
+				logger.error('[User] Sites error')
 				throw new Error('Failed to get sites')
 			}
 		})
@@ -101,11 +106,7 @@ export const userRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		 */
 		.get('/domains', async ({ auth }) => {
 			try {
-				// Get all wisp.place subdomains with mappings (up to 3)
-				const wispDomains = await getAllWispDomains(auth.did)
-
-				// Get custom domains
-				const customDomains = await getCustomDomainsByDid(auth.did)
+				const { wispDomains, customDomains } = await eventualRead.getDomainsForDid(auth.did)
 
 				return {
 					wispDomains: wispDomains.map((d) => ({
@@ -114,8 +115,8 @@ export const userRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 					})),
 					customDomains,
 				}
-			} catch (err) {
-				logger.error('[User] Domains error', err)
+			} catch {
+				logger.error('[User] Domains error')
 				throw new Error('Failed to get domains')
 			}
 		})
@@ -126,6 +127,7 @@ export const userRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		.post('/sync', async ({ auth }) => {
 			try {
 				logger.debug('[User] Manual site refresh requested; site availability is firehose-driven', { did: auth.did })
+				// Keep this POST path strongly consistent for callers polling after an action.
 				const sites = await getSitesByDid(auth.did)
 
 				return {
@@ -133,8 +135,8 @@ export const userRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 					synced: sites.length,
 					errors: [],
 				}
-			} catch (err) {
-				logger.error('[User] Sync error', err)
+			} catch {
+				logger.error('[User] Sync error')
 				throw new Error('Failed to sync sites')
 			}
 		})
@@ -145,14 +147,14 @@ export const userRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		.get('/site/:rkey/domains', async ({ auth, params }) => {
 			try {
 				const { rkey } = params
-				const domains = await getDomainsBySite(auth.did, rkey)
+				const domains = await eventualRead.getDomainsForSite(auth.did, rkey)
 
 				return {
 					rkey,
 					domains,
 				}
-			} catch (err) {
-				logger.error('[User] Site domains error', err)
+			} catch {
+				logger.error('[User] Site domains error')
 				throw new Error('Failed to get domains for site')
 			}
 		})

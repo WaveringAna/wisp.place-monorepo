@@ -14,14 +14,16 @@ export const isExpired = (expiresAt: Date | null, now: Date): boolean => {
 }
 
 export const evaluateAccess = ({ site, shares, principal, now }: EvaluateAccessInput): AccessDecision => {
-	if (!site) return { allowed: false, reason: 'notFound' }
+	if (site?.state !== 'ready') return { allowed: false, reason: 'notFound' }
+
+	// Expiry closes every credential, including an owner handoff. The database
+	// queries used by hosting enforce the same predicate before loading files.
+	if (isExpired(site.expiresAt, now)) {
+		return { allowed: false, reason: 'siteExpired' }
+	}
 
 	if (principal.kind === 'owner' && principal.did === site.ownerDid) {
 		return { allowed: true, reason: 'owner' }
-	}
-
-	if (isExpired(site.expiresAt, now)) {
-		return { allowed: false, reason: 'siteExpired' }
 	}
 
 	// The session lookup has already rechecked the backing share's expiry and revocation.

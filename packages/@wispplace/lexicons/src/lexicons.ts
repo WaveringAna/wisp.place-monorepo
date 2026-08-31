@@ -1200,8 +1200,9 @@ export const schemaDict = {
               name: {
                 type: 'string',
                 format: 'record-key',
+                maxLength: 64,
                 description:
-                  'Unique name for this secret, scoped to the caller DID.',
+                  'Unique 1–64 character secret ID scoped to the caller DID. Use ASCII letters, digits, dots, underscores, and hyphens only.',
               },
             },
           },
@@ -1257,6 +1258,9 @@ export const schemaDict = {
               name: {
                 type: 'string',
                 format: 'record-key',
+                maxLength: 64,
+                description:
+                  '1–64 character server-managed secret ID. Use ASCII letters, digits, dots, underscores, and hyphens only.',
               },
             },
           },
@@ -1264,6 +1268,9 @@ export const schemaDict = {
         errors: [
           {
             name: 'AuthenticationRequired',
+          },
+          {
+            name: 'InvalidRequest',
           },
           {
             name: 'NotFound',
@@ -1338,6 +1345,9 @@ export const schemaDict = {
               name: {
                 type: 'string',
                 format: 'record-key',
+                maxLength: 64,
+                description:
+                  '1–64 character server-managed secret ID. Use ASCII letters, digits, dots, underscores, and hyphens only.',
               },
             },
           },
@@ -1366,6 +1376,9 @@ export const schemaDict = {
         errors: [
           {
             name: 'AuthenticationRequired',
+          },
+          {
+            name: 'InvalidRequest',
           },
           {
             name: 'NotFound',
@@ -1834,6 +1847,7 @@ export const schemaDict = {
             },
             secret: {
               type: 'string',
+              minLength: 1,
               maxLength: 256,
               description:
                 'Optional raw secret used to sign the webhook payload with HMAC-SHA256. Prefer secretId to avoid embedding plaintext values in PDS records.',
@@ -1841,8 +1855,9 @@ export const schemaDict = {
             secretId: {
               type: 'string',
               format: 'record-key',
+              maxLength: 64,
               description:
-                'Name of a server-managed signing secret created via place.wisp.v2.secret.create. Takes precedence over secret if both are present.',
+                '1–64 character server-managed signing secret ID. Use ASCII letters, digits, dots, underscores, and hyphens only.',
             },
             enabled: {
               type: 'boolean',

@@ -1,208 +1,209 @@
-import { didWebToHttps, extractBlobCid, getPdsForDid, resolveDid } from '@wispplace/atproto-utils'
-import { sanitizePath } from '@wispplace/fs-utils'
-import { parseLexiconJson } from '@wispplace/lexicons/public-json'
-import type { Directory, Entry } from '@wispplace/lexicons/types/place/wisp/fs'
+import { isIP } from 'node:net'
 import type { Record as WispSettings } from '@wispplace/lexicons/types/place/wisp/settings'
-import type { Record as SubfsRecord } from '@wispplace/lexicons/types/place/wisp/subfs'
-import { validateRecord as validateSubfsRecord } from '@wispplace/lexicons/types/place/wisp/subfs'
-import { safeFetchJson } from '@wispplace/safe-fetch'
+import { isLocalhostFetchAllowed, type SafeFetchOptions, safeFetchJson } from '@wispplace/safe-fetch'
 import { getSiteSettingsCache } from './db'
 
-// Re-export shared utilities for local usage and tests
-export { didWebToHttps, extractBlobCid, getPdsForDid, resolveDid, sanitizePath }
+const DEFAULT_HANDLE_RESOLVER_URL = 'https://slingshot.microcosm.blue/xrpc/com.atproto.identity.resolveHandle'
+const DEFAULT_PLC_DIRECTORY_URL = 'https://plc.directory'
+// did:plc identifiers are fixed-width lowercase base32 (RFC 4648 without 0/1/8/9).
+const PLC_DID_PATTERN = /^did:plc:[a-z2-7]{24}$/
 
-/**
- * Extract all subfs URIs from a directory tree with their mount paths
- */
-export function extractSubfsUris(directory: Directory, currentPath: string = ''): Array<{ uri: string; path: string }> {
-	const uris: Array<{ uri: string; path: string }> = []
+type JsonFetcher = typeof safeFetchJson
 
-	for (const entry of directory.entries) {
-		const fullPath = currentPath ? `${currentPath}/${entry.name}` : entry.name
-
-		if ('type' in entry.node) {
-			if (entry.node.type === 'subfs') {
-				// Subfs node with subject URI
-				const subfsNode = entry.node as any
-				if (subfsNode.subject) {
-					uris.push({ uri: subfsNode.subject, path: fullPath })
-				}
-			} else if (entry.node.type === 'directory') {
-				// Recursively search subdirectories
-				const subUris = extractSubfsUris(entry.node as Directory, fullPath)
-				uris.push(...subUris)
-			}
-		}
-	}
-
-	return uris
+interface DidDocument {
+	alsoKnownAs?: unknown[]
 }
 
-/**
- * Fetch a subfs record from the PDS
- */
-async function fetchSubfsRecord(uri: string, pdsEndpoint: string): Promise<SubfsRecord | null> {
+export interface IdentityResolutionOptions {
+	/** Test seam. Production requests use SSRF-hardened safeFetchJson. */
+	fetchJson?: JsonFetcher
+	fetchOptions?: SafeFetchOptions
+	handleResolverUrl?: string
+	plcDirectoryUrl?: string
+}
+
+function environment(name: string): string | undefined {
+	return process.env[name] || (typeof Bun !== 'undefined' ? Bun.env[name] : undefined)
+}
+
+function normalizeHostname(hostname: string): string {
+	return hostname.replace(/^\[/, '').replace(/\]$/, '').toLowerCase()
+}
+
+function isDnsHostname(hostname: string): boolean {
+	const normalized = normalizeHostname(hostname)
+	if (normalized.length === 0 || normalized.length > 253 || isIP(normalized) !== 0) return false
+	const withoutTrailingDot = normalized.endsWith('.') ? normalized.slice(0, -1) : normalized
+	if (!withoutTrailingDot) return false
+	return withoutTrailingDot.split('.').every((label) => {
+		return label.length > 0 && label.length <= 63 && /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)
+	})
+}
+
+function isLoopbackDevelopmentHostname(hostname: string): boolean {
+	const normalized = normalizeHostname(hostname)
+	return (
+		normalized === 'localhost' ||
+		normalized.endsWith('.localhost') ||
+		normalized === '127.0.0.1' ||
+		normalized === '::1'
+	)
+}
+
+function isValidHandle(handle: string): boolean {
+	if (handle.length < 3 || handle.length > 253 || handle !== handle.toLowerCase()) return false
+	if (!handle.includes('.') || handle.includes('..') || handle.endsWith('.')) return false
+	return isDnsHostname(handle)
+}
+
+function parseDidWeb(did: string): { authority: string; pathSegments: string[] } | null {
+	if (!did.startsWith('did:web:') || did.length > 2048) return null
+	const parts = did.slice('did:web:'.length).split(':')
+	const encodedAuthority = parts.shift()
+	if (!encodedAuthority || parts.some((part) => part === '.' || part === '..' || !/^[A-Za-z0-9._~-]+$/.test(part))) {
+		return null
+	}
+
+	// did:web represents an explicit port as %3A. Reject other escapes so a
+	// method-specific identifier cannot smuggle a different URL authority.
+	if (/%(?!3a)/i.test(encodedAuthority)) return null
+	const authority = encodedAuthority.replace(/%3a/gi, ':')
+
 	try {
-		// Parse URI: at://did/collection/rkey
-		const parts = uri.replace('at://', '').split('/')
-		if (parts.length < 3) {
-			console.error('Invalid subfs URI:', uri)
-			return null
-		}
-
-		const did = parts[0] || ''
-		const collection = parts[1] || ''
-		const rkey = parts[2] || ''
-
-		// Fetch the record from PDS
-		const url = `${pdsEndpoint}/xrpc/com.atproto.repo.getRecord?repo=${encodeURIComponent(did)}&collection=${encodeURIComponent(collection)}&rkey=${encodeURIComponent(rkey)}`
-		const response = await safeFetchJson(url)
-
-		if (!response || !response.value) {
-			console.error('Subfs record not found:', uri)
-			return null
-		}
-
-		const record = parseLexiconJson<SubfsRecord>(response.value)
-		if (!validateSubfsRecord(record).success) {
-			console.error('Invalid subfs record:', uri)
-			return null
-		}
-
-		return record
-	} catch (err) {
-		console.error('Failed to fetch subfs record:', uri, err)
+		const url = new URL(`https://${authority}`)
+		if (url.username || url.password || url.pathname !== '/' || url.search || url.hash) return null
+		if (!isDnsHostname(url.hostname)) return null
+		return { authority: url.host, pathSegments: parts }
+	} catch {
 		return null
 	}
 }
 
+/** Strictly accepts the DID methods this hosting service resolves. */
+export function isValidDid(did: string): boolean {
+	return PLC_DID_PATTERN.test(did) || parseDidWeb(did) !== null
+}
+
+/** Strictly accepts a supported DID or canonical AT Protocol handle. */
+export function isValidAtprotoIdentifier(identifier: string): boolean {
+	return isValidDid(identifier) || isValidHandle(identifier)
+}
+
+/** Convert a validated did:web identifier to its HTTPS DID document URL. */
+export function didWebToHttps(did: string): string {
+	const parsed = parseDidWeb(did)
+	if (!parsed) throw new Error('Invalid did:web format')
+	const base = `https://${parsed.authority}`
+	if (parsed.pathSegments.length === 0) return `${base}/.well-known/did.json`
+	return `${base}/${parsed.pathSegments.map((part) => encodeURIComponent(part)).join('/')}/did.json`
+}
+
+function parseIdentityEndpoint(value: string, name: string): URL {
+	let url: URL
+	try {
+		url = new URL(value)
+	} catch {
+		throw new Error(`Invalid ${name} URL`)
+	}
+
+	if (url.username || url.password || url.search || url.hash || !url.hostname) {
+		throw new Error(`Invalid ${name} URL`)
+	}
+	if (/%(?:2f|5c|00)/i.test(url.pathname)) throw new Error(`Invalid ${name} URL path`)
+	const hostname = normalizeHostname(url.hostname)
+	if (!isDnsHostname(hostname) && isIP(hostname) === 0) throw new Error(`Invalid ${name} hostname`)
+
+	const localHttp = isLocalhostFetchAllowed() && isLoopbackDevelopmentHostname(hostname)
+	if (url.protocol !== 'https:' && !(url.protocol === 'http:' && localHttp)) {
+		throw new Error(`${name} must use HTTPS`)
+	}
+	return url
+}
+
+function configuredIdentityEndpoint(configured: string | undefined, fallback: string, name: string): string {
+	const url = parseIdentityEndpoint(configured || fallback, name)
+	url.pathname = url.pathname.replace(/\/+$/, '') || '/'
+	return url.toString()
+}
+
+function identityFetchOptions(options: IdentityResolutionOptions): SafeFetchOptions {
+	const fetchOptions = { ...(options.fetchOptions || {}) }
+	if (isLocalhostFetchAllowed()) fetchOptions.allowLocalhost = true
+	return fetchOptions
+}
+
+async function fetchJson<T>(url: string, options: IdentityResolutionOptions): Promise<T> {
+	const fetcher = options.fetchJson || safeFetchJson
+	return fetcher<T>(url, identityFetchOptions(options))
+}
+
+function parseDidDocument(value: unknown): DidDocument | null {
+	if (typeof value !== 'object' || value === null) return null
+	const document = value as DidDocument
+	if (document.alsoKnownAs !== undefined && !Array.isArray(document.alsoKnownAs)) return null
+	return document
+}
+
+function plcDocumentUrl(directory: string, did: string): string {
+	const url = new URL(directory)
+	url.pathname = `${url.pathname.replace(/\/+$/, '')}/${encodeURIComponent(did)}`
+	return url.toString()
+}
+
+/** Fetch a validated DID document with the pinned safe-fetch transport. */
+export async function getDidDocument(
+	did: string,
+	options: IdentityResolutionOptions = {},
+): Promise<DidDocument | null> {
+	if (!isValidDid(did)) return null
+
+	try {
+		const url = did.startsWith('did:plc:')
+			? plcDocumentUrl(
+					configuredIdentityEndpoint(
+						options.plcDirectoryUrl || environment('WISP_PLC_DIRECTORY_URL'),
+						DEFAULT_PLC_DIRECTORY_URL,
+						'PLC directory',
+					),
+					did,
+				)
+			: didWebToHttps(did)
+		return parseDidDocument(await fetchJson<unknown>(url, options))
+	} catch {
+		return null
+	}
+}
+
+function didDocumentIncludesHandle(document: DidDocument, handle: string): boolean {
+	const expected = `at://${handle}`
+	return (document.alsoKnownAs || []).some((value) => typeof value === 'string' && value.toLowerCase() === expected)
+}
+
 /**
- * Replace subfs nodes in a directory tree with their actual content
- * Subfs entries are "merged" - their root entries are hoisted into the parent directory
- * This function is recursive - it will keep expanding until no subfs nodes remain
- * Uses a cache to avoid re-fetching the same subfs records across recursion depths
+ * Resolve a handle only after strict handle validation, then bind the result to
+ * the handle declared in the fetched DID document.
  */
-export async function expandSubfsNodes(
-	directory: Directory,
-	pdsEndpoint: string,
-	depth: number = 0,
-	subfsCache: Map<string, SubfsRecord | null> = new Map(),
-): Promise<Directory> {
-	const MAX_DEPTH = 10 // Prevent infinite loops
+export async function resolveDid(identifier: string, options: IdentityResolutionOptions = {}): Promise<string | null> {
+	if (isValidDid(identifier)) return identifier
+	if (!isValidHandle(identifier)) return null
 
-	if (depth >= MAX_DEPTH) {
-		console.error('Max subfs expansion depth reached, stopping to prevent infinite loop')
-		return directory
-	}
-
-	// Extract all subfs URIs
-	const subfsUris = extractSubfsUris(directory)
-
-	if (subfsUris.length === 0) {
-		// No subfs nodes, return as-is
-		return directory
-	}
-
-	// Filter to only URIs we haven't fetched yet
-	const uncachedUris = subfsUris.filter(({ uri }) => !subfsCache.has(uri))
-
-	if (uncachedUris.length > 0) {
-		console.log(
-			`[Depth ${depth}] Found ${subfsUris.length} subfs references, fetching ${uncachedUris.length} new records (${subfsUris.length - uncachedUris.length} cached)...`,
+	try {
+		const resolverUrl = new URL(
+			configuredIdentityEndpoint(
+				options.handleResolverUrl || environment('WISP_HANDLE_RESOLVER_URL'),
+				DEFAULT_HANDLE_RESOLVER_URL,
+				'handle resolver',
+			),
 		)
+		resolverUrl.searchParams.set('handle', identifier)
+		const result = await fetchJson<{ did?: unknown }>(resolverUrl.toString(), options)
+		if (!result || typeof result.did !== 'string' || !isValidDid(result.did)) return null
 
-		// Fetch only uncached subfs records in parallel
-		const fetchedRecords = await Promise.all(
-			uncachedUris.map(async ({ uri }) => {
-				const record = await fetchSubfsRecord(uri, pdsEndpoint)
-				return { uri, record }
-			}),
-		)
-
-		// Add fetched records to cache
-		for (const { uri, record } of fetchedRecords) {
-			subfsCache.set(uri, record)
-		}
-	} else {
-		console.log(`[Depth ${depth}] Found ${subfsUris.length} subfs references, all cached`)
+		const document = await getDidDocument(result.did, options)
+		return document && didDocumentIncludesHandle(document, identifier) ? result.did : null
+	} catch {
+		return null
 	}
-
-	// Build a map of path -> root entries to merge using the cache
-	// Note: SubFS entries are compatible with FS entries at runtime
-	const subfsMap = new Map<string, Entry[]>()
-	for (const { uri, path } of subfsUris) {
-		const record = subfsCache.get(uri)
-		if (record?.root?.entries) {
-			subfsMap.set(path, record.root.entries as unknown as Entry[])
-		}
-	}
-
-	// Replace subfs nodes by merging their root entries into the parent directory
-	function replaceSubfsInEntries(entries: Entry[], currentPath: string = ''): Entry[] {
-		const result: Entry[] = []
-
-		for (const entry of entries) {
-			const fullPath = currentPath ? `${currentPath}/${entry.name}` : entry.name
-			const node = entry.node
-
-			if ('type' in node && node.type === 'subfs') {
-				// Check if this is a flat merge or subdirectory merge (default to flat if not specified)
-				const subfsNode = node as any
-				const isFlat = subfsNode.flat !== false // Default to true
-				const subfsEntries = subfsMap.get(fullPath)
-
-				if (subfsEntries) {
-					console.log(
-						`[Depth ${depth}] Merging subfs node at ${fullPath} (${subfsEntries.length} entries, flat: ${isFlat})`,
-					)
-
-					if (isFlat) {
-						// Flat merge: hoist entries directly into parent directory
-						const processedEntries = replaceSubfsInEntries(subfsEntries, currentPath)
-						result.push(...processedEntries)
-					} else {
-						// Subdirectory merge: create a directory with the subfs node's name
-						const processedEntries = replaceSubfsInEntries(subfsEntries, fullPath)
-						const directoryNode: Directory = {
-							type: 'directory',
-							entries: processedEntries,
-						}
-						result.push({
-							name: entry.name,
-							node: directoryNode as any, // Type assertion needed due to lexicon type complexity
-						})
-					}
-				} else {
-					// If not in map yet, preserve the subfs node for next recursion depth
-					console.log(`[Depth ${depth}] Subfs at ${fullPath} not yet fetched, preserving for next iteration`)
-					result.push(entry)
-				}
-			} else if ('type' in node && node.type === 'directory' && 'entries' in node) {
-				// Recursively process subdirectories
-				result.push({
-					...entry,
-					node: {
-						...node,
-						entries: replaceSubfsInEntries(node.entries, fullPath),
-					},
-				})
-			} else {
-				// Regular file entry
-				result.push(entry)
-			}
-		}
-
-		return result
-	}
-
-	const partiallyExpanded = {
-		...directory,
-		entries: replaceSubfsInEntries(directory.entries),
-	}
-
-	// Recursively expand any remaining subfs nodes (e.g., nested subfs inside parent subfs)
-	// Pass the cache to avoid re-fetching records
-	return expandSubfsNodes(partiallyExpanded, pdsEndpoint, depth + 1, subfsCache)
 }
 
 export async function getCachedSettings(did: string, rkey: string): Promise<WispSettings | null> {

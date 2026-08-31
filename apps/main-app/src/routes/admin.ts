@@ -1,9 +1,12 @@
 // Admin API routes
 
+import { createLogger } from '@wispplace/observability'
 import { Elysia, t } from 'elysia'
 import { adminAuth, requireAdmin } from '../lib/admin-auth'
-import { addSupporter, db, getAllSupporters, removeSupporter } from '../lib/db'
+import { addSupporter, eventualRead, getAdminDatabaseReport, removeSupporter } from '../lib/db'
 import { SlingshotHandleResolver } from '../lib/slingshot-handle-resolver'
+
+const logger = createLogger('main-app')
 
 export const adminRoutes = (cookieSecret: string) =>
 	new Elysia({
@@ -138,49 +141,14 @@ export const adminRoutes = (cookieSecret: string) =>
 				if (check) return check
 
 				try {
-					// Get total counts
-					const allSitesResult = await db`SELECT COUNT(*) as count FROM site_cache`
-					const wispSubdomainsResult = await db`SELECT COUNT(*) as count FROM domains WHERE domain LIKE '%.wisp.place'`
-					const customDomainsResult = await db`SELECT COUNT(*) as count FROM custom_domains WHERE verified = true`
-					const siteCacheResult = await db`SELECT COUNT(*) as count FROM site_cache`
-					const siteSettingsCacheResult = await db`SELECT COUNT(*) as count FROM site_settings_cache`
-
-					// Get recent sites (including those without domains)
-					const recentSites = await db`
-					SELECT
-						s.did,
-						s.rkey,
-						s.rkey as display_name,
-						s.cached_at as created_at,
-						d.domain as subdomain,
-						cd.domain as custom_domain
-					FROM site_cache s
-					LEFT JOIN domains d ON s.did = d.did AND s.rkey = d.rkey AND d.domain LIKE '%.wisp.place'
-					LEFT JOIN custom_domains cd ON s.did = cd.did AND s.rkey = cd.rkey AND cd.verified = true
-					ORDER BY s.cached_at DESC
-					LIMIT 10
-				`
-
-					// Get recent domains
-					const recentDomains =
-						await db`SELECT domain, did, rkey, verified, created_at FROM custom_domains ORDER BY created_at DESC LIMIT 10`
-
-					return {
-						stats: {
-							totalSites: allSitesResult[0].count,
-							totalWispSubdomains: wispSubdomainsResult[0].count,
-							totalCustomDomains: customDomainsResult[0].count,
-							totalSiteCache: siteCacheResult[0].count,
-							totalSiteSettingsCache: siteSettingsCacheResult[0].count,
-						},
-						recentSites: recentSites,
-						recentDomains: recentDomains,
-					}
+					// Includes cache/configuration metadata, so this report stays primary.
+					return await getAdminDatabaseReport()
 				} catch (error) {
+					logger.error('[Admin] Failed to fetch database stats', error)
 					set.status = 500
 					return {
 						error: 'Failed to fetch database stats',
-						message: error instanceof Error ? error.message : String(error),
+						message: 'Unable to retrieve database stats',
 					}
 				}
 			},
@@ -213,42 +181,14 @@ export const adminRoutes = (cookieSecret: string) =>
 				const offset = query.offset ? parseInt(query.offset as string, 10) : 0
 
 				try {
-					const sites = await db`
-					SELECT
-						s.did,
-						s.rkey,
-						s.rkey as display_name,
-						s.cached_at as created_at,
-						d.domain as subdomain,
-						cd.domain as custom_domain
-					FROM site_cache s
-					LEFT JOIN domains d ON s.did = d.did AND s.rkey = d.rkey AND d.domain LIKE '%.wisp.place'
-					LEFT JOIN custom_domains cd ON s.did = cd.did AND s.rkey = cd.rkey AND cd.verified = true
-					ORDER BY s.cached_at DESC
-					LIMIT ${limit} OFFSET ${offset}
-				`
-
-					const customDomains = await db`
-					SELECT
-						domain,
-						did,
-						rkey,
-						verified,
-						created_at
-					FROM custom_domains
-					ORDER BY created_at DESC
-					LIMIT ${limit} OFFSET ${offset}
-				`
-
-					return {
-						sites: sites,
-						customDomains: customDomains,
-					}
+					// Reporting only: this explicitly permits a lagging local replica.
+					return await eventualRead.getAdminSites(limit, offset)
 				} catch (error) {
+					logger.error('[Admin] Failed to fetch sites', error)
 					set.status = 500
 					return {
 						error: 'Failed to fetch sites',
-						message: error instanceof Error ? error.message : String(error),
+						message: 'Unable to retrieve sites',
 					}
 				}
 			},
@@ -293,10 +233,11 @@ export const adminRoutes = (cookieSecret: string) =>
 						}
 					}
 				} catch (error) {
+					logger.error('[Admin] Failed to fetch firehose status', error)
 					set.status = 500
 					return {
 						error: 'Failed to fetch firehose status',
-						message: error instanceof Error ? error.message : String(error),
+						message: 'Firehose service unavailable',
 					}
 				}
 			},
@@ -363,8 +304,18 @@ export const adminRoutes = (cookieSecret: string) =>
 				const check = requireAdmin({ cookie, set })
 				if (check) return check
 
-				const supporters = await getAllSupporters()
-				return { supporters }
+				try {
+					// This is an admin report. Supporter checks used for domain limits stay primary.
+					const supporters = await eventualRead.getAdminSupporters()
+					return { supporters }
+				} catch (error) {
+					logger.error('[Admin] Failed to fetch supporters', error)
+					set.status = 500
+					return {
+						error: 'Failed to fetch supporters',
+						message: 'Unable to retrieve supporters',
+					}
+				}
 			},
 			{
 				cookie: t.Cookie(
@@ -392,31 +343,40 @@ export const adminRoutes = (cookieSecret: string) =>
 				const check = requireAdmin({ cookie, set })
 				if (check) return check
 
-				const { identifier } = body
-				let did = identifier.trim()
+				try {
+					const { identifier } = body
+					let did = identifier.trim()
 
-				// If it's not a DID, treat it as a handle and resolve it
-				if (!did.startsWith('did:')) {
-					const handleResolver = new SlingshotHandleResolver()
-					const resolvedDid = await handleResolver.resolve(did)
+					// If it's not a DID, treat it as a handle and resolve it
+					if (!did.startsWith('did:')) {
+						const handleResolver = new SlingshotHandleResolver()
+						const resolvedDid = await handleResolver.resolve(did)
 
-					if (!resolvedDid) {
-						set.status = 400
-						return {
-							error: 'Invalid handle',
-							message: `Could not resolve handle: ${did}`,
+						if (!resolvedDid) {
+							set.status = 400
+							return {
+								error: 'Invalid handle',
+								message: `Could not resolve handle: ${did}`,
+							}
 						}
+
+						did = resolvedDid
 					}
 
-					did = resolvedDid
-				}
+					// Add to supporters table
+					await addSupporter(did)
 
-				// Add to supporters table
-				await addSupporter(did)
-
-				return {
-					success: true,
-					did,
+					return {
+						success: true,
+						did,
+					}
+				} catch (error) {
+					logger.error('[Admin] Failed to add supporter', error)
+					set.status = 500
+					return {
+						error: 'Failed to add supporter',
+						message: 'Unable to add supporter',
+					}
 				}
 			},
 			{
@@ -447,10 +407,19 @@ export const adminRoutes = (cookieSecret: string) =>
 				const check = requireAdmin({ cookie, set })
 				if (check) return check
 
-				const { did } = params
-				await removeSupporter(did)
+				try {
+					const { did } = params
+					await removeSupporter(did)
 
-				return { success: true }
+					return { success: true }
+				} catch (error) {
+					logger.error('[Admin] Failed to remove supporter', error)
+					set.status = 500
+					return {
+						error: 'Failed to remove supporter',
+						message: 'Unable to remove supporter',
+					}
+				}
 			},
 			{
 				cookie: t.Cookie(

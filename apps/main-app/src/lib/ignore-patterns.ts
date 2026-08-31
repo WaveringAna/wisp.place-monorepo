@@ -24,7 +24,6 @@ export function createIgnoreMatcher(customPatterns?: string[]): Ignore {
 	// Add custom patterns if provided
 	if (customPatterns && customPatterns.length > 0) {
 		ig.add(customPatterns)
-		console.log(`Loaded ${customPatterns.length} custom patterns from .wispignore`)
 	}
 
 	return ig

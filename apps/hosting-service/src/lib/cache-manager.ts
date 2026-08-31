@@ -38,10 +38,39 @@ interface GetOrFetchOpts<T> {
 	ttl?: number | ((value: T) => number | undefined)
 }
 
+interface InvalidationFence {
+	valid: boolean
+}
+
+interface PendingFetch {
+	promise: Promise<unknown>
+	fence: InvalidationFence
+}
+
+function hasValidFence(fence: InvalidationFence | undefined): boolean {
+	return fence?.valid ?? true
+}
+
+function isTooLargeToCache(config: NamespaceConfig, size: number): boolean {
+	return config.maxSize !== undefined && size > config.maxSize
+}
+
+function shouldEvictForIncomingEntry(
+	config: NamespaceConfig,
+	entryCount: number,
+	sizeBytes: number,
+	incomingSize: number,
+): boolean {
+	if (entryCount === 0) return false
+	if (config.maxEntries !== undefined && entryCount >= config.maxEntries) return true
+	return config.maxSize !== undefined && sizeBytes + incomingSize > config.maxSize
+}
+
 export class CacheManager<NS extends string = string> {
 	private namespaces: Map<NS, Map<string, CacheEntry>> = new Map()
 	private configs: Map<NS, NamespaceConfig> = new Map()
 	private stats: Map<NS, NamespaceStats> = new Map()
+	private pendingFetches: Map<NS, Map<string, PendingFetch>> = new Map()
 	private cleanupTimer: ReturnType<typeof setInterval> | null = null
 
 	constructor(config: Record<NS, NamespaceConfig>) {
@@ -54,18 +83,43 @@ export class CacheManager<NS extends string = string> {
 
 	// ── Primary API ──────────────────────────────────────────────────────
 
-	async getOrFetch<T>(ns: NS, key: string, fetcher: () => T | Promise<T>, opts?: GetOrFetchOpts<T>): Promise<T> {
+	getOrFetch<T>(ns: NS, key: string, fetcher: () => T | Promise<T>, opts?: GetOrFetchOpts<T>): Promise<T> {
 		const existing = this.get<T>(ns, key)
-		if (existing !== undefined) return existing
+		if (existing !== undefined) return Promise.resolve(existing)
 
-		const value = await fetcher()
+		const pending = this.pendingFetches.get(ns)?.get(key)
+		if (pending) return pending.promise as Promise<T>
 
-		if (!opts?.cacheIf || opts.cacheIf(value)) {
-			const ttl = typeof opts?.ttl === 'function' ? opts.ttl(value) : opts?.ttl
-			this.set(ns, key, value, ttl)
+		const fence: InvalidationFence = { valid: true }
+		let resolvePromise!: (value: T | PromiseLike<T>) => void
+		let rejectPromise!: (reason?: unknown) => void
+		const promise = new Promise<T>((resolve, reject) => {
+			resolvePromise = resolve
+			rejectPromise = reject
+		})
+		const request: PendingFetch = { promise, fence }
+		this.pendingFetchesFor(ns).set(key, request)
+
+		const fetchAndCache = async (): Promise<void> => {
+			try {
+				const value = await fetcher()
+				if (request.fence.valid) {
+					const shouldCache = !opts?.cacheIf || opts.cacheIf(value)
+					if (shouldCache && request.fence.valid) {
+						const ttl = typeof opts?.ttl === 'function' ? opts.ttl(value) : opts?.ttl
+						this.store(ns, key, value, ttl, request.fence)
+					}
+				}
+				resolvePromise(value)
+			} catch (error) {
+				rejectPromise(error)
+			} finally {
+				this.finishPendingFetch(ns, key, request)
+			}
 		}
 
-		return value
+		void fetchAndCache()
+		return promise
 	}
 
 	get<T>(ns: NS, key: string): T | undefined {
@@ -99,40 +153,109 @@ export class CacheManager<NS extends string = string> {
 	}
 
 	set(ns: NS, key: string, value: unknown, ttl?: number): void {
+		this.invalidatePendingFetch(ns, key)
+		this.store(ns, key, value, ttl)
+	}
+
+	private store(ns: NS, key: string, value: unknown, ttl?: number, fence?: InvalidationFence): void {
 		const map = this.namespaces.get(ns)
 		const cfg = this.configs.get(ns)
 		const st = this.stats.get(ns)
 		if (!map || !cfg || !st) return
+		if (!hasValidFence(fence)) return
 
 		const size = cfg.estimateSize ? cfg.estimateSize(value) : 0
+		if (!hasValidFence(fence)) return
 
-		// Remove existing entry first
+		// Remove an older value even when the replacement is too large to cache.
 		const existing = map.get(key)
 		if (existing) {
 			st.sizeBytes -= existing.size
 			map.delete(key)
+			st.entries = map.size
 		}
+		if (isTooLargeToCache(cfg, size)) return
 
-		// LRU eviction
-		while (map.size > 0) {
-			const overCount = cfg.maxEntries !== undefined && map.size >= cfg.maxEntries
-			const overSize = cfg.maxSize !== undefined && st.sizeBytes + size > cfg.maxSize
-			if (!overCount && !overSize) break
-
-			const oldest = map.keys().next().value
-			if (oldest === undefined) break
-			const evicted = map.get(oldest)!
-			map.delete(oldest)
-			st.sizeBytes -= evicted.size
-			st.evictions++
-		}
-
+		this.evictUntilFits(map, cfg, st, size)
 		map.set(key, { value, timestamp: Date.now(), size, ttl })
 		st.sizeBytes += size
 		st.entries = map.size
 	}
 
+	private evictUntilFits(
+		map: Map<string, CacheEntry>,
+		config: NamespaceConfig,
+		stats: NamespaceStats,
+		incomingSize: number,
+	): void {
+		while (shouldEvictForIncomingEntry(config, map.size, stats.sizeBytes, incomingSize)) {
+			const oldest = map.keys().next().value
+			if (oldest === undefined) return
+
+			const evicted = map.get(oldest)!
+			map.delete(oldest)
+			stats.sizeBytes -= evicted.size
+			stats.evictions++
+		}
+	}
+
+	private pendingFetchesFor(ns: NS): Map<string, PendingFetch> {
+		const pending = this.pendingFetches.get(ns)
+		if (pending) return pending
+
+		const created = new Map<string, PendingFetch>()
+		this.pendingFetches.set(ns, created)
+		return created
+	}
+
+	private finishPendingFetch(ns: NS, key: string, request: PendingFetch): void {
+		const pending = this.pendingFetches.get(ns)
+		if (!pending || pending.get(key) !== request) return
+
+		pending.delete(key)
+		if (pending.size === 0) this.pendingFetches.delete(ns)
+	}
+
+	/**
+	 * A fenced request remains alive for its original callers, but is removed from
+	 * the join map so a miss after invalidation starts a fresh fetch. The request
+	 * keeps its own fence, so its later completion cannot repopulate the cache.
+	 */
+	private invalidatePendingFetch(ns: NS, key: string): void {
+		const pending = this.pendingFetches.get(ns)
+		const request = pending?.get(key)
+		if (!pending || !request) return
+
+		request.fence.valid = false
+		pending.delete(key)
+		if (pending.size === 0) this.pendingFetches.delete(ns)
+	}
+
+	private invalidatePendingFetchesByPrefix(ns: NS, prefix: string): void {
+		const pending = this.pendingFetches.get(ns)
+		if (!pending) return
+
+		for (const [key, request] of pending) {
+			if (!key.startsWith(prefix)) continue
+			request.fence.valid = false
+			pending.delete(key)
+		}
+		if (pending.size === 0) this.pendingFetches.delete(ns)
+	}
+
+	private invalidateAllPendingFetches(ns: NS): void {
+		const pending = this.pendingFetches.get(ns)
+		if (!pending) return
+
+		for (const request of pending.values()) {
+			request.fence.valid = false
+		}
+		this.pendingFetches.delete(ns)
+	}
+
 	delete(ns: NS, key: string): void {
+		this.invalidatePendingFetch(ns, key)
+
 		const map = this.namespaces.get(ns)
 		const st = this.stats.get(ns)
 		if (!map || !st) return
@@ -146,6 +269,8 @@ export class CacheManager<NS extends string = string> {
 	}
 
 	deletePrefix(ns: NS, prefix: string): void {
+		this.invalidatePendingFetchesByPrefix(ns, prefix)
+
 		const map = this.namespaces.get(ns)
 		const st = this.stats.get(ns)
 		if (!map || !st) return
@@ -160,6 +285,8 @@ export class CacheManager<NS extends string = string> {
 	}
 
 	clear(ns: NS): void {
+		this.invalidateAllPendingFetches(ns)
+
 		const map = this.namespaces.get(ns)
 		const st = this.stats.get(ns)
 		if (!map || !st) return
@@ -167,6 +294,12 @@ export class CacheManager<NS extends string = string> {
 		map.clear()
 		st.entries = 0
 		st.sizeBytes = 0
+	}
+
+	clearAll(): void {
+		for (const ns of this.namespaces.keys()) {
+			this.clear(ns)
+		}
 	}
 
 	// ── Stats ────────────────────────────────────────────────────────────
@@ -211,16 +344,36 @@ export class CacheManager<NS extends string = string> {
 
 // ── Singleton ────────────────────────────────────────────────────────────
 
-type CacheNamespace = 'domains' | 'customDomains' | 'settings' | 'handles' | 'redirectRules' | 'siteCache' | 'siteFiles'
+const INVALIDATION_SAFETY_TTL_MS = 10_000
+const REDIRECT_RULES_SAFETY_TTL_MS = 30_000
 
+type CacheNamespace =
+	| 'domains'
+	| 'customDomains'
+	| 'settings'
+	| 'handles'
+	| 'redirectRules'
+	| 'siteCache'
+	| 'siteFiles'
+	| 'sourceCidMismatches'
+
+// Invalidation remains immediate. These TTLs bound stale data when an invalidation event cannot be delivered.
 export const cache = new CacheManager<CacheNamespace>({
-	domains: { ttl: 5 * 60_000, maxEntries: 5000 },
-	customDomains: { ttl: 5 * 60_000, maxEntries: 5000 },
-	settings: { ttl: 5 * 60_000, maxEntries: 1000 },
+	domains: { ttl: INVALIDATION_SAFETY_TTL_MS, maxEntries: 5000 },
+	customDomains: { ttl: INVALIDATION_SAFETY_TTL_MS, maxEntries: 5000 },
+	settings: { ttl: INVALIDATION_SAFETY_TTL_MS, maxEntries: 1000 },
 	handles: { ttl: 10 * 60_000, maxEntries: 5000 },
-	redirectRules: { maxEntries: 1000, maxSize: 10 * 1024 * 1024, estimateSize: (v) => (v as unknown[]).length * 100 },
-	siteCache: { ttl: 5 * 60_000, maxEntries: 5000 },
+	redirectRules: {
+		ttl: REDIRECT_RULES_SAFETY_TTL_MS,
+		maxEntries: 1000,
+		maxSize: 10 * 1024 * 1024,
+		estimateSize: (v) => (v as unknown[]).length * 100,
+	},
+	siteCache: { ttl: INVALIDATION_SAFETY_TTL_MS, maxEntries: 5000 },
 	// Negative-result cache for per-site fallback files (SPA, custom 404, auto-detected 404 pages).
 	// Stores null when a file is confirmed absent so repeated 404 responses don't re-hit S3.
-	siteFiles: { ttl: 5 * 60_000, maxEntries: 10_000 },
+	siteFiles: { ttl: INVALIDATION_SAFETY_TTL_MS, maxEntries: 10_000 },
+	// Short-lived local markers for non-transient source-CID validation failures.
+	// Invalidation clears these immediately.
+	sourceCidMismatches: { ttl: INVALIDATION_SAFETY_TTL_MS, maxEntries: 10_000 },
 })

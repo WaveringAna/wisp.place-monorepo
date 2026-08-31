@@ -2,7 +2,7 @@ import { chmodSync, closeSync, mkdirSync, openSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { cwd } from 'node:process'
-import { getHandleForDid, resolveDid } from '@wispplace/atproto-utils'
+import { getHandleForDid, resolveDid, unsafeRawIdentityGet } from '@wispplace/atproto-utils'
 import { isBun } from '@wispplace/bun-firehose'
 
 export const KEYCHAIN_SERVICE = 'wispctl'
@@ -580,7 +580,7 @@ export async function resolveIdentifierToDid(kv: KvAdapter, identifier: string):
 		return cachedDid
 	}
 
-	const resolved = await resolveDid(handle).catch(() => null)
+	const resolved = await resolveDid(handle, unsafeRawIdentityGet).catch(() => null)
 	if (!resolved) {
 		return cachedDid ?? null
 	}
@@ -600,7 +600,7 @@ export async function resolveIdentifierToDid(kv: KvAdapter, identifier: string):
 export async function backfillHandle(kv: KvAdapter, did: string): Promise<string | undefined> {
 	const account = readAccount(kv, did)
 	if (account?.handle) return account.handle
-	const handle = await getHandleForDid(did).catch(() => null)
+	const handle = await getHandleForDid(did, unsafeRawIdentityGet).catch(() => null)
 	if (!handle) return undefined
 	return upsertAccount(kv, did, { handle: handle, handleChecked: true }).handle
 }

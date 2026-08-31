@@ -1,11 +1,34 @@
 import { db } from './db'
+import {
+	classifyVerificationFailure,
+	MAX_WARNING_DETAILS_PER_PASS,
+	shouldLogDiagnosticDetail,
+} from './dns-verification-logging'
 import { verifyCustomDomain } from './dns-verify'
+
+export type DNSVerificationLogLevel = 'info' | 'warn' | 'error'
 
 interface VerificationStats {
 	totalChecked: number
 	verified: number
 	failed: number
 	errors: number
+}
+
+interface VerificationPassStats extends VerificationStats {
+	domains: number
+	pending: number
+	missingDns: number
+	previouslyVerifiedFailed: number
+	newlyVerified: number
+	warnings: number
+	cnameAdvisoryFailures: number
+	ownershipChanged: number
+	duplicatesRemoved: number
+	diagnosticDetailsLogged: number
+	diagnosticDetailsSuppressed: number
+	warningDetailsLogged: number
+	warningDetailsSuppressed: number
 }
 
 export class DNSVerificationWorker {
@@ -21,13 +44,11 @@ export class DNSVerificationWorker {
 
 	constructor(
 		private checkIntervalMs: number = 60 * 60 * 1000, // 1 hour default
-		private onLog?: (message: string, data?: any) => void,
+		private onLog?: (message: string, data?: Record<string, unknown>, level?: DNSVerificationLogLevel) => void,
 	) {}
 
-	private log(message: string, data?: any) {
-		if (this.onLog) {
-			this.onLog(message, data)
-		}
+	private log(message: string, data?: Record<string, unknown>, level: DNSVerificationLogLevel = 'info') {
+		this.onLog?.(message, data, level)
 	}
 
 	private async cleanupDuplicateDomainRows(): Promise<number> {
@@ -90,21 +111,53 @@ export class DNSVerificationWorker {
 	}
 
 	private async verifyAllDomains() {
-		this.log('Starting DNS verification check')
 		const startTime = Date.now()
-
-		const runStats: VerificationStats = {
+		const runStats: VerificationPassStats = {
+			domains: 0,
 			totalChecked: 0,
 			verified: 0,
 			failed: 0,
 			errors: 0,
+			pending: 0,
+			missingDns: 0,
+			previouslyVerifiedFailed: 0,
+			newlyVerified: 0,
+			warnings: 0,
+			cnameAdvisoryFailures: 0,
+			ownershipChanged: 0,
+			duplicatesRemoved: 0,
+			diagnosticDetailsLogged: 0,
+			diagnosticDetailsSuppressed: 0,
+			warningDetailsLogged: 0,
+			warningDetailsSuppressed: 0,
+		}
+		let completed = false
+		let fatalError = false
+		let diagnosticDetailsLogged = 0
+		let warningDetailsLogged = 0
+
+		const logDiagnostic = (message: string, data: Record<string, unknown>, level: DNSVerificationLogLevel = 'warn') => {
+			if (shouldLogDiagnosticDetail(diagnosticDetailsLogged)) {
+				diagnosticDetailsLogged++
+				runStats.diagnosticDetailsLogged++
+				this.log(message, data, level)
+			} else {
+				runStats.diagnosticDetailsSuppressed++
+			}
+		}
+
+		const logWarning = (message: string, data: Record<string, unknown>) => {
+			if (shouldLogDiagnosticDetail(warningDetailsLogged, MAX_WARNING_DETAILS_PER_PASS)) {
+				warningDetailsLogged++
+				runStats.warningDetailsLogged++
+				this.log(message, data, 'warn')
+			} else {
+				runStats.warningDetailsSuppressed++
+			}
 		}
 
 		try {
-			const removed = await this.cleanupDuplicateDomainRows()
-			if (removed > 0) {
-				this.log('Cleaned duplicate custom domain rows before verification', { removed })
-			}
+			runStats.duplicatesRemoved = await this.cleanupDuplicateDomainRows()
 
 			// Get all custom domains (both verified and pending)
 			const domains = await db<
@@ -126,17 +179,15 @@ export class DNSVerificationWorker {
           id DESC
       `
 
+			runStats.domains = domains?.length ?? 0
 			if (!domains || domains.length === 0) {
-				this.log('No custom domains to check')
 				this.lastRunTime = Date.now()
+				completed = true
 				return
 			}
 
-			const verifiedCount = domains.filter((d) => d.verified).length
-			const pendingCount = domains.filter((d) => !d.verified).length
-			this.log(`Checking ${domains.length} custom domains (${verifiedCount} verified, ${pendingCount} pending)`)
-
-			// Verify each domain
+			// Verify each domain. Normal DNS misses and pending claims are counted
+			// below but intentionally do not produce one log entry per domain.
 			for (const row of domains) {
 				runStats.totalChecked++
 				const { id, domain, did, verified: wasVerified } = row
@@ -167,13 +218,15 @@ export class DNSVerificationWorker {
 						const isStillOwner = currentOwner.length > 0 && currentOwner[0].id === id
 
 						if (!isStillOwner) {
-							this.log(`⚠️  Domain ownership changed during verification: ${domain}`, {
+							runStats.failed++
+							runStats.ownershipChanged++
+							logDiagnostic('Domain ownership changed during verification', {
+								domain,
 								expectedId: id,
 								expectedDid: did,
 								actualId: currentOwner[0]?.id,
 								actualDid: currentOwner[0]?.did,
 							})
-							runStats.failed++
 							continue
 						}
 
@@ -185,10 +238,16 @@ export class DNSVerificationWorker {
               WHERE id = ${id}
             `
 						runStats.verified++
-						if (!wasVerified) {
-							this.log(`Domain newly verified: ${domain}`, { did })
-						} else {
-							this.log(`Domain re-verified: ${domain}`, { did })
+						if (!wasVerified) runStats.newlyVerified++
+
+						const foundCname = result.found?.cname
+						if (foundCname !== undefined && foundCname.toLowerCase() !== `${expectedHash}.dns.wisp.place`) {
+							runStats.cnameAdvisoryFailures++
+						}
+
+						if (result.warning) {
+							runStats.warnings++
+							logWarning('DNS verification warning', { domain, warning: result.warning })
 						}
 					} else {
 						// Mark domain as unverified or keep it pending
@@ -199,14 +258,17 @@ export class DNSVerificationWorker {
               WHERE id = ${id}
             `
 						runStats.failed++
-						if (wasVerified) {
-							this.log(`Domain verification failed (was verified): ${domain}`, {
-								did,
-								error: result.error,
-								found: result.found,
-							})
-						} else {
-							this.log(`Domain still pending: ${domain}`, {
+						if (wasVerified) runStats.previouslyVerifiedFailed++
+
+						const failureKind = classifyVerificationFailure(result, wasVerified)
+						if (!wasVerified) runStats.pending++
+						if (failureKind === 'missing-dns') {
+							runStats.missingDns++
+						} else if (failureKind === 'mismatch') {
+							// A non-DNS mismatch on a previously verified domain is
+							// unusual enough to retain, but cap detail per pass.
+							logDiagnostic('Previously verified domain failed DNS verification', {
+								domain,
 								did,
 								error: result.error,
 								found: result.found,
@@ -215,29 +277,41 @@ export class DNSVerificationWorker {
 					}
 				} catch (error) {
 					runStats.errors++
-					this.log(`Error verifying domain: ${domain}`, {
-						did,
-						error: error instanceof Error ? error.message : String(error),
-					})
+					logDiagnostic(
+						`Error verifying domain: ${domain}`,
+						{
+							did,
+							error: error instanceof Error ? error.message : String(error),
+						},
+						'error',
+					)
 				}
 			}
 
-			// Update cumulative stats
+			// Update cumulative stats. Keep these health counters unchanged: only
+			// completed per-domain checks contribute to the existing totals.
 			this.stats.totalChecked += runStats.totalChecked
 			this.stats.verified += runStats.verified
 			this.stats.failed += runStats.failed
 			this.stats.errors += runStats.errors
 
-			const duration = Date.now() - startTime
 			this.lastRunTime = Date.now()
-
-			this.log('DNS verification check completed', {
-				duration: `${duration}ms`,
-				...runStats,
-			})
+			completed = true
 		} catch (error) {
-			this.log('Fatal error in DNS verification worker', {
-				error: error instanceof Error ? error.message : String(error),
+			fatalError = true
+			this.log(
+				'Fatal error in DNS verification worker',
+				{ error: error instanceof Error ? error.message : String(error) },
+				'error',
+			)
+		} finally {
+			const durationMs = Date.now() - startTime
+			this.log('DNS verification check completed', {
+				duration: `${durationMs}ms`,
+				durationMs,
+				completed,
+				fatalError,
+				...runStats,
 			})
 		}
 	}

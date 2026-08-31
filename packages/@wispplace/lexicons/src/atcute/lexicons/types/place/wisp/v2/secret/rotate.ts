@@ -7,7 +7,13 @@ const _mainSchema = /*#__PURE__*/ v.procedure("place.wisp.v2.secret.rotate", {
   input: {
     type: "lex",
     schema: /*#__PURE__*/ v.object({
-      name: /*#__PURE__*/ v.recordKeyString(),
+      /**
+       * 1–64 character server-managed secret ID. Use ASCII letters, digits, dots, underscores, and hyphens only.
+       * @maxLength 64
+       */
+      name: /*#__PURE__*/ v.constrain(/*#__PURE__*/ v.recordKeyString(), [
+        /*#__PURE__*/ v.stringLength(0, 64),
+      ]),
     }),
   },
   output: {

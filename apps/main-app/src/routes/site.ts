@@ -57,13 +57,12 @@ export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 						subfsUris = extractSubfsUris(manifest.root)
 
 						if (subfsUris.length > 0) {
-							console.log(`Found ${subfsUris.length} subfs records to delete`)
 							logger.info(`[Site] Found ${subfsUris.length} subfs records associated with ${rkey}`)
 						}
 					}
-				} catch (_err) {
-					// Record might not exist, continue with deletion
-					console.log('Could not fetch site record for subfs cleanup, continuing...')
+				} catch (err) {
+					// Record might not exist, continue with deletion.
+					logger.warn('[Site] Could not fetch site record for subfs cleanup; continuing', { error: err })
 				}
 
 				// Delete the main record from AT Protocol
@@ -81,7 +80,7 @@ export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 
 				// Delete associated subfs records
 				if (subfsUris.length > 0) {
-					console.log(`Deleting ${subfsUris.length} associated subfs records...`)
+					logger.info(`[Site] Deleting ${subfsUris.length} associated subfs records for ${rkey}`)
 
 					await Promise.all(
 						subfsUris.map(async ({ uri }) => {
@@ -96,12 +95,10 @@ export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 									rkey: subRkey,
 								})
 
-								console.log(`  🗑️  Deleted subfs: ${uri}`)
 								logger.info(`[Site] Deleted subfs record: ${uri}`)
-							} catch (err: any) {
-								// Log but don't fail if subfs deletion fails
-								console.warn(`Failed to delete subfs ${uri}:`, err?.message)
-								logger.warn(`[Site] Failed to delete subfs ${uri}`, err)
+							} catch (err) {
+								// Log but don't fail if subfs deletion fails.
+								logger.error('[Site] Failed to delete subfs record', err, { uri })
 							}
 						}),
 					)
@@ -120,7 +117,7 @@ export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				set.status = 500
 				return {
 					success: false,
-					error: err instanceof Error ? err.message : 'Failed to delete site',
+					error: 'Failed to delete site',
 				}
 			}
 		})
@@ -178,7 +175,7 @@ export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				set.status = 500
 				return {
 					success: false,
-					error: err instanceof Error ? err.message : 'Failed to fetch settings',
+					error: 'Failed to fetch settings',
 				}
 			}
 		})
@@ -239,7 +236,7 @@ export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				set.status = 500
 				return {
 					success: false,
-					error: err instanceof Error ? err.message : 'Failed to save settings',
+					error: 'Failed to save settings',
 				}
 			}
 		})

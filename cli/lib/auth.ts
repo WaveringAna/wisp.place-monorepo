@@ -11,7 +11,7 @@ import {
 } from '@atproto/oauth-client-node'
 import { log } from '@clack/prompts'
 import { serve as honoNodeServe } from '@hono/node-server'
-import { resolvePdsFromHandle } from '@wispplace/atproto-utils'
+import { resolvePdsFromHandle, unsafeRawIdentityGet } from '@wispplace/atproto-utils'
 import { isBun } from '@wispplace/bun-firehose'
 import { describeCapability, missingCapabilities, wispCliRequiredCapabilities } from '@wispplace/constants'
 import { Hono } from 'hono'
@@ -621,7 +621,7 @@ export async function authenticateAppPassword(
 
 	if (!serviceUrl) {
 		emitStatus(options, `Resolving PDS for ${identifier}...`)
-		serviceUrl = await resolvePdsFromHandle(identifier)
+		serviceUrl = await resolvePdsFromHandle(identifier, unsafeRawIdentityGet, { allowLoopback: true })
 		emitStatus(options, `Found PDS: ${serviceUrl}`)
 	}
 

@@ -1,9 +1,59 @@
-import type { Transform } from 'node:stream'
+import { Duplex, Readable, Transform, Writable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 import { promisify } from 'node:util'
-import { createGunzip, createGzip, gunzip, gzip } from 'node:zlib'
+import { createGunzip, createGzip, gzip } from 'node:zlib'
 
 const gzipAsync = promisify(gzip)
-const gunzipAsync = promisify(gunzip)
+
+/**
+ * Maximum uncompressed bytes accepted by the built-in gzip helpers.
+ *
+ * This matches Wisp's per-blob limit. Callers that handle a smaller payload can
+ * pass their own lower limit to `decompress` or `createDecompressStream`.
+ */
+export const DEFAULT_MAX_DECOMPRESSED_BYTES = 200 * 1024 * 1024
+
+/** Raised when gzip output exceeds the caller's allowed size. */
+export class DecompressionLimitError extends Error {
+	readonly maxOutputBytes: number
+	readonly outputBytes: number
+
+	constructor(maxOutputBytes: number, outputBytes: number) {
+		super(`Decompressed data exceeds the ${maxOutputBytes}-byte limit`)
+		this.name = 'DecompressionLimitError'
+		this.maxOutputBytes = maxOutputBytes
+		this.outputBytes = outputBytes
+	}
+}
+
+function assertValidOutputLimit(maxOutputBytes: number): void {
+	if (!Number.isSafeInteger(maxOutputBytes) || maxOutputBytes < 0) {
+		throw new RangeError('maxOutputBytes must be a non-negative safe integer')
+	}
+}
+
+/**
+ * Count decompressed bytes while preserving stream backpressure. Returning an
+ * error from this transform makes `pipeline` destroy the gzip source at the
+ * first chunk that crosses the limit.
+ */
+function createOutputLimitTransform(maxOutputBytes: number): Transform {
+	let outputBytes = 0
+
+	return new Transform({
+		transform(chunk, _encoding, callback) {
+			const output = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+			const nextOutputBytes = outputBytes + output.length
+			if (nextOutputBytes > maxOutputBytes) {
+				callback(new DecompressionLimitError(maxOutputBytes, nextOutputBytes))
+				return
+			}
+
+			outputBytes = nextOutputBytes
+			callback(null, output)
+		},
+	})
+}
 
 /**
  * Compress data using gzip.
@@ -28,31 +78,75 @@ export async function compress(data: Uint8Array): Promise<Uint8Array> {
 	return new Uint8Array(compressed)
 }
 
+async function pipeGzip(data: Uint8Array, maxOutputBytes: number, destination: Writable): Promise<void> {
+	if (!isGzipped(data)) {
+		throw new Error('Invalid gzip data: missing magic bytes')
+	}
+	assertValidOutputLimit(maxOutputBytes)
+	await pipeline(Readable.from([data]), createDecompressStream(maxOutputBytes), destination)
+}
+
 /**
- * Decompress gzip-compressed data.
+ * Decompress gzip-compressed data without allowing unbounded output.
  *
  * @param data - Compressed data
- * @returns Decompressed data as Uint8Array
+ * @param maxOutputBytes - Maximum accepted decompressed size
+ * @returns Decompressed data as a Buffer (a Uint8Array subclass)
  * @throws Error if data is not valid gzip format
+ * @throws DecompressionLimitError if decompressed output exceeds `maxOutputBytes`
  *
  * @remarks
  * Automatically validates gzip magic bytes (0x1f 0x8b) before decompression.
+ * Decompression runs through Node's streaming zlib implementation. The pipeline
+ * is destroyed as soon as a chunk crosses the output cap, rather than buffering
+ * the full decompressed payload first.
  *
  * @example
  * ```typescript
- * const decompressed = await decompress(compressedData);
+ * const decompressed = await decompress(compressedData, 10 * 1024 * 1024);
  * const text = new TextDecoder().decode(decompressed);
  * ```
  */
-export async function decompress(data: Uint8Array): Promise<Uint8Array> {
-	// Validate gzip magic bytes
-	if (data.length < 2 || data[0] !== 0x1f || data[1] !== 0x8b) {
-		throw new Error('Invalid gzip data: missing magic bytes')
-	}
 
-	const buffer = Buffer.from(data)
-	const decompressed = await gunzipAsync(buffer)
-	return new Uint8Array(decompressed)
+export async function decompress(
+	data: Uint8Array,
+	maxOutputBytes = DEFAULT_MAX_DECOMPRESSED_BYTES,
+): Promise<Buffer<ArrayBuffer>> {
+	const chunks: Buffer[] = []
+	let outputBytes = 0
+	const collector = new Writable({
+		write(chunk, _encoding, callback) {
+			const output = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+			chunks.push(output)
+			outputBytes += output.length
+			callback()
+		},
+	})
+
+	await pipeGzip(data, maxOutputBytes, collector)
+	return Buffer.concat(chunks, outputBytes) as Buffer<ArrayBuffer>
+}
+
+/**
+ * Count gzip output without retaining it.
+ *
+ * Use this when a caller needs to enforce a logical-size quota while keeping
+ * the accepted gzip payload compressed in storage.
+ */
+export async function measureDecompressedSize(
+	data: Uint8Array,
+	maxOutputBytes = DEFAULT_MAX_DECOMPRESSED_BYTES,
+): Promise<number> {
+	let outputBytes = 0
+	const counter = new Writable({
+		write(chunk, _encoding, callback) {
+			outputBytes += Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(chunk)
+			callback()
+		},
+	})
+
+	await pipeGzip(data, maxOutputBytes, counter)
+	return outputBytes
 }
 
 /**
@@ -98,20 +192,33 @@ export function createCompressStream(): Transform {
 }
 
 /**
- * Create a gzip decompression transform stream.
+ * Create a bounded gzip decompression stream.
  *
- * @returns A transform stream that decompresses data passing through it
+ * @param maxOutputBytes - Maximum accepted decompressed size
+ * @returns A duplex stream that decompresses data passing through it
+ * @throws DecompressionLimitError if output exceeds `maxOutputBytes`
  *
  * @remarks
- * Use this for streaming decompression of large files.
- * Pipe compressed data through this stream to decompress it on-the-fly.
+ * The output limiter is after zlib so it counts decompressed bytes. It destroys
+ * the gzip stream at the first output chunk that crosses the cap.
  *
  * @example
  * ```typescript
- * const decompressStream = createDecompressStream();
+ * const decompressStream = createDecompressStream(10 * 1024 * 1024);
  * compressedStream.pipe(decompressStream).pipe(destinationStream);
  * ```
  */
-export function createDecompressStream(): Transform {
-	return createGunzip()
+export function createDecompressStream(maxOutputBytes = DEFAULT_MAX_DECOMPRESSED_BYTES): Duplex {
+	assertValidOutputLimit(maxOutputBytes)
+
+	const gunzip = createGunzip()
+	const outputLimit = createOutputLimitTransform(maxOutputBytes)
+	gunzip.pipe(outputLimit)
+
+	// Duplex.from accepts this Node stream pair at runtime. Its declaration is
+	// narrower in newer @types/node releases, so preserve the cross-version type
+	// through the generic readable-stream branch.
+	gunzip.once('error', (error) => outputLimit.destroy(error))
+	outputLimit.once('error', (error) => gunzip.destroy(error))
+	return Duplex.from({ writable: gunzip, readable: outputLimit } as unknown as NodeJS.ReadWriteStream)
 }

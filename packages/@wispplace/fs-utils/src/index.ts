@@ -7,10 +7,18 @@ export { normalizeFileCids } from './file-cids'
 export { isHtmlContent, rewriteHtmlPaths } from './html-rewriter'
 // Manifest creation
 export { createManifest } from './manifest'
-export { normalizePath, sanitizePath } from './path'
+export type { NormalizeSitePathOptions } from './path'
+export { normalizePath, normalizeSitePath, sanitizePath } from './path'
 // Redirects parsing and matching
 export type { MatchRedirectContext, RedirectMatch, RedirectRule } from './redirects'
-export { matchRedirectRule, parseCookies, parseQueryString, parseRedirectsFile } from './redirects'
+export {
+	MAX_REDIRECT_FILE_BYTES,
+	matchRedirectRule,
+	parseCookies,
+	parseQueryString,
+	parseRedirectsFile,
+	parseRedirectsFileBytes,
+} from './redirects'
 
 // Subfs splitting utilities
 export {

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { hasFileExtension } from './file-serving'
+import { hasFileExtension, parseSingleByteRange } from './file-serving'
 
 describe('hasFileExtension', () => {
 	describe('paths with extensions', () => {
@@ -85,5 +85,24 @@ describe('hasFileExtension', () => {
 			// "file." has a dot but no alphanumeric chars after it
 			expect(hasFileExtension('file.')).toBe(false)
 		})
+	})
+})
+
+describe('parseSingleByteRange', () => {
+	test('parses bounded, open-ended, and suffix ranges', () => {
+		expect(parseSingleByteRange('bytes=2-5', 10)).toEqual({ start: 2, end: 5 })
+		expect(parseSingleByteRange('bytes=7-', 10)).toEqual({ start: 7, end: 9 })
+		expect(parseSingleByteRange('bytes=-3', 10)).toEqual({ start: 7, end: 9 })
+	})
+
+	test('caps an end offset and rejects unsatisfiable ranges', () => {
+		expect(parseSingleByteRange('bytes=8-99', 10)).toEqual({ start: 8, end: 9 })
+		expect(parseSingleByteRange('bytes=10-20', 10)).toBe('unsatisfiable')
+		expect(parseSingleByteRange('bytes=5-2', 10)).toBe('unsatisfiable')
+	})
+
+	test('ignores malformed or multipart syntax', () => {
+		expect(parseSingleByteRange('items=0-1', 10)).toBeNull()
+		expect(parseSingleByteRange('bytes=0-1,4-5', 10)).toBeNull()
 	})
 })

@@ -97,6 +97,9 @@ services:
       retries: 30
 
   firehose-service:
+    # The independent leadership supervisor/watchdog must be able to SIGKILL
+    # the worker; namespace PID 1 intentionally cannot be killed from within.
+    init: true
     build:
       context: .
       dockerfile: apps/firehose-service/Dockerfile

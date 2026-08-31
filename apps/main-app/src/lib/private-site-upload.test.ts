@@ -80,4 +80,15 @@ describe('readPrivateSiteUpload', () => {
 			}),
 		)
 	})
+
+	it('rejects unsafe file paths instead of normalizing them into collisions', async () => {
+		for (const path of ['nested/../index.html', '..\\index.html', 'nested//index.html', 'C:/Windows/index.html']) {
+			const form = new FormData()
+			form.append('files', new File(['hello'], 'index.html'), path)
+
+			await expect(readPrivateSiteUpload(requestFor(form))).rejects.toEqual(
+				expect.objectContaining({ message: 'invalid file path', status: 400 }),
+			)
+		}
+	})
 })

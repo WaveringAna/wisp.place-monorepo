@@ -17,7 +17,7 @@ const id = 'place.wisp.v2.secret.create'
 export type QueryParams = {}
 
 export interface InputSchema {
-  /** Unique name for this secret, scoped to the caller DID. */
+  /** Unique 1–64 character secret ID scoped to the caller DID. Use ASCII letters, digits, dots, underscores, and hyphens only. */
   name: string
 }
 

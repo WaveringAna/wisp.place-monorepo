@@ -21,207 +21,284 @@ export interface RedirectMatch {
 }
 
 const MAX_REDIRECT_RULES = 1000
+/** Maximum raw UTF-8 byte length accepted for a stored _redirects file. */
+export const MAX_REDIRECT_FILE_BYTES = 1_000_000
+const MAX_REDIRECT_FILE_CHARACTERS = MAX_REDIRECT_FILE_BYTES
+const MAX_REDIRECT_LINE_LENGTH = 8_192
+const MAX_REDIRECT_PATTERN_LENGTH = 2_048
+const MAX_REDIRECT_REQUEST_PATH_LENGTH = 8_192
+const MAX_REDIRECT_PATH_SEGMENTS = 128
+const MAX_REDIRECT_PLACEHOLDERS = 32
+const MAX_REDIRECT_QUERY_PARAMS = 32
 
-/**
- * Parse a _redirects file into an array of redirect rules
- */
+interface PathSegment {
+	prefix: string
+	param?: string
+	suffix: string
+}
+
+interface CompiledPath {
+	segments: PathSegment[]
+	params: string[]
+	regex: RegExp
+	splat?: { prefix: string; separator: boolean }
+}
+
+const compiledPaths = new WeakMap<RedirectRule, CompiledPath>()
+
+/** Parse a bounded, user-controlled _redirects file. */
 export function parseRedirectsFile(content: string): RedirectRule[] {
-	const lines = content.split('\n')
+	const truncated = content.length > MAX_REDIRECT_FILE_CHARACTERS
+	const limited = truncated ? content.slice(0, MAX_REDIRECT_FILE_CHARACTERS) : content
+	const lines = limited.split('\n')
+	if (truncated && !limited.endsWith('\n')) lines.pop()
+
 	const rules: RedirectRule[] = []
-
-	for (let lineNum = 0; lineNum < lines.length; lineNum++) {
-		const lineRaw = lines[lineNum]
-		if (!lineRaw) continue
-
-		const line = lineRaw.trim()
-
-		if (!line || line.startsWith('#')) {
-			continue
-		}
-
-		if (rules.length >= MAX_REDIRECT_RULES) {
-			break
-		}
+	for (const rawLine of lines) {
+		if (!rawLine || rawLine.length > MAX_REDIRECT_LINE_LENGTH) continue
+		const line = rawLine.trim()
+		if (!line || line.startsWith('#')) continue
+		if (rules.length >= MAX_REDIRECT_RULES) break
 
 		try {
 			const rule = parseRedirectLine(line)
-			if (rule?.fromPattern) {
-				rules.push(rule)
-			}
+			if (rule) rules.push(rule)
 		} catch {
-			// Skip invalid lines
+			// Invalid rules are ignored.
 		}
 	}
-
 	return rules
 }
 
+type RedirectTextDecoder = (data: Uint8Array) => string
+const redirectTextDecoder = new TextDecoder()
+
+function decodeRedirectText(data: Uint8Array): string {
+	return redirectTextDecoder.decode(data)
+}
+
 /**
- * Parse a single redirect rule line
- * Format: /from [query_params] /to [status] [conditions]
+ * Parse a stored _redirects byte buffer without ever decoding an oversized
+ * value. `null` indicates rejection before decoder or parser allocation.
  */
+export function parseRedirectsFileBytes(
+	data: Uint8Array,
+	decode: RedirectTextDecoder = decodeRedirectText,
+): RedirectRule[] | null {
+	if (data.byteLength > MAX_REDIRECT_FILE_BYTES) return null
+	return parseRedirectsFile(decode(data))
+}
+
 function parseRedirectLine(line: string): RedirectRule | null {
 	const parts = line.split(/\s+/)
+	const from = parts[0]
+	if (!from || parts.length < 2) return null
 
-	if (parts.length < 2) {
-		return null
-	}
-
-	let idx = 0
-	const from = parts[idx++]
-
-	if (!from) {
-		return null
-	}
-
+	let index = 1
 	let status = 301
 	let force = false
 	const conditions: NonNullable<RedirectRule['conditions']> = {}
-	const queryParams: Record<string, string> = {}
+	const queryParams = createStringRecord()
 	const queryStart = from.indexOf('?')
 
 	if (queryStart !== -1) {
-		const queryString = from.slice(queryStart + 1)
-		for (const segment of queryString.split('&')) {
-			if (!segment) continue
-
-			const splitIndex = segment.indexOf('=')
-			if (splitIndex === -1) continue
-
-			const key = segment.slice(0, splitIndex)
-			const value = segment.slice(splitIndex + 1)
-			if (key && value) {
-				queryParams[decodeURIComponent(key)] = decodeURIComponent(value)
+		for (const pair of from.slice(queryStart + 1).split('&')) {
+			const equals = pair.indexOf('=')
+			if (equals > 0 && equals < pair.length - 1) {
+				setQueryParam(queryParams, safeDecode(pair.slice(0, equals)), safeDecode(pair.slice(equals + 1)))
 			}
 		}
 	}
 
-	// Parse query parameters that come before the destination path
-	while (idx < parts.length) {
-		const part = parts[idx]
+	while (index < parts.length) {
+		const part = parts[index]
 		if (!part) {
-			idx++
+			index++
 			continue
 		}
+		if (part.startsWith('/') || part.startsWith('http://') || part.startsWith('https://')) break
 
-		if (part.startsWith('/') || part.startsWith('http://') || part.startsWith('https://')) {
-			break
+		const equals = part.indexOf('=')
+		if (equals === -1) break
+		if (equals > 0 && equals < part.length - 1) {
+			setQueryParam(queryParams, part.slice(0, equals), part.slice(equals + 1))
 		}
-
-		if (part.includes('=')) {
-			const splitIndex = part.indexOf('=')
-			const key = part.slice(0, splitIndex)
-			const value = part.slice(splitIndex + 1)
-
-			if (key && value) {
-				queryParams[key] = value
-			}
-			idx++
-		} else {
-			break
-		}
+		index++
 	}
 
-	if (idx >= parts.length) {
-		return null
-	}
+	const to = parts[index++]
+	if (!to) return null
 
-	const to = parts[idx++]
-	if (!to) {
-		return null
-	}
-
-	// Parse remaining parts for status code and conditions
-	for (let i = idx; i < parts.length; i++) {
-		const part = parts[i]
-
+	for (; index < parts.length; index++) {
+		const part = parts[index]
 		if (!part) continue
-
 		if (/^\d+!?$/.test(part)) {
-			if (part.endsWith('!')) {
-				force = true
-				status = parseInt(part.slice(0, -1), 10)
-			} else {
-				status = parseInt(part, 10)
-			}
+			const forced = part.endsWith('!')
+			if (forced) force = true
+			status = parseInt(forced ? part.slice(0, -1) : part, 10)
 			continue
 		}
 
-		if (part.includes('=')) {
-			const splitIndex = part.indexOf('=')
-			const key = part.slice(0, splitIndex)
-			const value = part.slice(splitIndex + 1)
-
-			if (!key || !value) continue
-
-			const keyLower = key.toLowerCase()
-
-			if (keyLower === 'country') {
-				conditions.country = value.split(',').map((v) => v.trim().toLowerCase())
-			} else if (keyLower === 'language') {
-				conditions.language = value.split(',').map((v) => v.trim().toLowerCase())
-			} else if (keyLower === 'role') {
-				conditions.role = value.split(',').map((v) => v.trim())
-			} else if (keyLower === 'cookie') {
-				conditions.cookie = value.split(',').map((v) => v.trim().toLowerCase())
-			}
+		const equals = part.indexOf('=')
+		if (equals <= 0 || equals === part.length - 1) continue
+		const key = part.slice(0, equals).toLowerCase()
+		const value = part.slice(equals + 1)
+		switch (key) {
+			case 'country':
+				conditions.country = value.split(',').map((item) => item.trim().toLowerCase())
+				break
+			case 'language':
+				conditions.language = value.split(',').map((item) => item.trim().toLowerCase())
+				break
+			case 'role':
+				conditions.role = value.split(',').map((item) => item.trim())
+				break
+			case 'cookie':
+				conditions.cookie = value.split(',').map((item) => item.trim().toLowerCase())
+				break
 		}
 	}
 
-	const { pattern, params } = convertPathToRegex(from)
-
-	return {
+	const compiled = compilePath(from)
+	const rule: RedirectRule = {
 		from,
 		to,
 		status,
 		force,
-		conditions: Object.keys(conditions).length > 0 ? conditions : undefined,
-		queryParams: Object.keys(queryParams).length > 0 ? queryParams : undefined,
-		fromPattern: pattern,
-		fromParams: params,
+		conditions: Object.keys(conditions).length ? conditions : undefined,
+		queryParams: Object.keys(queryParams).length ? queryParams : undefined,
+		fromPattern: compiled.regex,
+		fromParams: compiled.params,
 	}
+	compiledPaths.set(rule, compiled)
+	return rule
 }
 
 /**
- * Convert a path pattern with placeholders and splats to a regex
- * Examples:
- *   /blog/:year/:month/:day -> captures year, month, day
- *   /news/* -> captures splat
+ * Compile a deterministic pathname matcher. Source segments may contain one
+ * named placeholder; ambiguous adjacent placeholders and param+splat segments
+ * are rejected before a rule can be matched.
  */
-function convertPathToRegex(pattern: string): { pattern: RegExp; params: string[] } {
-	const params: string[] = []
-	let regexStr = '^'
+function compilePath(rawPattern: string): CompiledPath {
+	const queryStart = rawPattern.indexOf('?')
+	const path = queryStart === -1 ? rawPattern : rawPattern.slice(0, queryStart)
+	if (!path || path.length > MAX_REDIRECT_PATTERN_LENGTH) {
+		throw new Error('Redirect path pattern is too long or empty')
+	}
 
-	const pathPart = pattern.split('?')[0] || pattern
-	const splatCount = (pathPart.match(/\*/g) || []).length
-	if (splatCount > 1 || (splatCount === 1 && !pathPart.endsWith('*'))) {
+	const star = path.indexOf('*')
+	if (star !== -1 && (star !== path.length - 1 || path.indexOf('*', star + 1) !== -1)) {
 		throw new Error('Redirect splats must appear at most once and at the end of the path')
 	}
 
-	let escaped = pathPart.replace(/[.+^${}()|[\]\\]/g, '\\$&')
-
-	escaped = escaped.replace(/:([a-zA-Z_][a-zA-Z0-9_]*)/g, (_match, paramName) => {
-		params.push(paramName)
-		return '([^/?]+)'
-	})
-
-	if (escaped.includes('*')) {
-		escaped = escaped.replace(/\*/g, '(.*)')
-		params.push('splat')
+	const params: string[] = []
+	if (star === -1) {
+		const segments = parsePathSegments(path, params)
+		return { segments, params, regex: new RegExp(`^${pathRegex(segments)}/?$`) }
 	}
 
-	regexStr += escaped
-
-	if (!regexStr.endsWith('.*')) {
-		regexStr += '/?'
+	const beforeSplat = path.slice(0, -1)
+	const slash = beforeSplat.lastIndexOf('/')
+	const segments = slash === -1 ? [] : parsePathSegments(beforeSplat.slice(0, slash), params)
+	const splat = { prefix: beforeSplat.slice(slash + 1), separator: slash !== -1 }
+	if (parsePathSegment(splat.prefix, params).param) {
+		throw new Error('Redirect splats cannot share a segment with a named placeholder')
 	}
-
-	regexStr += '$'
-
+	addParam(params, 'splat')
 	return {
-		pattern: new RegExp(regexStr),
+		segments,
 		params,
+		splat,
+		regex: new RegExp(`^${pathRegex(segments)}${splat.separator ? '/' : ''}${escapeRegex(splat.prefix)}(.*)$`),
 	}
+}
+
+function parsePathSegments(path: string, params: string[]): PathSegment[] {
+	const segments = path.split('/')
+	if (segments.length > MAX_REDIRECT_PATH_SEGMENTS) throw new Error('Redirect path has too many segments')
+	return segments.map((segment) => parsePathSegment(segment, params))
+}
+
+function parsePathSegment(segment: string, params: string[]): PathSegment {
+	const placeholders = [...segment.matchAll(/:([a-zA-Z_][a-zA-Z0-9_]*)/g)]
+	if (placeholders.length > 1) throw new Error('Redirect path segments may contain at most one named placeholder')
+	const placeholder = placeholders[0]
+	if (!placeholder) return { prefix: segment, suffix: '' }
+
+	const [full, param] = placeholder
+	if (!full || !param) throw new Error('Redirect placeholder is missing a name')
+	addParam(params, param)
+	return {
+		prefix: segment.slice(0, placeholder.index),
+		param,
+		suffix: segment.slice(placeholder.index + full.length),
+	}
+}
+
+function addParam(params: string[], param: string): void {
+	if (params.length >= MAX_REDIRECT_PLACEHOLDERS) throw new Error('Redirect path has too many placeholders')
+	params.push(param)
+}
+
+// Retained for RedirectRule compatibility; matching below is fully token based.
+function pathRegex(segments: PathSegment[]): string {
+	return segments
+		.map(({ prefix, param, suffix }) => `${escapeRegex(prefix)}${param ? '([^/?]+)' : ''}${escapeRegex(suffix)}`)
+		.join('/')
+}
+
+function escapeRegex(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function getCompiledPath(rule: RedirectRule): CompiledPath | null {
+	const cached = compiledPaths.get(rule)
+	if (cached) return cached
+	try {
+		const compiled = compilePath(rule.from)
+		compiledPaths.set(rule, compiled)
+		return compiled
+	} catch {
+		return null
+	}
+}
+
+function matchPath(compiled: CompiledPath, path: string, requestSegments: string[]): string[] | null {
+	if (!compiled.splat) {
+		const exact = matchSegments(compiled.segments, requestSegments)
+		if (exact) return exact
+		return requestSegments[requestSegments.length - 1] === ''
+			? matchSegments(compiled.segments, requestSegments.slice(0, -1))
+			: null
+	}
+
+	const captures = matchSegments(compiled.segments, requestSegments, false)
+	if (!captures) return null
+	let start = requestSegments.slice(0, compiled.segments.length).join('/').length
+	if (compiled.splat.separator && path[start++] !== '/') return null
+	if (!path.startsWith(compiled.splat.prefix, start)) return null
+	return [...captures, path.slice(start + compiled.splat.prefix.length)]
+}
+
+function matchSegments(pattern: PathSegment[], request: string[], complete = true): string[] | null {
+	if (request.length < pattern.length || (complete && request.length !== pattern.length)) return null
+
+	const captures: string[] = []
+	for (let index = 0; index < pattern.length; index++) {
+		const segment = pattern[index]
+		const value = request[index]
+		if (!segment || value === undefined) return null
+		if (!segment.param) {
+			if (value !== segment.prefix) return null
+			continue
+		}
+		if (!value.startsWith(segment.prefix) || !value.endsWith(segment.suffix)) return null
+
+		const capture = value.slice(segment.prefix.length, value.length - segment.suffix.length)
+		if (!capture || capture.includes('?')) return null
+		captures.push(capture)
+	}
+	return captures
 }
 
 export interface MatchRedirectContext {
@@ -230,192 +307,135 @@ export interface MatchRedirectContext {
 	cookies?: Record<string, string>
 }
 
-/**
- * Match a request path against redirect rules with loop detection
- */
 export function matchRedirectRule(
 	requestPath: string,
 	rules: RedirectRule[],
 	context?: MatchRedirectContext,
 	visitedPaths: Set<string> = new Set(),
 ): RedirectMatch | null {
-	const normalizedPath = requestPath.startsWith('/') ? requestPath : `/${requestPath}`
+	const path = requestPath.startsWith('/') ? requestPath : `/${requestPath}`
+	if (path.length > MAX_REDIRECT_REQUEST_PATH_LENGTH || visitedPaths.has(path)) return null
+	visitedPaths.add(path)
+	if (visitedPaths.size > 10) return null
 
-	if (visitedPaths.has(normalizedPath)) {
-		return null
-	}
-
-	visitedPaths.add(normalizedPath)
-
-	if (visitedPaths.size > 10) {
-		return null
-	}
-
+	const requestSegments = path.split('/')
 	for (const rule of rules) {
-		// Check query parameter conditions first
-		if (rule.queryParams) {
-			if (!context?.queryParams) {
-				continue
-			}
+		if (!matchesQuery(rule.queryParams, context) || !matchesConditions(rule.conditions, context)) continue
 
-			const queryMatches = Object.entries(rule.queryParams).every(([key, expectedValue]) => {
-				const actualValue = context.queryParams?.[key]
-
-				if (actualValue === undefined) {
-					return false
-				}
-
-				if (expectedValue && !expectedValue.startsWith(':')) {
-					return actualValue === expectedValue
-				}
-
-				return true
-			})
-
-			if (!queryMatches) {
-				continue
-			}
-		}
-
-		// Check conditional redirects (country, language, role, cookie)
-		if (rule.conditions) {
-			if (rule.conditions.country && context?.headers) {
-				const cfCountry = context.headers['cf-ipcountry']
-				const xCountry = context.headers['x-country']
-				const country = cfCountry?.toLowerCase() || xCountry?.toLowerCase()
-				if (!country || !rule.conditions.country.includes(country)) {
-					continue
-				}
-			}
-
-			if (rule.conditions.language && context?.headers) {
-				const acceptLang = context.headers['accept-language']
-				if (!acceptLang) {
-					continue
-				}
-				const langs = acceptLang
-					.split(',')
-					.map((l) => {
-						const langPart = l.split(';')[0]
-						return langPart ? langPart.trim().toLowerCase() : ''
-					})
-					.filter((l) => l !== '')
-				const hasMatch = rule.conditions.language.some((lang) =>
-					langs.some((l) => l === lang || l.startsWith(`${lang}-`)),
-				)
-				if (!hasMatch) {
-					continue
-				}
-			}
-
-			if (rule.conditions.cookie && context?.cookies) {
-				const hasCookie = rule.conditions.cookie.some((cookieName) => context.cookies && cookieName in context.cookies)
-				if (!hasCookie) {
-					continue
-				}
-			}
-
-			// Role-based redirects would need JWT verification - skip for now
-			if (rule.conditions.role) {
-				continue
-			}
-		}
-
-		const match = rule.fromPattern?.exec(normalizedPath)
-		if (!match) {
-			continue
-		}
+		const compiled = getCompiledPath(rule)
+		const captures = compiled && matchPath(compiled, path, requestSegments)
+		if (!compiled || !captures) continue
 
 		let targetPath = rule.to
-
-		// Replace captured parameters
-		if (rule.fromParams && match.length > 1) {
-			for (let i = 0; i < rule.fromParams.length; i++) {
-				const paramName = rule.fromParams[i]
-				const paramValue = match[i + 1]
-
-				if (!paramName || !paramValue) continue
-
-				const encodedValue = encodeURIComponent(paramValue)
-
-				if (paramName === 'splat') {
-					const splatValue = encodedValue.replace(/%2F/g, '/')
-					targetPath = targetPath.replace(':splat', splatValue)
-				} else {
-					targetPath = targetPath.replace(`:${paramName}`, encodedValue)
-				}
-			}
+		for (const [index, param] of (rule.fromParams ?? compiled.params).entries()) {
+			const value = captures[index]
+			if (!param || value === undefined) continue
+			const encoded = encodeURIComponent(value)
+			targetPath = targetPath.replace(
+				param === 'splat' ? ':splat' : `:${param}`,
+				param === 'splat' ? encoded.replace(/%2F/g, '/') : encoded,
+			)
 		}
 
-		// Handle query parameter replacements
 		if (rule.queryParams && context?.queryParams) {
 			for (const [key, placeholder] of Object.entries(rule.queryParams)) {
-				const actualValue = context.queryParams[key]
-				if (actualValue && placeholder && placeholder.startsWith(':')) {
-					const paramName = placeholder.slice(1)
-					if (paramName) {
-						const encodedValue = encodeURIComponent(actualValue)
-						targetPath = targetPath.replace(`:${paramName}`, encodedValue)
-					}
-				}
+				const value = context.queryParams[key]
+				const param = placeholder?.startsWith(':') ? placeholder.slice(1) : ''
+				if (value && param) targetPath = targetPath.replace(`:${param}`, encodeURIComponent(value))
 			}
 		}
 
-		// Preserve query string for 200, 301, 302 redirects (unless target already has one)
 		if ([200, 301, 302].includes(rule.status) && context?.queryParams && !targetPath.includes('?')) {
-			const queryString = Object.entries(context.queryParams)
-				.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+			const query = Object.entries(context.queryParams)
+				.map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
 				.join('&')
-			if (queryString) {
-				targetPath += `?${queryString}`
-			}
+			if (query) targetPath += `?${query}`
 		}
-
-		return {
-			rule,
-			targetPath,
-			status: rule.status,
-		}
+		return { rule, targetPath, status: rule.status }
 	}
-
 	return null
 }
 
-/**
- * Parse cookies from Cookie header
- */
-export function parseCookies(cookieHeader?: string): Record<string, string> {
-	if (!cookieHeader) return {}
+function matchesQuery(expected: RedirectRule['queryParams'], context?: MatchRedirectContext): boolean {
+	if (!expected) return true
+	const actual = context?.queryParams
+	return Boolean(
+		actual &&
+			Object.entries(expected).every(([key, value]) => {
+				const received = actual[key]
+				return received !== undefined && (!value || value.startsWith(':') || received === value)
+			}),
+	)
+}
 
-	const cookies: Record<string, string> = {}
-	const parts = cookieHeader.split(';')
+function matchesConditions(conditions: RedirectRule['conditions'], context?: MatchRedirectContext): boolean {
+	if (!conditions) return true
+	if (conditions.role) return false
 
-	for (const part of parts) {
-		const [key, ...valueParts] = part.split('=')
-		if (key && valueParts.length > 0) {
-			cookies[key.trim()] = valueParts.join('=').trim()
+	if (conditions.country) {
+		const country = context?.headers?.['cf-ipcountry']?.toLowerCase() || context?.headers?.['x-country']?.toLowerCase()
+		if (!country || !conditions.country.includes(country)) return false
+	}
+	if (conditions.language) {
+		const header = context?.headers?.['accept-language']
+		if (!header) return false
+		const languages = header
+			.split(',')
+			.map((value) => (value.split(';')[0] || '').trim().toLowerCase())
+			.filter((value) => value !== '')
+		if (
+			!conditions.language.some((language) =>
+				languages.some((value) => value === language || value.startsWith(`${language}-`)),
+			)
+		) {
+			return false
 		}
 	}
+	if (conditions.cookie) {
+		const cookies = context?.cookies
+		if (!cookies || !conditions.cookie.some((name) => name in cookies)) return false
+	}
+	return true
+}
 
+export function parseCookies(cookieHeader?: string): Record<string, string> {
+	if (!cookieHeader) return {}
+	const cookies = createStringRecord()
+	for (const part of cookieHeader.split(';')) {
+		const equals = part.indexOf('=')
+		if (equals > 0) cookies[part.slice(0, equals).trim()] = part.slice(equals + 1).trim()
+	}
 	return cookies
 }
 
-/**
- * Parse query string into object
- */
+/** Empty pairs/keys are ignored; bare keys have empty values; bad escapes stay raw. */
 export function parseQueryString(url: string): Record<string, string> {
-	const queryStart = url.indexOf('?')
-	if (queryStart === -1) return {}
+	const start = url.indexOf('?')
+	if (start === -1) return {}
 
-	const queryString = url.slice(queryStart + 1)
-	const params: Record<string, string> = {}
-
-	for (const pair of queryString.split('&')) {
-		const [key, value] = pair.split('=')
-		if (key) {
-			params[decodeURIComponent(key)] = value ? decodeURIComponent(value) : ''
-		}
+	const params = createStringRecord()
+	for (const pair of url.slice(start + 1).split('&')) {
+		if (!pair) continue
+		const equals = pair.indexOf('=')
+		const key = equals === -1 ? pair : pair.slice(0, equals)
+		if (key) setQueryParam(params, safeDecode(key), safeDecode(equals === -1 ? '' : pair.slice(equals + 1)))
 	}
-
 	return params
+}
+
+function createStringRecord(): Record<string, string> {
+	return Object.create(null) as Record<string, string>
+}
+
+function setQueryParam(params: Record<string, string>, key: string, value: string): void {
+	if (!key || (!(key in params) && Object.keys(params).length >= MAX_REDIRECT_QUERY_PARAMS)) return
+	params[key] = value
+}
+
+function safeDecode(value: string): string {
+	try {
+		return decodeURIComponent(value)
+	} catch {
+		return value
+	}
 }

@@ -23,7 +23,7 @@ export interface Main {
   events?: ('create' | 'update' | 'delete')[]
   /** Optional raw secret used to sign the webhook payload with HMAC-SHA256. Prefer secretId to avoid embedding plaintext values in PDS records. */
   secret?: string
-  /** Name of a server-managed signing secret created via place.wisp.v2.secret.create. Takes precedence over secret if both are present. */
+  /** 1–64 character server-managed signing secret ID. Use ASCII letters, digits, dots, underscores, and hyphens only. */
   secretId?: string
   /** Whether the webhook is active. Defaults to true if omitted. */
   enabled?: boolean

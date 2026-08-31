@@ -3,33 +3,143 @@
  * Handles file retrieval, caching, redirects, and HTML rewriting
  */
 
-import { gunzipSync, gzipSync } from 'node:zlib'
+import { computeCID } from '@wispplace/atproto-utils'
 import { shouldCompressMimeType } from '@wispplace/atproto-utils/compression'
+import { MAX_BLOB_SIZE } from '@wispplace/constants'
 import { normalizeFileCids } from '@wispplace/fs-utils'
 import { isHtmlContent, rewriteHtmlPaths } from '@wispplace/fs-utils/html-rewriter'
 import type { Record as WispSettings } from '@wispplace/lexicons/types/place/wisp/settings'
 import { createLogger } from '@wispplace/observability'
-import type { StorageResult } from '@wispplace/tiered-storage'
+import {
+	compress as compressGzip,
+	DecompressionLimitError,
+	decompress as decompressGzip,
+	isGzipped,
+	measureDecompressedSize as measureGzipDecompressedSize,
+	type StorageResult,
+} from '@wispplace/tiered-storage'
 import { lookup } from 'mime-types'
 import { isSiteUpdating } from './cache-invalidation'
 import { cache } from './cache-manager'
 import { getSiteCache } from './db'
 import { triggerSiteHtmlHotCacheWarmup } from './html-prewarm'
-import { fetchAndCacheSite } from './on-demand-cache'
 import { generate404Page, generateDirectoryListing, siteUpdatingResponse } from './page-generators'
 import { loadRedirectRules, matchRedirectRule, parseCookies, parseQueryString } from './redirects'
 import { applyCustomHeaders, getIndexFiles } from './request-utils'
 import { recordStorageMiss } from './revalidate-metrics'
 import { enqueueRevalidate } from './revalidate-queue'
-import { storage } from './storage'
+import { addPublicSourceCidIfChecksumMatches, evictPublicCacheKey, isStorageUnavailableError, storage } from './storage'
 import { createTrace, logTrace, type RequestTrace, span } from './trace'
 import { getCachedSettings } from './utils'
 
 const logger = createLogger('file-serving')
 const STANDARD_CACHE_CONTROL = 'public, max-age=600'
+const DEFAULT_GZIP_PROCESSING_CONCURRENCY = 2
+const MAX_GZIP_PROCESSING_CONCURRENCY = 4
+
+function getGzipProcessingConcurrency(): number {
+	const configured = process.env.HOSTING_GZIP_PROCESSING_CONCURRENCY
+	if (!configured) return DEFAULT_GZIP_PROCESSING_CONCURRENCY
+
+	const value = Number(configured)
+	if (!Number.isSafeInteger(value) || value < 1 || value > MAX_GZIP_PROCESSING_CONCURRENCY) {
+		return DEFAULT_GZIP_PROCESSING_CONCURRENCY
+	}
+	return value
+}
+
+const gzipProcessingConcurrency = getGzipProcessingConcurrency()
+let activeGzipProcessing = 0
+const gzipProcessingWaiters: Array<() => void> = []
+
+/**
+ * Bounds CPU and memory-heavy gzip work across all requests in this process.
+ * The releaser transfers its reserved slot directly to the next waiter.
+ */
+async function withGzipProcessingBudget<T>(work: () => Promise<T>): Promise<T> {
+	if (activeGzipProcessing >= gzipProcessingConcurrency) {
+		await new Promise<void>((resolve) => gzipProcessingWaiters.push(resolve))
+	} else {
+		activeGzipProcessing++
+	}
+
+	try {
+		return await work()
+	} finally {
+		const next = gzipProcessingWaiters.shift()
+		if (next) {
+			next()
+		} else {
+			activeGzipProcessing--
+		}
+	}
+}
 
 type FileStorageResult = StorageResult<Uint8Array>
 type FileForRequestResult = { result: FileStorageResult; filePath: string; wasRewritten: boolean }
+
+class SourceCidValidationError extends Error {
+	constructor(readonly filePath: string) {
+		super('Stored file source CID does not match the manifest')
+		this.name = 'SourceCidValidationError'
+	}
+}
+
+export const SOURCE_CID_MISMATCH_TTL_MS = 10 * 1_000
+const SOURCE_CID_MISMATCH_NAMESPACE = 'sourceCidMismatches' as const
+
+type SourceCidMismatchResolution =
+	| { kind: 'not-found' }
+	| { kind: 'matched'; result: FileStorageResult }
+	| { kind: 'mismatched' }
+
+interface GzipOperations {
+	compress(data: Uint8Array): Promise<Uint8Array>
+	decompress(data: Uint8Array, maxOutputBytes: number): Promise<Buffer<ArrayBuffer>>
+	measureDecompressedSize(data: Uint8Array, maxOutputBytes: number): Promise<number>
+}
+
+const defaultGzipOperations: GzipOperations = {
+	compress: compressGzip,
+	decompress: decompressGzip,
+	measureDecompressedSize: measureGzipDecompressedSize,
+}
+let gzipOperations: GzipOperations = defaultGzipOperations
+
+/** @internal Test seam for deterministic gzip work and concurrency tests. */
+export function setGzipOperationsForTests(overrides?: Partial<GzipOperations>): void {
+	if (process.env.NODE_ENV === 'production') {
+		throw new Error('Gzip test operations cannot be configured in production')
+	}
+	gzipOperations = { ...defaultGzipOperations, ...overrides }
+}
+
+type FileLookupMode = 'original' | 'prefer-pre-rewritten-html'
+
+interface FileServingStrategy {
+	readonly fileLookup: FileLookupMode
+	readonly rewriteMissingHtmlOnDemand: boolean
+	readonly sharedOrigin: boolean
+	readonly adjustSharedPathRedirect: boolean
+	readonly basePath?: string
+}
+
+const ORIGINAL_FILE_STRATEGY: FileServingStrategy = {
+	fileLookup: 'original',
+	rewriteMissingHtmlOnDemand: false,
+	sharedOrigin: false,
+	adjustSharedPathRedirect: false,
+}
+
+function createSharedOriginFileStrategy(basePath: string): FileServingStrategy {
+	return {
+		fileLookup: 'prefer-pre-rewritten-html',
+		rewriteMissingHtmlOnDemand: true,
+		sharedOrigin: true,
+		adjustSharedPathRedirect: true,
+		basePath,
+	}
+}
 
 /**
  * Check if the last segment of a path looks like it has a file extension.
@@ -42,20 +152,156 @@ export function hasFileExtension(path: string): boolean {
 }
 
 /**
- * Helper to retrieve a file with metadata from tiered storage
- * Logs which tier the file was served from
+ * Log the tier only after a result has passed any manifest-source validation.
  */
-async function getFileWithMetadata(did: string, rkey: string, filePath: string) {
-	const key = `${did}/${rkey}/${filePath}`
-	const result = await storage.getWithMetadata(key)
+function logStorageResult(did: string, rkey: string, filePath: string, result: FileStorageResult): void {
+	const tier = result.source || 'unknown'
+	const size = result.data ? (result.data as Uint8Array).length : 0
+	logger.debug(`Served ${filePath} from ${tier} tier`, { did, rkey, size, tier })
+}
 
-	if (result) {
-		const tier = result.source || 'unknown'
-		const size = result.data ? (result.data as Uint8Array).length : 0
-		logger.debug(`Served ${filePath} from ${tier} tier`, { did, rkey, size, tier })
+const MAX_PENDING_LEGACY_SOURCE_CID_BACKFILLS = 1_024
+const LEGACY_SOURCE_CID_BACKFILL_TTL_MS = 10 * 60 * 1_000
+const pendingLegacySourceCidBackfills = new Map<string, number>()
+
+async function repairLegacySourceCid(
+	did: string,
+	rkey: string,
+	key: string,
+	expectedChecksum: string,
+	sourceCid: string,
+): Promise<void> {
+	const dedupeKey = key
+	const now = Date.now()
+	const previous = pendingLegacySourceCidBackfills.get(dedupeKey)
+	if (previous !== undefined && now - previous < LEGACY_SOURCE_CID_BACKFILL_TTL_MS) return
+	if (pendingLegacySourceCidBackfills.size >= MAX_PENDING_LEGACY_SOURCE_CID_BACKFILLS) {
+		const oldest = pendingLegacySourceCidBackfills.keys().next().value
+		if (oldest !== undefined) pendingLegacySourceCidBackfills.delete(oldest)
+	}
+	pendingLegacySourceCidBackfills.set(dedupeKey, now)
+
+	try {
+		if (await addPublicSourceCidIfChecksumMatches(key, expectedChecksum, sourceCid)) return
+	} catch {
+		logger.warn('Conditional legacy source CID metadata repair failed', { did, rkey })
+	}
+	// A backend without a conditional metadata update cannot safely heal this
+	// object. Fall back to the established durable full materialization.
+	try {
+		await enqueueRevalidate(did, rkey, 'storage-miss:legacy-source-cid-backfill')
+	} catch {
+		logger.warn('Failed to enqueue legacy source CID repair', { did, rkey })
+	}
+}
+
+function hasSourceCidMetadata(metadata: StoredFileCustomMetadata | undefined): boolean {
+	return metadata !== undefined && Object.getOwnPropertyDescriptor(metadata, 'sourceCid') !== undefined
+}
+
+async function hasExpectedSourceCid(
+	result: FileStorageResult,
+	expectedSourceCid: string,
+	did: string,
+	rkey: string,
+	key: string,
+): Promise<boolean> {
+	const metadata = result.metadata?.customMetadata as StoredFileCustomMetadata | undefined
+	if (hasSourceCidMetadata(metadata)) return metadata?.sourceCid === expectedSourceCid
+
+	if (result.data.byteLength > MAX_BLOB_SIZE || result.metadata.size > MAX_BLOB_SIZE) return false
+	if (computeCID(Buffer.from(result.data)) !== expectedSourceCid) return false
+
+	// Source CID verification is the serving boundary. Metadata repair may use
+	// a cold HEAD/copy round trip, so it must not delay a verified response.
+	void repairLegacySourceCid(did, rkey, key, result.metadata.checksum, expectedSourceCid).catch(() => {
+		logger.warn('Unexpected legacy source CID repair failure', { did, rkey })
+	})
+	return true
+}
+
+/**
+ * Retrieve a file and, when a manifest CID is available, verify that the
+ * stored object is from that manifest version before it can be served.
+ */
+async function getFileWithMetadata(
+	did: string,
+	rkey: string,
+	filePath: string,
+	expectedSourceCid?: string,
+): Promise<FileStorageResult | null> {
+	const key = `${did}/${rkey}/${filePath}`
+	if (expectedSourceCid === undefined) {
+		const result = await storage.getWithMetadata(key)
+		if (!result) return null
+
+		logStorageResult(did, rkey, filePath, result)
+		return result
 	}
 
-	return result
+	const sourceCidMismatchKey = `${did}:${rkey}:${filePath}:${expectedSourceCid}`
+	// Dedupe the initial read, eviction, and one cold retry. Concurrent requests
+	// may all arrive while the upper tier still contains the same stale object;
+	// getOrFetch ensures that burst performs one complete validation attempt.
+	const lookupResult = await cache.getOrFetch<SourceCidMismatchResolution>(
+		SOURCE_CID_MISMATCH_NAMESPACE,
+		sourceCidMismatchKey,
+		async () => {
+			const result = await storage.getWithMetadata(key)
+			if (!result) return { kind: 'not-found' }
+
+			if (await hasExpectedSourceCid(result, expectedSourceCid, did, rkey, key)) {
+				return { kind: 'matched', result }
+			}
+
+			logger.warn('Stored file source CID does not match the manifest; retrying cold storage', {
+				did,
+				rkey,
+				filePath,
+				tier: result.source,
+			})
+
+			try {
+				// This only deletes hot/warm copies and is fenced against eager promotion.
+				// It deliberately never mutates the cold source of truth.
+				await evictPublicCacheKey(key)
+			} catch (error) {
+				if (isStorageUnavailableError(error)) throw error
+				logger.warn('Failed to evict mismatched local file cache entry', { did, rkey, filePath })
+				return { kind: 'mismatched' }
+			}
+
+			// With upper tiers evicted, this is the one allowed cold-source retry. Do
+			// not evict again if it still fails: a briefly stale DB replica must fail
+			// closed without destructive cache oscillation.
+			let coldResult: FileStorageResult | null
+			try {
+				coldResult = await storage.getWithMetadata(key)
+			} catch (error) {
+				// A transient cold-tier outage is not evidence that the manifest is stale.
+				// Let the request boundary return 503 without scheduling a repair.
+				if (isStorageUnavailableError(error)) throw error
+				logger.warn('Failed to retry cold storage after a source CID mismatch', { did, rkey, filePath })
+				return { kind: 'mismatched' }
+			}
+			if (!coldResult || !(await hasExpectedSourceCid(coldResult, expectedSourceCid, did, rkey, key))) {
+				logger.warn('Cold file source CID does not match the manifest', { did, rkey, filePath })
+				return { kind: 'mismatched' }
+			}
+
+			return { kind: 'matched', result: coldResult }
+		},
+		{
+			cacheIf: (value) => value.kind === 'mismatched',
+			ttl: SOURCE_CID_MISMATCH_TTL_MS,
+		},
+	)
+
+	if (lookupResult.kind === 'not-found') return null
+	if (lookupResult.kind === 'mismatched') throw new SourceCidValidationError(filePath)
+
+	logStorageResult(did, rkey, filePath, lookupResult.result)
+	return lookupResult.result
 }
 
 function buildStorageKey(did: string, rkey: string, filePath: string): string {
@@ -65,6 +311,21 @@ function buildStorageKey(did: string, rkey: string, filePath: string): string {
 
 function normalizeFilePath(filePath: string): string {
 	return filePath.startsWith('/') ? filePath.slice(1) : filePath
+}
+
+const REWRITTEN_PATH_PREFIX = '.rewritten/'
+
+function sourceManifestPath(filePath: string): string {
+	const normalizedPath = normalizeFilePath(filePath)
+	return normalizedPath.startsWith(REWRITTEN_PATH_PREFIX)
+		? normalizedPath.slice(REWRITTEN_PATH_PREFIX.length)
+		: normalizedPath
+}
+
+function getExpectedSourceCid(fileCids: Record<string, string> | null, filePath: string): string | undefined {
+	if (fileCids === null) return undefined
+	const sourceCid = fileCids[sourceManifestPath(filePath)]
+	return typeof sourceCid === 'string' && sourceCid.length > 0 ? sourceCid : undefined
 }
 
 function isAbsoluteHttpUrl(path: string): boolean {
@@ -88,40 +349,28 @@ function manifestHasPath(fileCids: Record<string, string> | null, filePath: stri
 /**
  * Fetch a per-site fallback file (SPA, custom 404, auto-detected 404 pages),
  * caching null results so repeated 404 responses don't re-hit S3 for files
- * that don't exist on the site.
+ * that don't exist on the site. The expected source CID is part of the cache
+ * key, so a DB manifest update never inherits a stale negative result.
  */
 async function getFallbackFile(
 	did: string,
 	rkey: string,
 	filePath: string,
+	fileCids: Record<string, string> | null,
+	strategy: FileServingStrategy,
 	trace?: RequestTrace | null,
-): Promise<FileStorageResult | null> {
-	const cacheKey = `${did}:${rkey}:${filePath}`
+): Promise<FileForRequestResult | null> {
+	const expectedSourceCid = getExpectedSourceCid(fileCids, filePath)
+	if (fileCids !== null && expectedSourceCid === undefined) return null
+
+	const cacheKey = `${did}:${rkey}:${filePath}:${expectedSourceCid ?? 'no-manifest'}`
 	// null in the cache means we've confirmed this file doesn't exist
 	const negativeCached = cache.get<null>('siteFiles', cacheKey)
 	if (negativeCached === null) return null
 
-	const result = await span(trace, `storage:${filePath}`, () => getFileWithMetadata(did, rkey, filePath))
-	if (result === null) {
-		cache.set('siteFiles', cacheKey, null)
-	}
-	return result
-}
-
-/**
- * Same as getFallbackFile but prefers pre-rewritten HTML (for the WithRewrite path).
- */
-async function getFallbackFileForRequest(
-	did: string,
-	rkey: string,
-	filePath: string,
-	trace?: RequestTrace | null,
-): Promise<FileForRequestResult | null> {
-	const cacheKey = `${did}:${rkey}:${filePath}`
-	const negativeCached = cache.get<null>('siteFiles', cacheKey)
-	if (negativeCached === null) return null
-
-	const result = await span(trace, `storage:${filePath}`, () => getFileForRequest(did, rkey, filePath, true))
+	const result = await span(trace, `storage:${filePath}`, () =>
+		getFileForRequest(did, rkey, filePath, strategy, fileCids),
+	)
 	if (result === null) {
 		cache.set('siteFiles', cacheKey, null)
 	}
@@ -148,12 +397,12 @@ function shouldServeUpdatingPage(requestHeaders?: Record<string, string>): boole
 	return fetchDest === 'document' || fetchDest === 'iframe' || fetchDest === 'frame'
 }
 
-function buildStorageMissResponse(requestHeaders?: Record<string, string>): Response {
+function buildUnavailableResponse(message: string, requestHeaders?: Record<string, string>): Response {
 	if (shouldServeUpdatingPage(requestHeaders)) {
 		return siteUpdatingResponse()
 	}
 
-	return new Response('Storage temporarily unavailable', {
+	return new Response(message, {
 		status: 503,
 		headers: {
 			'Cache-Control': 'no-store',
@@ -162,52 +411,76 @@ function buildStorageMissResponse(requestHeaders?: Record<string, string>): Resp
 	})
 }
 
+function buildSiteUpdatingResponse(requestHeaders?: Record<string, string>): Response {
+	return buildUnavailableResponse('Site is updating', requestHeaders)
+}
+
+function buildStorageMissResponse(requestHeaders?: Record<string, string>): Response {
+	return buildUnavailableResponse('Storage temporarily unavailable', requestHeaders)
+}
+
+type DirectoryEntryMap = Map<string, boolean>
+
+function directoryPrefix(requestPath: string): string {
+	return requestPath ? `${requestPath}/` : ''
+}
+
+function addDirectoryEntry(entries: DirectoryEntryMap, relativePath: string): void {
+	if (!relativePath || relativePath.startsWith('.rewritten/')) return
+
+	const [name, ...rest] = relativePath.split('/')
+	if (!name || name === '.metadata.json' || name.endsWith('.meta')) return
+
+	const isDirectory = rest.length > 0
+	const existing = entries.get(name)
+	if (existing === undefined || (isDirectory && !existing)) {
+		entries.set(name, isDirectory)
+	}
+}
+
+function collectManifestDirectoryEntries(
+	entries: DirectoryEntryMap,
+	requestPath: string,
+	manifestPaths: readonly string[],
+): void {
+	const prefix = directoryPrefix(requestPath)
+	for (const filePath of manifestPaths) {
+		if (prefix && !filePath.startsWith(prefix)) continue
+		addDirectoryEntry(entries, prefix ? filePath.slice(prefix.length) : filePath)
+	}
+}
+
+async function collectStoredDirectoryEntries(
+	entries: DirectoryEntryMap,
+	did: string,
+	rkey: string,
+	requestPath: string,
+): Promise<void> {
+	const prefix = buildStorageKey(did, rkey, directoryPrefix(requestPath))
+	for await (const key of storage.listKeys(prefix)) {
+		addDirectoryEntry(entries, key.slice(prefix.length))
+	}
+}
+
+function toDirectoryEntries(entries: DirectoryEntryMap): Array<{ name: string; isDirectory: boolean }> {
+	return Array.from(entries.entries()).map(([name, isDirectory]) => ({ name, isDirectory }))
+}
+
 async function listDirectoryEntries(
 	did: string,
 	rkey: string,
 	requestPath: string,
 	manifestPaths?: string[] | null,
 ): Promise<Array<{ name: string; isDirectory: boolean }>> {
-	const entries = new Map<string, boolean>()
-
+	const entries: DirectoryEntryMap = new Map()
 	if (manifestPaths != null) {
-		// Use the DB manifest — no disk or S3 I/O
-		const prefix = requestPath ? `${requestPath}/` : ''
-		for (const filePath of manifestPaths) {
-			if (prefix && !filePath.startsWith(prefix)) continue
-			const relative = prefix ? filePath.slice(prefix.length) : filePath
-			if (!relative) continue
-			if (relative.startsWith('.rewritten/')) continue
-
-			const [name, ...rest] = relative.split('/')
-			if (!name || name === '.metadata.json' || name.endsWith('.meta')) continue
-
-			const isDirectory = rest.length > 0
-			const existing = entries.get(name)
-			if (existing === undefined || (isDirectory && !existing)) {
-				entries.set(name, isDirectory)
-			}
-		}
+		collectManifestDirectoryEntries(entries, requestPath, manifestPaths)
 	} else {
-		// Fallback: list from storage (only reached when site not yet in DB)
-		const prefix = buildStorageKey(did, rkey, requestPath ? `${requestPath}/` : '')
-		for await (const key of storage.listKeys(prefix)) {
-			const relative = key.slice(prefix.length)
-			if (!relative) continue
-			if (relative.startsWith('.rewritten/')) continue
-
-			const [name, ...rest] = relative.split('/')
-			if (!name || name === '.metadata.json' || name.endsWith('.meta')) continue
-
-			const isDirectory = rest.length > 0
-			const existing = entries.get(name)
-			if (existing === undefined || (isDirectory && !existing)) {
-				entries.set(name, isDirectory)
-			}
-		}
+		// Internal fallback when no manifest was supplied. Public cached requests
+		// return a bounded repair response before reaching this path.
+		await collectStoredDirectoryEntries(entries, did, rkey, requestPath)
 	}
-
-	return Array.from(entries.entries()).map(([name, isDirectory]) => ({ name, isDirectory }))
+	return toDirectoryEntries(entries)
 }
 
 async function hasFileForNonForcedRedirect(
@@ -235,84 +508,499 @@ async function getFileForRequest(
 	did: string,
 	rkey: string,
 	filePath: string,
-	preferRewrittenHtml: boolean,
+	strategy: FileServingStrategy,
+	fileCids: Record<string, string> | null,
 ): Promise<FileForRequestResult | null> {
+	const expectedSourceCid = getExpectedSourceCid(fileCids, filePath)
+	if (fileCids !== null && expectedSourceCid === undefined) return null
+
+	let sourceCidValidationFailed = false
+	const readCandidate = async (candidatePath: string): Promise<FileStorageResult | null> => {
+		try {
+			return await getFileWithMetadata(did, rkey, candidatePath, expectedSourceCid)
+		} catch (error) {
+			if (error instanceof SourceCidValidationError) {
+				sourceCidValidationFailed = true
+				return null
+			}
+			throw error
+		}
+	}
+
 	const mimeTypeGuess = lookup(filePath) || 'application/octet-stream'
-	if (preferRewrittenHtml && isHtmlContent(filePath, mimeTypeGuess)) {
-		const rewrittenPath = `.rewritten/${filePath}`
-		const rewritten = await getFileWithMetadata(did, rkey, rewrittenPath)
+	if (strategy.fileLookup === 'prefer-pre-rewritten-html' && isHtmlContent(filePath, mimeTypeGuess)) {
+		const rewrittenPath = `${REWRITTEN_PATH_PREFIX}${filePath}`
+		const rewritten = await readCandidate(rewrittenPath)
 		if (rewritten) {
 			return { result: rewritten, filePath, wasRewritten: true }
 		}
 	}
 
-	const result = await getFileWithMetadata(did, rkey, filePath)
-	if (!result) return null
-	return { result, filePath, wasRewritten: false }
+	const result = await readCandidate(filePath)
+	if (result) return { result, filePath, wasRewritten: false }
+	if (sourceCidValidationFailed) throw new SourceCidValidationError(filePath)
+	return null
 }
 
-function buildResponseFromStorageResult(
+function gzipQuality(parameters: string[]): number {
+	const qualityParameter = parameters.find((parameter) => parameter.trim().startsWith('q='))
+	if (!qualityParameter) return 1
+
+	const quality = Number(qualityParameter.trim().slice(2))
+	return Number.isFinite(quality) && quality >= 0 && quality <= 1 ? quality : 0
+}
+
+function clientAcceptsGzip(requestHeaders?: Record<string, string>): boolean {
+	const acceptEncoding = requestHeaders?.['accept-encoding']
+	if (!acceptEncoding) return false
+
+	let acceptsGzip = false
+	for (const encoding of acceptEncoding.split(',')) {
+		const [rawName = '', ...parameters] = encoding.trim().toLowerCase().split(';')
+		if (rawName.trim() !== 'gzip') continue
+		acceptsGzip ||= gzipQuality(parameters) > 0
+	}
+
+	return acceptsGzip
+}
+
+function addVaryHeader(headers: Record<string, string>, field: string): void {
+	const existingKey = Object.keys(headers).find((key) => key.toLowerCase() === 'vary')
+	const headerKey = existingKey ?? 'Vary'
+	const existing = headers[headerKey]
+	if (!existing || existing === '*') {
+		headers[headerKey] = existing || field
+		return
+	}
+
+	const fields = existing.split(',').map((value) => value.trim().toLowerCase())
+	if (!fields.includes(field.toLowerCase())) {
+		headers[headerKey] = `${existing}, ${field}`
+	}
+}
+
+function applyFileResponseHeaders(
+	headers: Record<string, string>,
+	filePath: string,
+	settings: WispSettings | null,
+	sharedOrigin: boolean,
+	varyByAcceptEncoding: boolean,
+): void {
+	applyCustomHeaders(headers, filePath, settings, { sharedOrigin })
+	if (varyByAcceptEncoding) addVaryHeader(headers, 'Accept-Encoding')
+}
+
+type StoredFileCustomMetadata = {
+	encoding?: string
+	mimeType?: string
+	sourceCid?: string
+	uncompressedSize?: string
+}
+
+type GzipFailureKind = 'decode-failed' | 'invalid-gzip' | 'output-limit'
+type StoredGzipSizeStatus = 'needs-measurement' | 'over-limit' | 'trusted'
+
+function getStoredGzipSizeStatus(metadata: StoredFileCustomMetadata | undefined): StoredGzipSizeStatus {
+	const rawSize = metadata?.uncompressedSize
+	if (typeof rawSize !== 'string' || !/^\d+$/.test(rawSize)) return 'needs-measurement'
+
+	const size = Number(rawSize)
+	// Check the hard cap before safe-integer validation so even a huge decimal
+	// metadata value cannot evade immediate rejection by overflowing Number.
+	if (size > MAX_BLOB_SIZE) return 'over-limit'
+	if (!Number.isSafeInteger(size) || size < 0) return 'needs-measurement'
+	return 'trusted'
+}
+
+function getGzipFailureKind(error: unknown): GzipFailureKind {
+	if (
+		error instanceof DecompressionLimitError ||
+		(error instanceof Error && error.name === 'DecompressionLimitError')
+	) {
+		return 'output-limit'
+	}
+	if (error instanceof Error && error.message.includes('missing magic bytes')) return 'invalid-gzip'
+	return 'decode-failed'
+}
+
+function buildGzipDecodeFailureResponse(
+	filePath: string,
+	failureKind: GzipFailureKind,
+	varyByAcceptEncoding: boolean,
+): Response {
+	// Do not log zlib errors: they can include untrusted compressed-object details.
+	logger.warn('Refusing to serve a stored gzip file that could not be decoded safely', { filePath, failureKind })
+
+	const headers: Record<string, string> = {
+		'Content-Type': 'text/plain; charset=utf-8',
+		'Cache-Control': 'no-store',
+	}
+	if (varyByAcceptEncoding) addVaryHeader(headers, 'Accept-Encoding')
+	return new Response('Stored file could not be decompressed safely', { status: 422, headers })
+}
+
+type StoredFileRepresentation = {
+	result: FileStorageResult
+	content: Buffer
+	metadata: StoredFileCustomMetadata | undefined
+	mimeType: string
+	explicitlyGzipped: boolean
+	hasGzipMagic: boolean
+	isGzipContent: boolean
+	shouldCompress: boolean
+	shouldServeCompressed: boolean
+	varyByAcceptEncoding: boolean
+}
+
+type GzipFailure = { kind: 'failure'; response: Response }
+type GzipPreparation = { kind: 'ready'; decodedIdentity?: Buffer<ArrayBuffer> } | GzipFailure
+type DecodedGzipIdentity = { kind: 'decoded'; content: Buffer<ArrayBuffer> } | GzipFailure
+type IdentityResponseContent = { kind: 'content'; content: Buffer<ArrayBuffer> } | GzipFailure
+type HtmlRewriteSource = { kind: 'content'; content: Buffer } | GzipFailure
+type RewrittenHtmlAttempt = { kind: 'rewritten'; output: Buffer } | { kind: 'serve-original' }
+type RewrittenHtmlCompression = { output: Buffer; contentEncoding?: 'gzip' }
+
+function createStoredFileRepresentation(
+	result: FileStorageResult,
+	filePath: string,
+	requestHeaders: Record<string, string> | undefined,
+	varyForDynamicRewrite = false,
+): StoredFileRepresentation {
+	const content = Buffer.from(result.data)
+	const metadata = result.metadata?.customMetadata as StoredFileCustomMetadata | undefined
+	const mimeType = metadata?.mimeType || lookup(filePath) || 'application/octet-stream'
+	const shouldCompress = shouldCompressMimeType(mimeType)
+	const hasGzipMagic = isGzipped(content)
+	const explicitlyGzipped = metadata?.encoding === 'gzip'
+	// Older cache objects can lack encoding metadata. For text assets, gzip magic
+	// is sufficient to safely negotiate the actual stored representation.
+	const inferredGzip = !explicitlyGzipped && hasGzipMagic && shouldCompress
+	const isGzipContent = explicitlyGzipped || inferredGzip
+	const shouldServeCompressed = isGzipContent && shouldCompress && clientAcceptsGzip(requestHeaders)
+	const varyByAcceptEncoding = varyForDynamicRewrite ? shouldCompress : isGzipContent && shouldCompress
+
+	return {
+		result,
+		content,
+		metadata,
+		mimeType,
+		explicitlyGzipped,
+		hasGzipMagic,
+		isGzipContent,
+		shouldCompress,
+		shouldServeCompressed,
+		varyByAcceptEncoding,
+	}
+}
+
+function gzipFailure(filePath: string, failureKind: GzipFailureKind, varyByAcceptEncoding: boolean): GzipFailure {
+	return { kind: 'failure', response: buildGzipDecodeFailureResponse(filePath, failureKind, varyByAcceptEncoding) }
+}
+
+async function measureLegacyGzipPassthrough(
+	content: Uint8Array,
+	filePath: string,
+	varyByAcceptEncoding: boolean,
+): Promise<GzipPreparation> {
+	try {
+		await withGzipProcessingBudget(async () => {
+			await gzipOperations.measureDecompressedSize(content, MAX_BLOB_SIZE)
+		})
+		return { kind: 'ready' }
+	} catch (error) {
+		return gzipFailure(filePath, getGzipFailureKind(error), varyByAcceptEncoding)
+	}
+}
+
+async function decodeStoredGzipIdentity(
+	content: Uint8Array,
+	filePath: string,
+	varyByAcceptEncoding: boolean,
+): Promise<DecodedGzipIdentity> {
+	try {
+		const decoded = await withGzipProcessingBudget(() => gzipOperations.decompress(content, MAX_BLOB_SIZE))
+		return { kind: 'decoded', content: decoded }
+	} catch (error) {
+		return gzipFailure(filePath, getGzipFailureKind(error), varyByAcceptEncoding)
+	}
+}
+
+/**
+ * Validate gzip state before a conditional response can be emitted. This makes
+ * legacy gzip bytes safe for both negotiated passthrough and identity reads.
+ */
+async function prepareStoredGzipResponse(
+	representation: StoredFileRepresentation,
+	filePath: string,
+): Promise<GzipPreparation> {
+	if (!representation.isGzipContent) return { kind: 'ready' }
+	if (representation.explicitlyGzipped && !representation.hasGzipMagic) {
+		return gzipFailure(filePath, 'invalid-gzip', representation.varyByAcceptEncoding)
+	}
+
+	const sizeStatus = getStoredGzipSizeStatus(representation.metadata)
+	if (sizeStatus === 'over-limit') {
+		return gzipFailure(filePath, 'output-limit', representation.varyByAcceptEncoding)
+	}
+	if (sizeStatus === 'trusted') return { kind: 'ready' }
+	if (representation.shouldServeCompressed) {
+		// A legacy object has no trusted firehose accounting metadata. Verify its
+		// logical size before returning compressed bytes to a gzip client.
+		return await measureLegacyGzipPassthrough(representation.content, filePath, representation.varyByAcceptEncoding)
+	}
+
+	// This branch must materialize identity bytes anyway. Decode once before
+	// conditionals so a malformed legacy object cannot receive a 304.
+	const decoded = await decodeStoredGzipIdentity(representation.content, filePath, representation.varyByAcceptEncoding)
+	if (decoded.kind === 'failure') return decoded
+	return { kind: 'ready', decodedIdentity: decoded.content }
+}
+
+function getRepresentationEtag(representation: StoredFileRepresentation): string | undefined {
+	const checksum = representation.result.metadata?.checksum
+	if (!checksum) return undefined
+
+	// A checksum of stored gzip bytes cannot be a strong validator for the
+	// decompressed identity representation. Give each negotiated representation
+	// a distinct opaque tag, while retaining the stored checksum as its source.
+	const suffix = representation.isGzipContent ? (representation.shouldServeCompressed ? '-gzip' : '-identity') : ''
+	return `"${checksum}${suffix}"`
+}
+
+function ifNoneMatchMatches(etag: string, ifNoneMatch: string): boolean {
+	if (ifNoneMatch === '*') return true
+	return ifNoneMatch
+		.split(',')
+		.map((entry) => entry.trim())
+		.includes(etag)
+}
+
+function buildNotModifiedResponse(
+	etag: string | undefined,
+	requestHeaders: Record<string, string> | undefined,
+	varyByAcceptEncoding: boolean,
+): Response | null {
+	const ifNoneMatch = requestHeaders?.['if-none-match']
+	if (!etag || !ifNoneMatch || !ifNoneMatchMatches(etag, ifNoneMatch)) return null
+
+	const headers: Record<string, string> = { ETag: etag, 'Cache-Control': STANDARD_CACHE_CONTROL }
+	if (varyByAcceptEncoding) addVaryHeader(headers, 'Accept-Encoding')
+	return new Response(null, { status: 304, headers })
+}
+
+function buildStoredResponseHeaders(
+	representation: StoredFileRepresentation,
+	etag: string | undefined,
+): Record<string, string> {
+	const headers: Record<string, string> = {
+		'Content-Type': representation.mimeType,
+		'Cache-Control': STANDARD_CACHE_CONTROL,
+		'X-Cache-Tier': representation.result.source,
+	}
+	if (etag) headers.ETag = etag
+	return headers
+}
+
+export type ByteRange = { start: number; end: number }
+export type ByteRangeParseResult = ByteRange | 'unsatisfiable' | null
+
+/** Parse one RFC 9110 byte range. Unsupported syntax is ignored; a valid range outside the entity is unsatisfiable. */
+export function parseSingleByteRange(value: string | undefined, size: number): ByteRangeParseResult {
+	if (!value || !Number.isSafeInteger(size) || size < 0 || value.includes(',')) return null
+	const match = /^bytes=(\d*)-(\d*)$/.exec(value.trim())
+	if (!match) return null
+	const [, rawStart = '', rawEnd = ''] = match
+	if (!rawStart && !rawEnd) return null
+	if (size === 0) return 'unsatisfiable'
+
+	if (!rawStart) {
+		const suffixLength = Number(rawEnd)
+		if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) return 'unsatisfiable'
+		return { start: Math.max(0, size - suffixLength), end: size - 1 }
+	}
+
+	const start = Number(rawStart)
+	if (!Number.isSafeInteger(start) || start >= size) return 'unsatisfiable'
+	if (!rawEnd) return { start, end: size - 1 }
+	const requestedEnd = Number(rawEnd)
+	if (!Number.isSafeInteger(requestedEnd) || requestedEnd < start) return 'unsatisfiable'
+	return { start, end: Math.min(requestedEnd, size - 1) }
+}
+
+function requestedByteRange(
+	requestHeaders: Record<string, string> | undefined,
+	headers: Record<string, string>,
+	size: number,
+): ByteRangeParseResult {
+	const ifRange = requestHeaders?.['if-range']
+	if (ifRange && ifRange !== headers.ETag) return null
+	return parseSingleByteRange(requestHeaders?.range, size)
+}
+
+function buildStorageBodyResponse(
+	content: Buffer,
+	headers: Record<string, string>,
+	filePath: string,
+	settings: WispSettings | null,
+	sharedOrigin: boolean,
+	varyByAcceptEncoding: boolean,
+	requestHeaders?: Record<string, string>,
+): Response {
+	applyFileResponseHeaders(headers, filePath, settings, sharedOrigin, varyByAcceptEncoding)
+	headers['Accept-Ranges'] = 'bytes'
+	const range = requestedByteRange(requestHeaders, headers, content.byteLength)
+	if (range === 'unsatisfiable') {
+		headers['Content-Range'] = `bytes */${content.byteLength}`
+		headers['Content-Length'] = '0'
+		return new Response(null, { status: 416, headers })
+	}
+
+	let body = content
+	let status = 200
+	if (range) {
+		body = content.subarray(range.start, range.end + 1)
+		status = 206
+		headers['Content-Range'] = `bytes ${range.start}-${range.end}/${content.byteLength}`
+	}
+	// Set this explicitly so Hono's automatic HEAD response retains GET parity.
+	headers['Content-Length'] = `${body.byteLength}`
+	// Node's Buffer generic is wider than the response constructor declaration,
+	// but the runtime accepts this Uint8Array-backed body without copying it.
+	return new Response(body as unknown as ConstructorParameters<typeof Response>[0], { status, headers })
+}
+
+async function getIdentityResponseContent(
+	representation: StoredFileRepresentation,
+	preparation: GzipPreparation,
+	filePath: string,
+): Promise<IdentityResponseContent> {
+	if (preparation.kind === 'ready' && preparation.decodedIdentity) {
+		return { kind: 'content', content: preparation.decodedIdentity }
+	}
+
+	const decoded = await decodeStoredGzipIdentity(representation.content, filePath, representation.varyByAcceptEncoding)
+	if (decoded.kind === 'failure') return decoded
+	return { kind: 'content', content: decoded.content }
+}
+
+async function buildStoredFileBodyResponse(
+	representation: StoredFileRepresentation,
+	preparation: GzipPreparation,
+	filePath: string,
+	settings: WispSettings | null,
+	sharedOrigin: boolean,
+	etag: string | undefined,
+	requestHeaders?: Record<string, string>,
+): Promise<Response> {
+	const headers = buildStoredResponseHeaders(representation, etag)
+	if (representation.isGzipContent && !representation.shouldServeCompressed) {
+		const identity = await getIdentityResponseContent(representation, preparation, filePath)
+		if (identity.kind === 'failure') return identity.response
+		return buildStorageBodyResponse(
+			identity.content,
+			headers,
+			filePath,
+			settings,
+			sharedOrigin,
+			representation.varyByAcceptEncoding,
+			requestHeaders,
+		)
+	}
+
+	if (representation.isGzipContent) headers['Content-Encoding'] = 'gzip'
+	return buildStorageBodyResponse(
+		representation.content,
+		headers,
+		filePath,
+		settings,
+		sharedOrigin,
+		representation.varyByAcceptEncoding,
+		requestHeaders,
+	)
+}
+
+async function buildResponseFromStorageResult(
 	result: FileStorageResult,
 	filePath: string,
 	settings: WispSettings | null,
 	requestHeaders?: Record<string, string>,
 	sharedOrigin = false,
-): Response {
-	const content = Buffer.from(result.data)
-	const meta = result.metadata.customMetadata as { encoding?: string; mimeType?: string } | undefined
-	const mimeType = meta?.mimeType || lookup(filePath) || 'application/octet-stream'
-	const cacheControl = STANDARD_CACHE_CONTROL
-	const etag = result.metadata.checksum ? `"${result.metadata.checksum}"` : undefined
+): Promise<Response> {
+	const representation = createStoredFileRepresentation(result, filePath, requestHeaders)
+	const preparation = await prepareStoredGzipResponse(representation, filePath)
+	if (preparation.kind === 'failure') return preparation.response
 
-	// Handle conditional requests (If-None-Match → 304 Not Modified)
-	if (etag && requestHeaders?.['if-none-match']) {
-		const ifNoneMatch = requestHeaders['if-none-match']
-		const matches =
-			ifNoneMatch === '*' ||
-			ifNoneMatch
-				.split(',')
-				.map((e) => e.trim())
-				.includes(etag)
-		if (matches) {
-			return new Response(null, {
-				status: 304,
-				headers: { ETag: etag, 'Cache-Control': cacheControl },
-			})
-		}
+	const etag = getRepresentationEtag(representation)
+	const notModified = buildNotModifiedResponse(etag, requestHeaders, representation.varyByAcceptEncoding)
+	if (notModified) return notModified
+	return await buildStoredFileBodyResponse(
+		representation,
+		preparation,
+		filePath,
+		settings,
+		sharedOrigin,
+		etag,
+		requestHeaders,
+	)
+}
+
+async function prepareHtmlRewriteSource(
+	representation: StoredFileRepresentation,
+	filePath: string,
+): Promise<HtmlRewriteSource> {
+	if (representation.explicitlyGzipped && !representation.hasGzipMagic) {
+		return gzipFailure(filePath, 'invalid-gzip', representation.varyByAcceptEncoding)
+	}
+	if (!representation.isGzipContent) return { kind: 'content', content: representation.content }
+	if (getStoredGzipSizeStatus(representation.metadata) === 'over-limit') {
+		return gzipFailure(filePath, 'output-limit', representation.varyByAcceptEncoding)
 	}
 
-	const headers: Record<string, string> = {
-		'Content-Type': mimeType,
-		'Cache-Control': cacheControl,
-		'X-Cache-Tier': result.source,
+	const decoded = await decodeStoredGzipIdentity(representation.content, filePath, representation.varyByAcceptEncoding)
+	if (decoded.kind === 'failure') return decoded
+	return { kind: 'content', content: decoded.content }
+}
+
+async function rewriteHtmlContent(content: Buffer, basePath: string, filePath: string): Promise<RewrittenHtmlAttempt> {
+	try {
+		const htmlString = new TextDecoder().decode(content)
+		const rewritten = await rewriteHtmlPaths(htmlString, basePath)
+		const output = Buffer.from(new TextEncoder().encode(rewritten))
+		if (output.byteLength <= MAX_BLOB_SIZE) return { kind: 'rewritten', output }
+
+		logger.warn('Rewritten HTML exceeds the file limit, serving original', {
+			filePath,
+			failureKind: 'rewritten-output-limit',
+		})
+		return { kind: 'serve-original' }
+	} catch {
+		// The gzip input has already been successfully bounded-decoded, so an
+		// ordinary rewriter failure can safely preserve the established fallback.
+		logger.warn('Failed to rewrite HTML on demand, serving original', { filePath, failureKind: 'html-rewrite-failed' })
+		return { kind: 'serve-original' }
 	}
+}
 
-	if (etag) {
-		headers.ETag = etag
+async function compressRewrittenHtml(
+	output: Buffer,
+	filePath: string,
+	shouldCompress: boolean,
+	requestHeaders: Record<string, string> | undefined,
+): Promise<RewrittenHtmlCompression> {
+	if (!shouldCompress || !clientAcceptsGzip(requestHeaders)) return { output }
+
+	try {
+		const compressed = await withGzipProcessingBudget(() => gzipOperations.compress(output))
+		return { output: Buffer.from(compressed), contentEncoding: 'gzip' }
+	} catch {
+		// The rewritten identity body is already safe. Do not fall back to the
+		// original representation merely because recompression failed.
+		logger.warn('Failed to recompress rewritten HTML, serving identity', {
+			filePath,
+			failureKind: 'gzip-compress-failed',
+		})
+		return { output }
 	}
-
-	if (meta?.encoding === 'gzip') {
-		const shouldServeCompressed = shouldCompressMimeType(mimeType)
-		const acceptEncoding = requestHeaders?.['accept-encoding'] ?? ''
-		const clientAcceptsGzip = acceptEncoding.includes('gzip')
-		const hasGzipMagic = content.length >= 2 && content[0] === 0x1f && content[1] === 0x8b
-
-		if (!clientAcceptsGzip || !shouldServeCompressed) {
-			if (hasGzipMagic) {
-				const decompressed = gunzipSync(content)
-				applyCustomHeaders(headers, filePath, settings, { sharedOrigin })
-				return new Response(decompressed, { headers })
-			}
-			logger.warn(`File marked as gzipped but lacks magic bytes, serving as-is`, { filePath })
-			applyCustomHeaders(headers, filePath, settings, { sharedOrigin })
-			return new Response(content, { headers })
-		}
-
-		headers['Content-Encoding'] = 'gzip'
-	}
-
-	applyCustomHeaders(headers, filePath, settings, { sharedOrigin })
-	return new Response(content, { headers })
 }
 
 async function buildRewrittenHtmlResponse(
@@ -323,55 +1011,551 @@ async function buildRewrittenHtmlResponse(
 	requestHeaders?: Record<string, string>,
 	sharedOrigin = false,
 ): Promise<Response> {
-	try {
-		const content = Buffer.from(result.data)
-		const meta = result.metadata.customMetadata as { encoding?: string; mimeType?: string } | undefined
-		const mimeType = meta?.mimeType || lookup(filePath) || 'application/octet-stream'
-		const cacheControl = STANDARD_CACHE_CONTROL
+	const representation = createStoredFileRepresentation(result, filePath, requestHeaders, true)
+	const source = await prepareHtmlRewriteSource(representation, filePath)
+	if (source.kind === 'failure') return source.response
 
-		const headers: Record<string, string> = {
-			'Content-Type': mimeType,
-			'Cache-Control': cacheControl,
-			'X-Cache-Tier': result.source,
-		}
+	const rewritten = await rewriteHtmlContent(source.content, basePath, filePath)
+	if (rewritten.kind === 'serve-original') {
+		return await buildResponseFromStorageResult(result, filePath, settings, requestHeaders, sharedOrigin)
+	}
 
-		const hasGzipMagic = content.length >= 2 && content[0] === 0x1f && content[1] === 0x8b
-		let decoded = content
-		if (meta?.encoding === 'gzip') {
-			if (hasGzipMagic) {
-				decoded = gunzipSync(content)
-			} else {
-				logger.warn(`File marked as gzipped but lacks magic bytes, serving original`, { filePath })
-				applyCustomHeaders(headers, filePath, settings, { sharedOrigin })
-				return new Response(content, { headers })
+	const compressed = await compressRewrittenHtml(
+		rewritten.output,
+		filePath,
+		representation.shouldCompress,
+		requestHeaders,
+	)
+	const headers = buildStoredResponseHeaders(representation, undefined)
+	if (compressed.contentEncoding) headers['Content-Encoding'] = compressed.contentEncoding
+	return buildStorageBodyResponse(
+		compressed.output,
+		headers,
+		filePath,
+		settings,
+		sharedOrigin,
+		representation.varyByAcceptEncoding,
+		requestHeaders,
+	)
+}
+
+interface FileResolverOptions {
+	did: string
+	rkey: string
+	settings: WispSettings | null
+	requestHeaders?: Record<string, string>
+	trace?: RequestTrace | null
+	strategy: FileServingStrategy
+	/** Preloaded manifest for top-level requests; avoids a second database read. */
+	expectedFileCids?: Record<string, string> | null
+}
+
+interface FileResolver {
+	getExpectedFileCids(): Promise<Record<string, string> | null>
+	findFirstExpectedFile(paths: Iterable<string>): Promise<FileForRequestResult | null>
+	findFallbackFile(filePath: string): Promise<FileForRequestResult | null>
+	markExpectedMiss(filePath: string): Promise<void>
+	expectedMissResponse(): Promise<Response | null>
+}
+
+interface RequestPathInfo {
+	requestPath: string
+	isDirectoryPathRequest: boolean
+}
+
+interface CachedRequestOptions {
+	did: string
+	rkey: string
+	filePath: string
+	fullUrl?: string
+	requestHeaders?: Record<string, string>
+	strategy: FileServingStrategy
+}
+
+interface FileRequestOptions extends FileResolverOptions {
+	filePath: string
+}
+
+interface RedirectRequestOptions extends CachedRequestOptions {
+	indexFiles: string[]
+	trace: RequestTrace | null
+	resolveFile(filePath: string): Promise<Response>
+}
+
+/**
+ * Deduplicate lookup candidates without changing their priority.
+ */
+function orderedUniquePaths(paths: Iterable<string>): string[] {
+	const seen = new Set<string>()
+	const uniquePaths: string[] = []
+
+	for (const path of paths) {
+		if (seen.has(path)) continue
+		seen.add(path)
+		uniquePaths.push(path)
+	}
+
+	return uniquePaths
+}
+
+function indexPathCandidates(requestPath: string, indexFiles: string[]): string[] {
+	return orderedUniquePaths(indexFiles.map((indexFile) => (requestPath ? `${requestPath}/${indexFile}` : indexFile)))
+}
+
+function directoryRequestCandidates(
+	requestPath: string,
+	isDirectoryPathRequest: boolean,
+	indexFiles: string[],
+): string[] {
+	const indexPaths = indexPathCandidates(requestPath, indexFiles)
+	if (!requestPath || isDirectoryPathRequest) return indexPaths
+	return orderedUniquePaths([requestPath, ...indexPaths])
+}
+
+function fileAndIndexCandidates(filePath: string, indexFiles: string[]): string[] {
+	return orderedUniquePaths([filePath, ...indexPathCandidates(filePath, indexFiles)])
+}
+
+function cleanUrlCandidates(filePath: string, indexFiles: string[]): string[] {
+	return orderedUniquePaths([`${filePath}.html`, ...indexPathCandidates(filePath, indexFiles)])
+}
+
+function normalizeRequestPath(filePath: string): RequestPathInfo {
+	const isDirectoryPathRequest = filePath.endsWith('/') && filePath.length > 0
+	let requestPath = filePath || ''
+	if (requestPath.endsWith('/') && requestPath.length > 1) {
+		requestPath = requestPath.slice(0, -1)
+	}
+	return { requestPath, isDirectoryPathRequest }
+}
+
+function wrapResponseStatus(response: Response, status: number): Response {
+	return new Response(response.body, { status, headers: response.headers })
+}
+
+function buildDirectoryListingResponse(
+	requestPath: string,
+	entries: Array<{ name: string; isDirectory: boolean }>,
+	status = 200,
+): Response {
+	return new Response(generateDirectoryListing(requestPath, entries), {
+		status,
+		headers: {
+			'Content-Type': 'text/html; charset=utf-8',
+			'Cache-Control': STANDARD_CACHE_CONTROL,
+		},
+	})
+}
+
+function buildStyled404Response(): Response {
+	return new Response(generate404Page(), {
+		status: 404,
+		headers: {
+			'Content-Type': 'text/html; charset=utf-8',
+			'Cache-Control': STANDARD_CACHE_CONTROL,
+		},
+	})
+}
+
+function createExpectedManifestMissTracker(
+	did: string,
+	rkey: string,
+	requestHeaders: Record<string, string> | undefined,
+	getExpectedFileCids: () => Promise<Record<string, string> | null>,
+	strategy: FileServingStrategy,
+) {
+	let expectedMissPath: string | null = null
+
+	return {
+		async mark(filePath: string): Promise<void> {
+			if (expectedMissPath) return
+			const fileCids = await getExpectedFileCids()
+			if (!fileCids) return
+
+			// A pre-rewritten cache entry is still derived from its original
+			// manifest path. If that original CID is absent, fail closed and
+			// request repair rather than falling through to a styled 404.
+			if (manifestLookupPaths(filePath, strategy).some((path) => manifestHasPath(fileCids, path))) {
+				expectedMissPath = sourceManifestPath(filePath)
 			}
-		} else if (hasGzipMagic && shouldCompressMimeType(mimeType)) {
-			// Heuristic: treat as gzipped text content even if encoding metadata is missing
-			decoded = gunzipSync(content)
+		},
+		async response(): Promise<Response | null> {
+			if (!expectedMissPath) return null
+			recordStorageMiss(expectedMissPath)
+			await enqueueRevalidate(did, rkey, `storage-miss:${expectedMissPath}`)
+			return buildStorageMissResponse(requestHeaders)
+		},
+	}
+}
+
+function manifestLookupPaths(filePath: string, strategy: FileServingStrategy): string[] {
+	const originalPath = normalizeFilePath(filePath)
+	if (strategy.fileLookup === 'original') return [originalPath]
+	return orderedUniquePaths([originalPath, `.rewritten/${originalPath}`])
+}
+
+function manifestMayContainFile(
+	fileCids: Record<string, string> | null,
+	filePath: string,
+	strategy: FileServingStrategy,
+): boolean {
+	return manifestLookupPaths(filePath, strategy).some((path) => manifestHasPath(fileCids, path))
+}
+
+function createFileResolver(options: FileResolverOptions): FileResolver {
+	const { did, rkey, requestHeaders, strategy, trace } = options
+	let expectedFileCids = options.expectedFileCids
+	let manifestLoaded = options.expectedFileCids !== undefined
+	const attemptedPaths = new Set<string>()
+
+	const getExpectedFileCids = async (): Promise<Record<string, string> | null> => {
+		if (!manifestLoaded) {
+			expectedFileCids = await getExpectedFileCidsForSite(did, rkey, trace)
+			manifestLoaded = true
 		}
+		return expectedFileCids ?? null
+	}
 
-		const htmlString = new TextDecoder().decode(decoded)
-		const rewritten = await rewriteHtmlPaths(htmlString, basePath)
-		let output = new TextEncoder().encode(rewritten)
+	const missTracker = createExpectedManifestMissTracker(did, rkey, requestHeaders, getExpectedFileCids, strategy)
 
-		const shouldServeCompressed = shouldCompressMimeType(mimeType)
-		const acceptEncoding = requestHeaders?.['accept-encoding'] ?? ''
-		const clientAcceptsGzip = acceptEncoding.includes('gzip')
-		if (clientAcceptsGzip && shouldServeCompressed) {
-			output = gzipSync(output)
-			headers['Content-Encoding'] = 'gzip'
+	const getExpectedFile = async (filePath: string): Promise<FileForRequestResult | null> => {
+		const fileCids = await getExpectedFileCids()
+		if (!manifestMayContainFile(fileCids, filePath, strategy)) return null
+		return await span(trace, `storage:${filePath}`, () => getFileForRequest(did, rkey, filePath, strategy, fileCids))
+	}
+
+	return {
+		getExpectedFileCids,
+		async findFirstExpectedFile(paths: Iterable<string>): Promise<FileForRequestResult | null> {
+			for (const filePath of orderedUniquePaths(paths)) {
+				if (attemptedPaths.has(filePath)) continue
+				attemptedPaths.add(filePath)
+
+				const result = await getExpectedFile(filePath)
+				if (result) return result
+				await missTracker.mark(filePath)
+			}
+			return null
+		},
+		findFallbackFile: async (filePath) =>
+			getFallbackFile(did, rkey, filePath, await getExpectedFileCids(), strategy, trace),
+		markExpectedMiss: (filePath) => missTracker.mark(filePath),
+		expectedMissResponse: () => missTracker.response(),
+	}
+}
+
+async function buildFileResponse(options: FileResolverOptions, fileResult: FileForRequestResult): Promise<Response> {
+	const { did, rkey, requestHeaders, settings, strategy } = options
+	const { filePath, result, wasRewritten } = fileResult
+	const meta = result.metadata.customMetadata as { encoding?: string; mimeType?: string } | undefined
+	const mimeType = meta?.mimeType || lookup(filePath) || 'application/octet-stream'
+	const shouldRewriteOnDemand =
+		strategy.rewriteMissingHtmlOnDemand && !wasRewritten && isHtmlContent(filePath, mimeType)
+
+	if (shouldRewriteOnDemand) {
+		void enqueueRevalidate(did, rkey, `rewrite-miss:${filePath}`)
+		return await buildRewrittenHtmlResponse(
+			result,
+			filePath,
+			strategy.basePath ?? '',
+			settings,
+			requestHeaders,
+			strategy.sharedOrigin,
+		)
+	}
+
+	return buildResponseFromStorageResult(result, filePath, settings, requestHeaders, strategy.sharedOrigin)
+}
+
+async function serveExpectedCandidates(
+	options: FileResolverOptions,
+	resolver: FileResolver,
+	candidates: Iterable<string>,
+): Promise<Response | null> {
+	const result = await resolver.findFirstExpectedFile(candidates)
+	return result ? await buildFileResponse(options, result) : null
+}
+
+async function serveDirectoryListing(
+	options: FileResolverOptions,
+	resolver: FileResolver,
+	requestPath: string,
+	status = 200,
+): Promise<Response | null> {
+	if (!options.settings?.directoryListing) return null
+
+	const fileCids = await resolver.getExpectedFileCids()
+	const entries = await listDirectoryEntries(
+		options.did,
+		options.rkey,
+		requestPath,
+		fileCids ? Object.keys(fileCids) : null,
+	)
+	if (entries.length === 0) return null
+
+	const storageMissResponse = await resolver.expectedMissResponse()
+	return storageMissResponse ?? buildDirectoryListingResponse(requestPath, entries, status)
+}
+
+async function serveFallbackFile(
+	options: FileResolverOptions,
+	resolver: FileResolver,
+	filePath: string,
+	status?: number,
+): Promise<Response | null> {
+	const result = await resolver.findFallbackFile(filePath)
+	if (!result) {
+		await resolver.markExpectedMiss(filePath)
+		return null
+	}
+
+	const response = await buildFileResponse(options, result)
+	return status === undefined ? response : wrapResponseStatus(response, status)
+}
+
+async function serveFirstFallbackFile(
+	options: FileResolverOptions,
+	resolver: FileResolver,
+	filePaths: Iterable<string>,
+	status?: number,
+): Promise<Response | null> {
+	for (const filePath of orderedUniquePaths(filePaths)) {
+		const response = await serveFallbackFile(options, resolver, filePath, status)
+		if (response) return response
+	}
+	return null
+}
+
+async function serveConfiguredFallbacks(
+	options: FileResolverOptions,
+	resolver: FileResolver,
+): Promise<Response | null> {
+	const { custom404, spaMode } = options.settings ?? {}
+
+	if (spaMode) {
+		const spaResponse = await serveFallbackFile(options, resolver, spaMode)
+		if (spaResponse) return spaResponse
+	}
+
+	if (custom404) {
+		return await serveFallbackFile(options, resolver, custom404, 404)
+	}
+
+	return null
+}
+
+function adjustRedirectTarget(targetPath: string, strategy: FileServingStrategy): string {
+	if (!strategy.adjustSharedPathRedirect || !strategy.basePath || isAbsoluteHttpUrl(targetPath)) {
+		return targetPath
+	}
+	return `${strategy.basePath}${targetPath.startsWith('/') ? targetPath.slice(1) : targetPath}`
+}
+
+function buildRedirectResponse(status: number, targetPath: string, strategy: FileServingStrategy): Response {
+	return new Response(null, {
+		status,
+		headers: {
+			Location: adjustRedirectTarget(targetPath, strategy),
+			'Cache-Control': STANDARD_CACHE_CONTROL,
+		},
+	})
+}
+
+function internalRedirectPath(targetPath: string): string {
+	return targetPath.startsWith('/') ? targetPath.slice(1) : targetPath
+}
+
+async function serveRedirectTarget(
+	status: number,
+	targetPath: string,
+	strategy: FileServingStrategy,
+	resolveFile: (filePath: string) => Promise<Response>,
+): Promise<Response | null> {
+	switch (status) {
+		case 200:
+			if (isAbsoluteHttpUrl(targetPath)) return externalRewriteNotAllowedResponse(targetPath)
+			return await resolveFile(internalRedirectPath(targetPath))
+		case 301:
+		case 302:
+			return buildRedirectResponse(status, targetPath, strategy)
+		case 404: {
+			const response = await resolveFile(internalRedirectPath(targetPath))
+			// A redirect-defined 404 must not disguise an unavailable or stale
+			// manifest object as a cacheable not-found response.
+			return response.status === 503 ? response : wrapResponseStatus(response, 404)
 		}
+		default:
+			return null
+	}
+}
 
-		applyCustomHeaders(headers, filePath, settings, { sharedOrigin })
-		return new Response(output, { headers })
-	} catch (err) {
-		logger.warn('Failed to rewrite HTML on demand, serving original', { filePath, error: err })
-		return buildResponseFromStorageResult(result, filePath, settings, requestHeaders, sharedOrigin)
+async function serveRedirectResponse(options: RedirectRequestOptions): Promise<Response | null> {
+	const { did, rkey, filePath, fullUrl, indexFiles, requestHeaders, resolveFile, strategy, trace } = options
+	const redirectRules = await cache.getOrFetch('redirectRules', `${did}:${rkey}`, () =>
+		span(trace, 'storage:redirectRules', () => loadRedirectRules(did, rkey)),
+	)
+	if (redirectRules.length === 0) return null
+
+	const requestPath = `/${filePath || ''}`
+	const redirectMatch = matchRedirectRule(requestPath, redirectRules, {
+		queryParams: fullUrl ? parseQueryString(fullUrl) : {},
+		headers: requestHeaders,
+		cookies: parseCookies(requestHeaders?.cookie),
+	})
+	if (!redirectMatch) return null
+
+	const { rule, status, targetPath } = redirectMatch
+	if (!rule.force && (await hasFileForNonForcedRedirect(did, rkey, filePath, indexFiles, trace))) {
+		return await resolveFile(filePath)
+	}
+
+	return await serveRedirectTarget(status, targetPath, strategy, resolveFile)
+}
+
+async function buildSourceCidStorageMissResponse(options: FileRequestOptions, filePath: string): Promise<Response> {
+	const sourcePath = sourceManifestPath(filePath)
+	recordStorageMiss(sourcePath)
+	await enqueueRevalidate(options.did, options.rkey, `storage-miss:${sourcePath}`)
+	return buildStorageMissResponse(options.requestHeaders)
+}
+
+async function serveFileRequest(options: FileRequestOptions): Promise<Response> {
+	try {
+		return await resolveFileRequest(options)
+	} catch (error) {
+		if (isStorageUnavailableError(error)) {
+			return buildStorageMissResponse(options.requestHeaders)
+		}
+		if (error instanceof SourceCidValidationError) {
+			return await buildSourceCidStorageMissResponse(options, error.filePath)
+		}
+		throw error
+	}
+}
+
+type FileResolutionStage = () => Promise<Response | null>
+type FileResolutionOutcome = { kind: 'response'; response: Response } | { kind: 'not-found' }
+
+async function runFileResolutionStages(stages: Iterable<FileResolutionStage>): Promise<FileResolutionOutcome> {
+	for (const stage of stages) {
+		const response = await stage()
+		if (response) return { kind: 'response', response }
+	}
+	return { kind: 'not-found' }
+}
+
+async function serveDirectoryRequestStage(
+	options: FileRequestOptions,
+	resolver: FileResolver,
+	requestPath: string,
+	isDirectoryPathRequest: boolean,
+	indexFiles: string[],
+): Promise<Response | null> {
+	const indexResponse = await serveExpectedCandidates(
+		options,
+		resolver,
+		directoryRequestCandidates(requestPath, isDirectoryPathRequest, indexFiles),
+	)
+	return indexResponse ?? (await serveDirectoryListing(options, resolver, requestPath))
+}
+
+async function serveFileAndIndexStage(
+	options: FileRequestOptions,
+	resolver: FileResolver,
+	fileRequestPath: string,
+	indexFiles: string[],
+): Promise<Response | null> {
+	return await serveExpectedCandidates(options, resolver, fileAndIndexCandidates(fileRequestPath, indexFiles))
+}
+
+async function serveCleanUrlStage(
+	options: FileRequestOptions,
+	resolver: FileResolver,
+	fileRequestPath: string,
+	indexFiles: string[],
+): Promise<Response | null> {
+	return await serveExpectedCandidates(options, resolver, cleanUrlCandidates(fileRequestPath, indexFiles))
+}
+
+async function serveFallbackResolutionStage(
+	options: FileRequestOptions,
+	resolver: FileResolver,
+): Promise<Response | null> {
+	const configuredFallback = await serveConfiguredFallbacks(options, resolver)
+	if (configuredFallback) return configuredFallback
+
+	const conventional404 = await serveFirstFallbackFile(options, resolver, ['404.html', 'not_found.html'], 404)
+	return conventional404 ?? (await serveDirectoryListing(options, resolver, '', 404))
+}
+
+async function resolveFileRequest(options: FileRequestOptions): Promise<Response> {
+	const resolver = createFileResolver(options)
+	const indexFiles = getIndexFiles(options.settings)
+	const { isDirectoryPathRequest, requestPath } = normalizeRequestPath(options.filePath)
+	const fileRequestPath = requestPath || indexFiles[0] || 'index.html'
+	const stages: FileResolutionStage[] = []
+
+	if (!requestPath || !hasFileExtension(requestPath)) {
+		stages.push(() => serveDirectoryRequestStage(options, resolver, requestPath, isDirectoryPathRequest, indexFiles))
+	}
+	stages.push(() => serveFileAndIndexStage(options, resolver, fileRequestPath, indexFiles))
+	if (options.settings?.cleanUrls && !hasFileExtension(fileRequestPath)) {
+		stages.push(() => serveCleanUrlStage(options, resolver, fileRequestPath, indexFiles))
+	}
+	stages.push(() => serveFallbackResolutionStage(options, resolver))
+
+	const outcome = await runFileResolutionStages(stages)
+	if (outcome.kind === 'response') return outcome.response
+	return (await resolver.expectedMissResponse()) ?? buildStyled404Response()
+}
+
+async function resolveCachedRequest(options: CachedRequestOptions, trace: RequestTrace | null): Promise<Response> {
+	const { did, filePath, requestHeaders, rkey, strategy } = options
+	const siteFileCids = await getExpectedFileCidsForSite(did, rkey, trace)
+	if (siteFileCids === null) {
+		recordStorageMiss('manifest')
+		await enqueueRevalidate(did, rkey, 'storage-miss:manifest')
+		return buildStorageMissResponse(requestHeaders)
+	}
+	triggerSiteHtmlHotCacheWarmup(did, rkey)
+
+	const settings = await span(trace, 'db:settings', () => getCachedSettings(did, rkey))
+	const indexFiles = getIndexFiles(settings)
+	const resolveFile = (path: string) =>
+		serveFileRequest({
+			did,
+			rkey,
+			filePath: path,
+			settings,
+			requestHeaders,
+			trace,
+			strategy,
+			expectedFileCids: siteFileCids,
+		})
+
+	const redirectResponse = await serveRedirectResponse({ ...options, indexFiles, resolveFile, trace })
+	return redirectResponse ?? (await resolveFile(filePath))
+}
+
+async function serveCachedRequest(options: CachedRequestOptions): Promise<Response> {
+	const { did, filePath, requestHeaders, rkey } = options
+	if (isSiteUpdating(did, rkey)) {
+		return buildSiteUpdatingResponse(requestHeaders)
+	}
+
+	const trace = createTrace()
+	try {
+		return await resolveCachedRequest(options, trace)
+	} catch (error) {
+		if (!isStorageUnavailableError(error)) throw error
+		return buildStorageMissResponse(requestHeaders)
+	} finally {
+		logTrace(trace, filePath || '/', logger)
 	}
 }
 
 /**
- * Helper to serve files from cache (for custom domains and subdomains)
+ * Serve files for custom domains and subdomains.
  */
 export async function serveFromCache(
 	did: string,
@@ -380,101 +1564,18 @@ export async function serveFromCache(
 	fullUrl?: string,
 	headers?: Record<string, string>,
 ): Promise<Response> {
-	if (isSiteUpdating(did, rkey)) {
-		return shouldServeUpdatingPage(headers)
-			? siteUpdatingResponse()
-			: new Response('Site is updating', { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' } })
-	}
-
-	const trace = createTrace()
-
-	// Only prewarm sites that are known to exist. Public routes can otherwise
-	// choose arbitrary site keys and force expensive storage-wide list operations.
-	const siteFileCids = await getExpectedFileCidsForSite(did, rkey, trace)
-	if (siteFileCids !== null) {
-		triggerSiteHtmlHotCacheWarmup(did, rkey)
-	}
-
-	// Load settings for this site
-	const settings = await span(trace, 'db:settings', () => getCachedSettings(did, rkey))
-	const indexFiles = getIndexFiles(settings)
-
-	// Check for redirect rules first (_redirects wins over settings)
-	const redirectRules = await cache.getOrFetch('redirectRules', `${did}:${rkey}`, () =>
-		span(trace, 'storage:redirectRules', () => loadRedirectRules(did, rkey)),
-	)
-
-	// Apply redirect rules if any exist
-	if (redirectRules.length > 0) {
-		const requestPath = `/${filePath || ''}`
-		const queryParams = fullUrl ? parseQueryString(fullUrl) : {}
-		const cookies = parseCookies(headers?.cookie)
-
-		const redirectMatch = matchRedirectRule(requestPath, redirectRules, {
-			queryParams,
-			headers,
-			cookies,
-		})
-
-		if (redirectMatch) {
-			const { rule, targetPath, status } = redirectMatch
-
-			// If not forced, check if the requested file exists before redirecting
-			if (!rule.force) {
-				// If file exists and redirect is not forced, serve the file normally
-				if (await hasFileForNonForcedRedirect(did, rkey, filePath, indexFiles, trace)) {
-					const response = await serveFileInternal(did, rkey, filePath, settings, headers, trace)
-					logTrace(trace, filePath || '/', logger)
-					return response
-				}
-			}
-
-			// Handle different status codes
-			if (status === 200) {
-				if (isAbsoluteHttpUrl(targetPath)) {
-					const response = externalRewriteNotAllowedResponse(targetPath)
-					logTrace(trace, filePath || '/', logger)
-					return response
-				}
-
-				// Rewrite: serve different content but keep URL the same
-				// Remove leading slash for internal path resolution
-				const rewritePath = targetPath.startsWith('/') ? targetPath.slice(1) : targetPath
-				const response = await serveFileInternal(did, rkey, rewritePath, settings, headers, trace)
-				logTrace(trace, filePath || '/', logger)
-				return response
-			} else if (status === 301 || status === 302) {
-				// External redirect: change the URL
-				logTrace(trace, filePath || '/', logger)
-				return new Response(null, {
-					status,
-					headers: {
-						Location: targetPath,
-						'Cache-Control': STANDARD_CACHE_CONTROL,
-					},
-				})
-			} else if (status === 404) {
-				// Custom 404 page from _redirects (wins over settings.custom404)
-				const custom404Path = targetPath.startsWith('/') ? targetPath.slice(1) : targetPath
-				const response = await serveFileInternal(did, rkey, custom404Path, settings, headers, trace)
-				logTrace(trace, filePath || '/', logger)
-				// Override status to 404
-				return new Response(response.body, {
-					status: 404,
-					headers: response.headers,
-				})
-			}
-		}
-	}
-
-	// No redirect matched, serve normally with settings
-	const response = await serveFileInternal(did, rkey, filePath, settings, headers, trace)
-	logTrace(trace, filePath || '/', logger)
-	return response
+	return await serveCachedRequest({
+		did,
+		rkey,
+		filePath,
+		fullUrl,
+		requestHeaders: headers,
+		strategy: ORIGINAL_FILE_STRATEGY,
+	})
 }
 
 /**
- * Internal function to serve a file (used by both normal serving and rewrites)
+ * Resolve a file for custom domains and subdomains.
  */
 export async function serveFileInternal(
 	did: string,
@@ -484,213 +1585,19 @@ export async function serveFileInternal(
 	requestHeaders?: Record<string, string>,
 	trace?: RequestTrace | null,
 ): Promise<Response> {
-	let expectedFileCids: Record<string, string> | null | undefined
-	let expectedMissPath: string | null = null
-
-	const getExpectedFileCids = async (): Promise<Record<string, string> | null> => {
-		if (expectedFileCids !== undefined) return expectedFileCids
-		expectedFileCids = await getExpectedFileCidsForSite(did, rkey, trace)
-		return expectedFileCids
-	}
-
-	const getExpectedFileWithMetadata = async (path: string): Promise<FileStorageResult | null> => {
-		const fileCids = await getExpectedFileCids()
-		if (!manifestHasPath(fileCids, path)) return null
-		return await span(trace, `storage:${path}`, () => getFileWithMetadata(did, rkey, path))
-	}
-
-	const markExpectedMiss = async (path: string) => {
-		if (expectedMissPath) return
-		const fileCids = await getExpectedFileCids()
-		if (!fileCids) return
-		const normalized = path.startsWith('/') ? path.slice(1) : path
-		if (fileCids[normalized]) {
-			expectedMissPath = normalized
-		}
-	}
-
-	const maybeReturnStorageMiss = async (): Promise<Response | null> => {
-		if (!expectedMissPath) return null
-		recordStorageMiss(expectedMissPath)
-		await enqueueRevalidate(did, rkey, `storage-miss:${expectedMissPath}`)
-		return buildStorageMissResponse(requestHeaders)
-	}
-
-	const indexFiles = getIndexFiles(settings)
-	const isDirectoryPathRequest = filePath.endsWith('/') && filePath.length > 0
-
-	// Normalize the request path (keep empty for root, remove trailing slash for others)
-	let requestPath = filePath || ''
-	if (requestPath.endsWith('/') && requestPath.length > 1) {
-		requestPath = requestPath.slice(0, -1)
-	}
-
-	// For directory-like paths (empty or no file extension in basename), try index files
-	if (!requestPath || !hasFileExtension(requestPath)) {
-		// For non-empty extensionless paths, try as a direct file first (e.g. binary downloads)
-		if (requestPath && !isDirectoryPathRequest) {
-			const directResult = await getExpectedFileWithMetadata(requestPath)
-			if (directResult) {
-				return buildResponseFromStorageResult(directResult, requestPath, settings, requestHeaders)
-			}
-			await markExpectedMiss(requestPath)
-		}
-
-		for (const indexFile of indexFiles) {
-			const indexPath = requestPath ? `${requestPath}/${indexFile}` : indexFile
-			const result = await getExpectedFileWithMetadata(indexPath)
-			if (result) {
-				return buildResponseFromStorageResult(result, indexPath, settings, requestHeaders)
-			}
-			await markExpectedMiss(indexPath)
-		}
-
-		// Index not found - check if we need directory listing
-		if (settings?.directoryListing) {
-			const fileCids = await getExpectedFileCids()
-			const directoryEntries = await listDirectoryEntries(
-				did,
-				rkey,
-				requestPath,
-				fileCids ? Object.keys(fileCids) : null,
-			)
-			if (directoryEntries.length > 0) {
-				const missResponse = await maybeReturnStorageMiss()
-				if (missResponse) return missResponse
-				const html = generateDirectoryListing(requestPath, directoryEntries)
-				return new Response(html, {
-					headers: {
-						'Content-Type': 'text/html; charset=utf-8',
-						'Cache-Control': STANDARD_CACHE_CONTROL,
-					},
-				})
-			}
-		}
-		// Fall through to normal file serving / 404 handling
-	}
-
-	// Try to serve as a file
-	const fileRequestPath: string = requestPath || indexFiles[0] || 'index.html'
-
-	// Retrieve from tiered storage
-	const result = await getExpectedFileWithMetadata(fileRequestPath)
-
-	if (result) {
-		return buildResponseFromStorageResult(result, fileRequestPath, settings, requestHeaders)
-	}
-	await markExpectedMiss(fileRequestPath)
-
-	// Try index files for directory-like paths (even with extensions,
-	// e.g. Astro emits `relay.md/index.html` for .md routes)
-	for (const indexFileName of indexFiles) {
-		const indexPath = fileRequestPath ? `${fileRequestPath}/${indexFileName}` : indexFileName
-		const indexResult = await getExpectedFileWithMetadata(indexPath)
-		if (indexResult) {
-			return buildResponseFromStorageResult(indexResult, indexPath, settings, requestHeaders)
-		}
-		await markExpectedMiss(indexPath)
-	}
-
-	// Try clean URLs: /about -> /about.html
-	if (settings?.cleanUrls && !hasFileExtension(fileRequestPath)) {
-		const htmlPath = `${fileRequestPath}.html`
-		const htmlResult = await getExpectedFileWithMetadata(htmlPath)
-		if (htmlResult) {
-			return buildResponseFromStorageResult(htmlResult, htmlPath, settings, requestHeaders)
-		}
-		await markExpectedMiss(htmlPath)
-
-		// Also try /about/index.html
-		for (const indexFileName of indexFiles) {
-			const indexPath = fileRequestPath ? `${fileRequestPath}/${indexFileName}` : indexFileName
-			const indexResult = await getExpectedFileWithMetadata(indexPath)
-			if (indexResult) {
-				return buildResponseFromStorageResult(indexResult, indexPath, settings, requestHeaders)
-			}
-			await markExpectedMiss(indexPath)
-		}
-	}
-
-	// SPA mode: serve SPA file for all non-existing routes (wins over custom404 but loses to _redirects)
-	if (settings?.spaMode) {
-		const spaFile = settings.spaMode
-		const spaResult = await getFallbackFile(did, rkey, spaFile, trace)
-		if (spaResult) {
-			return buildResponseFromStorageResult(spaResult, spaFile, settings, requestHeaders)
-		}
-		await markExpectedMiss(spaFile)
-	}
-
-	// Custom 404: serve custom 404 file if configured (wins conflict battle)
-	if (settings?.custom404) {
-		const custom404File = settings.custom404
-		const custom404Result = await getFallbackFile(did, rkey, custom404File, trace)
-		if (custom404Result) {
-			const response = buildResponseFromStorageResult(custom404Result, custom404File, settings, requestHeaders)
-			return new Response(response.body, { status: 404, headers: response.headers })
-		}
-		await markExpectedMiss(custom404File)
-	}
-
-	// Autodetect 404 pages (GitHub Pages: 404.html, Neocities/Nekoweb: not_found.html)
-	for (const auto404Page of ['404.html', 'not_found.html']) {
-		const auto404Result = await getFallbackFile(did, rkey, auto404Page, trace)
-		if (auto404Result) {
-			const response = buildResponseFromStorageResult(auto404Result, auto404Page, settings, requestHeaders)
-			return new Response(response.body, { status: 404, headers: response.headers })
-		}
-		await markExpectedMiss(auto404Page)
-	}
-
-	// Directory listing fallback: if enabled, show root directory listing on 404
-	if (settings?.directoryListing) {
-		const fileCids = await getExpectedFileCids()
-		const rootEntries = await listDirectoryEntries(did, rkey, '', fileCids ? Object.keys(fileCids) : null)
-		if (rootEntries.length > 0) {
-			const missResponse = await maybeReturnStorageMiss()
-			if (missResponse) return missResponse
-			const html = generateDirectoryListing('', rootEntries)
-			return new Response(html, {
-				status: 404,
-				headers: {
-					'Content-Type': 'text/html; charset=utf-8',
-					'Cache-Control': STANDARD_CACHE_CONTROL,
-				},
-			})
-		}
-	}
-
-	const missResponse = await maybeReturnStorageMiss()
-	if (missResponse) return missResponse
-
-	// Last resort: if site not in DB at all, try on-demand fetch
-	const fileCids = await getExpectedFileCids()
-	if (fileCids === null) {
-		logger.info(`Site not found in DB, attempting on-demand fetch before 404`, { did, rkey })
-		const success = await fetchAndCacheSite(did, rkey)
-		if (success) {
-			// Retry serving the originally requested file
-			const retryPath = filePath || indexFiles[0] || 'index.html'
-			const retryResult = await span(trace, `storage:${retryPath}`, () => getFileWithMetadata(did, rkey, retryPath))
-			if (retryResult) {
-				return buildResponseFromStorageResult(retryResult, retryPath, settings, requestHeaders)
-			}
-		}
-	}
-
-	// Default styled 404 page
-	const html = generate404Page()
-	return new Response(html, {
-		status: 404,
-		headers: {
-			'Content-Type': 'text/html; charset=utf-8',
-			'Cache-Control': STANDARD_CACHE_CONTROL,
-		},
+	return await serveFileRequest({
+		did,
+		rkey,
+		filePath,
+		settings,
+		requestHeaders,
+		trace,
+		strategy: ORIGINAL_FILE_STRATEGY,
 	})
 }
 
 /**
- * Helper to serve files from cache with HTML path rewriting for sites.wisp.place routes
+ * Serve files for sites.wisp.place paths, including HTML path rewriting.
  */
 export async function serveFromCacheWithRewrite(
 	did: string,
@@ -700,114 +1607,18 @@ export async function serveFromCacheWithRewrite(
 	fullUrl?: string,
 	headers?: Record<string, string>,
 ): Promise<Response> {
-	if (isSiteUpdating(did, rkey)) {
-		return shouldServeUpdatingPage(headers)
-			? siteUpdatingResponse()
-			: new Response('Site is updating', { status: 503, headers: { 'Cache-Control': 'no-store', 'Retry-After': '5' } })
-	}
-
-	const trace = createTrace()
-
-	// Only prewarm sites that are known to exist. Public routes can otherwise
-	// choose arbitrary site keys and force expensive storage-wide list operations.
-	const siteFileCids = await getExpectedFileCidsForSite(did, rkey, trace)
-	if (siteFileCids !== null) {
-		triggerSiteHtmlHotCacheWarmup(did, rkey)
-	}
-
-	// Load settings for this site
-	const settings = await span(trace, 'db:settings', () => getCachedSettings(did, rkey))
-	const indexFiles = getIndexFiles(settings)
-
-	// Check for redirect rules first (_redirects wins over settings)
-	const redirectRules = await cache.getOrFetch('redirectRules', `${did}:${rkey}`, () =>
-		span(trace, 'storage:redirectRules', () => loadRedirectRules(did, rkey)),
-	)
-
-	// Apply redirect rules if any exist
-	if (redirectRules.length > 0) {
-		const requestPath = `/${filePath || ''}`
-		const queryParams = fullUrl ? parseQueryString(fullUrl) : {}
-		const cookies = parseCookies(headers?.cookie)
-
-		const redirectMatch = matchRedirectRule(requestPath, redirectRules, {
-			queryParams,
-			headers,
-			cookies,
-		})
-
-		if (redirectMatch) {
-			const { rule, targetPath, status } = redirectMatch
-
-			// If not forced, check if the requested file exists before redirecting
-			if (!rule.force) {
-				// If file exists and redirect is not forced, serve the file normally
-				if (await hasFileForNonForcedRedirect(did, rkey, filePath, indexFiles, trace)) {
-					const response = await serveFileInternalWithRewrite(did, rkey, filePath, basePath, settings, headers, trace)
-					logTrace(trace, filePath || '/', logger)
-					return response
-				}
-			}
-
-			// Handle different status codes
-			if (status === 200) {
-				if (isAbsoluteHttpUrl(targetPath)) {
-					const response = externalRewriteNotAllowedResponse(targetPath)
-					logTrace(trace, filePath || '/', logger)
-					return response
-				}
-
-				// Rewrite: serve different content but keep URL the same
-				const rewritePath = targetPath.startsWith('/') ? targetPath.slice(1) : targetPath
-				const response = await serveFileInternalWithRewrite(did, rkey, rewritePath, basePath, settings, headers, trace)
-				logTrace(trace, filePath || '/', logger)
-				return response
-			} else if (status === 301 || status === 302) {
-				// External redirect: change the URL
-				// For sites.wisp.place, we need to adjust the target path to include the base path
-				// unless it's an absolute URL
-				let redirectTarget = targetPath
-				if (!isAbsoluteHttpUrl(targetPath)) {
-					redirectTarget = basePath + (targetPath.startsWith('/') ? targetPath.slice(1) : targetPath)
-				}
-				logTrace(trace, filePath || '/', logger)
-				return new Response(null, {
-					status,
-					headers: {
-						Location: redirectTarget,
-						'Cache-Control': STANDARD_CACHE_CONTROL,
-					},
-				})
-			} else if (status === 404) {
-				// Custom 404 page from _redirects (wins over settings.custom404)
-				const custom404Path = targetPath.startsWith('/') ? targetPath.slice(1) : targetPath
-				const response = await serveFileInternalWithRewrite(
-					did,
-					rkey,
-					custom404Path,
-					basePath,
-					settings,
-					headers,
-					trace,
-				)
-				logTrace(trace, filePath || '/', logger)
-				// Override status to 404
-				return new Response(response.body, {
-					status: 404,
-					headers: response.headers,
-				})
-			}
-		}
-	}
-
-	// No redirect matched, serve normally with settings
-	const response = await serveFileInternalWithRewrite(did, rkey, filePath, basePath, settings, headers, trace)
-	logTrace(trace, filePath || '/', logger)
-	return response
+	return await serveCachedRequest({
+		did,
+		rkey,
+		filePath,
+		fullUrl,
+		requestHeaders: headers,
+		strategy: createSharedOriginFileStrategy(basePath),
+	})
 }
 
 /**
- * Internal function to serve a file with rewriting
+ * Resolve a file for sites.wisp.place paths, including HTML path rewriting.
  */
 export async function serveFileInternalWithRewrite(
 	did: string,
@@ -818,225 +1629,13 @@ export async function serveFileInternalWithRewrite(
 	requestHeaders?: Record<string, string>,
 	trace?: RequestTrace | null,
 ): Promise<Response> {
-	let expectedFileCids: Record<string, string> | null | undefined
-	let expectedMissPath: string | null = null
-
-	const getExpectedFileCids = async (): Promise<Record<string, string> | null> => {
-		if (expectedFileCids !== undefined) return expectedFileCids
-		expectedFileCids = await getExpectedFileCidsForSite(did, rkey, trace)
-		return expectedFileCids
-	}
-
-	const getExpectedFileForRequest = async (path: string): Promise<FileForRequestResult | null> => {
-		const fileCids = await getExpectedFileCids()
-		const rewrittenPath = `.rewritten/${normalizeFilePath(path)}`
-		if (!manifestHasPath(fileCids, path) && !manifestHasPath(fileCids, rewrittenPath)) return null
-		return await span(trace, `storage:${path}`, () => getFileForRequest(did, rkey, path, true))
-	}
-
-	const markExpectedMiss = async (path: string) => {
-		if (expectedMissPath) return
-		const fileCids = await getExpectedFileCids()
-		if (!fileCids) return
-		const normalized = path.startsWith('/') ? path.slice(1) : path
-		if (fileCids[normalized]) {
-			expectedMissPath = normalized
-		}
-	}
-
-	const maybeReturnStorageMiss = async (): Promise<Response | null> => {
-		if (!expectedMissPath) return null
-		recordStorageMiss(expectedMissPath)
-		await enqueueRevalidate(did, rkey, `storage-miss:${expectedMissPath}`)
-		return buildStorageMissResponse()
-	}
-
-	const indexFiles = getIndexFiles(settings)
-	const isDirectoryPathRequest = filePath.endsWith('/') && filePath.length > 0
-	const buildResponse = async (fileResult: FileForRequestResult): Promise<Response> => {
-		const meta = fileResult.result.metadata.customMetadata as { encoding?: string; mimeType?: string } | undefined
-		const mimeType = meta?.mimeType || lookup(fileResult.filePath) || 'application/octet-stream'
-		const needsRewrite = !fileResult.wasRewritten && isHtmlContent(fileResult.filePath, mimeType)
-
-		if (needsRewrite) {
-			void enqueueRevalidate(did, rkey, `rewrite-miss:${fileResult.filePath}`)
-			return await buildRewrittenHtmlResponse(
-				fileResult.result,
-				fileResult.filePath,
-				basePath,
-				settings,
-				requestHeaders,
-				true,
-			)
-		}
-
-		return buildResponseFromStorageResult(fileResult.result, fileResult.filePath, settings, requestHeaders, true)
-	}
-
-	// Normalize the request path (keep empty for root, remove trailing slash for others)
-	let requestPath = filePath || ''
-	if (requestPath.endsWith('/') && requestPath.length > 1) {
-		requestPath = requestPath.slice(0, -1)
-	}
-
-	// For directory-like paths (empty or no file extension in basename), try index files
-	if (!requestPath || !hasFileExtension(requestPath)) {
-		// For non-empty extensionless paths, try as a direct file first (e.g. binary downloads)
-		if (requestPath && !isDirectoryPathRequest) {
-			const directResult = await getExpectedFileForRequest(requestPath)
-			if (directResult) {
-				return await buildResponse(directResult)
-			}
-			await markExpectedMiss(requestPath)
-		}
-
-		for (const indexFile of indexFiles) {
-			const indexPath = requestPath ? `${requestPath}/${indexFile}` : indexFile
-			const fileResult = await getExpectedFileForRequest(indexPath)
-			if (fileResult) {
-				return await buildResponse(fileResult)
-			}
-			await markExpectedMiss(indexPath)
-		}
-
-		// Index not found - check if we need directory listing
-		if (settings?.directoryListing) {
-			const fileCids = await getExpectedFileCids()
-			const directoryEntries = await listDirectoryEntries(
-				did,
-				rkey,
-				requestPath,
-				fileCids ? Object.keys(fileCids) : null,
-			)
-			if (directoryEntries.length > 0) {
-				const missResponse = await maybeReturnStorageMiss()
-				if (missResponse) return missResponse
-				const html = generateDirectoryListing(requestPath, directoryEntries)
-				return new Response(html, {
-					headers: {
-						'Content-Type': 'text/html; charset=utf-8',
-						'Cache-Control': STANDARD_CACHE_CONTROL,
-					},
-				})
-			}
-		}
-		// Fall through to normal file serving / 404 handling
-	}
-
-	// Try to serve as a file
-	const fileRequestPath: string = requestPath || indexFiles[0] || 'index.html'
-
-	const fileResult = await getExpectedFileForRequest(fileRequestPath)
-	if (fileResult) {
-		return await buildResponse(fileResult)
-	}
-	await markExpectedMiss(fileRequestPath)
-
-	// Try index files for directory-like paths (even with extensions,
-	// e.g. Astro emits `relay.md/index.html` for .md routes)
-	for (const indexFileName of indexFiles) {
-		const indexPath = fileRequestPath ? `${fileRequestPath}/${indexFileName}` : indexFileName
-		const indexResult = await getExpectedFileForRequest(indexPath)
-		if (indexResult) {
-			return await buildResponse(indexResult)
-		}
-		await markExpectedMiss(indexPath)
-	}
-
-	// Try clean URLs: /about -> /about.html
-	if (settings?.cleanUrls && !hasFileExtension(fileRequestPath)) {
-		const htmlPath = `${fileRequestPath}.html`
-		const htmlResult = await getExpectedFileForRequest(htmlPath)
-		if (htmlResult) {
-			return await buildResponse(htmlResult)
-		}
-		await markExpectedMiss(htmlPath)
-
-		// Also try /about/index.html
-		for (const indexFileName of indexFiles) {
-			const indexPath = fileRequestPath ? `${fileRequestPath}/${indexFileName}` : indexFileName
-			const indexResult = await getExpectedFileForRequest(indexPath)
-			if (indexResult) {
-				return await buildResponse(indexResult)
-			}
-			await markExpectedMiss(indexPath)
-		}
-	}
-
-	// SPA mode: serve SPA file for all non-existing routes
-	if (settings?.spaMode) {
-		const spaFile = settings.spaMode
-		const spaResult = await getFallbackFileForRequest(did, rkey, spaFile, trace)
-		if (spaResult) {
-			return await buildResponse(spaResult)
-		}
-		await markExpectedMiss(spaFile)
-	}
-
-	// Custom 404: serve custom 404 file if configured (wins conflict battle)
-	if (settings?.custom404) {
-		const custom404File = settings.custom404
-		const custom404Result = await getFallbackFileForRequest(did, rkey, custom404File, trace)
-		if (custom404Result) {
-			const response = await buildResponse(custom404Result)
-			return new Response(response.body, { status: 404, headers: response.headers })
-		}
-		await markExpectedMiss(custom404File)
-	}
-
-	// Autodetect 404 pages (GitHub Pages: 404.html, Neocities/Nekoweb: not_found.html)
-	for (const auto404Page of ['404.html', 'not_found.html']) {
-		const auto404Result = await getFallbackFileForRequest(did, rkey, auto404Page, trace)
-		if (auto404Result) {
-			const response = await buildResponse(auto404Result)
-			return new Response(response.body, { status: 404, headers: response.headers })
-		}
-		await markExpectedMiss(auto404Page)
-	}
-
-	// Directory listing fallback: if enabled, show root directory listing on 404
-	if (settings?.directoryListing) {
-		const fileCids = await getExpectedFileCids()
-		const rootEntries = await listDirectoryEntries(did, rkey, '', fileCids ? Object.keys(fileCids) : null)
-		if (rootEntries.length > 0) {
-			const missResponse = await maybeReturnStorageMiss()
-			if (missResponse) return missResponse
-			const html = generateDirectoryListing('', rootEntries)
-			return new Response(html, {
-				status: 404,
-				headers: {
-					'Content-Type': 'text/html; charset=utf-8',
-					'Cache-Control': STANDARD_CACHE_CONTROL,
-				},
-			})
-		}
-	}
-
-	const missResponse = await maybeReturnStorageMiss()
-	if (missResponse) return missResponse
-
-	// Last resort: if site not in DB at all, try on-demand fetch
-	const fileCids = await getExpectedFileCids()
-	if (fileCids === null) {
-		logger.info(`Site not found in DB, attempting on-demand fetch before 404`, { did, rkey })
-		const success = await fetchAndCacheSite(did, rkey)
-		if (success) {
-			// Retry serving the originally requested file
-			const retryPath = filePath || indexFiles[0] || 'index.html'
-			const retryResult = await span(trace, `storage:${retryPath}`, () => getFileForRequest(did, rkey, retryPath, true))
-			if (retryResult) {
-				return await buildResponse(retryResult)
-			}
-		}
-	}
-
-	// Default styled 404 page
-	const html = generate404Page()
-	return new Response(html, {
-		status: 404,
-		headers: {
-			'Content-Type': 'text/html; charset=utf-8',
-			'Cache-Control': STANDARD_CACHE_CONTROL,
-		},
+	return await serveFileRequest({
+		did,
+		rkey,
+		filePath,
+		settings,
+		requestHeaders,
+		trace,
+		strategy: createSharedOriginFileStrategy(basePath),
 	})
 }

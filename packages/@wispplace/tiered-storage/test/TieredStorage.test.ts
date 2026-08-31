@@ -248,8 +248,8 @@ describe('TieredStorage', () => {
 	describe('Promotion Strategy', () => {
 		test('should eagerly promote data to upper tiers', async () => {
 			const hot = new MemoryStorageTier({ maxSizeBytes: 1024 * 1024 })
-			const warm = new DiskStorageTier({ directory: `${testDir}/warm` })
-			const cold = new DiskStorageTier({ directory: `${testDir}/cold` })
+			const warm = new DiskStorageTier({ directory: `${testDir}/eager/warm` })
+			const cold = new DiskStorageTier({ directory: `${testDir}/eager/cold` })
 
 			const storage = new TieredStorage({
 				tiers: { hot, warm, cold },
@@ -276,8 +276,8 @@ describe('TieredStorage', () => {
 
 		test('should lazily promote data (not automatic)', async () => {
 			const hot = new MemoryStorageTier({ maxSizeBytes: 1024 * 1024 })
-			const warm = new DiskStorageTier({ directory: `${testDir}/warm` })
-			const cold = new DiskStorageTier({ directory: `${testDir}/cold` })
+			const warm = new DiskStorageTier({ directory: `${testDir}/lazy/warm` })
+			const cold = new DiskStorageTier({ directory: `${testDir}/lazy/cold` })
 
 			const storage = new TieredStorage({
 				tiers: { hot, warm, cold },

@@ -597,7 +597,7 @@ the server accepts canonical nsids plus some aliases:
 
 ### signing secret xrpcs
 
-these manage server-side webhook signing secrets. tokens are returned only on create/rotate, never on list.
+these manage server-side webhook signing secrets. tokens are returned only on create/rotate, never on list, and are stored as encrypted server-side envelopes. self-hosters must configure the webhook secret encryption key on both the main and delivery services; existing backups with historic plaintext are not retroactively protected.
 
 `place.wisp.v2.secret.create` procedure, auth required:
 

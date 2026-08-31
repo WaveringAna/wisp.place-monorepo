@@ -46,5 +46,6 @@ export type {
 	AccessPrincipal,
 	PrivateSite,
 	PrivateSiteShare,
+	PrivateSiteState,
 	ResolvedExpiry,
 } from './types'

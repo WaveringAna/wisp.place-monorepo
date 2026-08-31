@@ -417,7 +417,7 @@ Permanently revokes a share link.
 
 ## Signing Secrets
 
-Server-managed HMAC signing secrets for webhooks. The token is returned **once** at creation time and never stored in plaintext — it cannot be retrieved again, only rotated.
+Server-managed HMAC signing secrets for webhooks. The token is returned **once** at creation time and is stored only as an AES-256-GCM encrypted server-side envelope. It cannot be retrieved again, only rotated. Operators must configure the webhook secret encryption key on both the main and delivery services; see [Self-Hosting](/deployment#server-managed-webhook-secret-encryption) for deployment, rotation, and backup caveats.
 
 All four endpoints require authentication (`AuthenticationRequired` on failure).
 
@@ -429,7 +429,7 @@ Creates a new signing secret scoped to the authenticated DID.
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `name` | `string` (record-key) | ✅ | Unique per DID, `a-z0-9-` |
+| `name` | `string` | ✅ | Unique per DID; 1–64 ASCII letters, digits, `.`, `_`, or `-` |
 
 **Response:**
 
@@ -439,7 +439,9 @@ Creates a new signing secret scoped to the authenticated DID.
 | `token` | `string` | `wsk_` prefixed — store this now, never shown again |
 | `createdAt` | `string` (datetime) | |
 
-**Errors:** `AuthenticationRequired`, `InvalidRequest`, `AlreadyExists`
+**Errors:** `AuthenticationRequired`, `InvalidRequest`, `AlreadyExists`, `WebhookSecretEncryptionUnavailable`
+
+`WebhookSecretEncryptionUnavailable` is a stable generic `503` response. It does not reveal whether a key is missing, malformed, or unavailable.
 
 ---
 
@@ -473,7 +475,7 @@ Generates a new token for an existing secret. The old token is invalidated immed
 
 | Field | Type | Required |
 |---|---|---|
-| `name` | `string` | ✅ |
+| `name` | `string` | ✅ | 1–64 ASCII letters, digits, `.`, `_`, or `-` |
 
 **Response:**
 
@@ -483,7 +485,7 @@ Generates a new token for an existing secret. The old token is invalidated immed
 | `token` | `string` | New token — store this now, never shown again |
 | `rotatedAt` | `string` (datetime) | |
 
-**Errors:** `AuthenticationRequired`, `NotFound`
+**Errors:** `AuthenticationRequired`, `InvalidRequest`, `NotFound`, `WebhookSecretEncryptionUnavailable`
 
 ---
 
@@ -495,8 +497,8 @@ Deletes a signing secret. Any webhooks referencing this `secretId` will stop bei
 
 | Field | Type | Required |
 |---|---|---|
-| `name` | `string` | ✅ |
+| `name` | `string` | ✅ | 1–64 ASCII letters, digits, `.`, `_`, or `-` |
 
 **Response:** `{}`
 
-**Errors:** `AuthenticationRequired`, `NotFound`
+**Errors:** `AuthenticationRequired`, `InvalidRequest`, `NotFound`

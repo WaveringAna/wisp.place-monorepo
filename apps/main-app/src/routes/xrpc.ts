@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { CompositeDidDocumentResolver, PlcDidDocumentResolver, WebDidDocumentResolver } from '@atcute/identity-resolver'
 import { json, XRPCError, XRPCRouter } from '@atcute/xrpc-server'
 import { ServiceJwtVerifier } from '@atcute/xrpc-server/auth'
+import { isValidWebhookSecretId, WEBHOOK_SECRET_ENCRYPTION_ERROR } from '@wispplace/atproto-utils'
 import { BASE_HOST } from '@wispplace/constants'
 import {
 	PlaceWispV2DomainAddSite,
@@ -29,9 +30,8 @@ import {
 	deleteCustomDomain,
 	deleteWebhookSecret,
 	deleteWispDomain,
-	getAllWispDomains,
+	eventualRead,
 	getCustomDomainInfo,
-	getCustomDomainsByDid,
 	getDomainsBySite,
 	getSitesByDid,
 	isDomainRegistered,
@@ -213,6 +213,17 @@ const alreadyExists = (description: string): never => {
 		description,
 	})
 }
+
+const webhookSecretEncryptionUnavailable = (): never => {
+	throw new XRPCError({
+		status: 503,
+		error: 'WebhookSecretEncryptionUnavailable',
+		description: WEBHOOK_SECRET_ENCRYPTION_ERROR,
+	})
+}
+
+const isWebhookSecretEncryptionUnavailable = (error: unknown): boolean =>
+	error instanceof Error && error.message === WEBHOOK_SECRET_ENCRYPTION_ERROR
 
 const requireAuthenticated = (auth: XrpcAuthContext | undefined): XrpcAuthContext => {
 	if (!auth) {
@@ -623,7 +634,8 @@ export const xrpcRoutes = () => {
 					invalidDomain('domain parameter is required')
 				}
 
-				const info = await isDomainRegistered(domain)
+				// Query-only status may use the explicitly eventual presentation replica.
+				const { registration: info, customDomain } = await eventualRead.getDomainStatus(domain)
 				if (!info.registered) {
 					return json({
 						domain,
@@ -645,8 +657,7 @@ export const xrpcRoutes = () => {
 				}
 
 				if (kind === 'custom') {
-					const custom = await getCustomDomainInfo(domain)
-					const verified = Boolean(custom?.verified)
+					const verified = Boolean(customDomain?.verified)
 
 					return json({
 						domain,
@@ -654,7 +665,7 @@ export const xrpcRoutes = () => {
 						status: verified ? 'verified' : 'pendingVerification',
 						verified,
 						siteRkey: info.rkey ?? undefined,
-						lastCheckedAt: toIsoFromEpoch(custom?.last_verified_at),
+						lastCheckedAt: toIsoFromEpoch(customDomain?.last_verified_at),
 					})
 				}
 
@@ -678,7 +689,8 @@ export const xrpcRoutes = () => {
 				const auth = requireAuthenticated(authByRequest.get(request))
 				const did = auth.did as DidString
 
-				const [wispDomains, customDomains] = await Promise.all([getAllWispDomains(did), getCustomDomainsByDid(did)])
+				// Query-only list may use the explicitly eventual presentation replica.
+				const { wispDomains, customDomains } = await eventualRead.getDomainsForDid(did)
 
 				const domains: PlaceWispV2DomainGetList.DomainSummary[] = [
 					...wispDomains.map((entry: { domain: string; rkey: string | null }) => ({
@@ -719,7 +731,8 @@ export const xrpcRoutes = () => {
 		['place.wisp.v2.site.getdomains', 'place.wisp.v2.site.get-domains'],
 		{
 			async handler({ params }) {
-				const domains = mapSiteDomains(await getDomainsBySite(params.did, params.rkey))
+				// This public query only renders mappings; it never authorizes a mutation.
+				const domains = mapSiteDomains(await eventualRead.getDomainsForSite(params.did, params.rkey))
 				return json({ domains })
 			},
 		},
@@ -734,28 +747,16 @@ export const xrpcRoutes = () => {
 				const auth = requireAuthenticated(authByRequest.get(request))
 				const did = auth.did as DidString
 
-				const sites = await getSitesByDid(did)
-
-				const siteSummaries = await Promise.all(
-					sites.map(
-						async (site: {
-							rkey: string
-							display_name?: string | null
-							created_at?: number | string | null
-							updated_at?: number | string | null
-						}) => {
-							const domains = mapSiteDomains(await getDomainsBySite(did, site.rkey))
-
-							return {
-								siteRkey: site.rkey,
-								displayName: site.display_name ?? undefined,
-								createdAt: toIsoFromEpoch(site.created_at),
-								updatedAt: toIsoFromEpoch(site.updated_at),
-								domains,
-							}
-						},
-					),
-				)
+				// Query-only site listing may use the explicitly eventual presentation replica.
+				// The repository batches site rows and domain badges into one read query.
+				const sites = await eventualRead.getSitesWithDomainsForDid(did)
+				const siteSummaries = sites.map((site) => ({
+					siteRkey: site.rkey,
+					displayName: site.display_name ?? undefined,
+					createdAt: toIsoFromEpoch(site.created_at),
+					updatedAt: toIsoFromEpoch(site.updated_at),
+					domains: mapSiteDomains(site.domains),
+				}))
 
 				return json({ sites: siteSummaries })
 			},
@@ -890,13 +891,21 @@ export const xrpcRoutes = () => {
 	addProcedureWithAliases(router, withNsid(PlaceWispV2SecretCreate.mainSchema as any, XRPC_NSIDS.secretCreate), [], {
 		async handler({ input, request }) {
 			const auth = requireAuthenticated(authByRequest.get(request))
-			const name = input.name?.trim()
-			if (!name) invalidRequest('name is required')
+			const name = input.name
+			if (!isValidWebhookSecretId(name)) invalidRequest('invalid secret name')
 			try {
-				const { token, createdAt } = await createWebhookSecret(auth.did, name!)
-				return json({ name: name!, token, createdAt })
-			} catch {
-				return alreadyExists('a secret with that name already exists')
+				const { token, createdAt } = await createWebhookSecret(auth.did, name)
+				return json({ name, token, createdAt })
+			} catch (error) {
+				if (isWebhookSecretEncryptionUnavailable(error)) webhookSecretEncryptionUnavailable()
+				if (error instanceof Error && error.message === 'already_exists') {
+					return alreadyExists('a secret with that name already exists')
+				}
+				throw new XRPCError({
+					status: 500,
+					error: 'InternalServerError',
+					description: 'webhook secret operation failed',
+				})
 			}
 		},
 	})
@@ -904,6 +913,7 @@ export const xrpcRoutes = () => {
 	addQueryWithAliases(router, withNsid(PlaceWispV2SecretList.mainSchema as any, XRPC_NSIDS.secretList), [], {
 		async handler({ request }) {
 			const auth = requireAuthenticated(authByRequest.get(request))
+			// Secret metadata stays strongly consistent on the primary database.
 			const secrets = await listWebhookSecrets(auth.did)
 			return json({ secrets })
 		},
@@ -912,8 +922,8 @@ export const xrpcRoutes = () => {
 	addProcedureWithAliases(router, withNsid(PlaceWispV2SecretDelete.mainSchema as any, XRPC_NSIDS.secretDelete), [], {
 		async handler({ input, request }) {
 			const auth = requireAuthenticated(authByRequest.get(request))
-			const name = input.name?.trim()
-			if (!name) invalidRequest('name is required')
+			const name = input.name
+			if (!isValidWebhookSecretId(name)) invalidRequest('invalid secret name')
 			const deleted = await deleteWebhookSecret(auth.did, name)
 			if (!deleted) notFound('secret not found')
 			return json({})
@@ -923,11 +933,21 @@ export const xrpcRoutes = () => {
 	addProcedureWithAliases(router, withNsid(PlaceWispV2SecretRotate.mainSchema as any, XRPC_NSIDS.secretRotate), [], {
 		async handler({ input, request }) {
 			const auth = requireAuthenticated(authByRequest.get(request))
-			const name = input.name?.trim()
-			if (!name) invalidRequest('name is required')
-			const result = await rotateWebhookSecret(auth.did, name)
-			if (!result) notFound('secret not found')
-			return json({ name, token: result!.token, rotatedAt: result!.rotatedAt })
+			const name = input.name
+			if (!isValidWebhookSecretId(name)) invalidRequest('invalid secret name')
+			let result: Awaited<ReturnType<typeof rotateWebhookSecret>>
+			try {
+				result = await rotateWebhookSecret(auth.did, name)
+			} catch (error) {
+				if (isWebhookSecretEncryptionUnavailable(error)) webhookSecretEncryptionUnavailable()
+				throw new XRPCError({
+					status: 500,
+					error: 'InternalServerError',
+					description: 'webhook secret operation failed',
+				})
+			}
+			if (!result) return notFound('secret not found')
+			return json({ name, token: result.token, rotatedAt: result.rotatedAt })
 		},
 	})
 

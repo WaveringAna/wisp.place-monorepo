@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { createClientMetadata } from './oauth-client'
+import { createClientMetadata } from './oauth-client-metadata'
 
 describe('createClientMetadata', () => {
 	test('keeps the client URI on the configured origin', () => {

@@ -2,6 +2,63 @@
  * HTML page generation utilities shared between hosting-service and CLI
  */
 
+function escapeHtml(value: string): string {
+	return value.replace(/[&<>"']/g, (character) => {
+		switch (character) {
+			case '&':
+				return '&amp;'
+			case '<':
+				return '&lt;'
+			case '>':
+				return '&gt;'
+			case '"':
+				return '&quot;'
+			case "'":
+				return '&#39;'
+			default:
+				return character
+		}
+	})
+}
+
+function encodePathSegment(value: string): string {
+	return encodeURIComponent(toWellFormed(value)).replace(
+		/[!'()*]/g,
+		(character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+	)
+}
+
+// encodeURIComponent throws for lone UTF-16 surrogates. Manifest names are
+// untrusted, so replace those malformed code units before encoding a URL.
+function toWellFormed(value: string): string {
+	let result = ''
+
+	for (let index = 0; index < value.length; index++) {
+		const codeUnit = value.charCodeAt(index)
+
+		if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+			const nextCodeUnit = value.charCodeAt(index + 1)
+			if (nextCodeUnit >= 0xdc00 && nextCodeUnit <= 0xdfff) {
+				result += value.charAt(index)
+				result += value.charAt(index + 1)
+				index++
+			} else {
+				result += '\uFFFD'
+			}
+			continue
+		}
+
+		if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+			result += '\uFFFD'
+			continue
+		}
+
+		result += value.charAt(index)
+	}
+
+	return result
+}
+
 export function generate404Page(): string {
 	return `<!DOCTYPE html>
 <html>
@@ -104,13 +161,14 @@ export function generateDirectoryListing(path: string, entries: Array<{ name: st
 		if (!a.isDirectory && b.isDirectory) return 1
 		return a.name.localeCompare(b.name)
 	})
+	const escapedPath = escapeHtml(path)
 
 	return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Index of /${path}</title>
+  <title>Index of /${escapedPath}</title>
   <style>
     @media (prefers-color-scheme: light) {
       :root {
@@ -222,14 +280,16 @@ export function generateDirectoryListing(path: string, entries: Array<{ name: st
   </style>
 </head>
 <body>
-  <h1>Index of /${path}</h1>
+  <h1>Index of /${escapedPath}</h1>
   <ul>
     ${path ? '<li><a href="../" class="parent">../</a></li>' : ''}
     ${sortedEntries
-			.map(
-				(e) =>
-					`<li><a href="${e.name}${e.isDirectory ? '/' : ''}" class="${e.isDirectory ? 'folder' : 'file'}">${e.name}${e.isDirectory ? '/' : ''}</a></li>`,
-			)
+			.map((e) => {
+				const suffix = e.isDirectory ? '/' : ''
+				const href = `${encodePathSegment(e.name)}${suffix}`
+				const displayName = `${e.name}${suffix}`
+				return `<li><a href="${escapeHtml(href)}" class="${e.isDirectory ? 'folder' : 'file'}">${escapeHtml(displayName)}</a></li>`
+			})
 			.join('\n    ')}
   </ul>
   <footer>

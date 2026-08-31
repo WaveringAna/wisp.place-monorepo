@@ -3,19 +3,36 @@ import { recordRevalidateResult } from './revalidate-metrics'
 
 const redisUrl = process.env.REDIS_URL
 const streamName = process.env.WISP_REVALIDATE_STREAM || 'wisp:revalidate'
-const dedupeTtlSeconds = parsePositiveInt(process.env.WISP_REVALIDATE_DEDUPE_TTL_SECONDS, 60)
-const storageMissDedupeTtlSeconds = parsePositiveInt(
+const MAX_REVALIDATE_STREAM_CAPACITY = 1_000_000
+const MAX_REVALIDATE_DEDUPE_TTL_SECONDS = 7 * 24 * 60 * 60
+const streamMaxLen = parseBoundedPositiveInt(
+	process.env.WISP_REVALIDATE_STREAM_MAXLEN,
+	10_000,
+	MAX_REVALIDATE_STREAM_CAPACITY,
+)
+const dedupeTtlSeconds = parseBoundedPositiveInt(
+	process.env.WISP_REVALIDATE_DEDUPE_TTL_SECONDS,
+	60,
+	MAX_REVALIDATE_DEDUPE_TTL_SECONDS,
+)
+const storageMissDedupeTtlSeconds = parseBoundedPositiveInt(
 	process.env.WISP_REVALIDATE_STORAGE_MISS_DEDUPE_TTL_SECONDS,
 	Math.max(dedupeTtlSeconds, 600),
+	MAX_REVALIDATE_DEDUPE_TTL_SECONDS,
 )
 
 let client: Redis | null = null
 let loggedMissingRedis = false
 
-function parsePositiveInt(value: string | undefined, fallback: number): number {
+function parseBoundedPositiveInt(value: string | undefined, fallback: number, maximum: number): number {
 	if (!value) return fallback
-	const parsed = Number.parseInt(value, 10)
-	return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+	const parsed = Number(value)
+	return Number.isSafeInteger(parsed) && parsed > 0 && parsed <= maximum ? parsed : fallback
+}
+
+function redisErrorKind(error: unknown): string {
+	if (error instanceof Error && error.name) return error.name
+	return 'UnknownError'
 }
 
 function getDedupeTtlSeconds(reasonCategory: 'storage-miss' | 'rewrite-miss' | 'other'): number {
@@ -42,7 +59,7 @@ function getRedisClient(): Redis | null {
 		})
 
 		client.on('error', (err) => {
-			console.error('[Revalidate] Redis error:', err)
+			console.error(`[Revalidate] Redis error (${redisErrorKind(err)})`)
 		})
 
 		client.on('ready', () => {
@@ -55,6 +72,95 @@ function getRedisClient(): Redis | null {
 
 export type EnqueueResult = 'enqueued' | 'deduped' | 'disabled' | 'error'
 
+type RevalidateReasonCategory = 'storage-miss' | 'rewrite-miss' | 'other'
+
+export interface RevalidateQueueClient {
+	eval(script: string, keyCount: number, ...keysAndArgs: string[]): PromiseLike<unknown>
+}
+
+// Dedupe and enqueue are one atomic operation. The key stores the exact stream
+// ID and is trusted only while XRANGE proves that entry still exists. Producers
+// never MAXLEN-trim because that can remove pending consumer-group work.
+export const REVALIDATE_ENQUEUE_SCRIPT = `
+local existing = redis.call('GET', KEYS[1])
+if existing then
+  local found = redis.call('XRANGE', KEYS[2], existing, existing, 'COUNT', 1)
+  if #found == 1 and found[1][1] == existing then return {0, existing} end
+  redis.call('DEL', KEYS[1])
+end
+
+if redis.call('XLEN', KEYS[2]) >= tonumber(ARGV[2]) then return {-1, ''} end
+local streamId = redis.pcall('XADD', KEYS[2], '*', 'did', ARGV[3], 'rkey', ARGV[4], 'reason', ARGV[5], 'ts', ARGV[6])
+if type(streamId) == 'table' and streamId.err then
+  redis.call('DEL', KEYS[1])
+  return redis.error_reply(streamId.err)
+end
+redis.call('SET', KEYS[1], streamId, 'EX', ARGV[1])
+return {1, streamId}
+`
+
+function getReasonCategory(reason: string): RevalidateReasonCategory {
+	if (reason.startsWith('storage-miss')) return 'storage-miss'
+	if (reason.startsWith('rewrite-miss')) return 'rewrite-miss'
+	return 'other'
+}
+
+function parseEnqueueScriptResult(value: unknown): { status: number; streamId: string } | null {
+	if (!Array.isArray(value) || typeof value[0] !== 'number' || typeof value[1] !== 'string') return null
+	return { status: value[0], streamId: value[1] }
+}
+
+export async function enqueueRevalidateWithRedis(
+	redis: RevalidateQueueClient,
+	did: string,
+	rkey: string,
+	reason: string,
+): Promise<{ enqueued: boolean; result: Exclude<EnqueueResult, 'disabled'> }> {
+	// Separate dedup keys per reason category so a storage-miss is never
+	// silenced by a pending rewrite-miss (which runs with forceDownload=false).
+	const reasonCategory = getReasonCategory(reason)
+	const dedupeKey = `revalidate:site:${reasonCategory}:${did}:${rkey}`
+	const dedupeTtl = getDedupeTtlSeconds(reasonCategory)
+
+	try {
+		const outcome = parseEnqueueScriptResult(
+			await redis.eval(
+				REVALIDATE_ENQUEUE_SCRIPT,
+				2,
+				dedupeKey,
+				streamName,
+				dedupeTtl.toString(),
+				streamMaxLen.toString(),
+				did,
+				rkey,
+				reason,
+				Date.now().toString(),
+			),
+		)
+		if (!outcome) throw new Error('Unexpected Redis revalidate enqueue script response')
+		if (outcome.status === 0 && outcome.streamId) {
+			recordRevalidateResult('deduped')
+			return { enqueued: false, result: 'deduped' }
+		}
+		if (outcome.status === -1) {
+			console.warn(`[Revalidate] Queue capacity reached for ${did}/${rkey}`)
+			recordRevalidateResult('error')
+			return { enqueued: false, result: 'error' }
+		}
+		if (outcome.status !== 1 || !outcome.streamId) {
+			throw new Error('Unexpected Redis revalidate enqueue script status')
+		}
+
+		console.log(`[Revalidate] Enqueued ${did}/${rkey} (${reason}) to ${streamName}`)
+		recordRevalidateResult('enqueued')
+		return { enqueued: true, result: 'enqueued' }
+	} catch (err) {
+		recordRevalidateResult('error')
+		console.error('[Revalidate] Failed to enqueue', { did, rkey, reason, errorKind: redisErrorKind(err) })
+		return { enqueued: false, result: 'error' }
+	}
+}
+
 export async function enqueueRevalidate(
 	did: string,
 	rkey: string,
@@ -66,32 +172,7 @@ export async function enqueueRevalidate(
 		return { enqueued: false, result: 'disabled' }
 	}
 
-	try {
-		// Separate dedup keys per reason category so a storage-miss is never
-		// silenced by a pending rewrite-miss (which runs with forceDownload=false)
-		const reasonCategory = reason.startsWith('storage-miss')
-			? 'storage-miss'
-			: reason.startsWith('rewrite-miss')
-				? 'rewrite-miss'
-				: 'other'
-		const dedupeKey = `revalidate:site:${reasonCategory}:${did}:${rkey}`
-		const dedupeTtl = getDedupeTtlSeconds(reasonCategory)
-		const set = await redis.set(dedupeKey, '1', 'EX', dedupeTtl, 'NX')
-		if (!set) {
-			recordRevalidateResult('deduped')
-			return { enqueued: false, result: 'deduped' }
-		}
-
-		await redis.xadd(streamName, '*', 'did', did, 'rkey', rkey, 'reason', reason, 'ts', Date.now().toString())
-
-		console.log(`[Revalidate] Enqueued ${did}/${rkey} (${reason}) to ${streamName}`)
-		recordRevalidateResult('enqueued')
-		return { enqueued: true, result: 'enqueued' }
-	} catch (err) {
-		recordRevalidateResult('error')
-		console.error('[Revalidate] Failed to enqueue', { did, rkey, reason, error: err })
-		return { enqueued: false, result: 'error' }
-	}
+	return await enqueueRevalidateWithRedis(redis, did, rkey, reason)
 }
 
 export async function closeRevalidateQueue(): Promise<void> {

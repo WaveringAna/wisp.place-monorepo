@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto'
-import { PassThrough, type Readable } from 'node:stream'
+import { once } from 'node:events'
+import { PassThrough, type Readable, Transform } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 import type {
 	AllTierStats,
 	SetOptions,
@@ -16,6 +18,30 @@ import { calculateChecksum } from './utils/checksum.js'
 import { compress, createCompressStream, createDecompressStream, decompress } from './utils/compression.js'
 import { matchGlob } from './utils/glob.js'
 import { defaultDeserialize, defaultSerialize } from './utils/serialization.js'
+
+interface KeyFence {
+	generation: number
+	activeReads: number
+	pendingMutations: number
+	queue: Promise<void>
+}
+
+export interface UpperTierInvalidationFailure {
+	tier: 'hot' | 'warm'
+	reason: unknown
+}
+
+/** Result of clearing cache-only tiers without touching the cold source tier. */
+export interface UpperTierInvalidationResult {
+	hotDeleted: number
+	warmDeleted: number
+	failures: UpperTierInvalidationFailure[]
+}
+
+const throwIfAborted = (signal: AbortSignal | undefined): void => {
+	if (!signal?.aborted) return
+	throw signal.reason instanceof Error ? signal.reason : new Error('storage operation aborted')
+}
 
 /**
  * Main orchestrator for tiered storage system.
@@ -57,6 +83,9 @@ import { defaultDeserialize, defaultSerialize } from './utils/serialization.js'
 export class TieredStorage<T = unknown> {
 	private serialize: (data: unknown) => Promise<Uint8Array>
 	private deserialize: (data: Uint8Array) => Promise<unknown>
+	private keyFences = new Map<string, KeyFence>()
+	private upperTierPromotionEpoch = 0
+	private upperTierMutationQueue: Promise<void> = Promise.resolve()
 
 	constructor(private config: TieredStorageConfig) {
 		if (!config.tiers.cold) {
@@ -65,6 +94,113 @@ export class TieredStorage<T = unknown> {
 
 		this.serialize = config.serialization?.serialize ?? defaultSerialize
 		this.deserialize = config.serialization?.deserialize ?? defaultDeserialize
+	}
+
+	/**
+	 * Get the per-key fence that orders invalidation and eager promotion.
+	 */
+	private getKeyFence(key: string): KeyFence {
+		let fence = this.keyFences.get(key)
+		if (!fence) {
+			fence = { generation: 0, activeReads: 0, pendingMutations: 0, queue: Promise.resolve() }
+			this.keyFences.set(key, fence)
+		}
+		return fence
+	}
+
+	/**
+	 * Hold a fence while a read may later promote its result.
+	 */
+	private acquireReadFence(key: string): KeyFence {
+		const fence = this.getKeyFence(key)
+		fence.activeReads++
+		return fence
+	}
+
+	/**
+	 * Release a read fence and remove idle per-key state.
+	 */
+	private releaseReadFence(key: string, fence: KeyFence): void {
+		fence.activeReads--
+		this.releaseKeyFenceIfIdle(key, fence)
+	}
+
+	/**
+	 * Increment the generation before a key is invalidated.
+	 */
+	private beginKeyMutation(key: string): KeyFence {
+		const fence = this.getKeyFence(key)
+		fence.generation++
+		return fence
+	}
+
+	/**
+	 * Queue a key mutation behind earlier promotion or invalidation work.
+	 */
+	private enqueueKeyMutation<T>(key: string, fence: KeyFence, operation: () => Promise<T>): Promise<T> {
+		fence.pendingMutations++
+		const task = fence.queue.catch(() => undefined).then(operation)
+		fence.queue = task.then(
+			() => undefined,
+			() => undefined,
+		)
+		return task.finally(() => {
+			fence.pendingMutations--
+			this.releaseKeyFenceIfIdle(key, fence)
+		})
+	}
+
+	/**
+	 * Advance the bounded global epoch that fences cache-only invalidations from
+	 * in-flight eager promotions. It has no per-prefix state to leak over time.
+	 */
+	private advanceUpperTierPromotionEpoch(): void {
+		this.upperTierPromotionEpoch =
+			this.upperTierPromotionEpoch === Number.MAX_SAFE_INTEGER ? 0 : this.upperTierPromotionEpoch + 1
+	}
+
+	/**
+	 * Serialize upper-tier promotion writes with upper-tier prefix invalidation.
+	 * A purge queued after a write removes it; a write queued after a purge sees
+	 * its changed epoch and is skipped.
+	 */
+	private enqueueUpperTierMutation<T>(operation: () => Promise<T>): Promise<T> {
+		const task = this.upperTierMutationQueue.catch(() => undefined).then(operation)
+		this.upperTierMutationQueue = task.then(
+			() => undefined,
+			() => undefined,
+		)
+		return task
+	}
+
+	/**
+	 * Drop an idle fence so invalidated keys do not accumulate indefinitely.
+	 */
+	private releaseKeyFenceIfIdle(key: string, fence: KeyFence): void {
+		if (fence.activeReads === 0 && fence.pendingMutations === 0 && this.keyFences.get(key) === fence) {
+			this.keyFences.delete(key)
+		}
+	}
+
+	/**
+	 * Promote only if no invalidation began after the source read, and order that
+	 * promotion with deletion so a write already in progress is deleted afterward.
+	 */
+	private async promoteIfCurrent(
+		key: string,
+		fence: KeyFence,
+		generation: number,
+		upperTierPromotionEpoch: number,
+		promotions: Array<{ tier: StorageTier; data: Uint8Array; metadata: StorageMetadata }>,
+	): Promise<void> {
+		await this.enqueueKeyMutation(key, fence, async () => {
+			await this.enqueueUpperTierMutation(async () => {
+				if (fence.generation !== generation || this.upperTierPromotionEpoch !== upperTierPromotionEpoch) {
+					return
+				}
+				await Promise.allSettled(promotions.map(({ tier, data, metadata }) => tier.set(key, data, metadata)))
+			})
+		})
 	}
 
 	/**
@@ -97,6 +233,22 @@ export class TieredStorage<T = unknown> {
 	 * - When the data was created/last accessed
 	 */
 	async getWithMetadata(key: string): Promise<StorageResult<T> | null> {
+		const fence = this.acquireReadFence(key)
+		const generation = fence.generation
+		const upperTierPromotionEpoch = this.upperTierPromotionEpoch
+		try {
+			return await this.getWithMetadataWithFence(key, fence, generation, upperTierPromotionEpoch)
+		} finally {
+			this.releaseReadFence(key, fence)
+		}
+	}
+
+	private async getWithMetadataWithFence(
+		key: string,
+		fence: KeyFence,
+		generation: number,
+		upperTierPromotionEpoch: number,
+	): Promise<StorageResult<T> | null> {
 		// 1. Check hot tier first
 		if (this.config.tiers.hot) {
 			const result = await this.getFromTier(this.config.tiers.hot, key)
@@ -123,13 +275,12 @@ export class TieredStorage<T = unknown> {
 					await this.delete(key)
 					return null
 				}
-				// Eager promotion to hot tier (awaited - guaranteed to complete).
-				// Best-effort: see the cold-tier promotion below for why a failed
-				// promotion must not fail the read.
+				// Eager promotion is best-effort. The key fence prevents a lower-tier
+				// result captured before invalidation from repopulating hot storage.
 				if (this.config.tiers.hot && this.config.promotionStrategy === 'eager') {
-					try {
-						await this.config.tiers.hot.set(key, result.data, result.metadata)
-					} catch {}
+					await this.promoteIfCurrent(key, fence, generation, upperTierPromotionEpoch, [
+						{ tier: this.config.tiers.hot, data: result.data, metadata: result.metadata },
+					])
 				}
 				// Fire-and-forget access stats update (non-critical)
 				void this.updateAccessStats(key, 'warm')
@@ -159,14 +310,14 @@ export class TieredStorage<T = unknown> {
 			// that escape would discard a successful cold-tier read and, for callers that
 			// promote in a loop, abort the entire batch.
 			if (this.config.promotionStrategy === 'eager') {
-				const promotions: Promise<void>[] = []
+				const promotions: Array<{ tier: StorageTier; data: Uint8Array; metadata: StorageMetadata }> = []
 				if (this.config.tiers.warm) {
-					promotions.push(this.config.tiers.warm.set(key, result.data, result.metadata))
+					promotions.push({ tier: this.config.tiers.warm, data: result.data, metadata: result.metadata })
 				}
 				if (this.config.tiers.hot) {
-					promotions.push(this.config.tiers.hot.set(key, result.data, result.metadata))
+					promotions.push({ tier: this.config.tiers.hot, data: result.data, metadata: result.metadata })
 				}
-				await Promise.allSettled(promotions)
+				await this.promoteIfCurrent(key, fence, generation, upperTierPromotionEpoch, promotions)
 			}
 
 			// Fire-and-forget access stats update (non-critical)
@@ -337,149 +488,138 @@ export class TieredStorage<T = unknown> {
 	 */
 	async setStream(key: string, stream: NodeJS.ReadableStream, options: StreamSetOptions): Promise<SetResult> {
 		const shouldCompress = this.config.compression ?? false
-
-		// Create metadata
 		const now = new Date()
 		const ttl = options.ttl ?? this.config.defaultTTL
-
 		const metadata: StorageMetadata = {
 			key,
-			size: options.size, // Original uncompressed size
+			size: options.size,
 			createdAt: now,
 			lastAccessed: now,
 			accessCount: 0,
 			compressed: shouldCompress,
-			checksum: options.checksum ?? '', // Will be computed if not provided
+			checksum: options.checksum ?? '',
 			...(options.mimeType && { mimeType: options.mimeType }),
 		}
+		if (ttl) metadata.ttl = new Date(now.getTime() + ttl)
+		if (options.metadata) metadata.customMetadata = options.metadata
 
-		if (ttl) {
-			metadata.ttl = new Date(now.getTime() + ttl)
-		}
-
-		if (options.metadata) {
-			metadata.customMetadata = options.metadata
-		}
-
-		// Determine which tiers to write to
-		// Default: skip hot tier for streaming (typically memory-based, defeats purpose)
 		const tierOptions: { skipTiers?: ('hot' | 'warm')[]; onlyTiers?: ('hot' | 'warm' | 'cold')[] } = {}
-		if (options.onlyTiers) {
-			tierOptions.onlyTiers = options.onlyTiers
-		} else if (options.skipTiers) {
-			tierOptions.skipTiers = options.skipTiers
-		} else {
-			tierOptions.skipTiers = ['hot'] // Default for streaming
-		}
+		if (options.onlyTiers) tierOptions.onlyTiers = options.onlyTiers
+		else if (options.skipTiers) tierOptions.skipTiers = options.skipTiers
+		else tierOptions.skipTiers = ['hot']
 		const allowedTiers = this.getTiersForKey(key, tierOptions)
-
-		// Collect tiers that support streaming
 		const streamingTiers: Array<{ name: 'hot' | 'warm' | 'cold'; tier: StorageTier }> = []
-
-		if (this.config.tiers.hot?.setStream && allowedTiers.includes('hot')) {
+		if (this.config.tiers.hot?.setStream && allowedTiers.includes('hot'))
 			streamingTiers.push({ name: 'hot', tier: this.config.tiers.hot })
-		}
-
-		if (this.config.tiers.warm?.setStream && allowedTiers.includes('warm')) {
+		if (this.config.tiers.warm?.setStream && allowedTiers.includes('warm'))
 			streamingTiers.push({ name: 'warm', tier: this.config.tiers.warm })
-		}
-
-		if (this.config.tiers.cold.setStream && allowedTiers.includes('cold')) {
+		if (this.config.tiers.cold.setStream && allowedTiers.includes('cold'))
 			streamingTiers.push({ name: 'cold', tier: this.config.tiers.cold })
+		if (allowedTiers.includes('cold') && !this.config.tiers.cold.setStream && streamingTiers.length > 0) {
+			throw new Error('Cold tier must support setStream before upper streaming tiers can be written')
+		}
+		if (streamingTiers.length === 0) throw new Error('No tiers support streaming. Use set() for buffered writes.')
+
+		const hashStream = options.checksum ? null : createHash('sha256')
+		const cold = streamingTiers.find(({ name }) => name === 'cold')
+		const upperTiers = streamingTiers.filter(({ name }) => name !== 'cold')
+
+		if (cold && upperTiers.length > 0) {
+			// A cache copy may only observe bytes after the cold source of truth has
+			// committed. Validate replay support before consuming a non-repeatable input.
+			if (!cold.tier.getStream) {
+				throw new Error('Cold tier must support getStream to populate upper streaming tiers')
+			}
+			const tiersWritten = await this.writeStreamFanout(key, stream, [cold], metadata, shouldCompress, hashStream)
+			if (hashStream) {
+				metadata.checksum = hashStream.digest('hex')
+				await cold.tier.setMetadata(key, metadata)
+			}
+			const replay = await cold.tier.getStream(key)
+			if (!replay) throw new Error('Cold tier commit could not be replayed to upper streaming tiers')
+			try {
+				tiersWritten.push(...(await this.writeStreamFanout(key, replay.stream, upperTiers, metadata, false, null)))
+			} catch (error) {
+				// Cold remains committed. Cache cleanup is best effort and is not rollback.
+				await Promise.allSettled(upperTiers.map(({ tier }) => tier.delete(key)))
+				throw error
+			}
+			return { key, metadata, tiersWritten }
 		}
 
-		const tiersWritten: ('hot' | 'warm' | 'cold')[] = []
-
-		if (streamingTiers.length === 0) {
-			throw new Error('No tiers support streaming. Use set() for buffered writes.')
-		}
-
-		// We always need to compute checksum on uncompressed data if not provided
-		const needsChecksum = !options.checksum
-
-		// Create pass-through streams for each tier
-		const passThroughs = streamingTiers.map(() => new PassThrough())
-		const hashStream = needsChecksum ? createHash('sha256') : null
-
-		// Set up the stream pipeline:
-		// source -> (hash) -> (compress) -> tee to all tier streams
-		const sourceStream = stream as Readable
-
-		// If compression is enabled, we need to:
-		// 1. Compute hash on original data
-		// 2. Then compress
-		// 3. Then tee to all tiers
-		if (shouldCompress) {
-			const compressStream = createCompressStream()
-
-			// Hash the original uncompressed data
-			sourceStream.on('data', (chunk: Buffer) => {
-				if (hashStream) {
-					hashStream.update(chunk)
-				}
-			})
-
-			// Pipe source through compression
-			sourceStream.pipe(compressStream)
-
-			// Tee compressed output to all tier streams
-			compressStream.on('data', (chunk: Buffer) => {
-				for (const pt of passThroughs) {
-					pt.write(chunk)
-				}
-			})
-
-			compressStream.on('end', () => {
-				for (const pt of passThroughs) {
-					pt.end()
-				}
-			})
-
-			compressStream.on('error', (err) => {
-				for (const pt of passThroughs) {
-					pt.destroy(err)
-				}
-			})
-		} else {
-			// No compression - hash and tee directly
-			sourceStream.on('data', (chunk: Buffer) => {
-				for (const pt of passThroughs) {
-					pt.write(chunk)
-				}
-				if (hashStream) {
-					hashStream.update(chunk)
-				}
-			})
-
-			sourceStream.on('end', () => {
-				for (const pt of passThroughs) {
-					pt.end()
-				}
-			})
-
-			sourceStream.on('error', (err) => {
-				for (const pt of passThroughs) {
-					pt.destroy(err)
-				}
-			})
-		}
-
-		// Wait for all tier writes
-		const writePromises = streamingTiers.map(async ({ name, tier }, index) => {
-			await tier.setStream!(key, passThroughs[index]!, metadata)
-			tiersWritten.push(name)
-		})
-
-		await Promise.all(writePromises)
-
-		// Update checksum in metadata if computed
+		const tiersWritten = await this.writeStreamFanout(key, stream, streamingTiers, metadata, shouldCompress, hashStream)
 		if (hashStream) {
 			metadata.checksum = hashStream.digest('hex')
-			// Update metadata in all tiers with the computed checksum
 			await Promise.all(streamingTiers.map(({ tier }) => tier.setMetadata(key, metadata)))
 		}
-
 		return { key, metadata, tiersWritten }
+	}
+
+	/** Fan out one source stream while bounding every branch and preserving its first failure. */
+	private async writeStreamFanout(
+		key: string,
+		stream: NodeJS.ReadableStream,
+		tiers: Array<{ name: 'hot' | 'warm' | 'cold'; tier: StorageTier }>,
+		metadata: StorageMetadata,
+		shouldCompress: boolean,
+		hashStream: ReturnType<typeof createHash> | null,
+	): Promise<('hot' | 'warm' | 'cold')[]> {
+		const tiersWritten: ('hot' | 'warm' | 'cold')[] = []
+		const sourceStream = stream as Readable
+		const passThroughs = tiers.map(() => new PassThrough({ highWaterMark: 64 * 1024 }))
+		let failed = false
+		let firstError: unknown
+		let rejectFailure!: (reason: unknown) => void
+		const failure = new Promise<never>((_, reject) => {
+			rejectFailure = reject
+		})
+		void failure.catch(() => undefined)
+		const fail = (error: unknown): void => {
+			if (failed) return
+			failed = true
+			firstError = error
+			rejectFailure(error)
+			const destroyError = error instanceof Error ? error : new Error('streaming tier write failed', { cause: error })
+			sourceStream.destroy(destroyError)
+			for (const passThrough of passThroughs) passThrough.destroy(destroyError)
+		}
+		for (const passThrough of passThroughs) passThrough.on('error', fail)
+
+		const hashTransform = new Transform({
+			transform(chunk: Buffer, _encoding, callback) {
+				hashStream?.update(chunk)
+				callback(null, chunk)
+			},
+		})
+		const output = shouldCompress ? createCompressStream() : new PassThrough({ highWaterMark: 64 * 1024 })
+		const sourcePipeline = pipeline(sourceStream, hashTransform, output).catch((error: unknown) => fail(error))
+		const writePromises = tiers.map(({ name, tier }, index) =>
+			tier.setStream!(key, passThroughs[index]!, metadata)
+				.then(() => tiersWritten.push(name))
+				.catch((error: unknown) => {
+					fail(error)
+					throw error
+				}),
+		)
+		for (const write of writePromises) void write.catch(() => undefined)
+
+		try {
+			for await (const chunk of output) {
+				const drains: Promise<unknown>[] = []
+				for (const passThrough of passThroughs) {
+					if (!passThrough.write(chunk)) drains.push(once(passThrough, 'drain'))
+				}
+				if (drains.length > 0) await Promise.race([Promise.all(drains), failure])
+			}
+		} catch (error) {
+			fail(error)
+		} finally {
+			if (!failed) for (const passThrough of passThroughs) passThrough.end()
+		}
+		await Promise.allSettled(writePromises)
+		await sourcePipeline
+		if (failed) throw firstError
+		return tiersWritten
 	}
 
 	/**
@@ -503,11 +643,15 @@ export class TieredStorage<T = unknown> {
 	 * Automatically handles serialization and optional compression.
 	 */
 	async set(key: string, data: T, options?: SetOptions): Promise<SetResult> {
+		throwIfAborted(options?.signal)
+
 		// 1. Serialize data
 		const serialized = await this.serialize(data)
+		throwIfAborted(options?.signal)
 
 		// 2. Optionally compress
 		const finalData = this.config.compression ? await compress(serialized) : serialized
+		throwIfAborted(options?.signal)
 
 		// 3. Create metadata
 		const metadata = this.createMetadata(key, finalData, options)
@@ -521,24 +665,37 @@ export class TieredStorage<T = unknown> {
 		}
 		const allowedTiers = this.getTiersForKey(key, tierOptions)
 
-		// 5. Write to tiers
+		// 5. Commit the cold source of truth before exposing cache copies. If this
+		// fails, no upper tier has been changed by this call.
 		const tiersWritten: ('hot' | 'warm' | 'cold')[] = []
-
-		if (this.config.tiers.hot && allowedTiers.includes('hot')) {
-			await this.config.tiers.hot.set(key, finalData, metadata)
-			tiersWritten.push('hot')
-		}
-
-		if (this.config.tiers.warm && allowedTiers.includes('warm')) {
-			await this.config.tiers.warm.set(key, finalData, metadata)
-			tiersWritten.push('warm')
-		}
-
+		const writeOptions = options?.signal ? { signal: options.signal } : undefined
 		if (allowedTiers.includes('cold')) {
-			await this.config.tiers.cold.set(key, finalData, metadata)
+			throwIfAborted(options?.signal)
+			await this.config.tiers.cold.set(key, finalData, metadata, writeOptions)
 			tiersWritten.push('cold')
 		}
 
+		// Cache writes happen only after cold has committed. If one fails, remove
+		// cache copies on a best-effort basis and rethrow the cache failure. Cold is
+		// deliberately never removed: the write remains committed, not rolled back.
+		try {
+			if (this.config.tiers.hot && allowedTiers.includes('hot')) {
+				throwIfAborted(options?.signal)
+				await this.config.tiers.hot.set(key, finalData, metadata, writeOptions)
+				tiersWritten.push('hot')
+			}
+			if (this.config.tiers.warm && allowedTiers.includes('warm')) {
+				throwIfAborted(options?.signal)
+				await this.config.tiers.warm.set(key, finalData, metadata, writeOptions)
+				tiersWritten.push('warm')
+			}
+		} catch (error) {
+			await Promise.allSettled([
+				this.config.tiers.hot && allowedTiers.includes('hot') ? this.config.tiers.hot.delete(key) : undefined,
+				this.config.tiers.warm && allowedTiers.includes('warm') ? this.config.tiers.warm.delete(key) : undefined,
+			])
+			throw error
+		}
 		return { key, metadata, tiersWritten }
 	}
 
@@ -594,6 +751,30 @@ export class TieredStorage<T = unknown> {
 	 * Does not throw if the key doesn't exist.
 	 */
 	async delete(key: string): Promise<void> {
+		await this.invalidateKey(key)
+	}
+
+	/**
+	 * Fence and delete one key, including reads that begin while deletion is in flight.
+	 */
+	private async invalidateKey(key: string): Promise<void> {
+		const fence = this.beginKeyMutation(key)
+		await this.enqueueKeyMutation(key, fence, async () => {
+			try {
+				await this.deleteFromTiers(key)
+			} finally {
+				// A read that began after this invalidation started can still have
+				// captured stale lower-tier bytes. Advancing again at completion
+				// prevents its queued promotion from repopulating an upper tier.
+				fence.generation++
+			}
+		})
+	}
+
+	/**
+	 * Delete one key from all configured tiers without acquiring its fence again.
+	 */
+	private async deleteFromTiers(key: string): Promise<void> {
 		await Promise.all([
 			this.config.tiers.hot?.delete(key),
 			this.config.tiers.warm?.delete(key),
@@ -669,6 +850,134 @@ export class TieredStorage<T = unknown> {
 	}
 
 	/**
+	 * Add a source CID without changing bytes. The cold tier commits first under
+	 * its checksum/version fence; upper copies are only best-effort caches.
+	 */
+	async addSourceCidIfChecksumMatches(key: string, expectedChecksum: string, sourceCid: string): Promise<boolean> {
+		const cold = this.config.tiers.cold
+		if (!cold.setMetadataIfChecksumMatches) return false
+
+		const current = await cold.getMetadata(key)
+		if (!current || current.checksum !== expectedChecksum) return false
+		const metadata: StorageMetadata = {
+			...current,
+			customMetadata: { ...current.customMetadata, sourceCid },
+		}
+		if (!(await cold.setMetadataIfChecksumMatches(key, expectedChecksum, metadata))) return false
+
+		const upperTiers = [this.config.tiers.hot, this.config.tiers.warm].filter(
+			(tier): tier is StorageTier => tier !== undefined,
+		)
+		await Promise.allSettled(
+			upperTiers.map((tier) =>
+				tier.setMetadataIfChecksumMatches
+					? tier.setMetadataIfChecksumMatches(key, expectedChecksum, metadata)
+					: Promise.resolve(false),
+			),
+		)
+		return true
+	}
+
+	/** Delete a prefix from one cache tier, using its native fast path when available. */
+	private async invalidateTierPrefix(tier: StorageTier, prefix: string): Promise<number> {
+		if (tier.deletePrefix) {
+			return await tier.deletePrefix(prefix)
+		}
+
+		const keys: string[] = []
+		for await (const key of tier.listKeys(prefix)) {
+			keys.push(key)
+		}
+		if (keys.length > 0) {
+			await tier.deleteMany(keys)
+		}
+		return keys.length
+	}
+
+	/**
+	 * Clear only hot and warm cached copies under a prefix.
+	 *
+	 * The cold tier is deliberately never touched. The global epoch and queue make
+	 * eager promotions captured before or during this purge skip their cache write.
+	 */
+	async invalidateUpperCaches(prefix: string): Promise<UpperTierInvalidationResult> {
+		// This synchronous pre-purge increment invalidates source reads already in flight.
+		this.advanceUpperTierPromotionEpoch()
+
+		return await this.enqueueUpperTierMutation(async () => {
+			try {
+				const tiers: Array<{ name: 'hot' | 'warm'; tier: StorageTier }> = []
+				if (this.config.tiers.hot) {
+					tiers.push({ name: 'hot', tier: this.config.tiers.hot })
+				}
+				if (this.config.tiers.warm) {
+					tiers.push({ name: 'warm', tier: this.config.tiers.warm })
+				}
+
+				const results = await Promise.allSettled(tiers.map(({ tier }) => this.invalidateTierPrefix(tier, prefix)))
+				let hotDeleted = 0
+				let warmDeleted = 0
+				const failures: UpperTierInvalidationFailure[] = []
+
+				for (const [index, result] of results.entries()) {
+					const { name } = tiers[index]!
+					if (result.status === 'fulfilled') {
+						if (name === 'hot') {
+							hotDeleted = result.value
+						} else {
+							warmDeleted = result.value
+						}
+					} else {
+						failures.push({ tier: name, reason: result.reason })
+					}
+				}
+
+				return { hotDeleted, warmDeleted, failures }
+			} finally {
+				// Reads that began while this purge ran captured the pre-completion epoch.
+				this.advanceUpperTierPromotionEpoch()
+			}
+		})
+	}
+
+	/**
+	 * Clear one key from the cache-only tiers without touching cold storage.
+	 *
+	 * This is intentionally exact-key rather than a prefix operation. It shares
+	 * the upper-tier promotion fence with `invalidateUpperCaches`, so an eager
+	 * lower-tier read cannot restore the evicted copy after this method resolves.
+	 * Both configured upper tiers are attempted even if one fails.
+	 */
+	async invalidateUpperCacheKey(key: string): Promise<UpperTierInvalidationFailure[]> {
+		// Invalidate lower-tier reads that began before this exact-key eviction.
+		this.advanceUpperTierPromotionEpoch()
+
+		return await this.enqueueUpperTierMutation(async () => {
+			try {
+				const tiers: Array<{ name: 'hot' | 'warm'; tier: StorageTier }> = []
+				if (this.config.tiers.hot) {
+					tiers.push({ name: 'hot', tier: this.config.tiers.hot })
+				}
+				if (this.config.tiers.warm) {
+					tiers.push({ name: 'warm', tier: this.config.tiers.warm })
+				}
+
+				const results = await Promise.allSettled(tiers.map(({ tier }) => tier.delete(key)))
+				const failures: UpperTierInvalidationFailure[] = []
+				for (const [index, result] of results.entries()) {
+					if (result.status === 'rejected') {
+						failures.push({ tier: tiers[index]!.name, reason: result.reason })
+					}
+				}
+				return failures
+			} finally {
+				// Reads that began while this eviction ran captured the pre-completion epoch.
+				this.advanceUpperTierPromotionEpoch()
+			}
+		})
+	}
+
+	/**
 	 * Invalidate all keys matching a prefix.
 	 *
 	 * @param prefix - The prefix to match (e.g., 'user:' matches 'user:123', 'user:456')
@@ -702,16 +1011,45 @@ export class TieredStorage<T = unknown> {
 			keysToDelete.add(key)
 		}
 
-		// Delete from all tiers in parallel
 		const keys = Array.from(keysToDelete)
 
-		await Promise.all([
-			this.config.tiers.hot?.deleteMany(keys),
-			this.config.tiers.warm?.deleteMany(keys),
-			this.config.tiers.cold.deleteMany(keys),
-		])
+		// Each key gets its own fence, so unrelated invalidations remain parallel while
+		// an in-flight read cannot promote stale bytes after this invalidation.
+		await Promise.all(keys.map((key) => this.invalidateKey(key)))
 
 		return keys.length
+	}
+
+	/**
+	 * Delete the durable cold-tier namespace without accumulating every key in
+	 * memory. Native prefix deletion is used where available; otherwise keys are
+	 * streamed into bounded deleteMany batches.
+	 */
+	async deleteColdPrefix(prefix: string, batchSize = 250): Promise<number> {
+		if (!Number.isSafeInteger(batchSize) || batchSize <= 0 || batchSize > 1_000) {
+			throw new Error('invalid cold prefix deletion batch size')
+		}
+
+		const tier = this.config.tiers.cold
+		if (tier.deletePrefix) return await tier.deletePrefix(prefix)
+
+		let deleted = 0
+		let batch: string[] = []
+		for await (const key of tier.listKeys(prefix)) {
+			// StorageTier promises prefix filtering, but keep a namespace-delete
+			// defense in depth check before passing keys to a bulk delete.
+			if (!key.startsWith(prefix)) continue
+			batch.push(key)
+			if (batch.length < batchSize) continue
+			await tier.deleteMany(batch)
+			deleted += batch.length
+			batch = []
+		}
+		if (batch.length > 0) {
+			await tier.deleteMany(batch)
+			deleted += batch.length
+		}
+		return deleted
 	}
 
 	/**

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { DELETED_SITE_RECORD_CID } from '@wispplace/constants'
 import type { SiteCache, SiteSettingsCache } from '@wispplace/database'
 import { createLogger } from '@wispplace/observability'
 import postgres from 'postgres'
@@ -18,75 +19,680 @@ const sql = postgres(config.databaseUrl, {
  * A site-write lock is held for the entire duration of a site sync, which
  * includes minutes of blob downloads. Holding those long-lived locks on the
  * main query pool would starve ordinary queries (the connection-pooling
- * starvation class of bug). Isolating them in their own small pool means a
- * stuck/slow sync can only ever exhaust lock connections, never block reads.
+ * starvation class of bug). Each slot is a one-connection postgres client, so
+ * it remains pinned for the holder and can be physically closed on quarantine.
  */
-const lockSql = postgres(config.databaseUrl, {
-	max: 10,
-	idle_timeout: 30,
-	connect_timeout: 10,
-})
+export const LOCK_POOL_SIZE = 10
+/** A reserve must never wait forever for a leaked or wedged lock holder. */
+export const LOCK_POOL_RESERVE_TIMEOUT_MS = 30_000
 
-/**
- * Generate a numeric advisory-lock id from a string key.
- *
- * MUST stay byte-for-byte identical to the hosting-service implementation so the
- * firehose, revalidate worker, and on-demand cache all contend for the SAME
- * Postgres advisory lock when they target the same site key.
- */
-function stringToLockId(key: string): bigint {
-	const hash = createHash('sha256').update(key).digest('hex')
-	const hashNum = BigInt(`0x${hash.substring(0, 16)}`)
-	return hashNum & 0x7fffffffffffffffn
+export interface SiteWriteLockQuery<T = unknown> extends PromiseLike<T> {
+	/** postgres.js exposes this on pending queries to send a cancel request. */
+	cancel?: () => unknown
+}
+
+export interface SiteWriteLockReservedClient {
+	(strings: TemplateStringsArray, ...values: unknown[]): SiteWriteLockQuery<unknown>
+	release(): void
+}
+
+export interface SiteWriteLockPoolClient {
+	reserve(): Promise<SiteWriteLockReservedClient>
+	end(options: { timeout: number }): Promise<void>
+}
+
+const createSiteWriteLockPoolClient = (): SiteWriteLockPoolClient =>
+	postgres(config.databaseUrl, {
+		max: 1,
+		// A reserved session can be intentionally idle while files download. Do
+		// not let the driver drop its session-scoped advisory lock in that gap.
+		idle_timeout: 0,
+		max_lifetime: null,
+		connect_timeout: 10,
+	}) as unknown as SiteWriteLockPoolClient
+
+export interface SiteWriteLockConnection {
+	(strings: TemplateStringsArray, ...values: unknown[]): SiteWriteLockQuery<unknown>
+	release(): void
+	close(options: { timeout: number }): Promise<void>
+}
+
+interface LockPoolWaiter {
+	resolve(connection: SiteWriteLockConnection): void
+	reject(error: Error): void
+	active: boolean
+	deadline: number
+	timer: ReturnType<typeof setTimeout>
+	settled: boolean
+	signal?: AbortSignal
+	abortListener?: () => void
+}
+
+export interface SiteWriteLockPoolOptions {
+	/** Number of one-connection postgres clients kept in this pool. */
+	size?: number
+	/** Maximum time spent waiting for a reserved slot/session. */
+	reserveTimeoutMs?: number
+	/** Test seam; production creates a max=1 postgres client. */
+	createClient?: () => SiteWriteLockPoolClient
 }
 
 /**
- * The unified per-site write-lock key. Shared verbatim with the hosting-service
- * on-demand path so all writers to a site's cache mutually exclude.
+ * A bounded pool of reserved postgres sessions.
+ *
+ * The object returned to a lock holder is a small forwarding wrapper. It is
+ * deliberately not the postgres client itself: postgres.js owns its `release`
+ * method and its root client can be ended when a session is quarantined.
+ */
+interface LockPoolSlot {
+	client: SiteWriteLockPoolClient
+	endPromise: Promise<void> | null
+}
+
+interface LockPoolDirectActivation {
+	settled: boolean
+	reject(error: Error): void
+	abortListener?: () => void
+}
+
+export class SiteWriteLockPool {
+	private readonly slots = new Set<LockPoolSlot>()
+	private readonly retiring = new Set<LockPoolSlot>()
+	private readonly available: LockPoolSlot[] = []
+	private readonly waiters: LockPoolWaiter[] = []
+	private readonly assignedWaiters = new Set<LockPoolWaiter>()
+	private readonly directActivations = new Set<LockPoolDirectActivation>()
+	private readonly size: number
+	private readonly reserveTimeoutMs: number
+	private readonly createClientFactory: () => SiteWriteLockPoolClient
+	private ending: Promise<void> | null = null
+	private closed = false
+
+	constructor(options: SiteWriteLockPoolOptions = {}) {
+		const size = options.size ?? LOCK_POOL_SIZE
+		this.size = Number.isSafeInteger(size) && size > 0 ? size : LOCK_POOL_SIZE
+		const reserveTimeoutMs = options.reserveTimeoutMs ?? LOCK_POOL_RESERVE_TIMEOUT_MS
+		this.reserveTimeoutMs =
+			Number.isFinite(reserveTimeoutMs) && reserveTimeoutMs >= 0 ? reserveTimeoutMs : LOCK_POOL_RESERVE_TIMEOUT_MS
+		this.createClientFactory = options.createClient ?? createSiteWriteLockPoolClient
+	}
+
+	reserve(signal?: AbortSignal): Promise<SiteWriteLockConnection> {
+		if (this.closed) return Promise.reject(new Error('Site write lock pool is closed'))
+		if (signal?.aborted) return Promise.reject(abortReason(signal))
+
+		const deadline = Date.now() + this.reserveTimeoutMs
+		const slot = this.available.pop()
+		if (slot) return this.activateForCaller(slot, deadline, signal)
+
+		if (this.slots.size < this.size) {
+			try {
+				return this.activateForCaller(this.createSlot(), deadline, signal)
+			} catch (error) {
+				return Promise.reject(error instanceof Error ? error : new Error('Failed to create lock client'))
+			}
+		}
+
+		return new Promise<SiteWriteLockConnection>((resolve, reject) => {
+			const waiter = {} as LockPoolWaiter
+			waiter.resolve = resolve
+			waiter.reject = reject
+			waiter.active = true
+			waiter.deadline = deadline
+			waiter.settled = false
+			waiter.signal = signal
+			waiter.timer = this.startWaiterTimer(waiter)
+			if (signal) {
+				waiter.abortListener = () => this.abortWaiter(waiter, abortReason(signal))
+				signal.addEventListener('abort', waiter.abortListener, { once: true })
+			}
+			this.waiters.push(waiter)
+			if (signal?.aborted) this.abortWaiter(waiter, abortReason(signal))
+		})
+	}
+
+	end(options: { timeout: number }): Promise<void> {
+		if (this.ending) return this.ending
+
+		this.closed = true
+		const closeError = new Error('Site write lock pool is closed')
+		for (const waiter of this.waiters.splice(0)) this.settleWaiter(waiter, closeError)
+		for (const waiter of this.assignedWaiters) {
+			this.assignedWaiters.delete(waiter)
+			this.settleWaiter(waiter, closeError)
+		}
+		for (const activation of this.directActivations) activation.reject(closeError)
+
+		// Keep every slot tracked until its physical root client has ended. This
+		// includes available, leased, and already-retiring/quarantined sessions.
+		const slots = [...this.slots]
+		this.ending = Promise.all(slots.map((slot) => this.retire(slot, options, false))).then(() => undefined)
+		return this.ending
+	}
+
+	private createSlot(): LockPoolSlot {
+		const slot = { client: this.createClientFactory(), endPromise: null }
+		this.slots.add(slot)
+		return slot
+	}
+
+	private activateForCaller(
+		slot: LockPoolSlot,
+		deadline: number,
+		signal?: AbortSignal,
+	): Promise<SiteWriteLockConnection> {
+		return new Promise<SiteWriteLockConnection>((resolve, reject) => {
+			const activation: LockPoolDirectActivation = {
+				settled: false,
+				reject: (error) => {
+					if (activation.settled) return
+					activation.settled = true
+					if (signal && activation.abortListener) signal.removeEventListener('abort', activation.abortListener)
+					activation.abortListener = undefined
+					reject(error)
+				},
+			}
+			this.directActivations.add(activation)
+			if (signal) {
+				activation.abortListener = () => activation.reject(abortReason(signal))
+				signal.addEventListener('abort', activation.abortListener, { once: true })
+			}
+			void this.activate(slot, deadline, signal).then(
+				(connection) => {
+					this.directActivations.delete(activation)
+					if (signal && activation.abortListener) signal.removeEventListener('abort', activation.abortListener)
+					if (activation.settled || this.closed) {
+						void connection.close({ timeout: 0 }).catch(() => undefined)
+						return
+					}
+					activation.settled = true
+					resolve(connection)
+				},
+				(error) => {
+					this.directActivations.delete(activation)
+					if (signal && activation.abortListener) signal.removeEventListener('abort', activation.abortListener)
+					if (activation.settled) return
+					activation.settled = true
+					reject(error instanceof Error ? error : new Error('Failed to reserve lock client'))
+				},
+			)
+		})
+	}
+
+	private activate(slot: LockPoolSlot, deadline: number, signal?: AbortSignal): Promise<SiteWriteLockConnection> {
+		const timeoutMs = Math.max(0, deadline - Date.now())
+		return this.reserveClient(slot.client, timeoutMs, signal)
+			.then((reserved) => {
+				if (this.closed || this.retiring.has(slot)) {
+					try {
+						reserved.release()
+					} catch {
+						// The root client is being retired below.
+					}
+					void this.retire(slot, { timeout: 0 }).catch(() => undefined)
+					throw new Error('Site write lock pool is closed')
+				}
+				return this.reservation(slot, reserved)
+			})
+			.catch((error) => {
+				// Retirement is tracked separately so a reserve timeout remains
+				// bounded even when closing the physical root is slow.
+				if (!this.retiring.has(slot)) void this.retire(slot, { timeout: 0 }).catch(() => undefined)
+				throw error
+			})
+	}
+
+	private reserveClient(
+		client: SiteWriteLockPoolClient,
+		timeoutMs: number,
+		signal?: AbortSignal,
+	): Promise<SiteWriteLockReservedClient> {
+		if (signal?.aborted) return Promise.reject(abortReason(signal))
+		let pending: Promise<SiteWriteLockReservedClient>
+		try {
+			pending = Promise.resolve(client.reserve())
+		} catch (error) {
+			return Promise.reject(error)
+		}
+
+		return new Promise<SiteWriteLockReservedClient>((resolve, reject) => {
+			let settled = false
+			const timer = setTimeout(() => {
+				if (settled) return
+				settled = true
+				cleanup()
+				reject(new Error('Timed out reserving site write lock connection'))
+				releaseWhenReady()
+			}, timeoutMs)
+			;(timer as unknown as { unref?: () => void }).unref?.()
+			const cleanup = () => {
+				clearTimeout(timer)
+				if (signal) signal.removeEventListener('abort', onAbort)
+			}
+			const releaseWhenReady = () => {
+				// A driver reserve can still resolve after our bound. Release that
+				// wrapper rather than leaving the physical session pinned.
+				void pending.then(
+					(reserved) => {
+						try {
+							reserved.release()
+						} catch {
+							// The root client is being retired by activate's rejection path.
+						}
+					},
+					() => undefined,
+				)
+			}
+			const onAbort = () => {
+				if (settled) return
+				settled = true
+				cleanup()
+				reject(abortReason(signal as AbortSignal))
+				releaseWhenReady()
+			}
+			if (signal) signal.addEventListener('abort', onAbort, { once: true })
+			pending.then(
+				(reserved) => {
+					if (settled) return
+					settled = true
+					cleanup()
+					resolve(reserved)
+				},
+				(error) => {
+					if (settled) return
+					settled = true
+					cleanup()
+					reject(error)
+				},
+			)
+			if (signal?.aborted) onAbort()
+		})
+	}
+
+	private reservation(slot: LockPoolSlot, reserved: SiteWriteLockReservedClient): SiteWriteLockConnection {
+		let finished = false
+		// Forward queries through a new function object. Do not attach lifecycle
+		// methods to either postgres.js object; the driver uses those methods to
+		// manage its own connection queues.
+		const connection = ((strings: TemplateStringsArray, ...values: unknown[]) =>
+			reserved(strings, ...values)) as SiteWriteLockConnection
+
+		connection.release = () => {
+			if (finished) return
+			finished = true
+			try {
+				reserved.release()
+			} catch (error) {
+				// A release failure leaves session state uncertain just like an unlock
+				// failure. Quarantine this one slot and continue dispatching waiters.
+				void this.retire(slot, { timeout: 0 }).catch(() => undefined)
+				logger.error('[DB] Failed to release reserved site-write connection', undefined, {
+					errorKind: databaseErrorKind(error),
+				})
+				return
+			}
+			this.returnSlot(slot)
+		}
+
+		connection.close = async (options): Promise<void> => {
+			if (finished) return
+			finished = true
+			await this.retire(slot, options)
+		}
+
+		return connection
+	}
+
+	private startWaiterTimer(waiter: LockPoolWaiter): ReturnType<typeof setTimeout> {
+		const remaining = Math.max(0, waiter.deadline - Date.now())
+		const timer = setTimeout(() => this.expireWaiter(waiter), remaining)
+		;(timer as unknown as { unref?: () => void }).unref?.()
+		return timer
+	}
+
+	private clearWaiterAbortListener(waiter: LockPoolWaiter): void {
+		if (waiter.signal && waiter.abortListener) waiter.signal.removeEventListener('abort', waiter.abortListener)
+		waiter.abortListener = undefined
+	}
+
+	private settleWaiter(waiter: LockPoolWaiter, error: Error): void {
+		if (waiter.settled) return
+		waiter.active = false
+		waiter.settled = true
+		clearTimeout(waiter.timer)
+		this.clearWaiterAbortListener(waiter)
+		waiter.reject(error)
+	}
+
+	private abortWaiter(waiter: LockPoolWaiter, error: Error): void {
+		if (waiter.settled) return
+		const index = this.waiters.indexOf(waiter)
+		if (index >= 0) this.waiters.splice(index, 1)
+		this.assignedWaiters.delete(waiter)
+		this.settleWaiter(waiter, error)
+	}
+
+	private expireWaiter(waiter: LockPoolWaiter): void {
+		if (!waiter.active) return
+		const index = this.waiters.indexOf(waiter)
+		if (index >= 0) this.waiters.splice(index, 1)
+		this.settleWaiter(waiter, new Error('Timed out waiting for a site write lock connection'))
+	}
+
+	private takeWaiter(clearTimer: boolean): LockPoolWaiter | undefined {
+		while (this.waiters.length > 0) {
+			const waiter = this.waiters.shift()
+			if (!waiter?.active) continue
+			waiter.active = false
+			if (clearTimer) clearTimeout(waiter.timer)
+			return waiter
+		}
+		return undefined
+	}
+
+	private returnSlot(slot: LockPoolSlot): void {
+		if (this.closed || this.retiring.has(slot)) return
+		const waiter = this.takeWaiter(true)
+		if (waiter) {
+			this.assignSlot(slot, waiter)
+			return
+		}
+		this.available.push(slot)
+	}
+
+	private assignSlot(slot: LockPoolSlot, waiter: LockPoolWaiter): void {
+		clearTimeout(waiter.timer)
+		if (waiter.deadline <= Date.now()) {
+			this.settleWaiter(waiter, new Error('Timed out waiting for a site write lock connection'))
+			void this.retire(slot, { timeout: 0 }).catch(() => undefined)
+			return
+		}
+		this.assignedWaiters.add(waiter)
+		void this.activate(slot, waiter.deadline, waiter.signal).then(
+			(connection) => {
+				this.assignedWaiters.delete(waiter)
+				if (waiter.settled || this.closed) {
+					this.clearWaiterAbortListener(waiter)
+					void connection.close({ timeout: 0 }).catch(() => undefined)
+					return
+				}
+				waiter.settled = true
+				this.clearWaiterAbortListener(waiter)
+				waiter.resolve(connection)
+			},
+			(error) => {
+				this.assignedWaiters.delete(waiter)
+				if (waiter.settled) return
+				this.settleWaiter(waiter, error instanceof Error ? error : new Error('Failed to reserve lock client'))
+				this.dispatch()
+			},
+		)
+	}
+
+	private removeAvailableSlot(slot: LockPoolSlot): void {
+		const index = this.available.indexOf(slot)
+		if (index >= 0) this.available.splice(index, 1)
+	}
+
+	private retire(slot: LockPoolSlot, options: { timeout: number }, dispatch = true): Promise<void> {
+		if (slot.endPromise) return slot.endPromise
+		this.retiring.add(slot)
+		this.removeAvailableSlot(slot)
+		slot.endPromise = Promise.resolve()
+			.then(() => slot.client.end(options))
+			.finally(() => {
+				this.slots.delete(slot)
+				this.retiring.delete(slot)
+				if (dispatch && !this.closed) this.dispatch()
+			})
+		return slot.endPromise
+	}
+
+	private dispatch(): void {
+		if (this.closed) return
+
+		while (this.waiters.length > 0) {
+			const waiter = this.takeWaiter(false)
+			if (!waiter) continue
+
+			let slot = this.available.pop()
+			if (!slot) {
+				if (this.slots.size >= this.size) {
+					// No slot is currently available. Put this live waiter back without
+					// resetting its original deadline.
+					waiter.active = true
+					this.waiters.unshift(waiter)
+					return
+				}
+				try {
+					slot = this.createSlot()
+				} catch (error) {
+					waiter.reject(error instanceof Error ? error : new Error('Failed to create lock client'))
+					continue
+				}
+			}
+
+			this.assignSlot(slot, waiter)
+		}
+	}
+}
+
+const lockPool = new SiteWriteLockPool()
+
+/**
+ * The unified per-site write-lock key. Shared verbatim with other cache
+ * writers so all writers to a site's cache mutually exclude.
  */
 export function siteWriteLockKey(did: string, rkey: string): string {
 	return `site-write:${did}:${rkey}`
 }
 
 /**
+ * Derive the signed 63-bit PostgreSQL advisory-lock id without converting it
+ * through JavaScript Number, which would lose high bits above 2^53 - 1.
+ */
+export function siteWriteLockId(did: string, rkey: string): bigint {
+	const hash = createHash('sha256').update(siteWriteLockKey(did, rkey)).digest('hex')
+	return BigInt(`0x${hash.substring(0, 16)}`) & 0x7fffffffffffffffn
+}
+
+function databaseErrorKind(error: unknown): string {
+	if (!(error instanceof Error)) return 'UnknownError'
+	return error.constructor.name || 'Error'
+}
+
+function abortReason(signal: AbortSignal): Error {
+	return signal.reason instanceof Error ? signal.reason : new Error('Site write lock aborted')
+}
+
+/**
+ * Execute one lock-acquisition query with postgres.js cancellation. The query
+ * starts only after the preflight check, and an abort rejects immediately even
+ * when a minimal test seam does not expose `.cancel()`; the caller then closes
+ * the reserved session instead of returning a possibly lock-owning connection.
+ */
+function runCancellableLockQuery<T>(start: () => SiteWriteLockQuery<T>, signal?: AbortSignal): Promise<T> {
+	if (signal?.aborted) return Promise.reject(abortReason(signal))
+	let query: SiteWriteLockQuery<T>
+	try {
+		query = start()
+	} catch (error) {
+		return Promise.reject(error)
+	}
+	return new Promise<T>((resolve, reject) => {
+		let settled = false
+		const cleanup = () => {
+			if (signal) signal.removeEventListener('abort', onAbort)
+		}
+		const finish = (callback: () => void) => {
+			if (settled) return
+			settled = true
+			cleanup()
+			callback()
+		}
+		const onAbort = () => {
+			if (settled) return
+			try {
+				const cancellation = query.cancel?.()
+				if (cancellation) void Promise.resolve(cancellation).catch(() => undefined)
+			} catch {
+				// The reserved connection is closed by the caller below.
+			}
+			finish(() => reject(abortReason(signal as AbortSignal)))
+		}
+		if (signal) signal.addEventListener('abort', onAbort, { once: true })
+		Promise.resolve(query).then(
+			(value) => finish(() => resolve(value)),
+			(error) => finish(() => reject(error)),
+		)
+		if (signal?.aborted) onAbort()
+	})
+}
+
+/** postgres.js decodes a boolean result as `true`; anything else is unsafe. */
+function advisoryUnlockReturnedTrue(result: unknown): boolean {
+	if (!Array.isArray(result) || result.length === 0) return false
+	const row = result[0]
+	if (typeof row !== 'object' || row === null) return false
+	const value =
+		(row as { unlocked?: unknown; pg_advisory_unlock?: unknown }).unlocked ??
+		(row as { pg_advisory_unlock?: unknown }).pg_advisory_unlock
+	return value === true
+}
+
+export class SiteWriteLockAcquisitionError extends Error {
+	readonly errorKind: string
+
+	constructor(cause: unknown) {
+		super('Failed to acquire site-write lock')
+		this.name = 'SiteWriteLockAcquisitionError'
+		this.errorKind = databaseErrorKind(cause)
+	}
+}
+
+/**
+ * Run `fn` on an already-reserved connection while holding the per-site lock.
+ * The connection is released after normal acquisition/callback paths. An unlock
+ * failure closes its physical session so a potentially lock-owning backend
+ * cannot be reused or permanently consume a pool slot.
+ */
+export async function withReservedSiteWriteLock<T>(
+	conn: SiteWriteLockConnection,
+	did: string,
+	rkey: string,
+	fn: () => Promise<T>,
+	signal?: AbortSignal,
+): Promise<T> {
+	const lockId = siteWriteLockId(did, rkey)
+	let held = false
+	let connectionSafeToRelease = true
+	try {
+		try {
+			await runCancellableLockQuery(() => conn`SET lock_timeout = '120s'`, signal)
+			await runCancellableLockQuery(() => conn`SELECT pg_advisory_lock(${lockId}::bigint)`, signal)
+			held = true
+		} catch (error) {
+			if (signal?.aborted) {
+				// Cancellation can race a server-side lock grant. Never return this
+				// session to the pool unless it has been physically closed.
+				connectionSafeToRelease = false
+				try {
+					await conn.close({ timeout: 0 })
+				} catch (closeError) {
+					logger.error('[DB] Failed to close aborted site-write lock connection', undefined, {
+						did,
+						rkey,
+						errorKind: databaseErrorKind(closeError),
+					})
+				}
+			}
+			logger.error('[DB] Failed to acquire site-write lock', undefined, {
+				did,
+				rkey,
+				errorKind: databaseErrorKind(error),
+			})
+			throw new SiteWriteLockAcquisitionError(error)
+		}
+
+		try {
+			if (signal?.aborted) throw abortReason(signal)
+			return await fn()
+		} finally {
+			if (held) {
+				let unlockFailure: unknown
+				try {
+					const result = await conn`SELECT pg_advisory_unlock(${lockId}::bigint) AS unlocked`
+					if (!advisoryUnlockReturnedTrue(result)) unlockFailure = new Error('Advisory lock was not released')
+				} catch (error) {
+					unlockFailure = error
+				}
+
+				if (unlockFailure) {
+					// Advisory locks are session-scoped. A thrown unlock or a false
+					// result means this session must never return to the reusable pool.
+					connectionSafeToRelease = false
+					logger.error('[DB] Failed to release site-write lock; quarantining connection', undefined, {
+						did,
+						rkey,
+						errorKind: databaseErrorKind(unlockFailure),
+					})
+					try {
+						await conn.close({ timeout: 0 })
+					} catch (closeError) {
+						// Cleanup must not replace a callback failure or expose driver details.
+						logger.error('[DB] Failed to close quarantined site-write lock connection', undefined, {
+							did,
+							rkey,
+							errorKind: databaseErrorKind(closeError),
+						})
+					}
+				}
+			}
+		}
+	} finally {
+		if (connectionSafeToRelease) {
+			try {
+				conn.release()
+			} catch (error) {
+				// Keep the callback/acquisition outcome intact if client cleanup fails.
+				logger.error('[DB] Failed to release site-write lock connection', undefined, {
+					did,
+					rkey,
+					errorKind: databaseErrorKind(error),
+				})
+			}
+		}
+	}
+}
+
+/**
  * Run `fn` while holding the per-site write lock, serializing all cache writers
  * for `${did}/${rkey}` across drivers and instances.
  *
- * Uses a blocking acquire (firehose updates must not be dropped) bounded by
- * lock_timeout so a stuck holder can't wedge the queue forever; on timeout it
- * proceeds without the lock rather than losing the update.
+ * Uses a blocking acquire bounded by lock_timeout so a stuck holder cannot wedge
+ * the queue forever. An acquisition timeout or database error fails closed: the
+ * caller receives an error and can retry without writing concurrently.
  */
-export async function withSiteWriteLock<T>(did: string, rkey: string, fn: () => Promise<T>): Promise<T> {
-	const lockId = Number(stringToLockId(siteWriteLockKey(did, rkey)))
-	const conn = await lockSql.reserve()
-	let held = false
+export async function withSiteWriteLock<T>(
+	did: string,
+	rkey: string,
+	fn: () => Promise<T>,
+	signal?: AbortSignal,
+): Promise<T> {
+	let conn: SiteWriteLockConnection
+
 	try {
-		try {
-			await conn`SET lock_timeout = '120s'`
-			await conn`SELECT pg_advisory_lock(${lockId})`
-			held = true
-		} catch (err) {
-			logger.warn(`[DB] Could not acquire site-write lock for ${did}/${rkey}; proceeding without it`, {
-				did,
-				rkey,
-				error: err instanceof Error ? err.message : String(err),
-			})
-		}
-
-		if (!held) {
-			return await fn()
-		}
-
-		try {
-			return await fn()
-		} finally {
-			await conn`SELECT pg_advisory_unlock(${lockId})`.catch((err) => {
-				logger.error('[DB] Failed to release site-write lock', err, { did, rkey })
-			})
-		}
-	} finally {
-		conn.release()
+		conn = await lockPool.reserve(signal)
+	} catch (error) {
+		logger.error('[DB] Failed to reserve site-write lock connection', undefined, {
+			did,
+			rkey,
+			errorKind: databaseErrorKind(error),
+		})
+		throw new SiteWriteLockAcquisitionError(error)
 	}
+
+	return await withReservedSiteWriteLock(conn, did, rkey, fn, signal)
 }
 
 // Read functions
@@ -215,6 +821,11 @@ export async function upsertSiteCache(
 	}
 }
 
+/** Keep an empty durable manifest so hosting can distinguish a confirmed delete from a projection/storage outage. */
+export async function markSiteCacheDeleted(did: string, rkey: string): Promise<void> {
+	await upsertSiteCache(did, rkey, DELETED_SITE_RECORD_CID, {})
+}
+
 export async function deleteSiteCache(did: string, rkey: string): Promise<void> {
 	await sql`DELETE FROM site_cache WHERE did = ${did} AND rkey = ${rkey}`
 }
@@ -293,7 +904,7 @@ export async function isSupporter(did: string): Promise<boolean> {
 }
 
 export async function closeDatabase(): Promise<void> {
-	await Promise.all([sql.end({ timeout: 5 }), lockSql.end({ timeout: 5 })])
+	await Promise.all([sql.end({ timeout: 5 }), lockPool.end({ timeout: 5 })])
 	logger.info('[DB] Database connections closed')
 }
 

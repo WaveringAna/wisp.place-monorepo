@@ -82,7 +82,9 @@ describe('DiskStorageTier - Recursive Directory Support', () => {
 			}
 
 			// Traversal segments are rejected before the cache-root containment check.
-			await expect(tier.set(metadata.key, data, metadata)).rejects.toThrow(/traversal segment|outside configured directory/)
+			await expect(tier.set(metadata.key, data, metadata)).rejects.toThrow(
+				/traversal segment|outside configured directory/,
+			)
 			expect(existsSync(traversalTarget)).toBe(false)
 		})
 

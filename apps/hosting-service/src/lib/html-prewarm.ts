@@ -6,6 +6,7 @@ const logger = createLogger('html-prewarm')
 const warmedSites = new Set<string>()
 const prewarmGeneration = new Map<string, number>()
 const prewarmInFlight = new Map<string, { generation: number; promise: Promise<void> }>()
+let prewarmEpoch = 0
 
 function getSiteKey(did: string, rkey: string): string {
 	return `${did}/${rkey}`
@@ -53,6 +54,7 @@ export function triggerSiteHtmlHotCacheWarmup(did: string, rkey: string): void {
 	if (warmedSites.has(siteKey)) return
 
 	const generation = prewarmGeneration.get(siteKey) ?? 0
+	const epoch = prewarmEpoch
 	const existing = prewarmInFlight.get(siteKey)
 	if (existing && existing.generation === generation) return
 
@@ -62,7 +64,7 @@ export function triggerSiteHtmlHotCacheWarmup(did: string, rkey: string): void {
 			try {
 				const { scannedKeys, warmedHtmlKeys, failedKeys } = await loadSiteHtmlKeysIntoHotTier(did, rkey)
 				const latestGeneration = prewarmGeneration.get(siteKey) ?? 0
-				if (latestGeneration !== generation) return
+				if (prewarmEpoch !== epoch || latestGeneration !== generation) return
 
 				// Remember successful scans even when there are no matching keys so repeated
 				// requests for the same missing/empty prefix cannot force repeated storage scans.
@@ -97,10 +99,18 @@ export function resetSiteHtmlHotCacheWarmup(did: string, rkey: string): void {
 	prewarmInFlight.delete(siteKey)
 }
 
-export function resetHtmlHotCacheWarmupForTests(): void {
+/** Reset all local prewarm state after a broad cache recovery. */
+export function resetAllHtmlHotCacheWarmups(): void {
+	// Fence existing background scans before forgetting their bookkeeping. A scan
+	// that started before broad cache recovery must not mark stale hot data warm.
+	prewarmEpoch += 1
 	warmedSites.clear()
 	prewarmGeneration.clear()
 	prewarmInFlight.clear()
+}
+
+export function resetHtmlHotCacheWarmupForTests(): void {
+	resetAllHtmlHotCacheWarmups()
 }
 
 export async function waitForSiteHtmlHotCacheWarmupForTests(did: string, rkey: string): Promise<void> {

@@ -1,333 +1,1357 @@
 import type { Main as WhRecord } from '@wispplace/lexicons/types/place/wisp/v2/wh'
 import { createLogger } from '@wispplace/observability'
 import { config } from '../config'
+import type { WebhookEntry } from './db'
+import * as database from './db'
+import * as delivery from './delivery'
 import {
-	deleteWebhookRecord,
-	findBacklinkWebhooks,
-	findWebhooksForDid,
-	loadAllWebhooks,
-	saveCursor,
-	upsertWebhookRecord,
-} from './db'
-import { deliverWebhook } from './delivery'
-import { JetstreamClient, type JetstreamEvent } from './jetstream'
-import { matchWebhooks } from './matcher'
-import { getCached, invalidate, setCached } from './registry'
+	buildJetstreamSubscriptionUrl,
+	JetstreamClient,
+	type JetstreamEvent,
+	type JetstreamOptions,
+	normalizeRelayIdentity,
+} from './jetstream'
+import {
+	collectAtUriReferences,
+	collectRelevantAtUriReferences,
+	type EventKind,
+	isDid,
+	matchWebhooks,
+	parseAtUri,
+	scopeDid,
+	validateWebhookRecord,
+} from './matcher'
+import {
+	BACKLINK_CACHE_KEY,
+	clearRegistryCache,
+	getCached,
+	getCacheGeneration,
+	invalidate,
+	invalidateMany,
+	setCachedIfCurrent,
+} from './registry'
 import { assertSafeWebhookUrlSyntax } from './webhook-url'
 
 const logger = createLogger('webhook-service:firehose')
 
-let lastEventTime = Date.now()
-let isConnected = false
+const WH_COLLECTION = 'place.wisp.v2.wh'
+const MAX_RELEVANT_REFERENCES =
+	typeof database.MAX_BACKLINK_REFERENCES_PER_EVENT === 'number' && database.MAX_BACKLINK_REFERENCES_PER_EVENT > 0
+		? database.MAX_BACKLINK_REFERENCES_PER_EVENT
+		: 100
+const DIRECT_STREAM = 'direct'
+const BACKLINK_STREAM = 'backlink'
+const REGISTRY_STREAM = 'registry'
+type StreamName = typeof DIRECT_STREAM | typeof BACKLINK_STREAM | typeof REGISTRY_STREAM
+
+export interface CursorRepository {
+	load(stream: StreamName, relay: string): Promise<number | undefined>
+	save(stream: StreamName, cursor: number, relay: string): Promise<void>
+}
+
+export interface PriorReferenceSnapshot {
+	references: readonly string[]
+	timeUs?: number
+	rev?: string
+}
+
+/** Durable, bounded backlink state. It deliberately stores references, never whole records. */
+export interface PriorReferenceRepository {
+	load(eventAtUri: string): Promise<PriorReferenceSnapshot | undefined>
+	save(eventAtUri: string, references: readonly string[], timeUs: number, rev: string): Promise<void>
+	delete(eventAtUri: string, timeUs: number, rev: string): Promise<void>
+}
+
+export interface DurableDeliveryEvent {
+	relay: string
+	timeUs: number
+	rev: string
+	operation: EventKind
+	did: string
+	collection: string
+	rkey: string
+	cid?: string
+	record?: unknown
+}
+
+export type EnqueueWebhookDeliveries = (
+	entries: readonly WebhookEntry[],
+	event: DurableDeliveryEvent,
+) => Promise<{ enqueued: number; deduplicated: number }>
+
+export interface FirehoseStartOptions {
+	/** Test seam. Production uses the durable DB cursor repository. */
+	cursorRepository?: CursorRepository
+	/** Test seam. Production requires the durable DB prior-reference repository. */
+	referenceRepository?: PriorReferenceRepository
+	enqueueWebhookDeliveries?: EnqueueWebhookDeliveries
+	/** Test seam. Production writes an idempotent redacted intake quarantine row. */
+	recordWebhookIntakeQuarantine?: typeof database.recordWebhookIntakeQuarantine
+	createJetstreamClient?: (options: JetstreamOptions) => JetstreamClient
+	/** Compatibility seam for tests; each stream remains independent in production. */
+	cursors?: Partial<Record<StreamName, number>>
+	/** Capture relay events without invoking handlers until startup reconciliation finishes. */
+	paused?: boolean
+}
+
+interface RuntimeDependencies {
+	cursorRepository: CursorRepository
+	referenceRepository: PriorReferenceRepository
+	enqueueWebhookDeliveries: EnqueueWebhookDeliveries
+	recordWebhookIntakeQuarantine: typeof database.recordWebhookIntakeQuarantine
+	createJetstreamClient: (options: JetstreamOptions) => JetstreamClient
+}
+
+interface WhMutationResult {
+	deliveryRecord?: WhRecord
+	selfKey: string
+	/** Deterministic malformed/unsafe registration: revoke and acknowledge, never replay forever. */
+	ackableInvalid?: true
+}
+
+let lastEventTime = 0
 let totalEvents = 0
 let totalMatched = 0
-
-export function getFirehoseHealth() {
-	return {
-		connected: isConnected,
-		lastEventTime,
-		timeSinceLastEvent: Date.now() - lastEventTime,
-		healthy: isConnected && Date.now() - lastEventTime < 60_000,
-	}
-}
-
-export function getEventStats() {
-	return { events: totalEvents, matched: totalMatched }
-}
-
-let directScopeDids = new Set<string>()
-let backlinkScopeDids = new Set<string>()
+let tooComplexBacklinkEvents = 0
+let invalidRegistryRecords = 0
+let invalidDeliveryInputEvents = 0
+let rejectedSubscriptionAdmissions = 0
+let registrySnapshotOverflow = false
 let firehoseStarted = false
+let stopping = false
+let reconfigureScheduled = false
+let reconfiguring: Promise<void> | null = null
+let directRestartCursorHint: number | undefined
+let backlinkRestartCursorHint: number | undefined
+let forceStreamRestart = false
+let refreshRegistryPromise: Promise<void> | null = null
+let intakePaused = false
+const CURSOR_SAFETY_REWIND_US = 2_000_000
+let dependencies: RuntimeDependencies | null = null
 
-function setsEqual(a: Set<string>, b: Set<string>): boolean {
-	if (a.size !== b.size) return false
-	for (const v of a) if (!b.has(v)) return false
-	return true
+let scopeDids = new Set<string>()
+let ownerDids = new Set<string>()
+let backlinkScopeDids = new Set<string>()
+let directWantedDids = new Set<string>()
+
+let directJetstream: JetstreamClient | null = null
+let backlinkJetstream: JetstreamClient | null = null
+// Always-on, collection-filtered discovery stream. It is the sole mutation path
+// for webhook registrations, including an owner's first-ever record.
+let registryJetstream: JetstreamClient | null = null
+const allClients = new Set<JetstreamClient>()
+
+const cursorWriteTails = new Map<StreamName, Promise<void>>()
+
+function safeError(stream: StreamName): void {
+	logger.warn(`[${stream}] intake event failed; cursor was not advanced`)
 }
 
-export function initScopeDids(webhooks: Array<{ record: { scope: { aturi: string; backlinks?: boolean } } }>): void {
-	const newDirectDids = new Set<string>()
-	const newBacklinkDids = new Set<string>()
-	for (const w of webhooks) {
-		const did = w.record.scope.aturi.replace(/^at:\/\//, '').split('/')[0]
-		if (!did) continue
-		newDirectDids.add(did)
-		if (w.record.scope.backlinks) newBacklinkDids.add(did)
-	}
-
-	const directChanged = !setsEqual(directScopeDids, newDirectDids)
-	const backlinkChanged = !setsEqual(backlinkScopeDids, newBacklinkDids)
-
-	directScopeDids = newDirectDids
-	backlinkScopeDids = newBacklinkDids
-
-	logger.info(`[registry] tracking ${directScopeDids.size} scope DID(s), ${backlinkScopeDids.size} with backlinks`)
-
-	if (!firehoseStarted) return
-
-	if (directChanged) {
-		restartDirectJetstream()
-	}
-
-	if (backlinkChanged) {
-		if (backlinkScopeDids.size > 0 && !backlinkJetstream) {
-			startBacklinkJetstream()
-		} else if (backlinkScopeDids.size === 0 && backlinkJetstream) {
-			stopBacklinkJetstream()
-		}
-	}
+function sortedDids(values: ReadonlySet<string>): string[] {
+	return [...values].sort()
 }
 
-function extractAtUriDids(obj: unknown, found: Set<string>): void {
-	if (typeof obj === 'string') {
-		if (obj.startsWith('at://')) {
-			const rest = obj.slice(5)
-			const slash = rest.indexOf('/')
-			const did = slash === -1 ? rest : rest.slice(0, slash)
-			if (did) found.add(did)
-		}
-		return
-	}
-	if (Array.isArray(obj)) {
-		for (const v of obj) extractAtUriDids(v, found)
-		return
-	}
-	if (obj !== null && typeof obj === 'object') {
-		for (const v of Object.values(obj)) extractAtUriDids(v, found)
-	}
+function eventAtUri(did: string, collection: string, rkey: string): string {
+	return `at://${did}/${collection}/${rkey}`
 }
 
-function recordReferencesAnyOf(record: unknown, dids: Set<string>): boolean {
-	if (record == null || dids.size === 0) return false
-	const found = new Set<string>()
-	extractAtUriDids(record, found)
-	for (const did of found) {
-		if (dids.has(did)) return true
+function normalizeReferences(references: readonly string[]): string[] {
+	const result = new Set<string>()
+	for (const reference of references) {
+		const parsed = parseAtUri(reference)
+		if (!parsed || !backlinkScopeDids.has(parsed.did)) continue
+		result.add(
+			`at://${parsed.did}${parsed.collection ? `/${parsed.collection}` : ''}${parsed.rkey ? `/${parsed.rkey}` : ''}`,
+		)
+		if (result.size >= 256) break
+	}
+	return [...result]
+}
+
+function currentReferences(record: unknown): { references: string[]; tooComplex: boolean } {
+	const collected = collectRelevantAtUriReferences(
+		record,
+		(reference) => {
+			const parsed = parseAtUri(reference)
+			return parsed !== null && backlinkScopeDids.has(parsed.did)
+		},
+		MAX_RELEVANT_REFERENCES,
+	)
+	return { references: normalizeReferences(collected.references), tooComplex: collected.tooComplex }
+}
+
+function referencesIntersectActiveScopes(references: readonly string[]): boolean {
+	for (const reference of references) {
+		const parsed = parseAtUri(reference)
+		if (parsed && backlinkScopeDids.has(parsed.did)) return true
 	}
 	return false
 }
 
-async function getWebhooksForEvent(eventDid: string, eventRecord: unknown) {
-	let direct = getCached(eventDid)
-	if (!direct) {
-		direct = await findWebhooksForDid(eventDid)
-		setCached(eventDid, direct)
-	}
-
-	let backlink = getCached('__backlinks__')
-	if (!backlink || backlink.length === 0) {
-		backlink = await findBacklinkWebhooks()
-		if (backlink.length > 0) setCached('__backlinks__', backlink)
-	}
-
-	const includeBacklinks = backlink.length > 0 && recordReferencesAnyOf(eventRecord, backlinkScopeDids)
-	if (!includeBacklinks) return direct
-
-	const seen = new Set(direct.map((e) => `${e.ownerDid}/${e.rkey}`))
-	const combined = [...direct]
+function mergeEntries(direct: readonly WebhookEntry[], backlink: readonly WebhookEntry[]): WebhookEntry[] {
+	const result = [...direct]
+	const seen = new Set(result.map((entry) => `${entry.ownerDid}/${entry.rkey}`))
 	for (const entry of backlink) {
-		const k = `${entry.ownerDid}/${entry.rkey}`
-		if (!seen.has(k)) {
-			seen.add(k)
-			combined.push(entry)
-		}
+		const key = `${entry.ownerDid}/${entry.rkey}`
+		if (seen.has(key)) continue
+		seen.add(key)
+		result.push(entry)
 	}
-	return combined
+	return result
 }
 
-async function deliver(
-	did: string,
-	collection: string,
-	rkey: string,
-	op: string,
-	cid: string | undefined,
-	record: unknown,
-): Promise<void> {
-	const candidates = await getWebhooksForEvent(did, record)
-	if (candidates.length === 0) return
-
-	const matched = matchWebhooks(candidates, did, collection, rkey, op as any, record)
-
-	if (process.env.FILTER_DEBUG) {
-		for (const c of candidates) {
-			logger.debug(
-				matched.includes(c)
-					? `[filter] ✓ ${c.ownerDid}/${c.rkey}  scope=${c.record.scope.aturi}`
-					: `[filter] ✗ ${c.ownerDid}/${c.rkey}  scope=${c.record.scope.aturi}`,
-			)
-		}
+function entriesForTrackedKeys(keys: Iterable<string> | undefined): WebhookEntry[] {
+	if (!keys) return []
+	const entries: WebhookEntry[] = []
+	for (const key of keys) {
+		const tracked = trackedWebhooks.get(key)
+		if (!tracked) continue
+		entries.push({ ownerDid: tracked.ownerDid, rkey: tracked.rkey, record: tracked.record })
 	}
-
-	if (matched.length === 0) return
-	totalMatched += matched.length
-	logger.info(`[deliver] ${op} ${did}/${collection}/${rkey} → ${matched.length} webhook(s)`)
-	await Promise.allSettled(matched.map((entry) => deliverWebhook(entry, did, collection, rkey, op as any, cid, record)))
+	return entries
 }
 
-async function handleWhRecord(op: string, did: string, rkey: string, record: unknown): Promise<void> {
-	logger.info(`[wh] ${op} ${did}/${rkey}`)
-	let changed = true
-	if (op === 'delete') {
-		deleteWebhookRecord(did, rkey).catch((err) => logger.error(`[DB] delete ${did}/${rkey}`, err))
-	} else if (record) {
-		const wh = record as WhRecord
-		if (!wh.scope?.aturi || !wh.url) {
-			logger.error(`[wh] Skipping ${did}/${rkey} — invalid record`, { record })
-			return
-		}
-		try {
-			assertSafeWebhookUrlSyntax(wh.url)
-		} catch (err) {
-			logger.error(`[wh] Skipping ${did}/${rkey} — unsafe webhook URL`, { err })
-			return
-		}
-		logger.info(`[wh] scope=${wh.scope.aturi} url=${wh.url} enabled=${wh.enabled ?? true}`)
-		changed = await upsertWebhookRecord(did, rkey, wh).catch((err) => {
-			logger.error(`[DB] upsert ${did}/${rkey}`, err)
-			return false
+function cachedTrackedEntries(key: string, keys: Iterable<string> | undefined): readonly WebhookEntry[] {
+	const cached = getCached(key)
+	if (cached !== undefined) return cached
+	const generation = getCacheGeneration(key)
+	const entries = entriesForTrackedKeys(keys)
+	// This is synchronous today, but retain the generation fence so future async
+	// candidate sources cannot repopulate a mutation-invalidated entry.
+	if (setCachedIfCurrent(key, entries, generation)) return getCached(key) ?? entries
+	return entriesForTrackedKeys(keys)
+}
+
+async function getWebhooksForEvent(eventDid: string, referenceRecord: unknown): Promise<WebhookEntry[]> {
+	const direct = cachedTrackedEntries(eventDid, scopeWebhookKeys.get(eventDid))
+	const backlink = cachedTrackedEntries(BACKLINK_CACHE_KEY, backlinkWebhookKeys)
+	if (backlink.length === 0 || !referencesIntersectActiveScopes(collectAtUriReferences(referenceRecord))) {
+		return [...direct]
+	}
+	return mergeEntries(direct, backlink)
+}
+
+function defaultCursorRepository(): CursorRepository {
+	const api = database as typeof database & {
+		loadCursorForStream?: (stream: string, relay: string) => Promise<number | undefined>
+		saveCursorForStream?: (stream: string, cursor: number, relay: string) => Promise<void>
+		saveCursor?:
+			| ((cursor: number, relay: string) => Promise<void>)
+			| ((stream: string, cursor: number, relay: string) => Promise<void>)
+	}
+	return {
+		async load(stream, relay) {
+			if (api.loadCursorForStream) return api.loadCursorForStream(stream, relay)
+			// Legacy installs have only one cursor. Never reuse it for unrelated streams.
+			if (stream === DIRECT_STREAM) return database.loadCursor(relay)
+			throw new Error('Independent durable cursor storage is unavailable')
+		},
+		async save(stream, cursor, relay) {
+			if (api.saveCursorForStream) return api.saveCursorForStream(stream, cursor, relay)
+			if (api.saveCursor && api.saveCursor.length >= 3) {
+				return (api.saveCursor as (stream: string, cursor: number, relay: string) => Promise<void>)(
+					stream,
+					cursor,
+					relay,
+				)
+			}
+			if (stream === DIRECT_STREAM) return database.saveCursor(cursor, relay)
+			throw new Error('Independent durable cursor storage is unavailable')
+		},
+	}
+}
+
+function defaultReferenceRepository(): PriorReferenceRepository {
+	const api = database as typeof database & {
+		loadPriorReferenceIndex?: (eventAtUri: string) => Promise<PriorReferenceSnapshot | undefined>
+		savePriorReferenceIndex?: (
+			eventAtUri: string,
+			references: readonly string[],
+			timeUs: number,
+			rev: string,
+		) => Promise<void>
+		deletePriorReferenceIndex?: (eventAtUri: string, timeUs: number, rev: string) => Promise<void>
+	}
+	return {
+		async load(key) {
+			if (!api.loadPriorReferenceIndex) throw new Error('Durable prior-reference storage is unavailable')
+			return api.loadPriorReferenceIndex(key)
+		},
+		async save(key, references, timeUs, rev) {
+			if (!api.savePriorReferenceIndex) throw new Error('Durable prior-reference storage is unavailable')
+			return api.savePriorReferenceIndex(key, references, timeUs, rev)
+		},
+		async delete(key, timeUs, rev) {
+			if (!api.deletePriorReferenceIndex) throw new Error('Durable prior-reference storage is unavailable')
+			return api.deletePriorReferenceIndex(key, timeUs, rev)
+		},
+	}
+}
+
+function defaultEnqueueWebhookDeliveries(): EnqueueWebhookDeliveries {
+	const api = delivery as typeof delivery & { enqueueWebhookDeliveries?: EnqueueWebhookDeliveries }
+	return async (entries, event) => {
+		if (!api.enqueueWebhookDeliveries) throw new Error('Durable webhook delivery queue is unavailable')
+		return api.enqueueWebhookDeliveries(entries, event)
+	}
+}
+
+function currentDependencies(): RuntimeDependencies {
+	if (!dependencies) throw new Error('Firehose was not started')
+	return dependencies
+}
+
+/** A small mutex for registry-state snapshots versus live WH mutations. */
+class AsyncMutex {
+	private tail: Promise<void> = Promise.resolve()
+
+	async run<T>(operation: () => Promise<T>): Promise<T> {
+		const previous = this.tail
+		let release: (() => void) | undefined
+		this.tail = new Promise<void>((resolve) => {
+			release = resolve
 		})
+		await previous.catch(() => undefined)
+		try {
+			return await operation()
+		} finally {
+			release?.()
+		}
+	}
+}
+
+const registryStateMutex = new AsyncMutex()
+
+class KeyedSerialExecutor {
+	private readonly tails = new Map<string, Promise<void>>()
+
+	constructor(private readonly maxKeys: number) {}
+
+	async run(key: string, task: () => Promise<void>): Promise<void> {
+		const previous = this.tails.get(key)
+		if (!previous && this.tails.size >= this.maxKeys) throw new Error('Intake record-key limit reached')
+		const current = previous ? previous.then(task) : task()
+		this.tails.set(key, current)
+		try {
+			await current
+		} finally {
+			if (this.tails.get(key) === current) this.tails.delete(key)
+		}
+	}
+
+	get size(): number {
+		return this.tails.size
+	}
+}
+
+const recordExecutor = new KeyedSerialExecutor(config.intakeRecordKeyMax)
+
+/**
+ * Rebuild tracked owner/scope DID sets. Owner DIDs are always subscribed so a
+ * webhook owned by A and scoped to B still receives A's future update/delete.
+ */
+interface TrackedWebhook {
+	readonly ownerDid: string
+	readonly rkey: string
+	readonly scopeDid: string
+	readonly backlinks: boolean
+	readonly record: WhRecord
+}
+
+const trackedWebhooks = new Map<string, TrackedWebhook>()
+const scopeWebhookKeys = new Map<string, Set<string>>()
+const backlinkWebhookKeys = new Set<string>()
+const ownerRefCounts = new Map<string, number>()
+const scopeRefCounts = new Map<string, number>()
+const backlinkScopeRefCounts = new Map<string, number>()
+
+const DIRECT_SUBSCRIPTION_PARAMETER_BYTES = Buffer.byteLength('&wantedDids=')
+const DIRECT_SUBSCRIPTION_CURSOR_RESERVE_BYTES = Buffer.byteLength(`&cursor=${Number.MAX_SAFE_INTEGER}`)
+let directSubscriptionUrlBytes = Buffer.byteLength(new URL(config.jetstreamUrl).toString())
+
+function wantedDidBytes(did: string): number {
+	return DIRECT_SUBSCRIPTION_PARAMETER_BYTES + Buffer.byteLength(encodeURIComponent(did))
+}
+
+function projectedCount(
+	counts: ReadonlyMap<string, number>,
+	did: string,
+	prior: TrackedWebhook | undefined,
+	next: TrackedWebhook | undefined,
+	field: keyof TrackedWebhook,
+): number {
+	let value = counts.get(did) ?? 0
+	if (prior?.[field] === did) value--
+	if (next?.[field] === did) value++
+	return value
+}
+
+function projectedBooleanCount(
+	counts: ReadonlyMap<string, number>,
+	did: string,
+	prior: TrackedWebhook | undefined,
+	next: TrackedWebhook | undefined,
+): number {
+	let value = counts.get(did) ?? 0
+	if (prior?.backlinks && prior.scopeDid === did) value--
+	if (next?.backlinks && next.scopeDid === did) value++
+	return value
+}
+
+function canAdmitTrackedWebhook(key: string, next: TrackedWebhook): boolean {
+	const prior = trackedWebhooks.get(key)
+	if (!prior && trackedWebhooks.size >= config.registryActiveSubscriptionsMax) return false
+	if (!prior && (ownerRefCounts.get(next.ownerDid) ?? 0) >= config.registryOwnerActiveRecordsMax) return false
+
+	const affected = affectedDids(prior, next)
+	let projectedScopeDids = scopeDids.size
+	let projectedBacklinkScopes = backlinkScopeDids.size
+	let projectedDirectDids = directWantedDids.size
+	let projectedUrlBytes = directSubscriptionUrlBytes
+	for (const did of affected) {
+		const oldScope = (scopeRefCounts.get(did) ?? 0) > 0
+		const newScope = projectedCount(scopeRefCounts, did, prior, next, 'scopeDid') > 0
+		if (!oldScope && newScope) projectedScopeDids++
+		if (oldScope && !newScope) projectedScopeDids--
+
+		const oldBacklink = (backlinkScopeRefCounts.get(did) ?? 0) > 0
+		const newBacklink = projectedBooleanCount(backlinkScopeRefCounts, did, prior, next) > 0
+		if (!oldBacklink && newBacklink) projectedBacklinkScopes++
+		if (oldBacklink && !newBacklink) projectedBacklinkScopes--
+
+		const oldDirect = directWantedDids.has(did)
+		const newDirect =
+			projectedCount(ownerRefCounts, did, prior, next, 'ownerDid') +
+				projectedCount(scopeRefCounts, did, prior, next, 'scopeDid') >
+			0
+		if (!oldDirect && newDirect) {
+			projectedDirectDids++
+			projectedUrlBytes += wantedDidBytes(did)
+		}
+		if (oldDirect && !newDirect) {
+			projectedDirectDids--
+			projectedUrlBytes -= wantedDidBytes(did)
+		}
+	}
+	return (
+		projectedScopeDids <= config.registryDirectScopeDidsMax &&
+		projectedBacklinkScopes <= config.registryBacklinkScopeDidsMax &&
+		projectedDirectDids <= config.registryDirectScopeDidsMax &&
+		projectedUrlBytes + DIRECT_SUBSCRIPTION_CURSOR_RESERVE_BYTES <= config.registrySubscriptionUrlBytesMax
+	)
+}
+
+function canAdmitSubscription(ownerDid: string, rkey: string, record: WhRecord): boolean {
+	const next = trackedWebhook(ownerDid, rkey, record)
+	return next !== undefined && canAdmitTrackedWebhook(`${ownerDid}/${rkey}`, next)
+}
+
+function adjustCount(counts: Map<string, number>, values: Set<string>, value: string, delta: 1 | -1): void {
+	const next = (counts.get(value) ?? 0) + delta
+	if (next <= 0) {
+		counts.delete(value)
+		values.delete(value)
 	} else {
-		logger.warn(`[wh] ${op} ${did}/${rkey} — record missing`)
-		return
+		counts.set(value, next)
+		values.add(value)
 	}
-	if (!changed) {
-		logger.debug(`[wh] ${did}/${rkey} unchanged, skipping reload`)
-		return
-	}
-	invalidate(did)
-	invalidate('__backlinks__')
-	loadAllWebhooks()
-		.then(initScopeDids)
-		.catch(() => {})
 }
 
-let directJetstream: JetstreamClient | null = null
+function refreshDirectDid(did: string): void {
+	const wasTracked = directWantedDids.has(did)
+	const shouldTrack = (ownerRefCounts.get(did) ?? 0) + (scopeRefCounts.get(did) ?? 0) > 0
+	if (!wasTracked && shouldTrack) {
+		directWantedDids.add(did)
+		directSubscriptionUrlBytes += wantedDidBytes(did)
+	} else if (wasTracked && !shouldTrack) {
+		directWantedDids.delete(did)
+		directSubscriptionUrlBytes -= wantedDidBytes(did)
+	}
+}
 
-async function handleDirectEvent(event: JetstreamEvent): Promise<void> {
+function trackedWebhook(ownerDid: string, rkey: string, record: unknown): TrackedWebhook | undefined {
+	if (!isDid(ownerDid)) {
+		invalidRegistryRecords++
+		return undefined
+	}
+	const validated = validateWebhookRecord(record)
+	if (!validated) {
+		invalidRegistryRecords++
+		return undefined
+	}
+	// Disabled records remain durable state/history, but have no active scope or
+	// delivery effect and therefore consume no admission/index capacity.
+	if (validated.enabled === false) return undefined
+	const scope = parseAtUri(validated.scope.aturi)
+	if (!scope) return undefined
+	return { ownerDid, rkey, scopeDid: scope.did, backlinks: validated.scope.backlinks === true, record: validated }
+}
+
+function addTrackedWebhook(key: string, entry: TrackedWebhook): void {
+	trackedWebhooks.set(key, entry)
+	let scoped = scopeWebhookKeys.get(entry.scopeDid)
+	if (!scoped) {
+		scoped = new Set<string>()
+		scopeWebhookKeys.set(entry.scopeDid, scoped)
+	}
+	scoped.add(key)
+	if (entry.backlinks) backlinkWebhookKeys.add(key)
+	adjustCount(ownerRefCounts, ownerDids, entry.ownerDid, 1)
+	adjustCount(scopeRefCounts, scopeDids, entry.scopeDid, 1)
+	if (entry.backlinks) adjustCount(backlinkScopeRefCounts, backlinkScopeDids, entry.scopeDid, 1)
+	refreshDirectDid(entry.ownerDid)
+	refreshDirectDid(entry.scopeDid)
+}
+
+function removeTrackedWebhook(key: string): TrackedWebhook | undefined {
+	const entry = trackedWebhooks.get(key)
+	if (!entry) return undefined
+	trackedWebhooks.delete(key)
+	const scoped = scopeWebhookKeys.get(entry.scopeDid)
+	scoped?.delete(key)
+	if (scoped?.size === 0) scopeWebhookKeys.delete(entry.scopeDid)
+	if (entry.backlinks) backlinkWebhookKeys.delete(key)
+	adjustCount(ownerRefCounts, ownerDids, entry.ownerDid, -1)
+	adjustCount(scopeRefCounts, scopeDids, entry.scopeDid, -1)
+	if (entry.backlinks) adjustCount(backlinkScopeRefCounts, backlinkScopeDids, entry.scopeDid, -1)
+	refreshDirectDid(entry.ownerDid)
+	refreshDirectDid(entry.scopeDid)
+	return entry
+}
+
+function affectedDids(...entries: Array<TrackedWebhook | undefined>): Set<string> {
+	const result = new Set<string>()
+	for (const entry of entries) {
+		if (!entry) continue
+		result.add(entry.ownerDid)
+		result.add(entry.scopeDid)
+	}
+	return result
+}
+
+function applyTrackedWebhookMutation(
+	ownerDid: string,
+	rkey: string,
+	newRecord: WhRecord | undefined,
+	registrationCursorHint?: number,
+	schedule = true,
+): void {
+	const key = `${ownerDid}/${rkey}`
+	const prior = trackedWebhooks.get(key)
+	const next = newRecord ? trackedWebhook(ownerDid, rkey, newRecord) : undefined
+	const affected = affectedDids(prior, next)
+	const previousDirect = new Map([...affected].map((did) => [did, directWantedDids.has(did)]))
+	const previousBacklinks = new Map([...affected].map((did) => [did, backlinkScopeDids.has(did)]))
+	removeTrackedWebhook(key)
+	if (next) addTrackedWebhook(key, next)
+	let changed = false
+	for (const did of affected) {
+		if (previousDirect.get(did) !== directWantedDids.has(did)) changed = true
+		if (previousBacklinks.get(did) !== backlinkScopeDids.has(did)) changed = true
+	}
+	if (schedule && changed && firehoseStarted && !stopping) scheduleReconfigure(registrationCursorHint)
+}
+
+function sameDidSet(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
+	if (left.size !== right.size) return false
+	for (const did of left) {
+		if (!right.has(did)) return false
+	}
+	return true
+}
+
+/** Rebuild the bounded in-memory subscription index from reconciliation-filtered DB rows. */
+export function initScopeDids(webhooks: ReadonlyArray<{ did: string; rkey?: string; record: unknown }>): void {
+	clearRegistryCache()
+	trackedWebhooks.clear()
+	scopeWebhookKeys.clear()
+	backlinkWebhookKeys.clear()
+	ownerRefCounts.clear()
+	scopeRefCounts.clear()
+	backlinkScopeRefCounts.clear()
+	scopeDids = new Set<string>()
+	ownerDids = new Set<string>()
+	backlinkScopeDids = new Set<string>()
+	directWantedDids = new Set<string>()
+	directSubscriptionUrlBytes = Buffer.byteLength(new URL(config.jetstreamUrl).toString())
+	const ordered = [...webhooks].sort((left, right) =>
+		`${left.did}/${left.rkey ?? ''}`.localeCompare(`${right.did}/${right.rkey ?? ''}`),
+	)
+	for (const webhook of ordered) {
+		if (!webhook.rkey || !isDid(webhook.did)) continue
+		const entry = trackedWebhook(webhook.did, webhook.rkey, webhook.record)
+		if (!entry) continue
+		const key = `${webhook.did}/${webhook.rkey}`
+		if (!canAdmitTrackedWebhook(key, entry)) {
+			rejectedSubscriptionAdmissions++
+			continue
+		}
+		addTrackedWebhook(key, entry)
+	}
+}
+
+async function findExistingWebhook(ownerDid: string, rkey: string): Promise<WebhookEntry | undefined> {
+	// This is a primary-key lookup, not a full registry scan: the global registry
+	// consumer must have strictly bounded work for each WH mutation.
+	return database.getWebhookRecord(ownerDid, rkey)
+}
+
+async function loadTrackableWebhooks(): Promise<database.ActiveWebhookLoadResult> {
+	return database.loadActiveWebhooks()
+}
+
+function replaceTrackedOwner(
+	ownerDid: string,
+	rows: readonly { did: string; rkey: string; record: WhRecord }[],
+	registrationCursorHint?: number,
+): void {
+	clearRegistryCache()
+	// A reconciliation swap may remove and immediately re-add the same DID. Batch
+	// those mutations so a no-op owner refresh cannot churn live subscriptions.
+	const priorDirectDids = new Set(directWantedDids)
+	const priorBacklinkDids = new Set(backlinkScopeDids)
+	const priorKeys = [...trackedWebhooks.entries()]
+		.filter(([, entry]) => entry.ownerDid === ownerDid)
+		.map(([key]) => key)
+		.sort()
+	for (const key of priorKeys) {
+		const rkey = key.slice(ownerDid.length + 1)
+		applyTrackedWebhookMutation(ownerDid, rkey, undefined, undefined, false)
+	}
+	const ordered = rows
+		.filter((row) => row.did === ownerDid)
+		.slice()
+		.sort((left, right) => left.rkey.localeCompare(right.rkey))
+	for (const row of ordered) applyTrackedWebhookMutation(ownerDid, row.rkey, row.record, undefined, false)
+	if (
+		firehoseStarted &&
+		!stopping &&
+		(!sameDidSet(priorDirectDids, directWantedDids) || !sameDidSet(priorBacklinkDids, backlinkScopeDids))
+	) {
+		// Replay from the registry stream's acknowledged boundary. This closes the
+		// interval between a PDS snapshot becoming active and its direct stream swap.
+		scheduleReconfigure(registrationCursorHint)
+	}
+}
+
+/** Incremental, bounded owner swap used for reconciliation transitions. */
+export function refreshRegistryOwnerFromDatabase(ownerDid: string): Promise<void> {
+	return registryStateMutex.run(async () => {
+		const snapshot = await database.loadActiveWebhooksForOwner(ownerDid)
+		registrySnapshotOverflow ||= snapshot.overflow
+		replaceTrackedOwner(ownerDid, snapshot.rows, registryJetstream?.cursor)
+	})
+}
+
+async function reloadRegistry(
+	oldRecord: WhRecord | undefined,
+	newRecord: WhRecord | undefined,
+	ownerDid: string,
+	rkey: string,
+	registrationCursorHint?: number,
+): Promise<void> {
+	const keys = new Set<string>([ownerDid])
+	const oldScope = oldRecord ? scopeDid(oldRecord.scope.aturi) : undefined
+	const newScope = newRecord ? scopeDid(newRecord.scope.aturi) : undefined
+	if (oldScope) keys.add(oldScope)
+	if (newScope) keys.add(newScope)
+	invalidateMany(keys)
+	invalidate(BACKLINK_CACHE_KEY)
+	// Apply just this mutation to the in-memory sets. The global registry stream
+	// never performs a load-all scan per event.
+	applyTrackedWebhookMutation(ownerDid, rkey, newRecord, registrationCursorHint)
+}
+
+/**
+ * Coalesced reconciliation-transition hook. It clears potentially stale cached
+ * candidates and reloads only status-eligible, sanitized records. A force restart
+ * replays each stream from its durable cursor; no callback can restart after stop.
+ */
+export function refreshRegistryFromDatabase(): Promise<void> {
+	if (refreshRegistryPromise) return refreshRegistryPromise
+	refreshRegistryPromise = registryStateMutex
+		.run(async () => {
+			// Holding the mutex across this bounded status-filtered snapshot prevents a
+			// live WH mutation from being overwritten by an older DB result. The
+			// synchronous init swap invalidates caches only once the snapshot arrived.
+			const snapshot = await loadTrackableWebhooks()
+			registrySnapshotOverflow = snapshot.overflow
+			initScopeDids(snapshot.rows)
+			if (firehoseStarted && !stopping && !intakePaused) scheduleReconfigure(undefined, true)
+		})
+		.finally(() => {
+			refreshRegistryPromise = null
+		})
+	return refreshRegistryPromise
+}
+
+async function disableInvalidWebhook(
+	ownerDid: string,
+	rkey: string,
+	oldRecord: WhRecord | undefined,
+	source: { revision: string; cid?: string; timeUs: number },
+): Promise<void> {
+	const applied = await database.deleteWebhookRecord(ownerDid, rkey, source)
+	if (applied && oldRecord) await reloadRegistry(oldRecord, undefined, ownerDid, rkey, source.timeUs)
+}
+
+async function handleWhRecord(
+	op: EventKind,
+	ownerDid: string,
+	rkey: string,
+	record: unknown,
+	source: { revision: string; cid?: string; timeUs: number },
+): Promise<WhMutationResult> {
+	const existing = await findExistingWebhook(ownerDid, rkey)
+	const oldRecord = existing?.record
+	const selfKey = `${ownerDid}/${rkey}`
+
+	if (op === 'delete') {
+		// Delete is source-fenced before invalidating caches or acknowledging the cursor.
+		const applied = await database.deleteWebhookRecord(ownerDid, rkey, source)
+		if (applied && oldRecord) await reloadRegistry(oldRecord, undefined, ownerDid, rkey, source.timeUs)
+		return { selfKey }
+	}
+
+	const validated = validateWebhookRecord(record)
+	if (!validated) {
+		invalidRegistryRecords++
+		// An invalid update must revoke an older valid endpoint rather than leave it
+		// active indefinitely. The malformed record itself is never stored or used.
+		await disableInvalidWebhook(ownerDid, rkey, oldRecord, source)
+		return { selfKey, ackableInvalid: true }
+	}
 	try {
-		if (event.kind !== 'commit' || !event.commit) return
-		lastEventTime = Date.now()
-		const { did } = event
-		const { operation: op, collection, rkey, record, cid } = event.commit
-		if (op !== 'create' && op !== 'update' && op !== 'delete') return
+		assertSafeWebhookUrlSyntax(validated.url)
+	} catch {
+		invalidRegistryRecords++
+		await disableInvalidWebhook(ownerDid, rkey, oldRecord, source)
+		return { selfKey, ackableInvalid: true }
+	}
+
+	if (validated.enabled !== false && !canAdmitSubscription(ownerDid, rkey, validated)) {
+		rejectedSubscriptionAdmissions++
+		// Do not retain an old scope when a valid update cannot be admitted: that
+		// would keep delivering to a stale endpoint forever. A new over-cap record
+		// is omitted; an existing one is durably revoked before acknowledgement.
+		if (oldRecord) await disableInvalidWebhook(ownerDid, rkey, oldRecord, source)
+		await database.recordWebhookIntakeQuarantine({
+			relay: normalizeRelayIdentity(config.jetstreamUrl),
+			timeUs: source.timeUs,
+			rev: source.revision,
+			did: ownerDid,
+			collection: WH_COLLECTION,
+			rkey,
+			reason: 'invalid_subscription',
+		})
+		logger.warn('[registry] active subscription admission limit reached; event quarantined')
+		return { selfKey, ackableInvalid: true }
+	}
+
+	const changed = await database.upsertWebhookRecord(ownerDid, rkey, validated, source)
+	if (changed) await reloadRegistry(oldRecord, validated, ownerDid, rkey, source.timeUs)
+	return { deliveryRecord: validated, selfKey }
+}
+
+async function enqueueMatched(
+	event: JetstreamEvent,
+	backlinkRecord: unknown,
+	deliveryRecord: unknown,
+	excludedWebhookKey?: string,
+): Promise<void> {
+	if (event.kind !== 'commit' || !event.commit) return
+	const { did, time_us: timeUs, commit } = event
+	const candidates = await getWebhooksForEvent(did, backlinkRecord)
+	let matched = matchWebhooks(
+		candidates,
+		did,
+		commit.collection,
+		commit.rkey,
+		commit.operation,
+		deliveryRecord,
+		backlinkRecord,
+	)
+	// A subscription never receives the mutation of its own WH record. Other
+	// subscriptions may intentionally watch place.wisp.v2.wh and still receive it.
+	if (excludedWebhookKey) {
+		matched = matched.filter((entry) => `${entry.ownerDid}/${entry.rkey}` !== excludedWebhookKey)
+	}
+	if (matched.length === 0) return
+
+	const durableEvent: DurableDeliveryEvent = {
+		relay: normalizeRelayIdentity(config.jetstreamUrl),
+		timeUs,
+		rev: commit.rev,
+		operation: commit.operation,
+		did,
+		collection: commit.collection,
+		rkey: commit.rkey,
+		...(commit.cid ? { cid: commit.cid } : {}),
+		...(deliveryRecord === undefined ? {} : { record: deliveryRecord }),
+	}
+	try {
+		const result = await currentDependencies().enqueueWebhookDeliveries(matched, durableEvent)
+		totalMatched += result.enqueued + result.deduplicated
+	} catch (error) {
+		if (error instanceof delivery.WebhookDeliveryInputError) {
+			// Deterministic untrusted payload/subscription input is ackable. Store a
+			// bounded redacted identity first; a failure to persist that row remains
+			// retryable and deliberately keeps the cursor behind.
+			await currentDependencies().recordWebhookIntakeQuarantine({
+				relay: normalizeRelayIdentity(config.jetstreamUrl),
+				timeUs,
+				rev: commit.rev,
+				did,
+				collection: commit.collection,
+				rkey: commit.rkey,
+				reason: error.kind,
+			})
+			invalidDeliveryInputEvents++
+			logger.warn('[delivery] invalid durable input; event quarantined')
+			return
+		}
+		throw error
+	}
+}
+
+interface ReferenceLifecycle {
+	readonly key: string
+	readonly oldReferences: readonly string[]
+	readonly newReferences: readonly string[]
+	readonly matchRecord: unknown
+	readonly tooComplex: boolean
+}
+
+async function loadReferenceLifecycle(
+	event: JetstreamEvent,
+	deliveryRecord: unknown,
+): Promise<ReferenceLifecycle | undefined> {
+	if (event.kind !== 'commit' || !event.commit || backlinkScopeDids.size === 0) return undefined
+	const { did, commit } = event
+	const key = eventAtUri(did, commit.collection, commit.rkey)
+	const repository = currentDependencies().referenceRepository
+	const snapshot = await repository.load(key)
+	const oldReferences = normalizeReferences(snapshot?.references ?? [])
+	if (commit.operation !== 'delete' && deliveryRecord === undefined) {
+		throw new Error('Non-delete commit has no validated record')
+	}
+	const current =
+		commit.operation === 'delete' ? { references: [], tooComplex: false } : currentReferences(deliveryRecord)
+	const combined = [...new Set([...oldReferences, ...current.references])]
+	return {
+		key,
+		oldReferences,
+		newReferences: current.references,
+		matchRecord: current.tooComplex ? [] : combined,
+		tooComplex: current.tooComplex,
+	}
+}
+
+async function commitReferenceLifecycle(
+	event: JetstreamEvent,
+	lifecycle: ReferenceLifecycle | undefined,
+): Promise<void> {
+	if (!lifecycle || event.kind !== 'commit' || !event.commit) return
+	const { time_us: timeUs, commit } = event
+	const repository = currentDependencies().referenceRepository
+	if (lifecycle.tooComplex) {
+		// Preserve a monotonic empty tombstone at this event version. A later delete
+		// therefore cannot resurrect stale references from an earlier known state.
+		await repository.save(lifecycle.key, [], timeUs, commit.rev)
+		return
+	}
+	if (commit.operation === 'delete') {
+		// Delete only after all deliveries using the old durable snapshot are enqueued.
+		await repository.delete(lifecycle.key, timeUs, commit.rev)
+	} else {
+		await repository.save(lifecycle.key, lifecycle.newReferences, timeUs, commit.rev)
+	}
+}
+
+async function clearPriorReferenceState(event: JetstreamEvent): Promise<void> {
+	if (event.kind !== 'commit' || !event.commit) return
+	await currentDependencies().referenceRepository.save(
+		eventAtUri(event.did, event.commit.collection, event.commit.rkey),
+		[],
+		event.time_us,
+		event.commit.rev,
+	)
+}
+
+async function processCommit(stream: StreamName, event: JetstreamEvent): Promise<void> {
+	if (event.kind !== 'commit' || !event.commit) return
+	const { did, commit } = event
+	if (commit.operation !== 'create' && commit.operation !== 'update' && commit.operation !== 'delete') return
+
+	const isWebhookRegistration = commit.collection === WH_COLLECTION
+	// The dedicated registry stream is the only mutator for WH records. Direct
+	// and backlink consumers still acknowledge their duplicate WH copies, while
+	// registry delivers the WH event to legitimate non-self subscriptions.
+	if (isWebhookRegistration && stream !== REGISTRY_STREAM) return
+	if (!isWebhookRegistration && stream === REGISTRY_STREAM) return
+
+	// The backlink consumer sees the full relay. Directly subscribed owners/scopes
+	// are handled by the direct stream so identical events do not race each other.
+	if (stream === BACKLINK_STREAM && directWantedDids.has(did)) return
+	if (stream === BACKLINK_STREAM && backlinkScopeDids.size === 0) return
+
+	let deliveryRecord = commit.record
+	let selfKey: string | undefined
+	let ackableInvalid = false
+	if (isWebhookRegistration) {
+		const mutation = await registryStateMutex.run(() =>
+			handleWhRecord(commit.operation, did, commit.rkey, commit.record, {
+				revision: commit.rev,
+				timeUs: event.time_us,
+				...(commit.cid ? { cid: commit.cid } : {}),
+			}),
+		)
+		deliveryRecord = mutation.deliveryRecord
+		selfKey = mutation.selfKey
+		ackableInvalid = mutation.ackableInvalid === true
+	}
+	if (ackableInvalid) {
+		await clearPriorReferenceState(event)
 		totalEvents++
-
-		if (collection === 'place.wisp.v2.wh') {
-			await handleWhRecord(op, did, rkey, record)
-			return
-		}
-
-		await deliver(did, collection, rkey, op, cid, record)
-	} catch (err) {
-		logger.error('Direct Jetstream event error', err)
-	}
-}
-
-function restartDirectJetstream(overrideCursor?: number): void {
-	const cursor = overrideCursor ?? directJetstream?.cursor
-	directJetstream?.destroy()
-
-	if (directScopeDids.size === 0) {
-		directJetstream = null
 		return
 	}
 
-	directJetstream = new JetstreamClient({
-		url: config.jetstreamUrl,
-		wantedDids: [...directScopeDids],
-		cursor,
-		onEvent: handleDirectEvent,
-		onError: (err) => logger.error('Direct Jetstream error', err),
-		onConnect: () => {
-			isConnected = true
-			logger.info('Direct Jetstream connected')
-		},
-		onDisconnect: () => {
-			isConnected = false
-		},
-	})
-	directJetstream.start()
+	const lifecycle = await loadReferenceLifecycle(event, deliveryRecord)
+	if (lifecycle?.tooComplex) {
+		tooComplexBacklinkEvents++
+		logger.warn('[backlink] record references too complex; backlink matching skipped')
+		// Passing an empty backlink snapshot preserves direct matching while ensuring
+		// no truncated backlink result is ever partially delivered or indexed.
+		await enqueueMatched(event, [], deliveryRecord, selfKey)
+		await commitReferenceLifecycle(event, lifecycle)
+		totalEvents++
+		return
+	}
+	// A full-backlink relay event with neither prior nor current relevant reference
+	// cannot match any backlink subscription. Direct candidates still matter only
+	// when this event came from a direct subscription, which was handled above.
+	if (
+		stream === BACKLINK_STREAM &&
+		lifecycle &&
+		lifecycle.oldReferences.length === 0 &&
+		lifecycle.newReferences.length === 0
+	) {
+		await commitReferenceLifecycle(event, lifecycle)
+		return
+	}
+
+	await enqueueMatched(event, lifecycle?.matchRecord ?? deliveryRecord, deliveryRecord, selfKey)
+	await commitReferenceLifecycle(event, lifecycle)
+	totalEvents++
 }
 
-let backlinkJetstream: JetstreamClient | null = null
-
-async function handleBacklinkEvent(event: JetstreamEvent): Promise<void> {
+async function handleStreamEvent(stream: StreamName, event: JetstreamEvent): Promise<void> {
+	lastEventTime = Date.now()
+	if (event.kind !== 'commit' || !event.commit) return
+	const key = `${event.did}/${event.commit.collection}/${event.commit.rkey}`
 	try {
-		if (event.kind !== 'commit' || !event.commit) return
-		lastEventTime = Date.now()
-		const { did } = event
-		const { operation: op, collection, rkey, record, cid } = event.commit
-		if (op !== 'create' && op !== 'update' && op !== 'delete') return
-
-		if (collection === 'place.wisp.v2.wh' && !directScopeDids.has(did)) {
-			await handleWhRecord(op, did, rkey, record)
-			return
-		}
-
-		// Skip events from scoped DIDs — the direct jetstream already handles those
-		if (directScopeDids.has(did)) return
-
-		if (!recordReferencesAnyOf(record, backlinkScopeDids)) return
-
-		await deliver(did, collection, rkey, op, cid, record)
-	} catch (err) {
-		logger.error('Backlink Jetstream event error', err)
+		await recordExecutor.run(key, () => processCommit(stream, event))
+	} catch {
+		safeError(stream)
+		throw new Error('Intake event processing failed')
 	}
 }
 
-function startBacklinkJetstream(cursor?: number): void {
-	backlinkJetstream = new JetstreamClient({
+async function persistCursor(stream: StreamName, event: JetstreamEvent): Promise<void> {
+	const relay = normalizeRelayIdentity(config.jetstreamUrl)
+	const previous = cursorWriteTails.get(stream) ?? Promise.resolve()
+	const current = previous
+		.catch(() => undefined)
+		.then(() => currentDependencies().cursorRepository.save(stream, event.time_us, relay))
+	cursorWriteTails.set(stream, current)
+	try {
+		await current
+	} finally {
+		if (cursorWriteTails.get(stream) === current) cursorWriteTails.delete(stream)
+	}
+}
+
+function createClient(
+	stream: StreamName,
+	cursor: number | undefined,
+	wantedDids?: readonly string[],
+	wantedCollections?: readonly string[],
+): JetstreamClient {
+	const client = currentDependencies().createJetstreamClient({
 		url: config.jetstreamUrl,
+		...(wantedDids ? { wantedDids } : {}),
+		...(wantedCollections ? { wantedCollections } : {}),
 		cursor,
-		onEvent: handleBacklinkEvent,
-		onError: (err) => logger.error('Backlink Jetstream error', err),
-		onConnect: () => logger.info('Backlink Jetstream connected'),
-		onDisconnect: () => logger.warn('Backlink Jetstream disconnected, reconnecting'),
+		maxQueue: config.intakeQueueMax,
+		concurrency: config.intakeConcurrency,
+		maxEventBytes: config.intakeEventMaxBytes,
+		reconnectMinMs: config.jetstreamReconnectMinMs,
+		reconnectMaxMs: config.jetstreamReconnectMaxMs,
+		reconnectMaxExponent: config.jetstreamReconnectMaxExponent,
+		onEvent: (event) => handleStreamEvent(stream, event),
+		onAcknowledged: (event) => persistCursor(stream, event),
+		onConnect: () => logger.info(`[${stream}] Jetstream connected`),
+		onDisconnect: () => logger.warn(`[${stream}] Jetstream disconnected`),
+		onError: () => safeError(stream),
 	})
-	backlinkJetstream.start()
+	if (intakePaused) client.pause()
+	allClients.add(client)
+	return client
 }
 
-function stopBacklinkJetstream(): void {
-	backlinkJetstream?.destroy()
-	backlinkJetstream = null
+function safelyRewoundCursor(cursor: number | undefined): number | undefined {
+	if (cursor === undefined || !Number.isSafeInteger(cursor) || cursor < 0) return undefined
+	return Math.max(0, cursor - CURSOR_SAFETY_REWIND_US)
 }
 
-export function startFirehose(initialCursor?: number): void {
-	logger.info(`Jetstream: ${config.jetstreamUrl}`)
-	if (initialCursor !== undefined) {
-		logger.info(`Resuming from cursor ${initialCursor}`)
+function earliestCursor(...cursors: Array<number | undefined>): number | undefined {
+	let earliest: number | undefined
+	for (const cursor of cursors) {
+		if (cursor === undefined) continue
+		earliest = earliest === undefined ? cursor : Math.min(earliest, cursor)
+	}
+	return earliest
+}
+
+async function streamCursor(
+	stream: StreamName,
+	initialCursor?: number,
+	registrationHint?: number,
+): Promise<number | undefined> {
+	const durable =
+		initialCursor ??
+		(await currentDependencies().cursorRepository.load(stream, normalizeRelayIdentity(config.jetstreamUrl)))
+	return earliestCursor(durable, safelyRewoundCursor(registrationHint))
+}
+
+interface StreamPlan {
+	readonly cursor: number | undefined
+	readonly wantedDids?: readonly string[]
+	readonly wantedCollections?: readonly string[]
+}
+
+function assertPlanUrl(plan: StreamPlan): void {
+	buildJetstreamSubscriptionUrl(
+		{
+			url: config.jetstreamUrl,
+			...(plan.wantedDids ? { wantedDids: plan.wantedDids } : {}),
+			...(plan.wantedCollections ? { wantedCollections: plan.wantedCollections } : {}),
+		},
+		plan.cursor,
+	)
+}
+
+async function planRegistry(initialCursor?: number): Promise<StreamPlan> {
+	const durable =
+		initialCursor ??
+		(await currentDependencies().cursorRepository.load(REGISTRY_STREAM, normalizeRelayIdentity(config.jetstreamUrl)))
+	// A fresh registry cursor begins at zero. Jetstream clamps it to retained
+	// history, avoiding any correctness decision based on local wall-clock skew.
+	const plan: StreamPlan = { cursor: durable ?? 0, wantedCollections: [WH_COLLECTION] }
+	assertPlanUrl(plan)
+	return plan
+}
+
+async function planDirect(initialCursor?: number, registrationHint?: number): Promise<StreamPlan | undefined> {
+	if (directWantedDids.size === 0) return undefined
+	const plan: StreamPlan = {
+		cursor: await streamCursor(DIRECT_STREAM, initialCursor, registrationHint),
+		wantedDids: sortedDids(directWantedDids),
+	}
+	assertPlanUrl(plan)
+	return plan
+}
+
+async function planBacklink(initialCursor?: number, registrationHint?: number): Promise<StreamPlan | undefined> {
+	if (backlinkScopeDids.size === 0) return undefined
+	const plan: StreamPlan = { cursor: await streamCursor(BACKLINK_STREAM, initialCursor, registrationHint) }
+	assertPlanUrl(plan)
+	return plan
+}
+
+function startPlanned(stream: StreamName, plan: StreamPlan): JetstreamClient {
+	const client = createClient(stream, plan.cursor, plan.wantedDids, plan.wantedCollections)
+	client.start()
+	return client
+}
+
+async function startRegistry(initialCursor?: number): Promise<void> {
+	if (!firehoseStarted || stopping || registryJetstream) return
+	registryJetstream = startPlanned(REGISTRY_STREAM, await planRegistry(initialCursor))
+}
+
+async function startDirect(initialCursor?: number, registrationHint?: number): Promise<void> {
+	if (!firehoseStarted || stopping || directJetstream) return
+	const plan = await planDirect(initialCursor, registrationHint)
+	if (plan) directJetstream = startPlanned(DIRECT_STREAM, plan)
+}
+
+async function startBacklink(initialCursor?: number, registrationHint?: number): Promise<void> {
+	if (!firehoseStarted || stopping || backlinkJetstream) return
+	const plan = await planBacklink(initialCursor, registrationHint)
+	if (plan) backlinkJetstream = startPlanned(BACKLINK_STREAM, plan)
+}
+
+async function retireClient(client: JetstreamClient): Promise<void> {
+	client.stopAccepting()
+	await client.drain()
+	client.destroy()
+	allClients.delete(client)
+}
+
+function scheduleReconfigure(registrationCursorHint?: number, force = false): void {
+	const rewound = safelyRewoundCursor(registrationCursorHint)
+	if (rewound !== undefined) {
+		directRestartCursorHint = earliestCursor(directRestartCursorHint, rewound)
+		backlinkRestartCursorHint = earliestCursor(backlinkRestartCursorHint, rewound)
+	}
+	if (force) forceStreamRestart = true
+	if (reconfigureScheduled || stopping || !firehoseStarted) return
+	reconfigureScheduled = true
+	queueMicrotask(() => {
+		reconfigureScheduled = false
+		if (stopping || !firehoseStarted) return
+		if (!reconfiguring) {
+			reconfiguring = reconfigure()
+				.catch(() => {
+					// Plans are validated before retiring active clients. Keep the old
+					// subscription alive and avoid exposing configuration details.
+					logger.warn('[registry] subscription reconfiguration was rejected')
+				})
+				.finally(() => {
+					reconfiguring = null
+					// Hints arriving while a prior reconfiguration drained are serviced
+					// afterwards, still from durable/rewound cursors.
+					if (
+						firehoseStarted &&
+						!stopping &&
+						(directRestartCursorHint !== undefined || backlinkRestartCursorHint !== undefined || forceStreamRestart)
+					) {
+						scheduleReconfigure()
+					}
+				})
+		}
+	})
+}
+
+async function reconfigure(): Promise<void> {
+	if (!firehoseStarted || stopping) return
+	const force = forceStreamRestart
+	forceStreamRestart = false
+	const directHint = directRestartCursorHint
+	const backlinkHint = backlinkRestartCursorHint
+	directRestartCursorHint = undefined
+	backlinkRestartCursorHint = undefined
+
+	// Validate/load every replacement before touching an active subscription. A
+	// config/admission error leaves the old direct stream serving safely.
+	const nextRegistry = force && registryJetstream ? await planRegistry() : undefined
+	const nextDirect = await planDirect(undefined, directHint)
+	const nextBacklink =
+		backlinkScopeDids.size > 0 && (force || !backlinkJetstream)
+			? await planBacklink(undefined, backlinkHint)
+			: undefined
+
+	if (force && registryJetstream) {
+		const oldRegistry = registryJetstream
+		registryJetstream = null
+		await retireClient(oldRegistry)
+		if (!stopping && nextRegistry) registryJetstream = startPlanned(REGISTRY_STREAM, nextRegistry)
+	}
+
+	const oldDirect = directJetstream
+	if (oldDirect) {
+		directJetstream = null
+		await retireClient(oldDirect)
+	}
+	if (!stopping && nextDirect) directJetstream = startPlanned(DIRECT_STREAM, nextDirect)
+
+	if (backlinkScopeDids.size === 0) {
+		const oldBacklink = backlinkJetstream
+		backlinkJetstream = null
+		if (oldBacklink) await retireClient(oldBacklink)
+	} else if (force && backlinkJetstream) {
+		const oldBacklink = backlinkJetstream
+		backlinkJetstream = null
+		await retireClient(oldBacklink)
+		if (!stopping && nextBacklink) backlinkJetstream = startPlanned(BACKLINK_STREAM, nextBacklink)
+	} else if (!backlinkJetstream && !stopping && nextBacklink) {
+		backlinkJetstream = startPlanned(BACKLINK_STREAM, nextBacklink)
+	}
+}
+
+export async function startFirehose(options: FirehoseStartOptions = {}): Promise<void> {
+	if (firehoseStarted) return
+	stopping = false
+	intakePaused = options.paused === true
+	dependencies = {
+		cursorRepository: options.cursorRepository ?? defaultCursorRepository(),
+		referenceRepository: options.referenceRepository ?? defaultReferenceRepository(),
+		enqueueWebhookDeliveries: options.enqueueWebhookDeliveries ?? defaultEnqueueWebhookDeliveries(),
+		recordWebhookIntakeQuarantine: options.recordWebhookIntakeQuarantine ?? database.recordWebhookIntakeQuarantine,
+		createJetstreamClient: options.createJetstreamClient ?? ((clientOptions) => new JetstreamClient(clientOptions)),
 	}
 	firehoseStarted = true
-	restartDirectJetstream(initialCursor)
-	if (backlinkScopeDids.size > 0) startBacklinkJetstream(initialCursor)
-
-	setInterval(() => {
-		if (Date.now() - lastEventTime > 30_000) {
-			logger.warn(`No events for ${Math.round((Date.now() - lastEventTime) / 1000)}s`)
-		}
-	}, 30_000)
-
-	let lastSavedCursor: number | undefined
-	setInterval(() => {
-		const direct = directJetstream?.cursor
-		const backlink = backlinkJetstream?.cursor
-		const cursor =
-			direct !== undefined && backlink !== undefined
-				? Math.max(direct, backlink)
-				: (direct ?? backlink ?? (isConnected ? Date.now() * 1000 : undefined))
-		if (cursor !== undefined && cursor !== lastSavedCursor) {
-			lastSavedCursor = cursor
-			saveCursor(cursor, config.jetstreamUrl)
-				.then(() => logger.debug(`[cursor] Saved ${cursor}`))
-				.catch((err) => logger.error('[cursor] Failed to save cursor', err))
-		}
-	}, 5_000)
+	try {
+		await startRegistry(options.cursors?.[REGISTRY_STREAM])
+		await startDirect(options.cursors?.[DIRECT_STREAM])
+		await startBacklink(options.cursors?.[BACKLINK_STREAM])
+	} catch (error) {
+		firehoseStarted = false
+		stopping = true
+		for (const client of allClients) client.destroy()
+		allClients.clear()
+		directJetstream = null
+		backlinkJetstream = null
+		registryJetstream = null
+		throw error
+	}
 }
 
+/** Release startup-captured work only after reconciliation/fencing completes. */
+export function resumeFirehose(): void {
+	if (!firehoseStarted || stopping || !intakePaused) return
+	intakePaused = false
+	for (const client of allClients) client.resume()
+	// Rebuild all subscriptions from durable cursors after a paused capture. A
+	// registration replay supplies a more specific rewind hint when needed.
+	scheduleReconfigure(undefined, true)
+}
+
+/** Stop accepting new socket messages. Call drainFirehose before closing the DB. */
 export function stopFirehose(): void {
-	logger.info('Stopping Jetstream consumers')
-	isConnected = false
-	directJetstream?.destroy()
+	if (!firehoseStarted && stopping) return
+	firehoseStarted = false
+	stopping = true
+	intakePaused = false
+	reconfigureScheduled = false
+	for (const client of allClients) client.stopAccepting()
+}
+
+export async function drainFirehose(timeoutMs = config.shutdownTimeoutMs): Promise<boolean> {
+	const clients = [...allClients]
+	// A subscription reconfiguration can be awaiting a cursor query or retiring
+	// a previous client while shutdown begins. It is intake work too: do not let
+	// callers close DB/Redis until it settles or this bounded drain expires.
+	const pendingReconfigure = reconfiguring
+	let timer: ReturnType<typeof setTimeout> | undefined
+	try {
+		const completed = await Promise.race([
+			Promise.all([
+				...clients.map((client) => client.drain()),
+				...(pendingReconfigure ? [pendingReconfigure] : []),
+			]).then(() => true),
+			new Promise<boolean>((resolve) => {
+				timer = setTimeout(() => resolve(false), timeoutMs)
+			}),
+		])
+		return completed
+	} finally {
+		if (timer) clearTimeout(timer)
+		for (const client of clients) {
+			client.destroy()
+			allClients.delete(client)
+		}
+		directJetstream = null
+		backlinkJetstream = null
+		registryJetstream = null
+		dependencies = null
+	}
+}
+
+export function getFirehoseHealth() {
+	const directRequired = directWantedDids.size > 0
+	const backlinkRequired = backlinkScopeDids.size > 0
+	const directConnected = !directRequired || directJetstream?.isConnected === true
+	const backlinkConnected = !backlinkRequired || backlinkJetstream?.isConnected === true
+	const registryConnected = registryJetstream?.isConnected === true
+	const connected = registryConnected && directConnected && backlinkConnected
+	return {
+		connected,
+		directConnected,
+		backlinkConnected,
+		registryConnected,
+		started: firehoseStarted,
+		paused: intakePaused,
+		queued: (directJetstream?.queued ?? 0) + (backlinkJetstream?.queued ?? 0) + (registryJetstream?.queued ?? 0),
+		activeRecordKeys: recordExecutor.size,
+		tooComplexBacklinkEvents,
+		invalidRegistryRecords,
+		invalidDeliveryInputEvents,
+		rejectedSubscriptionAdmissions,
+		registrySnapshotOverflow,
+		admissionLimits: {
+			activeSubscriptions: config.registryActiveSubscriptionsMax,
+			wantedDids: config.registryDirectScopeDidsMax,
+			subscriptionUrlBytes: config.registrySubscriptionUrlBytesMax,
+		},
+		lastEventTime: lastEventTime || undefined,
+		timeSinceLastEvent: lastEventTime ? Date.now() - lastEventTime : undefined,
+		streamFailures: {
+			direct: {
+				quarantined: directJetstream?.isQuarantined ?? false,
+				protocolFailures: directJetstream?.protocolFailureCount ?? 0,
+				failureKind: directJetstream?.failureKind,
+				lastProgressAt: directJetstream?.lastProgressTime,
+			},
+			backlink: {
+				quarantined: backlinkJetstream?.isQuarantined ?? false,
+				protocolFailures: backlinkJetstream?.protocolFailureCount ?? 0,
+				failureKind: backlinkJetstream?.failureKind,
+				lastProgressAt: backlinkJetstream?.lastProgressTime,
+			},
+			registry: {
+				quarantined: registryJetstream?.isQuarantined ?? false,
+				protocolFailures: registryJetstream?.protocolFailureCount ?? 0,
+				failureKind: registryJetstream?.failureKind,
+				lastProgressAt: registryJetstream?.lastProgressTime,
+			},
+		},
+		healthy: firehoseStarted && registryConnected && directConnected && backlinkConnected && !registrySnapshotOverflow,
+	}
+}
+
+export function getEventStats() {
+	return {
+		events: totalEvents,
+		matched: totalMatched,
+		tooComplexBacklinkEvents,
+		invalidRegistryRecords,
+		invalidDeliveryInputEvents,
+		rejectedSubscriptionAdmissions,
+	}
+}
+
+/** Test-only reset after a fully stopped client set. */
+export function resetFirehoseForTests(): void {
+	stopFirehose()
+	for (const client of allClients) client.destroy()
+	allClients.clear()
 	directJetstream = null
-	stopBacklinkJetstream()
+	backlinkJetstream = null
+	registryJetstream = null
+	dependencies = null
+	stopping = false
+	intakePaused = false
+	lastEventTime = 0
+	totalEvents = 0
+	totalMatched = 0
+	tooComplexBacklinkEvents = 0
+	invalidRegistryRecords = 0
+	invalidDeliveryInputEvents = 0
+	rejectedSubscriptionAdmissions = 0
+	registrySnapshotOverflow = false
+	trackedWebhooks.clear()
+	scopeWebhookKeys.clear()
+	backlinkWebhookKeys.clear()
+	ownerRefCounts.clear()
+	scopeRefCounts.clear()
+	backlinkScopeRefCounts.clear()
+	scopeDids = new Set<string>()
+	ownerDids = new Set<string>()
+	backlinkScopeDids = new Set<string>()
+	directWantedDids = new Set<string>()
+	directSubscriptionUrlBytes = Buffer.byteLength(new URL(config.jetstreamUrl).toString())
+	clearRegistryCache()
+	cursorWriteTails.clear()
 }

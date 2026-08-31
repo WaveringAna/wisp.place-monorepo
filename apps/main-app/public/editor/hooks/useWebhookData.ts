@@ -54,8 +54,8 @@ export function useWebhookData() {
 					}),
 				)
 			}
-		} catch (err) {
-			console.error('Failed to fetch webhooks:', err)
+		} catch {
+			console.error('Failed to fetch webhooks')
 		} finally {
 			setWebhooksLoading(false)
 		}
@@ -68,8 +68,8 @@ export function useWebhookData() {
 			if (!res.ok) throw new Error('Failed to fetch events')
 			const data = await res.json()
 			if (data.success && data.events) setEventLogs(data.events)
-		} catch (err) {
-			console.error('Failed to fetch event logs:', err)
+		} catch {
+			console.error('Failed to fetch event logs')
 		} finally {
 			setEventLogsLoading(false)
 		}
@@ -81,7 +81,7 @@ export function useWebhookData() {
 			url: string
 			backlinks: boolean
 			events: string[]
-			secret: string
+			secret?: string
 			secretId?: string
 			enabled: boolean
 		}) => {

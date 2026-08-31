@@ -3,17 +3,26 @@ process.getBuiltinModule = require
 
 import { cors } from '@elysiajs/cors'
 import { staticPlugin } from '@elysiajs/static'
-import { BASE_HOST } from '@wispplace/constants'
+import { BASE_HOST, MAX_PUBLIC_UPLOAD_REQUEST_SIZE } from '@wispplace/constants'
 import { createLogger, initializeGrafanaExporters, logCollector, redactSecretPath } from '@wispplace/observability'
 import { observabilityMiddleware } from '@wispplace/observability/middleware/elysia'
 import type { Context } from 'elysia'
 import { Elysia } from 'elysia'
 import { promptAdminSetup } from './lib/admin-auth'
 import { csrfProtection } from './lib/csrf'
-import { closeDatabase, getCookieSecret, pruneAnalyticsData } from './lib/db'
-import { DNSVerificationWorker } from './lib/dns-verification-worker'
+import {
+	closeDatabase,
+	getCookieSecret,
+	getDatabaseReadHealth,
+	getWebhookSecretEncryptionHealth,
+	hasSeparateDatabaseReadPool,
+	pruneAnalyticsData,
+} from './lib/db'
+import { type DNSVerificationLogLevel, DNSVerificationWorker } from './lib/dns-verification-worker'
+import { startPeriodicSingleFlightTask, stopServerWithGracePeriod } from './lib/lifecycle'
 import {
 	cleanupExpiredSessions,
+	closeOAuthLockDatabase,
 	createClientMetadata,
 	getCurrentKeys,
 	getOAuthClient,
@@ -21,8 +30,12 @@ import {
 } from './lib/oauth-client'
 import { startPrivateSiteReaper } from './lib/private-site-reaper'
 import { pruneHandoffs, pruneSessions } from './lib/private-sites-db'
-import { closeRedisClient, getRedisClient } from './lib/redis'
+import { getPublicUploadRequestGateStats } from './lib/public-upload-gate'
+import { getPublicUploadLifecycleStats, stopAndDrainPublicUploads } from './lib/public-upload-lifecycle'
+import { closeRedisClient, getConnectedRedisClient } from './lib/redis'
+import { requestBodyAdmission } from './lib/request-body-admission'
 import { ensureServiceIdentityKeypair } from './lib/service-identity'
+import { closeSiteUploadLockDatabase } from './lib/site-upload-lock'
 import type { Config } from './lib/types'
 import { SESSION_COOKIE_NAME } from './lib/wisp-auth'
 import { adminRoutes } from './routes/admin'
@@ -55,9 +68,13 @@ const parsedServiceIds = (Bun.env.SERVICE_IDS ?? '')
 const didServiceIds = parsedServiceIds.length > 0 ? Array.from(new Set(parsedServiceIds)) : ['#wisp_xrpc']
 const serverPort = Number(Bun.env.PORT ?? (isLocalDev ? '8000' : '80'))
 
+const databaseReadHealth = await getDatabaseReadHealth()
 logger.info('[Server] Startup config', {
 	isLocalDev,
 	port: serverPort,
+	separateDatabaseReadPoolConfigured: hasSeparateDatabaseReadPool,
+	databaseReadEndpointMode: databaseReadHealth.mode,
+	databaseReadFallbackToPrimary: databaseReadHealth.usingPrimaryFallback,
 })
 
 const config: Config = {
@@ -68,8 +85,10 @@ const config: Config = {
 // Initialize admin setup (prompt if no admin exists)
 await promptAdminSetup()
 
-// Establish Redis connection (used for webhook event logs)
-getRedisClient()
+// Establish Redis early for durable domain-cache invalidation, without blocking startup.
+void getConnectedRedisClient().catch(() => {
+	logger.error('[Redis] Initial connection failed')
+})
 
 // Get or generate cookie signing secret
 const cookieSecret = await getCookieSecret()
@@ -81,9 +100,9 @@ const servicePublicKeyMultibase = serviceIdentity.publicKeyMultibase
 
 const client = await getOAuthClient(config)
 
-// Periodic maintenance: cleanup expired sessions and rotate keys
-// Run every hour
-const runMaintenance = async () => {
+// Periodic maintenance runs immediately, then hourly. Slow passes share one
+// single-flight task so they cannot overlap with later interval ticks.
+const runMaintenance = async (): Promise<void> => {
 	console.log('[Maintenance] Running periodic maintenance...')
 	await cleanupExpiredSessions()
 	await rotateKeysIfNeeded()
@@ -92,25 +111,25 @@ const runMaintenance = async () => {
 	await pruneAnalyticsData()
 }
 
-// Run maintenance on startup
-runMaintenance().catch((err) => logger.error('[Maintenance] Periodic maintenance failed', err))
-
-// Schedule maintenance to run every hour
-setInterval(
-	() => {
-		runMaintenance().catch((err) => logger.error('[Maintenance] Periodic maintenance failed', err))
-	},
-	60 * 60 * 1000,
+const maintenance = startPeriodicSingleFlightTask(runMaintenance, 60 * 60 * 1000, () =>
+	logger.error('[Maintenance] Periodic maintenance failed'),
 )
 
-startPrivateSiteReaper()
+const privateSiteReaper = startPrivateSiteReaper()
 
 // Start DNS verification worker (runs every 10 minutes)
 // Can be disabled via DISABLE_DNS_WORKER=true environment variable
 const dnsVerifier = new DNSVerificationWorker(
 	10 * 60 * 1000, // 10 minutes
-	(msg, data) => {
-		logCollector.info(`[DNS Verifier] ${msg}`, 'main-app', data ? { data } : undefined)
+	(msg, data, level: DNSVerificationLogLevel = 'info') => {
+		const context = data ? { data } : undefined
+		if (level === 'error') {
+			logCollector.error(`[DNS Verifier] ${msg}`, 'main-app', undefined, context)
+		} else if (level === 'warn') {
+			logCollector.warn(`[DNS Verifier] ${msg}`, 'main-app', context)
+		} else {
+			logCollector.info(`[DNS Verifier] ${msg}`, 'main-app', context)
+		}
 	},
 )
 
@@ -123,7 +142,7 @@ if (Bun.env.DISABLE_DNS_WORKER !== 'true') {
 
 export const app = new Elysia({
 	serve: {
-		maxRequestBodySize: 1024 * 1024 * 128 * 3,
+		maxRequestBodySize: MAX_PUBLIC_UPLOAD_REQUEST_SIZE,
 		development: Bun.env.NODE_ENV !== 'production',
 		id: Bun.env.NODE_ENV !== 'production' ? undefined : null,
 	},
@@ -135,6 +154,8 @@ export const app = new Elysia({
 	// Observability middleware
 	.onBeforeHandle(observabilityMiddleware('main-app').beforeHandle)
 	.onRequest(({ request }) => {
+		const admissionError = requestBodyAdmission.admit(request)
+		if (admissionError) return admissionError
 		if (isLocalDev) {
 			const pathname = redactSecretPath(new URL(request.url).pathname)
 			if (pathname.startsWith('/xrpc/')) {
@@ -144,6 +165,9 @@ export const app = new Elysia({
 				})
 			}
 		}
+	})
+	.onAfterResponse(({ request }) => {
+		requestBodyAdmission.release(request)
 	})
 	.onAfterHandle((ctx: Context) => {
 		observabilityMiddleware('main-app').afterHandle(ctx)
@@ -173,6 +197,7 @@ export const app = new Elysia({
 		set.headers['Permissions-Policy'] = 'geolocation=(), microphone=(), camera=()'
 	})
 	.onError((context) => {
+		requestBodyAdmission.release(context.request)
 		// Call observability error handler first
 		observabilityMiddleware('main-app').onError(context)
 
@@ -409,11 +434,21 @@ export const app = new Elysia({
 			}),
 		}
 	})
-	.get('/api/health', () => {
-		const dnsVerifierHealth = dnsVerifier.getHealth()
+	.get('/api/health', async () => {
+		const [databaseRead, dnsVerifierHealth] = await Promise.all([getDatabaseReadHealth(), dnsVerifier.getHealth()])
+		const webhookSecretEncryption = getWebhookSecretEncryptionHealth()
 		return {
-			status: 'ok',
+			status: databaseRead.usingPrimaryFallback || webhookSecretEncryption.status === 'degraded' ? 'degraded' : 'ok',
 			timestamp: new Date().toISOString(),
+			database: {
+				separateReadPoolConfigured: hasSeparateDatabaseReadPool,
+				readEndpoint: databaseRead,
+			},
+			webhookSecretEncryption,
+			publicUploads: {
+				admission: getPublicUploadRequestGateStats(),
+				lifecycle: getPublicUploadLifecycleStats(),
+			},
 			dnsVerifier: dnsVerifierHealth,
 		}
 	})
@@ -443,9 +478,10 @@ export const app = new Elysia({
 				message: 'DNS verification triggered',
 			}
 		} catch (error) {
+			logger.error('[DNS Verifier] Manual verification trigger failed', error)
 			return {
 				success: false,
-				error: error instanceof Error ? error.message : String(error),
+				error: 'Failed to trigger DNS verification',
 			}
 		}
 	})
@@ -484,23 +520,73 @@ export const app = new Elysia({
 	.listen({
 		port: serverPort,
 		hostname: '0.0.0.0',
+		// Bun rejects chunked/undeclared bodies above this hard ceiling before
+		// Elysia invokes multipart parsing. Route admission is stricter per kind.
+		maxRequestBodySize: MAX_PUBLIC_UPLOAD_REQUEST_SIZE,
 	})
 
 console.log(`🦊 Elysia is running at http://${app.server?.hostname}:${app.server?.port}`)
 
 // Graceful shutdown
-process.on('SIGINT', async () => {
-	console.log('\n🛑 Shutting down...')
-	dnsVerifier.stop()
-	closeRedisClient()
-	await closeDatabase()
-	process.exit(0)
-})
+const GRACEFUL_SHUTDOWN_TIMEOUT_MS = 30_000
+let shutdownPromise: Promise<void> | undefined
 
-process.on('SIGTERM', async () => {
-	console.log('\n🛑 Shutting down...')
-	dnsVerifier.stop()
-	closeRedisClient()
-	await closeDatabase()
-	process.exit(0)
-})
+const shutdown = (): void => {
+	if (shutdownPromise) return
+
+	shutdownPromise = (async () => {
+		console.log('\n🛑 Shutting down...')
+
+		// Stop periodic scheduling now. The returned promises wait for only the
+		// already-active maintenance and reaper passes.
+		const backgroundTasks = [
+			{ name: 'maintenance', promise: maintenance.stop() },
+			{ name: 'private-site reaper', promise: privateSiteReaper.stop() },
+			{ name: 'public uploads', promise: stopAndDrainPublicUploads(GRACEFUL_SHUTDOWN_TIMEOUT_MS) },
+		]
+		try {
+			dnsVerifier.stop()
+		} catch {
+			logger.error('[DNS Verifier] Shutdown failed')
+		}
+
+		// app.stop() first stops new requests and waits for in-flight work. Force
+		// active connections closed only if that grace period expires.
+		try {
+			const result = await stopServerWithGracePeriod(app, GRACEFUL_SHUTDOWN_TIMEOUT_MS)
+			if (result === 'forced') logger.warn('[Server] Graceful shutdown timed out; active requests were closed')
+		} catch {
+			logger.error('[Server] Graceful shutdown failed; forcing active requests closed')
+			try {
+				await app.stop(true)
+			} catch {
+				logger.error('[Server] Forced shutdown failed')
+			}
+		}
+
+		const backgroundResults = await Promise.allSettled(backgroundTasks.map(({ promise }) => promise))
+		for (const [index, result] of backgroundResults.entries()) {
+			if (result.status === 'rejected') {
+				logger.error(`${backgroundTasks[index]?.name ?? 'background task'} shutdown failed`)
+			}
+		}
+
+		const clientTasks = [
+			{ name: 'Redis', promise: Promise.resolve().then(() => closeRedisClient()) },
+			{ name: 'OAuth lock database', promise: closeOAuthLockDatabase() },
+			{ name: 'site upload lock database', promise: closeSiteUploadLockDatabase() },
+			{ name: 'database', promise: closeDatabase() },
+		]
+		const clientResults = await Promise.allSettled(clientTasks.map(({ promise }) => promise))
+		for (const [index, result] of clientResults.entries()) {
+			if (result.status === 'rejected') {
+				logger.error(`${clientTasks[index]?.name ?? 'client'} shutdown failed`)
+			}
+		}
+
+		process.exit(0)
+	})()
+}
+
+process.on('SIGINT', shutdown)
+process.on('SIGTERM', shutdown)

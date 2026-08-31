@@ -236,7 +236,7 @@ export interface StorageTier {
 	 * @remarks
 	 * If the key already exists, it should be overwritten.
 	 */
-	set(key: string, data: Uint8Array, metadata: StorageMetadata): Promise<void>
+	set(key: string, data: Uint8Array, metadata: StorageMetadata, options?: { signal?: AbortSignal }): Promise<void>
 
 	/**
 	 * Delete data for a key.
@@ -314,6 +314,12 @@ export interface StorageTier {
 	 * Useful for updating TTL (via touch()) or access counts.
 	 */
 	setMetadata(key: string, metadata: StorageMetadata): Promise<void>
+
+	/**
+	 * Replace metadata only if the existing object still has the observed
+	 * checksum. Returns false for an absent object or a changed version.
+	 */
+	setMetadataIfChecksumMatches?(key: string, expectedChecksum: string, metadata: StorageMetadata): Promise<boolean>
 
 	/**
 	 * Get statistics about this tier.
@@ -461,6 +467,9 @@ export interface TieredStorageConfig {
  * These options allow fine-grained control over where and how data is stored.
  */
 export interface SetOptions {
+	/** Abort an in-flight durable write, for bounded lifecycle operations. */
+	signal?: AbortSignal
+
 	/**
 	 * Custom TTL in milliseconds for this specific key.
 	 *
