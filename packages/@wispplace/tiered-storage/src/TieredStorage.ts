@@ -13,6 +13,7 @@ import type {
 	StreamResult,
 	StreamSetOptions,
 	TieredStorageConfig,
+	TierGetResult,
 } from './types/index'
 import { calculateChecksum } from './utils/checksum.js'
 import { compress, createCompressStream, createDecompressStream, decompress } from './utils/compression.js'
@@ -24,6 +25,12 @@ interface KeyFence {
 	activeReads: number
 	pendingMutations: number
 	queue: Promise<void>
+}
+
+type InFlightBufferedRead = {
+	generation: number
+	upperTierPromotionEpoch: number
+	promise: Promise<TierGetResult | null>
 }
 
 export interface UpperTierInvalidationFailure {
@@ -41,6 +48,23 @@ export interface UpperTierInvalidationResult {
 const throwIfAborted = (signal: AbortSignal | undefined): void => {
 	if (!signal?.aborted) return
 	throw signal.reason instanceof Error ? signal.reason : new Error('storage operation aborted')
+}
+
+function cloneStorageMetadata(metadata: StorageMetadata): StorageMetadata {
+	return {
+		...metadata,
+		createdAt: new Date(metadata.createdAt.getTime()),
+		lastAccessed: new Date(metadata.lastAccessed.getTime()),
+		...(metadata.ttl && { ttl: new Date(metadata.ttl.getTime()) }),
+		...(metadata.customMetadata && { customMetadata: { ...metadata.customMetadata } }),
+	}
+}
+
+function cloneTierGetResult(result: TierGetResult): TierGetResult {
+	return {
+		data: new Uint8Array(result.data),
+		metadata: cloneStorageMetadata(result.metadata),
+	}
 }
 
 /**
@@ -84,6 +108,7 @@ export class TieredStorage<T = unknown> {
 	private serialize: (data: unknown) => Promise<Uint8Array>
 	private deserialize: (data: Uint8Array) => Promise<unknown>
 	private keyFences = new Map<string, KeyFence>()
+	private inFlightBufferedReads = new Map<string, InFlightBufferedRead>()
 	private upperTierPromotionEpoch = 0
 	private upperTierMutationQueue: Promise<void> = Promise.resolve()
 
@@ -147,6 +172,20 @@ export class TieredStorage<T = unknown> {
 		return task.finally(() => {
 			fence.pendingMutations--
 			this.releaseKeyFenceIfIdle(key, fence)
+		})
+	}
+
+	/** Queue a byte or version write and fence reads that overlap its commit. */
+	private enqueueKeyWrite<T>(key: string, operation: () => Promise<T>): Promise<T> {
+		const fence = this.beginKeyMutation(key)
+		return this.enqueueKeyMutation(key, fence, async () => {
+			try {
+				return await operation()
+			} finally {
+				// Reads started while this write was in flight must not promote their
+				// pre-commit bytes after the write resolves.
+				fence.generation++
+			}
 		})
 	}
 
@@ -251,7 +290,13 @@ export class TieredStorage<T = unknown> {
 	): Promise<StorageResult<T> | null> {
 		// 1. Check hot tier first
 		if (this.config.tiers.hot) {
-			const result = await this.getFromTier(this.config.tiers.hot, key)
+			const result = await this.getFromTierCoalesced(
+				'hot',
+				this.config.tiers.hot,
+				key,
+				generation,
+				upperTierPromotionEpoch,
+			)
 			if (result) {
 				if (this.isExpired(result.metadata)) {
 					await this.delete(key)
@@ -259,9 +304,10 @@ export class TieredStorage<T = unknown> {
 				}
 				// Fire-and-forget access stats update (non-critical)
 				void this.updateAccessStats(key, 'hot')
+				const consumerResult = cloneTierGetResult(result)
 				return {
-					data: (await this.deserializeData(result.data)) as T,
-					metadata: result.metadata,
+					data: (await this.deserializeData(consumerResult.data)) as T,
+					metadata: consumerResult.metadata,
 					source: 'hot',
 				}
 			}
@@ -269,7 +315,13 @@ export class TieredStorage<T = unknown> {
 
 		// 2. Check warm tier
 		if (this.config.tiers.warm) {
-			const result = await this.getFromTier(this.config.tiers.warm, key)
+			const result = await this.getFromTierCoalesced(
+				'warm',
+				this.config.tiers.warm,
+				key,
+				generation,
+				upperTierPromotionEpoch,
+			)
 			if (result) {
 				if (this.isExpired(result.metadata)) {
 					await this.delete(key)
@@ -284,16 +336,23 @@ export class TieredStorage<T = unknown> {
 				}
 				// Fire-and-forget access stats update (non-critical)
 				void this.updateAccessStats(key, 'warm')
+				const consumerResult = cloneTierGetResult(result)
 				return {
-					data: (await this.deserializeData(result.data)) as T,
-					metadata: result.metadata,
+					data: (await this.deserializeData(consumerResult.data)) as T,
+					metadata: consumerResult.metadata,
 					source: 'warm',
 				}
 			}
 		}
 
 		// 3. Check cold tier (source of truth)
-		const result = await this.getFromTier(this.config.tiers.cold, key)
+		const result = await this.getFromTierCoalesced(
+			'cold',
+			this.config.tiers.cold,
+			key,
+			generation,
+			upperTierPromotionEpoch,
+		)
 		if (result) {
 			if (this.isExpired(result.metadata)) {
 				await this.delete(key)
@@ -322,9 +381,10 @@ export class TieredStorage<T = unknown> {
 
 			// Fire-and-forget access stats update (non-critical)
 			void this.updateAccessStats(key, 'cold')
+			const consumerResult = cloneTierGetResult(result)
 			return {
-				data: (await this.deserializeData(result.data)) as T,
-				metadata: result.metadata,
+				data: (await this.deserializeData(consumerResult.data)) as T,
+				metadata: consumerResult.metadata,
 				source: 'cold',
 			}
 		}
@@ -339,10 +399,7 @@ export class TieredStorage<T = unknown> {
 	 * Uses the tier's getWithMetadata if available, otherwise falls back
 	 * to separate get() and getMetadata() calls.
 	 */
-	private async getFromTier(
-		tier: StorageTier,
-		key: string,
-	): Promise<{ data: Uint8Array; metadata: StorageMetadata } | null> {
+	private async getFromTier(tier: StorageTier, key: string): Promise<TierGetResult | null> {
 		// Use optimized combined method if available
 		if (tier.getWithMetadata) {
 			return tier.getWithMetadata(key)
@@ -358,6 +415,37 @@ export class TieredStorage<T = unknown> {
 			return null
 		}
 		return { data, metadata }
+	}
+
+	/**
+	 * Coalesce buffered reads to one tier operation per key and fence generation.
+	 * The raw serialized result is shared so get() and getWithMetadata() cannot
+	 * accidentally share differently typed deserialized values.
+	 */
+	private getFromTierCoalesced(
+		tierName: 'hot' | 'warm' | 'cold',
+		tier: StorageTier,
+		key: string,
+		generation: number,
+		upperTierPromotionEpoch: number,
+	): Promise<TierGetResult | null> {
+		const inFlightKey = `${tierName}\0${key}`
+		const existing = this.inFlightBufferedReads.get(inFlightKey)
+		if (existing?.generation === generation && existing.upperTierPromotionEpoch === upperTierPromotionEpoch)
+			return existing.promise
+
+		const promise = this.getFromTier(tier, key)
+		const entry = { generation, upperTierPromotionEpoch, promise }
+		this.inFlightBufferedReads.set(inFlightKey, entry)
+		void promise.then(
+			() => {
+				if (this.inFlightBufferedReads.get(inFlightKey) === entry) this.inFlightBufferedReads.delete(inFlightKey)
+			},
+			() => {
+				if (this.inFlightBufferedReads.get(inFlightKey) === entry) this.inFlightBufferedReads.delete(inFlightKey)
+			},
+		)
+		return promise
 	}
 
 	/**
@@ -487,6 +575,14 @@ export class TieredStorage<T = unknown> {
 	 * ```
 	 */
 	async setStream(key: string, stream: NodeJS.ReadableStream, options: StreamSetOptions): Promise<SetResult> {
+		return this.enqueueKeyWrite(key, () => this.setStreamInternal(key, stream, options))
+	}
+
+	private async setStreamInternal(
+		key: string,
+		stream: NodeJS.ReadableStream,
+		options: StreamSetOptions,
+	): Promise<SetResult> {
 		const shouldCompress = this.config.compression ?? false
 		const now = new Date()
 		const ttl = options.ttl ?? this.config.defaultTTL
@@ -643,6 +739,10 @@ export class TieredStorage<T = unknown> {
 	 * Automatically handles serialization and optional compression.
 	 */
 	async set(key: string, data: T, options?: SetOptions): Promise<SetResult> {
+		return this.enqueueKeyWrite(key, () => this.setInternal(key, data, options))
+	}
+
+	private async setInternal(key: string, data: T, options?: SetOptions): Promise<SetResult> {
 		throwIfAborted(options?.signal)
 
 		// 1. Serialize data
@@ -835,18 +935,19 @@ export class TieredStorage<T = unknown> {
 		const ttl = ttlMs ?? this.config.defaultTTL
 		if (!ttl) return
 
-		const newTTL = new Date(Date.now() + ttl)
+		await this.enqueueKeyWrite(key, async () => {
+			const newTTL = new Date(Date.now() + ttl)
+			for (const tier of [this.config.tiers.hot, this.config.tiers.warm, this.config.tiers.cold]) {
+				if (!tier) continue
 
-		for (const tier of [this.config.tiers.hot, this.config.tiers.warm, this.config.tiers.cold]) {
-			if (!tier) continue
-
-			const metadata = await tier.getMetadata(key)
-			if (metadata) {
-				metadata.ttl = newTTL
-				metadata.lastAccessed = new Date()
-				await tier.setMetadata(key, metadata)
+				const metadata = await tier.getMetadata(key)
+				if (metadata) {
+					metadata.ttl = newTTL
+					metadata.lastAccessed = new Date()
+					await tier.setMetadata(key, metadata)
+				}
 			}
-		}
+		})
 	}
 
 	/**
@@ -854,28 +955,30 @@ export class TieredStorage<T = unknown> {
 	 * its checksum/version fence; upper copies are only best-effort caches.
 	 */
 	async addSourceCidIfChecksumMatches(key: string, expectedChecksum: string, sourceCid: string): Promise<boolean> {
-		const cold = this.config.tiers.cold
-		if (!cold.setMetadataIfChecksumMatches) return false
+		return this.enqueueKeyWrite(key, async () => {
+			const cold = this.config.tiers.cold
+			if (!cold.setMetadataIfChecksumMatches) return false
 
-		const current = await cold.getMetadata(key)
-		if (!current || current.checksum !== expectedChecksum) return false
-		const metadata: StorageMetadata = {
-			...current,
-			customMetadata: { ...current.customMetadata, sourceCid },
-		}
-		if (!(await cold.setMetadataIfChecksumMatches(key, expectedChecksum, metadata))) return false
+			const current = await cold.getMetadata(key)
+			if (!current || current.checksum !== expectedChecksum) return false
+			const metadata: StorageMetadata = {
+				...current,
+				customMetadata: { ...current.customMetadata, sourceCid },
+			}
+			if (!(await cold.setMetadataIfChecksumMatches(key, expectedChecksum, metadata))) return false
 
-		const upperTiers = [this.config.tiers.hot, this.config.tiers.warm].filter(
-			(tier): tier is StorageTier => tier !== undefined,
-		)
-		await Promise.allSettled(
-			upperTiers.map((tier) =>
-				tier.setMetadataIfChecksumMatches
-					? tier.setMetadataIfChecksumMatches(key, expectedChecksum, metadata)
-					: Promise.resolve(false),
-			),
-		)
-		return true
+			const upperTiers = [this.config.tiers.hot, this.config.tiers.warm].filter(
+				(tier): tier is StorageTier => tier !== undefined,
+			)
+			await Promise.allSettled(
+				upperTiers.map((tier) =>
+					tier.setMetadataIfChecksumMatches
+						? tier.setMetadataIfChecksumMatches(key, expectedChecksum, metadata)
+						: Promise.resolve(false),
+				),
+			)
+			return true
+		})
 	}
 
 	/** Delete a prefix from one cache tier, using its native fast path when available. */
@@ -1030,26 +1133,33 @@ export class TieredStorage<T = unknown> {
 			throw new Error('invalid cold prefix deletion batch size')
 		}
 
-		const tier = this.config.tiers.cold
-		if (tier.deletePrefix) return await tier.deletePrefix(prefix)
+		// This operation has no per-key list when the tier provides a native
+		// namespace delete, so use the global promotion epoch as its read fence.
+		this.advanceUpperTierPromotionEpoch()
+		try {
+			const tier = this.config.tiers.cold
+			if (tier.deletePrefix) return await tier.deletePrefix(prefix)
 
-		let deleted = 0
-		let batch: string[] = []
-		for await (const key of tier.listKeys(prefix)) {
-			// StorageTier promises prefix filtering, but keep a namespace-delete
-			// defense in depth check before passing keys to a bulk delete.
-			if (!key.startsWith(prefix)) continue
-			batch.push(key)
-			if (batch.length < batchSize) continue
-			await tier.deleteMany(batch)
-			deleted += batch.length
-			batch = []
+			let deleted = 0
+			let batch: string[] = []
+			for await (const key of tier.listKeys(prefix)) {
+				// StorageTier promises prefix filtering, but keep a namespace-delete
+				// defense in depth check before passing keys to a bulk delete.
+				if (!key.startsWith(prefix)) continue
+				batch.push(key)
+				if (batch.length < batchSize) continue
+				await tier.deleteMany(batch)
+				deleted += batch.length
+				batch = []
+			}
+			if (batch.length > 0) {
+				await tier.deleteMany(batch)
+				deleted += batch.length
+			}
+			return deleted
+		} finally {
+			this.advanceUpperTierPromotionEpoch()
 		}
-		if (batch.length > 0) {
-			await tier.deleteMany(batch)
-			deleted += batch.length
-		}
-		return deleted
 	}
 
 	/**
@@ -1114,7 +1224,16 @@ export class TieredStorage<T = unknown> {
 	 * Cannot be undone.
 	 */
 	async clear(): Promise<void> {
-		await Promise.all([this.config.tiers.hot?.clear(), this.config.tiers.warm?.clear(), this.config.tiers.cold.clear()])
+		this.advanceUpperTierPromotionEpoch()
+		try {
+			await Promise.all([
+				this.config.tiers.hot?.clear(),
+				this.config.tiers.warm?.clear(),
+				this.config.tiers.cold.clear(),
+			])
+		} finally {
+			this.advanceUpperTierPromotionEpoch()
+		}
 	}
 
 	/**
@@ -1129,16 +1248,21 @@ export class TieredStorage<T = unknown> {
 	 * - Clearing cold tier to start fresh (⚠️ loses source of truth!)
 	 */
 	async clearTier(tier: 'hot' | 'warm' | 'cold'): Promise<void> {
-		switch (tier) {
-			case 'hot':
-				await this.config.tiers.hot?.clear()
-				break
-			case 'warm':
-				await this.config.tiers.warm?.clear()
-				break
-			case 'cold':
-				await this.config.tiers.cold.clear()
-				break
+		this.advanceUpperTierPromotionEpoch()
+		try {
+			switch (tier) {
+				case 'hot':
+					await this.config.tiers.hot?.clear()
+					break
+				case 'warm':
+					await this.config.tiers.warm?.clear()
+					break
+				case 'cold':
+					await this.config.tiers.cold.clear()
+					break
+			}
+		} finally {
+			this.advanceUpperTierPromotionEpoch()
 		}
 	}
 
@@ -1192,20 +1316,25 @@ export class TieredStorage<T = unknown> {
 			throw new Error(`Unsupported snapshot version: ${snapshot.version}`)
 		}
 
-		// Import metadata into all configured tiers
-		for (const key of snapshot.keys) {
-			const metadata = snapshot.metadata[key]
-			if (!metadata) continue
+		this.advanceUpperTierPromotionEpoch()
+		try {
+			// Import metadata into all configured tiers
+			for (const key of snapshot.keys) {
+				const metadata = snapshot.metadata[key]
+				if (!metadata) continue
 
-			if (this.config.tiers.hot) {
-				await this.config.tiers.hot.setMetadata(key, metadata)
+				if (this.config.tiers.hot) {
+					await this.config.tiers.hot.setMetadata(key, metadata)
+				}
+
+				if (this.config.tiers.warm) {
+					await this.config.tiers.warm.setMetadata(key, metadata)
+				}
+
+				await this.config.tiers.cold.setMetadata(key, metadata)
 			}
-
-			if (this.config.tiers.warm) {
-				await this.config.tiers.warm.setMetadata(key, metadata)
-			}
-
-			await this.config.tiers.cold.setMetadata(key, metadata)
+		} finally {
+			this.advanceUpperTierPromotionEpoch()
 		}
 	}
 

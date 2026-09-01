@@ -18,6 +18,7 @@
     "@wispplace/constants": "workspace:*",
     "@wispplace/database": "workspace:*",
     "@wispplace/fs-utils": "workspace:*",
+    "@wispplace/graceful-shutdown": "workspace:*",
     "@wispplace/lexicons": "workspace:*",
     "@wispplace/observability": "workspace:*",
     "@wispplace/page-generators": "workspace:*",

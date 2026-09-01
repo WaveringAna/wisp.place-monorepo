@@ -50,10 +50,6 @@ export function setCachedIfCurrent(scopeDid: string, entries: readonly WebhookEn
 	return true
 }
 
-export function setCached(scopeDid: string, entries: readonly WebhookEntry[]): void {
-	setCachedIfCurrent(scopeDid, entries, getCacheGeneration(scopeDid))
-}
-
 export function invalidate(scopeDid: string): void {
 	if (!validCacheKey(scopeDid)) return
 	if (!generations.has(scopeDid) && generations.size >= MAX_GENERATION_KEYS) {
@@ -72,8 +68,4 @@ export function clearRegistryCache(): void {
 	globalGeneration++
 	generations.clear()
 	cache.clear()
-}
-
-export function getRegistryCacheSize(): number {
-	return cache.size
 }

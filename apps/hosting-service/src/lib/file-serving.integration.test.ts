@@ -36,6 +36,7 @@ type FakeReadOutcome = FakeEntry | null | Error
 const storageData = new Map<string, FakeEntry>()
 const storageReadSequences = new Map<string, FakeReadOutcome[]>()
 const storageGetFailures = new Map<string, Error>()
+const storageGetKeys: string[] = []
 const storageGetWithMetadataKeys: string[] = []
 const evictedPublicCacheKeys: string[] = []
 const revalidateCalls: Array<{ did: string; rkey: string; reason: string }> = []
@@ -46,6 +47,9 @@ let evictPublicCacheKeyStarted: (() => void) | null = null
 let legacyMetadataHealResult: boolean | Error = true
 const legacyMetadataHealCalls: Array<{ key: string; checksum: string; sourceCid: string }> = []
 let siteFileCids: Record<string, string> | null = null
+let gatedStorageReadKey: string | null = null
+let gatedStorageReadStarted: (() => void) | null = null
+let gatedStorageReadGate: Promise<void> | null = null
 
 class TestDecompressionLimitError extends Error {
 	constructor() {
@@ -116,6 +120,7 @@ function isTestGzip(data: Uint8Array): boolean {
 
 const fakeStorage = {
 	async get(key: string) {
+		storageGetKeys.push(key)
 		const failure = storageGetFailures.get(key)
 		if (failure) throw failure
 		const entry = storageData.get(key)
@@ -123,6 +128,11 @@ const fakeStorage = {
 	},
 	async getWithMetadata(key: string) {
 		storageGetWithMetadataKeys.push(key)
+		if (key === gatedStorageReadKey && gatedStorageReadGate) {
+			gatedStorageReadStarted?.()
+			gatedStorageReadStarted = null
+			await gatedStorageReadGate
+		}
 		const sequence = storageReadSequences.get(key)
 		const entry = sequence && sequence.length > 0 ? sequence.shift() : storageData.get(key)
 		if (entry instanceof Error) throw entry
@@ -294,6 +304,7 @@ function resetServingState() {
 	storageData.clear()
 	storageReadSequences.clear()
 	storageGetFailures.clear()
+	storageGetKeys.length = 0
 	storageGetWithMetadataKeys.length = 0
 	evictedPublicCacheKeys.length = 0
 	revalidateCalls.length = 0
@@ -304,6 +315,9 @@ function resetServingState() {
 	legacyMetadataHealResult = true
 	legacyMetadataHealCalls.length = 0
 	siteFileCids = null
+	gatedStorageReadKey = null
+	gatedStorageReadStarted = null
+	gatedStorageReadGate = null
 	cache.clear('redirectRules')
 	cache.clear('siteCache')
 	cache.clear('siteFiles')
@@ -398,6 +412,45 @@ describe('serveFileInternal directory-index fallback for extensioned paths', () 
 		expect(storageGetWithMetadataKeys).toHaveLength(0)
 		expect(recordedStorageMisses).toEqual(['manifest'])
 		expect(revalidateCalls).toEqual([{ did: DID, rkey: RKEY, reason: 'storage-miss:manifest' }])
+	})
+
+	test('does not read _redirects when the manifest omits it', async () => {
+		storeFile('index.html', '<html>index</html>')
+		siteFileCids = { 'index.html': 'index-cid' }
+
+		const response = await serveFromCache(DID, RKEY, 'index.html', 'https://example.com/index.html')
+
+		expect(response.status).toBe(200)
+		expect(await response.text()).toBe('<html>index</html>')
+		expect(storageGetKeys).not.toContain(`${DID}/${RKEY}/_redirects`)
+		expect(storageGetWithMetadataKeys).not.toContain(`${DID}/${RKEY}/_redirects`)
+	})
+
+	test('starts manifest prewarm only after the requested file resolves', async () => {
+		storeFile('index.html', '<html>index</html>')
+		storeFile('other.html', '<html>other</html>')
+		siteFileCids = { 'index.html': 'index-cid', 'other.html': 'other-cid' }
+
+		let releaseRequestedRead!: () => void
+		const requestedRead = new Promise<void>((resolve) => {
+			releaseRequestedRead = resolve
+		})
+		const requestedReadStarted = new Promise<void>((resolve) => {
+			gatedStorageReadStarted = resolve
+		})
+		gatedStorageReadKey = `${DID}/${RKEY}/index.html`
+		gatedStorageReadGate = requestedRead
+
+		const responsePromise = serveFromCache(DID, RKEY, 'index.html', 'https://example.com/index.html')
+		await requestedReadStarted
+		expect(storageGetWithMetadataKeys).toEqual([`${DID}/${RKEY}/index.html`])
+
+		releaseRequestedRead()
+		const response = await responsePromise
+		expect(response.status).toBe(200)
+		await response.text()
+		await new Promise<void>((resolve) => queueMicrotask(resolve))
+		expect(storageGetWithMetadataKeys).toContain(`${DID}/${RKEY}/other.html`)
 	})
 
 	test('skips storage miss before redirect when manifest says extensioned direct file is absent', async () => {
@@ -1370,8 +1423,12 @@ describe('manifest source CID validation', () => {
 		expect(response.status).toBe(200)
 		expect(await response.text()).toBe('<html>pre-rewritten</html>')
 		expect(evictedPublicCacheKeys).toHaveLength(0)
-		expect(storageGetWithMetadataKeys).toContain(`${DID}/${RKEY}/.rewritten/page.html`)
-		expect(storageGetWithMetadataKeys).not.toContain(`${DID}/${RKEY}/page.html`)
+		const rewrittenRead = storageGetWithMetadataKeys.indexOf(`${DID}/${RKEY}/.rewritten/page.html`)
+		const originalRead = storageGetWithMetadataKeys.indexOf(`${DID}/${RKEY}/page.html`)
+		// The requested preferred representation must win before background prewarm
+		// starts its independent read of the original HTML.
+		expect(rewrittenRead).toBeGreaterThanOrEqual(0)
+		expect(originalRead).toBeGreaterThan(rewrittenRead)
 	})
 
 	test('returns repair 503 instead of falling through to an SPA after a source CID mismatch', async () => {

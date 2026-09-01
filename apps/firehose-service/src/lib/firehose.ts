@@ -134,12 +134,12 @@ async function settlesWithinGrace(operation: Promise<unknown>, gracePeriodMs: nu
 	})
 }
 
-export interface StopAndDrainOptions {
+interface StopAndDrainOptions {
 	/** Overrides FIREHOSE_DRAIN_GRACE_MS for this stop operation. */
 	gracePeriodMs?: number
 }
 
-export interface FirehoseDrainResult extends SchedulerDrainResult {
+interface FirehoseDrainResult extends SchedulerDrainResult {
 	cursor?: number
 	pendingCursorEvents: number
 	replayRequired: boolean
@@ -187,7 +187,7 @@ function isDurableRevalidation(result: SiteRevalidationEnqueueResult): boolean {
 const DURABLE_REVALIDATION_CAPACITY_RETRY_BASE_MS = 250
 const DURABLE_REVALIDATION_CAPACITY_RETRY_MAX_MS = 5_000
 
-export interface DurableRevalidationRetryOptions {
+interface DurableRevalidationRetryOptions {
 	/** Stop waiting when intake or the owning lifecycle is no longer active. */
 	shouldContinue?: () => boolean
 	/** Abort the capacity wait when the owning firehose lifecycle stops. */
@@ -343,10 +343,6 @@ export function getFirehoseHealth() {
 		consecutiveFailures: relayFailureBudget.consecutiveFailures,
 		healthy: lifecycle === 'running' && isConnected && Date.now() - lastEventTime < 60_000,
 	}
-}
-
-export function getConsecutiveFailures(): number {
-	return relayFailureBudget.consecutiveFailures
 }
 
 function isCurrentRelay(relayGeneration: number): boolean {
@@ -932,6 +928,3 @@ export function stopAndDrainFirehose(options: StopAndDrainOptions = {}): Promise
 export function stopFirehose(): Promise<FirehoseDrainResult> {
 	return stopAndDrainFirehose()
 }
-
-/** Alias kept for callers that prefer the verb order used by lifecycle code. */
-export const stopFirehoseAndDrain = stopAndDrainFirehose

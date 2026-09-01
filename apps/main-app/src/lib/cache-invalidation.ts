@@ -1,8 +1,13 @@
+import {
+	DEFAULT_CACHE_INVALIDATION_CHANNEL,
+	DEFAULT_CACHE_INVALIDATION_STREAM,
+	publishCacheInvalidationEvent,
+	resolveCacheInvalidationStreamMaxLen,
+} from '@wispplace/constants'
 import { createLogger } from '@wispplace/observability'
 import { getConnectedRedisClient } from './redis'
 
 const logger = createLogger('main-app:cache-invalidation')
-const CHANNEL = 'wisp:cache-invalidate'
 
 type DomainKind = 'wisp' | 'custom'
 
@@ -18,30 +23,17 @@ export async function publishDomainCacheInvalidation(
 		const redis = await getConnectedRedisClient()
 		if (!redis) return
 
-		const stream = process.env.WISP_CACHE_INVALIDATION_STREAM || 'wisp:cache-invalidate-stream'
-		const configuredMaxLen = Number.parseInt(process.env.WISP_CACHE_INVALIDATION_STREAM_MAXLEN || '', 10)
-		const maxLen = Number.isSafeInteger(configuredMaxLen) && configuredMaxLen > 0 ? `${configuredMaxLen}` : '10000'
-		const fields = [
-			'action',
-			'domain',
-			'domain',
-			normalizedDomain,
-			'domainKind',
-			domainKind,
-			...(customDomainId ? ['customDomainId', customDomainId] : []),
-			'ts',
-			Date.now().toString(),
-		]
-
-		const streamId = (await redis.send('XADD', [stream, 'MAXLEN', '~', maxLen, '*', ...fields])) as string
-		const message = JSON.stringify({
-			action: 'domain',
-			domain: normalizedDomain,
-			domainKind,
-			customDomainId,
-			streamId,
-		})
-		await redis.publish(CHANNEL, message)
+		const publisher = {
+			xadd: (stream: string, ...args: string[]) => redis.send('XADD', [stream, ...args]),
+			publish: (channel: string, message: string) => redis.publish(channel, message),
+		}
+		await publishCacheInvalidationEvent(
+			publisher,
+			{ action: 'domain', domain: normalizedDomain, domainKind, customDomainId },
+			DEFAULT_CACHE_INVALIDATION_CHANNEL,
+			process.env.WISP_CACHE_INVALIDATION_STREAM || DEFAULT_CACHE_INVALIDATION_STREAM,
+			resolveCacheInvalidationStreamMaxLen(process.env.WISP_CACHE_INVALIDATION_STREAM_MAXLEN),
+		)
 	} catch (error) {
 		logger.warn('[CacheInvalidation] Failed to publish domain invalidation', {
 			domain: normalizedDomain,

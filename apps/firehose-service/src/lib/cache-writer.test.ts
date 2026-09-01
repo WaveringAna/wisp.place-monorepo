@@ -44,7 +44,12 @@ function deferred<T = void>() {
 function serializedLock(): SiteUpdateHandlerDependencies['withSiteWriteLock'] &
 	SettingsWriteDependencies['withSiteWriteLock'] {
 	let tail: Promise<void> = Promise.resolve()
-	return async <T>(_did: string, _rkey: string, operation: () => Promise<T>): Promise<T> => {
+	return async <T>(
+		_did: string,
+		_rkey: string,
+		operation: (signal: AbortSignal) => Promise<T>,
+		lockSignal?: AbortSignal,
+	): Promise<T> => {
 		const previous = tail
 		let release!: () => void
 		tail = new Promise<void>((resolve) => {
@@ -52,7 +57,7 @@ function serializedLock(): SiteUpdateHandlerDependencies['withSiteWriteLock'] &
 		})
 		await previous
 		try {
-			return await operation()
+			return await operation(lockSignal ?? new AbortController().signal)
 		} finally {
 			release()
 		}
@@ -164,7 +169,8 @@ describe('locked site/settings reconciliation', () => {
 			materializeCurrentRecord: async () => {
 				materializations++
 			},
-			withSiteWriteLock: async (_did, _rkey, operation) => await operation(),
+			withSiteWriteLock: async (_did, _rkey, operation, _signal) =>
+				await operation(_signal ?? new AbortController().signal),
 		}
 
 		await handleSiteCreateOrUpdate('did:plc:test', 'site', siteRecord('hint'), 'cid-hint', undefined, dependencies)
@@ -284,7 +290,8 @@ describe('locked site/settings reconciliation', () => {
 				deletes++
 			},
 			publishCacheInvalidation: async () => undefined,
-			withSiteWriteLock: async (_did, _rkey, operation) => await operation(),
+			withSiteWriteLock: async (_did, _rkey, operation, _signal) =>
+				await operation(_signal ?? new AbortController().signal),
 		}
 
 		await handleSettingsUpdate('did:plc:test', 'site', settingsRecord(false), 'cid-C1', undefined, dependencies)
@@ -310,7 +317,8 @@ describe('locked site/settings reconciliation', () => {
 				deletes++
 			},
 			publishCacheInvalidation: async () => undefined,
-			withSiteWriteLock: async (_did, _rkey, operation) => await operation(),
+			withSiteWriteLock: async (_did, _rkey, operation, _signal) =>
+				await operation(_signal ?? new AbortController().signal),
 		}
 
 		await expect(
@@ -340,12 +348,16 @@ describe('locked site/settings reconciliation', () => {
 			},
 			deleteSiteSettingsCache: async () => undefined,
 			publishCacheInvalidation: async () => undefined,
-			withSiteWriteLock: async (_did, _rkey, operation) => await operation(),
+			withSiteWriteLock: async (_did, _rkey, operation, _signal) =>
+				await operation(_signal ?? new AbortController().signal),
 		}
 
 		try {
 			await handleSettingsUpdate('did:plc:test', 'site', settingsRecord(false), 'cid-C1', { resources }, dependencies)
-			expect(lookupResources).toBe(resources)
+			// The lock wrapper rebinds only the signal; the budget and deadline
+			// must remain the caller's shared instances.
+			expect(lookupResources?.transferBudget).toBe(resources.transferBudget)
+			expect(lookupResources?.deadlineAt).toBe(resources.deadlineAt)
 			expect(resources.transferBudget.consumedBytes).toBe(8)
 			expect(writes).toBe(1)
 		} finally {
@@ -415,7 +427,8 @@ describe('locked site/settings reconciliation', () => {
 			},
 			deleteSiteSettingsCache: async () => undefined,
 			publishCacheInvalidation: async () => undefined,
-			withSiteWriteLock: async (_did, _rkey, operation) => await operation(),
+			withSiteWriteLock: async (_did, _rkey, operation, _signal) =>
+				await operation(_signal ?? new AbortController().signal),
 		}
 
 		try {

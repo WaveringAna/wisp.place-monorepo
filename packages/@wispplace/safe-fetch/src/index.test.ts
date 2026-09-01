@@ -3,6 +3,7 @@ import {
 	DEFAULT_FETCH_TIMEOUT_MS,
 	DEFAULT_MAX_REQUEST_BODY_SIZE,
 	isPublicIpAddress,
+	SafeFetchError,
 	SafeFetchHttpError,
 	type SafeFetchResolver,
 	type SafeFetchTransport,
@@ -18,6 +19,87 @@ const okTransport: SafeFetchTransport = async () => new Response('ok')
 describe('safeFetch public-request defaults', () => {
 	test('uses a bounded control-plane timeout', () => {
 		expect(DEFAULT_FETCH_TIMEOUT_MS).toBe(30_000)
+	})
+
+	test('normalizes an empty method to GET before invoking a custom transport', async () => {
+		let observedMethod = ''
+		await safeFetch('https://pds.example/xrpc', {
+			method: '',
+			resolver: publicResolver,
+			transport: async (request) => {
+				observedMethod = request.method
+				return new Response('ok')
+			},
+		})
+		expect(observedMethod).toBe('GET')
+	})
+
+	test('keeps classified error causes non-enumerable', () => {
+		const cause = new Error('resolver secret')
+		const error = new SafeFetchError('dns', 'DNS resolution failed', cause)
+		expect(error.cause).toBe(cause)
+		expect(Object.keys(error)).not.toContain('cause')
+		expect(JSON.stringify(error)).not.toContain('resolver secret')
+	})
+
+	test('does not start body, DNS, or transport work after a pre-abort', async () => {
+		let bodyReads = 0
+		let resolverCalls = 0
+		let transportCalls = 0
+		class CountingBlob extends Blob {
+			override async arrayBuffer(): Promise<ArrayBuffer> {
+				bodyReads++
+				return await super.arrayBuffer()
+			}
+		}
+		const controller = new AbortController()
+		controller.abort(new Error('stop before request'))
+
+		await expect(
+			safeFetch('https://pds.example/xrpc', {
+				signal: controller.signal,
+				body: new CountingBlob(['body']),
+				resolver: async () => {
+					resolverCalls++
+					return [{ address: '93.184.216.34', family: 4 }]
+				},
+				transport: async () => {
+					transportCalls++
+					return new Response('unexpected')
+				},
+			}),
+		).rejects.toThrow('stop before request')
+		expect(bodyReads).toBe(0)
+		expect(resolverCalls).toBe(0)
+		expect(transportCalls).toBe(0)
+	})
+
+	test('attaches a rejection handler when an operation aborts synchronously', async () => {
+		let resolveAddresses: ((value: readonly [{ address: string; family: 4 }]) => void) | undefined
+		let rejectionHandlerAttached = false
+		const pending = new Promise<readonly [{ address: string; family: 4 }]>((resolve) => {
+			resolveAddresses = resolve
+		})
+		const originalThen = pending.then.bind(pending)
+		// biome-ignore lint/suspicious/noThenProperty: Verify that abort races attach a rejection handler.
+		pending.then = ((onFulfilled, onRejected) => {
+			rejectionHandlerAttached = typeof onRejected === 'function'
+			return originalThen(onFulfilled, onRejected)
+		}) as typeof pending.then
+		const controller = new AbortController()
+
+		await expect(
+			safeFetch('https://pds.example/xrpc', {
+				signal: controller.signal,
+				resolver: () => {
+					controller.abort(new Error('stop during DNS'))
+					return pending
+				},
+				transport: okTransport,
+			}),
+		).rejects.toThrow('stop during DNS')
+		expect(rejectionHandlerAttached).toBe(true)
+		resolveAddresses?.([{ address: '93.184.216.34', family: 4 }])
 	})
 
 	test('rejects non-public IPv4 and IPv6 ranges', () => {

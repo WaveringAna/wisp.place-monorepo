@@ -14,7 +14,7 @@ interface DidDocument {
 	alsoKnownAs?: unknown[]
 }
 
-export interface IdentityResolutionOptions {
+interface IdentityResolutionOptions {
 	/** Test seam. Production requests use SSRF-hardened safeFetchJson. */
 	fetchJson?: JsonFetcher
 	fetchOptions?: SafeFetchOptions
@@ -80,7 +80,7 @@ function parseDidWeb(did: string): { authority: string; pathSegments: string[] }
 }
 
 /** Strictly accepts the DID methods this hosting service resolves. */
-export function isValidDid(did: string): boolean {
+function isValidDid(did: string): boolean {
 	return PLC_DID_PATTERN.test(did) || parseDidWeb(did) !== null
 }
 

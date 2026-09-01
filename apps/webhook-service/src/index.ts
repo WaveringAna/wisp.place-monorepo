@@ -1,3 +1,4 @@
+import { onceAsync, remainingShutdownTimeout, settleBeforeDeadline } from '@wispplace/graceful-shutdown'
 import { createLogger, shutdownGrafanaExporters } from '@wispplace/observability'
 import { config } from './config'
 import {
@@ -15,6 +16,7 @@ import {
 	startFirehose,
 	stopFirehose,
 } from './lib/firehose'
+import { isWebhookServingReady } from './lib/readiness'
 import { closeRedisPublisher, getRedisPublisherHealth } from './lib/redis'
 import { canCloseSharedClients } from './lib/shutdown-policy'
 
@@ -26,7 +28,6 @@ type HealthServer = ReturnType<typeof Bun.serve>
 
 let healthServer: HealthServer | null = null
 let startupPromise: Promise<void> | null = null
-let shutdownPromise: Promise<boolean> | null = null
 let phase: LifecyclePhase = 'starting'
 let startupBackfill = { found: 0, failed: 0 }
 let reconciliationRetryScheduler: ReconciliationRetryScheduler | null = null
@@ -58,7 +59,10 @@ async function reconciliationHealth(): Promise<{
 	failed: number
 	retryInfrastructureHealthy: boolean
 }> {
-	const retryInfrastructureHealthy = reconciliationRetryScheduler?.health.infrastructureHealthy ?? true
+	const retryHealth = reconciliationRetryScheduler?.health
+	// A pending or stopped scheduler is not ready. This prevents the
+	// reconciling-live phase from briefly masking a stuck scheduler startup.
+	const retryInfrastructureHealthy = retryHealth?.running === true && retryHealth.infrastructureHealthy
 	const api = database as typeof database & {
 		getWebhookOwnerReconciliationHealth?: () => Promise<{ scanning: number; failed: number }>
 	}
@@ -82,13 +86,16 @@ async function healthResponse(): Promise<Response> {
 	const intake = getFirehoseHealth()
 	const redis = getRedisPublisherHealth()
 	const reconciliation = await reconciliationHealth()
-	const healthy =
-		phase === 'live' &&
-		intake.healthy &&
-		backfillInfrastructureHealthy &&
-		reconciliation.failed === 0 &&
-		reconciliation.scanning === 0 &&
-		reconciliation.retryInfrastructureHealthy
+	// A single owner may be unavailable or still retrying without making the
+	// whole service unable to serve other tenants. Keep those counts visible in
+	// the response, but gate readiness only on lifecycle, intake, and shared
+	// infrastructure health.
+	const healthy = isWebhookServingReady({
+		phase,
+		intakeHealthy: intake.healthy,
+		backfillInfrastructureHealthy,
+		retryInfrastructureHealthy: reconciliation.retryInfrastructureHealthy,
+	})
 	const body = {
 		status: healthy ? 'healthy' : 'degraded',
 		phase,
@@ -177,54 +184,15 @@ function waitForBackfillRetry(signal: AbortSignal, attempt: number): Promise<voi
 	})
 }
 
-/** Wait only until the process-wide shutdown deadline; never reject on a detached task. */
-async function settlesBeforeDeadline(task: Promise<unknown> | null, deadline: number): Promise<boolean> {
-	if (!task) return true
-	const remaining = Math.max(0, deadline - Date.now())
-	if (remaining === 0) {
-		// The caller may let this task finish only during process exit. Consume a
-		// late rejection so an expired shutdown budget cannot become unhandled work.
-		void task.then(
-			() => undefined,
-			() => undefined,
-		)
-		return false
-	}
-	return new Promise((resolve) => {
-		let settled = false
-		const finish = (value: boolean) => {
-			if (settled) return
-			settled = true
-			clearTimeout(timer)
-			resolve(value)
-		}
-		const timer = setTimeout(() => finish(false), remaining)
-		void task.then(
-			() => finish(true),
-			() => finish(true),
-		)
-	})
-}
-
-function remainingShutdownTimeout(deadline: number): number {
-	return Math.max(1, deadline - Date.now())
-}
-
 async function closeBeforeDeadline(
 	task: Promise<void>,
 	deadline: number,
 	timedOutMessage: string,
 	failedMessage: string,
 ): Promise<void> {
-	if (!(await settlesBeforeDeadline(task, deadline))) {
-		logger.warn(timedOutMessage)
-		return
-	}
-	try {
-		await task
-	} catch {
-		logger.warn(failedMessage)
-	}
+	const result = await settleBeforeDeadline(task, deadline)
+	if (result.status === 'timed-out') logger.warn(timedOutMessage)
+	else if (result.status === 'rejected') logger.warn(failedMessage)
 }
 
 function ensureReconciliationRetryScheduler(
@@ -412,134 +380,125 @@ export function main(): Promise<void> {
  * that result as a generic non-zero exit status instead of closing shared clients
  * underneath the outstanding work.
  */
-export function shutdown(signal = 'shutdown'): Promise<boolean> {
-	if (shutdownPromise) return shutdownPromise
-	shutdownPromise = (async () => {
-		const shutdownDeadline = Date.now() + config.shutdownTimeoutMs
-		// During early startup the registry snapshot is the active reconciliation
-		// producer; afterwards the detached PDS backfill owns that role.
-		const initialBackfill = initialBackfillPromise ?? registryBootstrapPromise ?? intakeStartupPromise
-		phase = 'stopping'
-		backgroundBackfillStopped = true
-		reconciliationGeneration++
-		const abortController = reconciliationAbortController
-		reconciliationAbortController = null
-		const scheduler = reconciliationRetryScheduler
-		const schedulerStart = reconciliationSchedulerStartPromise
-		reconciliationRetryScheduler = null
-		// Begin cancellation now, but do not let PDS retry draining delay stopping
-		// intake. It is awaited at a bounded point after accepted relay work drains.
-		const schedulerStop = scheduler?.stop({
-			timeoutMs: remainingShutdownTimeout(shutdownDeadline),
-			...(abortController ? { signal: abortController.signal } : {}),
-		})
-		abortController?.abort()
-		logger.info(`Webhook service stopping (${signal})`)
+const runShutdown = onceAsync(async (signal: string): Promise<boolean> => {
+	const shutdownDeadline = Date.now() + config.shutdownTimeoutMs
+	// During early startup the registry snapshot is the active reconciliation
+	// producer; afterwards the detached PDS backfill owns that role.
+	const initialBackfill = initialBackfillPromise ?? registryBootstrapPromise ?? intakeStartupPromise
+	phase = 'stopping'
+	backgroundBackfillStopped = true
+	reconciliationGeneration++
+	const abortController = reconciliationAbortController
+	reconciliationAbortController = null
+	const scheduler = reconciliationRetryScheduler
+	const schedulerStart = reconciliationSchedulerStartPromise
+	reconciliationRetryScheduler = null
+	// Begin cancellation now, but do not let PDS retry draining delay stopping
+	// intake. It is awaited at a bounded point after accepted relay work drains.
+	const schedulerStop = scheduler?.stop({
+		timeoutMs: remainingShutdownTimeout(shutdownDeadline),
+		...(abortController ? { signal: abortController.signal } : {}),
+	})
+	abortController?.abort()
+	logger.info(`Webhook service stopping (${signal})`)
 
-		// Stop the unauthenticated HTTP surface first, then stop accepting relay work.
-		if (healthServer) {
-			try {
-				healthServer.stop(true)
-			} catch {
-				// Listener may already be stopped by a concurrent signal.
-			}
-			healthServer = null
+	// Stop the unauthenticated HTTP surface first, then stop accepting relay work.
+	if (healthServer) {
+		try {
+			healthServer.stop(true)
+		} catch {
+			// Listener may already be stopped by a concurrent signal.
 		}
-		stopFirehose()
-		const initialBackfillSettled = await settlesBeforeDeadline(initialBackfill, shutdownDeadline)
-		if (!initialBackfillSettled) {
-			logger.warn('Initial reconciliation did not settle before shutdown deadline')
-		}
-		let intakeDrained = false
-		const intakeDrain = drainFirehose(remainingShutdownTimeout(shutdownDeadline))
-		if (!(await settlesBeforeDeadline(intakeDrain, shutdownDeadline))) {
-			logger.warn('Webhook intake drain timed out; unfinished events remain behind their cursor')
-		} else {
-			try {
-				intakeDrained = await intakeDrain
-				if (!intakeDrained) logger.warn('Webhook intake drain timed out; unfinished events remain behind their cursor')
-			} catch {
-				logger.warn('Webhook intake drain failed; unfinished events remain behind their cursor')
-			}
-		}
+		healthServer = null
+	}
+	stopFirehose()
+	const initialBackfillResult = await settleBeforeDeadline(initialBackfill, shutdownDeadline)
+	const initialBackfillSettled = initialBackfillResult.status !== 'timed-out'
+	if (!initialBackfillSettled) logger.warn('Initial reconciliation did not settle before shutdown deadline')
 
-		let deliveryStopped = false
-		const deliveryStop = drainAndStopDeliveryWorker(remainingShutdownTimeout(shutdownDeadline))
-		if (!(await settlesBeforeDeadline(deliveryStop, shutdownDeadline))) {
-			logger.warn('Webhook delivery worker abort cleanup did not settle before shutdown deadline')
-		} else {
-			try {
-				deliveryStopped = await deliveryStop
-				if (!deliveryStopped)
-					logger.warn('Webhook delivery worker abort cleanup did not settle before shutdown deadline')
-			} catch {
-				logger.warn('Webhook delivery worker did not stop cleanly')
-			}
-		}
-		let schedulerDrained = true
-		if (schedulerStop) {
-			if (!(await settlesBeforeDeadline(schedulerStop, shutdownDeadline))) {
-				schedulerDrained = false
-				logger.warn('Reconciliation retry scheduler did not drain before shutdown deadline')
-			} else {
-				try {
-					const result = await schedulerStop
-					schedulerDrained = result.drained
-					if (!schedulerDrained) logger.warn('Reconciliation retry scheduler did not drain before shutdown deadline')
-				} catch {
-					schedulerDrained = false
-					logger.warn('Reconciliation retry scheduler did not stop cleanly')
-				}
-			}
-		}
-		// A scheduler can still be constructing when shutdown begins. Its startup
-		// promise includes the stopped-path cleanup in ensureReconciliationRetryScheduler.
-		const schedulerStartSettled = await settlesBeforeDeadline(schedulerStart, shutdownDeadline)
-		if (!schedulerStartSettled) {
+	let intakeDrained = false
+	const intakeDrain = drainFirehose(remainingShutdownTimeout(shutdownDeadline))
+	const intakeDrainResult = await settleBeforeDeadline(intakeDrain, shutdownDeadline)
+	if (intakeDrainResult.status === 'timed-out') {
+		logger.warn('Webhook intake drain timed out; unfinished events remain behind their cursor')
+	} else if (intakeDrainResult.status === 'rejected') {
+		logger.warn('Webhook intake drain failed; unfinished events remain behind their cursor')
+	} else {
+		intakeDrained = intakeDrainResult.value
+		if (!intakeDrained) logger.warn('Webhook intake drain timed out; unfinished events remain behind their cursor')
+	}
+
+	let deliveryStopped = false
+	const deliveryStop = drainAndStopDeliveryWorker(remainingShutdownTimeout(shutdownDeadline))
+	const deliveryStopResult = await settleBeforeDeadline(deliveryStop, shutdownDeadline)
+	if (deliveryStopResult.status === 'timed-out') {
+		logger.warn('Webhook delivery worker abort cleanup did not settle before shutdown deadline')
+	} else if (deliveryStopResult.status === 'rejected') {
+		logger.warn('Webhook delivery worker did not stop cleanly')
+	} else {
+		deliveryStopped = deliveryStopResult.value
+		if (!deliveryStopped) logger.warn('Webhook delivery worker abort cleanup did not settle before shutdown deadline')
+	}
+	let schedulerDrained = true
+	if (schedulerStop) {
+		const schedulerStopResult = await settleBeforeDeadline(schedulerStop, shutdownDeadline)
+		if (schedulerStopResult.status === 'timed-out') {
 			schedulerDrained = false
-			logger.warn('Reconciliation retry scheduler startup did not settle before shutdown deadline')
-		} else if (schedulerStart) {
-			try {
-				await schedulerStart
-			} catch {
-				schedulerDrained = false
-				logger.warn('Reconciliation retry scheduler startup did not stop cleanly')
-			}
-		}
-		const safeToCloseSharedClients = canCloseSharedClients({
-			initialBackfillSettled,
-			intakeDrained,
-			schedulerDrained,
-			deliveryStopped,
-		})
-		if (safeToCloseSharedClients) {
-			await closeBeforeDeadline(
-				closeRedisPublisher(),
-				shutdownDeadline,
-				'Redis publisher did not close before shutdown deadline',
-				'Redis publisher did not close cleanly',
-			)
-			await closeBeforeDeadline(
-				database.closeDatabase(),
-				shutdownDeadline,
-				'Database did not close before shutdown deadline',
-				'Database did not close cleanly',
-			)
-			await closeBeforeDeadline(
-				shutdownGrafanaExporters(),
-				shutdownDeadline,
-				'Observability did not close before shutdown deadline',
-				'Observability did not close cleanly',
-			)
+			logger.warn('Reconciliation retry scheduler did not drain before shutdown deadline')
+		} else if (schedulerStopResult.status === 'rejected') {
+			schedulerDrained = false
+			logger.warn('Reconciliation retry scheduler did not stop cleanly')
 		} else {
-			// A callback ignored cancellation or its bounded drain. Leave all shared
-			// clients open until process exit rather than close them beneath that work.
-			logger.warn('Skipping shared-client close because webhook shutdown is incomplete')
+			schedulerDrained = schedulerStopResult.value.drained
+			if (!schedulerDrained) logger.warn('Reconciliation retry scheduler did not drain before shutdown deadline')
 		}
-		phase = safeToCloseSharedClients ? 'stopped' : 'failed'
-		return safeToCloseSharedClients
-	})()
-	return shutdownPromise
+	}
+	// A scheduler can still be constructing when shutdown begins. Its startup
+	// promise includes the stopped-path cleanup in ensureReconciliationRetryScheduler.
+	const schedulerStartResult = await settleBeforeDeadline(schedulerStart, shutdownDeadline)
+	if (schedulerStartResult.status === 'timed-out') {
+		schedulerDrained = false
+		logger.warn('Reconciliation retry scheduler startup did not settle before shutdown deadline')
+	} else if (schedulerStartResult.status === 'rejected') {
+		schedulerDrained = false
+		logger.warn('Reconciliation retry scheduler startup did not stop cleanly')
+	}
+	const safeToCloseSharedClients = canCloseSharedClients({
+		initialBackfillSettled,
+		intakeDrained,
+		schedulerDrained,
+		deliveryStopped,
+	})
+	if (safeToCloseSharedClients) {
+		await closeBeforeDeadline(
+			closeRedisPublisher(),
+			shutdownDeadline,
+			'Redis publisher did not close before shutdown deadline',
+			'Redis publisher did not close cleanly',
+		)
+		await closeBeforeDeadline(
+			database.closeDatabase(),
+			shutdownDeadline,
+			'Database did not close before shutdown deadline',
+			'Database did not close cleanly',
+		)
+		await closeBeforeDeadline(
+			shutdownGrafanaExporters(),
+			shutdownDeadline,
+			'Observability did not close before shutdown deadline',
+			'Observability did not close cleanly',
+		)
+	} else {
+		// A callback ignored cancellation or its bounded drain. Leave all shared
+		// clients open until process exit rather than close them beneath that work.
+		logger.warn('Skipping shared-client close because webhook shutdown is incomplete')
+	}
+	phase = safeToCloseSharedClients ? 'stopped' : 'failed'
+	return safeToCloseSharedClients
+})
+
+export function shutdown(signal = 'shutdown'): Promise<boolean> {
+	return runShutdown(signal)
 }
 
 if (import.meta.main) {

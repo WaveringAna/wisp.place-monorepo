@@ -188,6 +188,8 @@ function listRecordsUrl(pdsUrl: string, did: string, cursor: string | undefined)
 	return url.toString()
 }
 
+const MAX_PDS_ERROR_BYTES = 16 * 1024
+
 async function discardResponse(response: Response): Promise<void> {
 	try {
 		await response.body?.cancel()
@@ -196,10 +198,59 @@ async function discardResponse(response: Response): Promise<void> {
 	}
 }
 
+/** Read only a small error body so status classification cannot create a response-body DoS. */
+async function readBoundedErrorJson(response: Response, signal?: AbortSignal): Promise<unknown> {
+	const reader = response.body?.getReader()
+	if (!reader) return undefined
+	const chunks: Uint8Array[] = []
+	let total = 0
+	try {
+		for (;;) {
+			if (signal?.aborted) {
+				await reader.cancel()
+				return undefined
+			}
+			const { done, value } = await reader.read()
+			if (done) break
+			if (total + value.byteLength > MAX_PDS_ERROR_BYTES) {
+				await reader.cancel()
+				return undefined
+			}
+			chunks.push(value)
+			total += value.byteLength
+		}
+	} catch {
+		return undefined
+	} finally {
+		reader.releaseLock()
+	}
+	const bytes = new Uint8Array(total)
+	let offset = 0
+	for (const chunk of chunks) {
+		bytes.set(chunk, offset)
+		offset += chunk.byteLength
+	}
+	try {
+		return JSON.parse(new TextDecoder().decode(bytes))
+	} catch {
+		return undefined
+	}
+}
+
+/** Only an explicit repo-absence response is safe to treat as an empty snapshot. */
+async function isAuthoritativeRepoAbsence(response: Response, did: string, signal?: AbortSignal): Promise<boolean> {
+	if (response.status !== 400 && response.status !== 404) return false
+	const body = await readBoundedErrorJson(response, signal)
+	if (!body || typeof body !== 'object' || Array.isArray(body)) return false
+	const error = (body as Record<string, unknown>).error
+	const message = (body as Record<string, unknown>).message
+	return error === 'RepoNotFound' || (error === 'InvalidRequest' && message === `Could not find repo: ${did}`)
+}
+
 async function resolveBackfillPds(did: string, fetcher: IdentityGetFetcher, signal?: AbortSignal): Promise<string> {
 	if (!isCanonicalWebhookDid(did)) throw new Error('Webhook backfill DID is invalid')
 	const pdsUrl = await getPdsForDid(did, fetcher, { allowLoopback: true }, { signal })
-	if (!pdsUrl) throw new Error('Webhook backfill has no valid PDS endpoint')
+	if (!pdsUrl) throw new OwnerScanFailure('Webhook backfill has no valid PDS endpoint')
 	return pdsUrl
 }
 
@@ -221,27 +272,43 @@ export async function fetchWhRecordPages(
 	let total = 0
 
 	for (let page = 0; page < MAX_BACKFILL_PAGES; page++) {
-		const response = await fetcher(listRecordsUrl(pdsUrl, did, cursor), { signal })
-		if (!response.ok) {
-			await discardResponse(response)
-			throw new Error('Webhook backfill PDS request failed')
+		let response: Response
+		try {
+			response = await fetcher(listRecordsUrl(pdsUrl, did, cursor), { signal })
+		} catch {
+			throw new OwnerScanFailure('Webhook backfill PDS request failed')
 		}
-		const data = parseListRecordsResponse(await readBoundedIdentityJson(response, MAX_BACKFILL_PAGE_BYTES, signal), did)
+		if (!response.ok) {
+			const authoritativeEmpty = await isAuthoritativeRepoAbsence(response, did, signal)
+			// Absence is authoritative only before any snapshot page was consumed.
+			// A prior empty/fully omitted page with a cursor is still a partial scan.
+			if (authoritativeEmpty && page === 0) return total
+			await discardResponse(response)
+			throw new OwnerScanFailure('Webhook backfill PDS request failed')
+		}
+		let data: ListRecordsResponse
+		try {
+			data = parseListRecordsResponse(await readBoundedIdentityJson(response, MAX_BACKFILL_PAGE_BYTES, signal), did)
+		} catch (error) {
+			if (error instanceof ReconciliationInfrastructureFailure || error instanceof OwnerScanFailure) throw error
+			throw new OwnerScanFailure('Webhook backfill response is invalid')
+		}
 		if (data.omitted > 0)
 			logger.warn(`[backfill] Omitted ${data.omitted} invalid webhook record(s) from a snapshot page`)
-		if (total + data.records.length > MAX_BACKFILL_RECORDS) throw new Error('Webhook backfill record limit exceeded')
+		if (total + data.records.length > MAX_BACKFILL_RECORDS)
+			throw new OwnerScanFailure('Webhook backfill record limit exceeded')
 		for (const record of data.records) {
-			if (seenRkeys.has(record.rkey)) invalidPdsResponse()
+			if (seenRkeys.has(record.rkey)) throw new OwnerScanFailure('Webhook backfill response is invalid')
 			seenRkeys.add(record.rkey)
 		}
 		await onPage(data.records)
 		total += data.records.length
 		if (data.cursor === undefined) return total
-		if (seenCursors.has(data.cursor)) invalidPdsResponse()
+		if (seenCursors.has(data.cursor)) throw new OwnerScanFailure('Webhook backfill response is invalid')
 		seenCursors.add(data.cursor)
 		cursor = data.cursor
 	}
-	throw new Error('Webhook backfill page limit exceeded')
+	throw new OwnerScanFailure('Webhook backfill page limit exceeded')
 }
 
 /** Compatibility helper for callers that explicitly need a bounded in-memory snapshot. */
@@ -263,8 +330,8 @@ export async function fetchWhRecordsForDid(
 }
 
 class OwnerScanFailure extends Error {
-	constructor() {
-		super('Webhook backfill owner scan failed')
+	constructor(message = 'Webhook backfill owner scan failed') {
+		super(message)
 	}
 }
 
@@ -379,7 +446,7 @@ async function reconcileOwner(
 }
 
 /** Retry one already-degraded owner. Infrastructure failures remain fatal to the caller. */
-export async function retryFailedWebhookOwner(did: string, options: StartupBackfillOptions = {}): Promise<boolean> {
+async function retryFailedWebhookOwner(did: string, options: StartupBackfillOptions = {}): Promise<boolean> {
 	try {
 		await reconcileOwner(did, options.fetcher ?? backfillIdentityGet, options.onOwnerTransition, options.signal)
 		return true

@@ -283,18 +283,8 @@ export const getAdminDatabaseReport = primaryPresentationRead.getAdminDatabaseRe
 // Delivery history can contain operator-controlled URLs; keep it on primary.
 export const getWebhookEventHistory = primaryPresentationRead.getWebhookEventHistory
 
-export const getWispDomainInfo = async (did: string) => {
-	const rows = await db`SELECT domain, rkey FROM domains WHERE did = ${did} ORDER BY created_at ASC LIMIT 1`
-	return rows[0] ?? null
-}
-
 export const getAllWispDomains = primaryPresentationRead.getAllWispDomains
 export const countWispDomains = primaryPresentationRead.countWispDomains
-
-export const getDidByDomain = async (domain: string): Promise<string | null> => {
-	const rows = await db`SELECT did FROM domains WHERE domain = ${domain.toLowerCase()}`
-	return rows[0]?.did ?? null
-}
 
 export const isDomainAvailable = async (handle: string): Promise<boolean> => {
 	const h = handle.trim().toLowerCase()
@@ -357,11 +347,6 @@ export const updateWispDomainSite = async (domain: string, siteRkey: string | nu
         SET rkey = ${siteRkey}
         WHERE domain = ${domain}
     `
-}
-
-export const getWispDomainSite = async (did: string): Promise<string | null> => {
-	const rows = await db`SELECT rkey FROM domains WHERE did = ${did} ORDER BY created_at ASC LIMIT 1`
-	return rows[0]?.rkey ?? null
 }
 
 export const deleteWispDomain = async (domain: string): Promise<void> => {
@@ -622,7 +607,7 @@ export const getWebhookSecretToken = async (did: string, name: string): Promise<
 	return decryptWebhookSecret(envelope, requireWebhookSecretKeyring())
 }
 
-export type WebhookMutationAction = 'create' | 'delete'
+type WebhookMutationAction = 'create' | 'delete'
 
 const WEBHOOK_MUTATION_WINDOW_MS = 60_000
 const WEBHOOK_MUTATION_MAX_PER_WINDOW = 10

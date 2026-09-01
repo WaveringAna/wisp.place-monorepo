@@ -25,6 +25,31 @@ export const MAX_BLOB_SIZE = 500 * 1024 * 1024
 export const DEFAULT_MAX_REQUEST_BODY_SIZE = 1024 * 1024
 export const MAX_REQUEST_BODY_SIZE = 10 * 1024 * 1024
 
+export type SafeFetchErrorKind =
+	| 'invalid_url'
+	| 'blocked_destination'
+	| 'dns'
+	| 'timeout'
+	| 'redirect'
+	| 'request_too_large'
+	| 'response_too_large'
+
+/** A classified validation/lifecycle error for callers that need a stable contract. */
+export class SafeFetchError extends Error {
+	override readonly cause: unknown
+
+	constructor(
+		public readonly kind: SafeFetchErrorKind,
+		message: string,
+		cause?: unknown,
+	) {
+		super(message)
+		this.name = 'SafeFetchError'
+		this.cause = cause
+		Object.defineProperty(this, 'cause', { enumerable: false })
+	}
+}
+
 const BLOCKED_HOSTS = new Set(['metadata.google.internal'])
 const MAX_RETRIES = 3
 const INITIAL_RETRY_DELAY = 1_000
@@ -56,6 +81,11 @@ export interface SafeFetchTransportRequest {
  */
 export type SafeFetchTransport = (request: SafeFetchTransportRequest) => Promise<Response>
 
+/** Optional stricter URL policy invoked for the initial URL and every redirect. */
+export type SafeFetchUrlValidator = (url: URL) => void
+
+export type SafeFetchRedirectErrorKind = 'invalid' | 'limit'
+
 /** A synchronous shared counter charged before a response chunk is accepted. */
 export interface SafeFetchByteBudget {
 	consume(bytes: number): void
@@ -81,6 +111,20 @@ export interface SafeFetchOptions extends RequestInit {
 	 * general private-network escape hatch.
 	 */
 	allowLocalhost?: boolean
+	/** Apply an additional URL policy to the initial URL and every redirect. */
+	urlValidator?: SafeFetchUrlValidator
+	/** Additional case-insensitive header names to remove on every redirect. */
+	redirectHeadersToStrip?: readonly string[]
+	/** Header names to remove when a redirect changes a request to GET. */
+	methodChangeHeadersToStrip?: readonly string[]
+	/** Customize redirect errors while keeping redirect handling shared. */
+	redirectError?: (kind: SafeFetchRedirectErrorKind) => Error
+	/** Override the default User-Agent; null disables the default header. */
+	defaultUserAgent?: string | null
+	/** Customize the error raised when a streamed response exceeds maxSize. */
+	responseSizeError?: (maxSize: number) => Error
+	/** Customize the error delivered if a returned response body is aborted. */
+	responseAbortError?: (signal: AbortSignal) => Error
 	/** Charge response bytes to a caller-owned shared transfer budget. */
 	byteBudget?: SafeFetchByteBudget
 }
@@ -247,33 +291,38 @@ export function isPublicIpAddress(address: string): boolean {
 	return false
 }
 
-function isLoopbackIpAddress(address: string): boolean {
+export function isLoopbackIpAddress(address: string): boolean {
 	const normalized = normalizeHostname(address)
 	const ipv4 = parseIpv4(normalized)
 	if (ipv4) return ipv4[0] === 127
 
 	const ipv6 = parseIpv6(normalized)
 	if (!ipv6) return false
-	return ipv6.slice(0, 7).every((word) => word === 0) && ipv6[7] === 1
+	if (ipv6.slice(0, 7).every((word) => word === 0) && ipv6[7] === 1) return true
+	if (isIpv4MappedIpv6(ipv6)) {
+		const mapped = [(ipv6[6] ?? 0) >> 8, (ipv6[6] ?? 0) & 0xff, (ipv6[7] ?? 0) >> 8, (ipv6[7] ?? 0) & 0xff]
+		return mapped[0] === 127
+	}
+	return false
 }
 
 function validateResolvedAddress(candidate: ResolvedAddress, allowLoopback: boolean): ResolvedAddress {
 	if (!candidate || typeof candidate.address !== 'string') {
-		throw new Error('DNS returned an invalid address')
+		throw new SafeFetchError('dns', 'DNS returned an invalid address')
 	}
 
 	const address = normalizeHostname(candidate.address)
 	const detectedFamily = isIP(address)
 	if (detectedFamily !== 4 && detectedFamily !== 6) {
-		throw new Error(`DNS returned a non-IP address: ${candidate.address}`)
+		throw new SafeFetchError('dns', `DNS returned a non-IP address: ${candidate.address}`)
 	}
 	if (candidate.family !== detectedFamily) {
-		throw new Error(`DNS returned an address-family mismatch for ${candidate.address}`)
+		throw new SafeFetchError('dns', `DNS returned an address-family mismatch for ${candidate.address}`)
 	}
 
 	if (isPublicIpAddress(address)) return { address, family: detectedFamily }
 	if (allowLoopback && isLoopbackIpAddress(address)) return { address, family: detectedFamily }
-	throw new Error(`Blocked non-public address: ${candidate.address}`)
+	throw new SafeFetchError('blocked_destination', `Blocked non-public address: ${candidate.address}`)
 }
 
 async function defaultResolver(hostname: string): Promise<readonly ResolvedAddress[]> {
@@ -313,20 +362,21 @@ function validateMaxRedirects(maxRedirects: number | undefined): number {
 	return Math.min(value, MAX_REDIRECTS)
 }
 
-function parseRequestUrl(rawUrl: string): URL {
+function parseRequestUrl(rawUrl: string, urlValidator?: SafeFetchUrlValidator): URL {
 	let url: URL
 	try {
 		url = new URL(rawUrl)
 	} catch {
 		// Do not echo a raw URL here: callers can put credentials in its query.
-		throw new Error('Invalid URL')
+		throw new SafeFetchError('invalid_url', 'Invalid URL')
 	}
 
+	urlValidator?.(url)
 	if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-		throw new Error(`Blocked protocol: ${url.protocol}`)
+		throw new SafeFetchError('invalid_url', `Blocked protocol: ${url.protocol}`)
 	}
-	if (!url.hostname) throw new Error('URL must contain a hostname')
-	if (url.username || url.password) throw new Error('URLs with credentials are not allowed')
+	if (!url.hostname) throw new SafeFetchError('invalid_url', 'URL must contain a hostname')
+	if (url.username || url.password) throw new SafeFetchError('invalid_url', 'URLs with credentials are not allowed')
 	return url
 }
 
@@ -337,14 +387,25 @@ async function resolveAndValidate(
 	signal: AbortSignal,
 ): Promise<ResolvedAddress[]> {
 	const hostname = normalizeHostname(url.hostname)
-	if (BLOCKED_HOSTS.has(hostname)) throw new Error(`Blocked host: ${hostname}`)
-	if (hostname === 'localhost' && !allowLoopback) throw new Error(`Blocked host: ${hostname}`)
+	if (BLOCKED_HOSTS.has(hostname)) throw new SafeFetchError('blocked_destination', `Blocked host: ${hostname}`)
+	if (hostname === 'localhost' && !allowLoopback)
+		throw new SafeFetchError('blocked_destination', `Blocked host: ${hostname}`)
 
 	const family = isIP(hostname)
-	const candidates: readonly ResolvedAddress[] =
-		family === 4 || family === 6 ? [{ address: hostname, family }] : await waitForAbort(resolver(hostname), signal)
+	let candidates: readonly ResolvedAddress[]
+	if (family === 4 || family === 6) {
+		candidates = [{ address: hostname, family }]
+	} else {
+		try {
+			candidates = await waitForAbort(() => resolver(hostname), signal)
+		} catch (error) {
+			if (signal.aborted) throw abortError(signal)
+			if (error instanceof SafeFetchError) throw error
+			throw new SafeFetchError('dns', 'DNS resolution failed', error)
+		}
+	}
 
-	if (candidates.length === 0) throw new Error(`DNS returned no addresses for ${hostname}`)
+	if (candidates.length === 0) throw new SafeFetchError('dns', `DNS returned no addresses for ${hostname}`)
 
 	// The development escape hatch is deliberately hostname-scoped as well as
 	// address-scoped. It cannot turn an arbitrary production-style hostname into
@@ -363,19 +424,36 @@ function abortError(signal: AbortSignal): Error {
 	return new Error(reason ? String(reason) : 'Request aborted')
 }
 
-function waitForAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+function waitForAbort<T>(operation: () => Promise<T>, signal: AbortSignal): Promise<T> {
 	if (signal.aborted) return Promise.reject(abortError(signal))
 
 	return new Promise<T>((resolve, reject) => {
-		const abort = () => reject(abortError(signal))
+		const cleanup = () => signal.removeEventListener('abort', abort)
+		const abort = () => {
+			cleanup()
+			reject(abortError(signal))
+		}
 		signal.addEventListener('abort', abort, { once: true })
+		if (signal.aborted) {
+			abort()
+			return
+		}
+
+		let promise: Promise<T>
+		try {
+			promise = operation()
+		} catch (error) {
+			cleanup()
+			reject(error)
+			return
+		}
 		promise.then(
 			(value) => {
-				signal.removeEventListener('abort', abort)
+				cleanup()
 				resolve(value)
 			},
 			(error) => {
-				signal.removeEventListener('abort', abort)
+				cleanup()
 				reject(error)
 			},
 		)
@@ -391,7 +469,10 @@ function createDeadline(
 	close: () => void
 } {
 	const controller = new AbortController()
-	const timeout = setTimeout(() => controller.abort(new Error(`Request timeout after ${timeoutMs}ms`)), timeoutMs)
+	const timeout = setTimeout(
+		() => controller.abort(new SafeFetchError('timeout', `Request timeout after ${timeoutMs}ms`)),
+		timeoutMs,
+	)
 	const signals = [upstreamSignal, secondarySignal].filter(
 		(signal): signal is AbortSignal => signal !== undefined && signal !== null,
 	)
@@ -412,18 +493,23 @@ function createDeadline(
 	}
 }
 
-function headersForInitialRequest(headersInit: RequestInit['headers'] | undefined): Headers {
+function headersForInitialRequest(
+	headersInit: RequestInit['headers'] | undefined,
+	defaultUserAgent: string | null | undefined,
+): Headers {
 	const headers = new Headers(headersInit)
 	headers.delete('host')
-	if (!headers.has('user-agent')) headers.set('user-agent', 'wisp-place hosting-service')
+	if (defaultUserAgent !== null && !headers.has('user-agent')) {
+		headers.set('user-agent', defaultUserAgent ?? 'wisp-place hosting-service')
+	}
 	return headers
 }
 
-function headersForRedirect(headers: Headers): Headers {
+function headersForRedirect(headers: Headers, additionalHeaders: readonly string[] | undefined): Headers {
 	const next = new Headers(headers)
 	// Do not carry credentials to a redirect, including a same-origin redirect.
 	// Node has no cookie jar, so this also prevents implicit cookie forwarding.
-	for (const name of ['authorization', 'cookie', 'proxy-authorization', 'host']) {
+	for (const name of ['authorization', 'cookie', 'proxy-authorization', 'host', ...(additionalHeaders ?? [])]) {
 		next.delete(name)
 	}
 	return next
@@ -447,7 +533,7 @@ function responseHeadersFromNode(headers: Record<string, string | string[] | num
 }
 
 function requestBodyTooLarge(maxSize: number): Error {
-	return new Error(`Request body exceeds max size: ${maxSize} bytes`)
+	return new SafeFetchError('request_too_large', `Request body exceeds max size: ${maxSize} bytes`)
 }
 
 function assertRequestBodySize(size: number, maxSize: number): void {
@@ -598,11 +684,16 @@ function withBoundedBody(
 	signal: AbortSignal,
 	close: () => void,
 	byteBudget?: SafeFetchByteBudget,
+	responseSizeError?: (maxSize: number) => Error,
+	responseAbortError?: (signal: AbortSignal) => Error,
 ): Response {
 	if (contentLengthExceedsLimit(response, maxSize)) {
-		void response.body?.cancel()
+		if (response.body) cancelReader(response.body)
 		close()
-		throw new Error(`Response too large: content-length exceeds ${maxSize} bytes`)
+		throw (
+			responseSizeError?.(maxSize) ??
+			new SafeFetchError('response_too_large', `Response too large: content-length exceeds ${maxSize} bytes`)
+		)
 	}
 	if (!response.body) {
 		close()
@@ -621,8 +712,8 @@ function withBoundedBody(
 		close()
 	}
 	const abortBody = () => {
-		void reader.cancel(signal.reason).catch(() => undefined)
-		streamController?.error(abortError(signal))
+		cancelReader(reader, signal.reason)
+		streamController?.error(responseAbortError?.(signal) ?? abortError(signal))
 		finish()
 	}
 	signal.addEventListener('abort', abortBody, { once: true })
@@ -647,7 +738,9 @@ function withBoundedBody(
 				byteBudget?.consume(chunk.byteLength)
 				totalSize += chunk.byteLength
 				if (totalSize > maxSize) {
-					const error = new Error(`Response exceeds max size: ${maxSize} bytes`)
+					const error =
+						responseSizeError?.(maxSize) ??
+						new SafeFetchError('response_too_large', `Response exceeds max size: ${maxSize} bytes`)
 					cancelReader(reader, error)
 					throw error
 				}
@@ -711,6 +804,9 @@ function isRetryableStatus(status: number): boolean {
 
 function isRetryableError(error: unknown): boolean {
 	if (error instanceof SafeFetchHttpError) return isRetryableStatus(error.status)
+	if (error instanceof SafeFetchError && error.kind === 'dns' && error.cause !== undefined) {
+		return isRetryableError(error.cause)
+	}
 	if (!(error instanceof Error)) return false
 	const code = (error as Error & { code?: string }).code
 	if (
@@ -770,7 +866,7 @@ async function withRetry<T>(
 	try {
 		for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
 			const remainingTimeoutMs = deadlineAt - Date.now()
-			if (remainingTimeoutMs <= 0) throw new Error(`Request timeout after ${totalTimeoutMs}ms`)
+			if (remainingTimeoutMs <= 0) throw new SafeFetchError('timeout', `Request timeout after ${totalTimeoutMs}ms`)
 			if (requestDeadline.signal.aborted) throw abortError(requestDeadline.signal)
 			try {
 				return await request(remainingTimeoutMs)
@@ -810,7 +906,7 @@ async function fetchOnce(
 	const configuredTimeoutMs = validateTimeout(options?.timeout, DEFAULT_FETCH_TIMEOUT_MS)
 	const timeoutMs =
 		remainingTimeoutMs === undefined ? configuredTimeoutMs : Math.min(configuredTimeoutMs, remainingTimeoutMs)
-	if (timeoutMs <= 0) throw new Error(`Request timeout after ${configuredTimeoutMs}ms`)
+	if (timeoutMs <= 0) throw new SafeFetchError('timeout', `Request timeout after ${configuredTimeoutMs}ms`)
 	const maxSize = validateMaxSize(options?.maxSize, MAX_RESPONSE_SIZE)
 	const maxRequestBodySize = validateMaxRequestBodySize(options?.maxRequestBodySize)
 	const maxRedirects = validateMaxRedirects(options?.maxRedirects)
@@ -821,10 +917,10 @@ async function fetchOnce(
 	const deadline = createDeadline(timeoutMs, options?.signal, options?.byteBudget?.signal)
 
 	try {
-		let currentUrl = parseRequestUrl(urlText)
-		let currentHeaders = headersForInitialRequest(options?.headers)
+		let currentUrl = parseRequestUrl(urlText, options?.urlValidator)
+		let currentHeaders = headersForInitialRequest(options?.headers, options?.defaultUserAgent)
 		let method = (options?.method || 'GET').toUpperCase()
-		let body = await waitForAbort(serializeBody(options?.body, maxRequestBodySize), deadline.signal)
+		let body = await waitForAbort(() => serializeBody(options?.body, maxRequestBodySize), deadline.signal)
 		let redirects = 0
 
 		while (true) {
@@ -837,22 +933,23 @@ async function fetchOnce(
 			// list preserves the DNS-rebinding guarantee.
 			for (const [index, address] of addresses.entries()) {
 				const remainingForConnection = deadlineAt - Date.now()
-				if (remainingForConnection <= 0) throw new Error(`Request timeout after ${timeoutMs}ms`)
+				if (remainingForConnection <= 0) throw new SafeFetchError('timeout', `Request timeout after ${timeoutMs}ms`)
 				// Reserve time for later validated families instead of letting an
 				// unreachable first address consume the whole request deadline.
 				const addressesRemaining = addresses.length - index
 				const attemptTimeoutMs = Math.max(1, Math.ceil(remainingForConnection / addressesRemaining))
 				try {
 					response = await waitForAbort(
-						transport({
-							url: currentUrl,
-							address,
-							method,
-							headers: currentHeaders,
-							body,
-							signal: deadline.signal,
-							timeoutMs: attemptTimeoutMs,
-						}),
+						() =>
+							transport({
+								url: currentUrl,
+								address,
+								method,
+								headers: currentHeaders,
+								body,
+								signal: deadline.signal,
+								timeoutMs: attemptTimeoutMs,
+							}),
 						deadline.signal,
 					)
 					break
@@ -864,38 +961,70 @@ async function fetchOnce(
 			if (!response) throw lastConnectError
 
 			if (!isRedirectStatus(response.status)) {
-				return withBoundedBody(response, maxSize, deadline.signal, deadline.close, options?.byteBudget)
+				return withBoundedBody(
+					response,
+					maxSize,
+					deadline.signal,
+					deadline.close,
+					options?.byteBudget,
+					options?.responseSizeError,
+					options?.responseAbortError,
+				)
 			}
 
 			if (options?.redirect === 'manual') {
-				return withBoundedBody(response, maxSize, deadline.signal, deadline.close, options?.byteBudget)
+				return withBoundedBody(
+					response,
+					maxSize,
+					deadline.signal,
+					deadline.close,
+					options?.byteBudget,
+					options?.responseSizeError,
+					options?.responseAbortError,
+				)
 			}
 			if (options?.redirect === 'error') {
-				void response.body?.cancel()
-				throw new Error(`Redirect blocked: HTTP ${response.status}`)
+				if (response.body) cancelReader(response.body)
+				throw new SafeFetchError('redirect', `Redirect blocked: HTTP ${response.status}`)
 			}
 
 			const location = response.headers.get('location')
-			if (!location) return withBoundedBody(response, maxSize, deadline.signal, deadline.close, options?.byteBudget)
+			if (!location)
+				return withBoundedBody(
+					response,
+					maxSize,
+					deadline.signal,
+					deadline.close,
+					options?.byteBudget,
+					options?.responseSizeError,
+					options?.responseAbortError,
+				)
 			if (redirects >= maxRedirects) {
-				void response.body?.cancel()
-				throw new Error(`Too many redirects (maximum ${maxRedirects})`)
+				if (response.body) cancelReader(response.body)
+				throw (
+					options?.redirectError?.('limit') ??
+					new SafeFetchError('redirect', `Too many redirects (maximum ${maxRedirects})`)
+				)
 			}
 
 			let nextUrl: URL
 			try {
 				nextUrl = new URL(location, currentUrl)
 			} catch {
-				void response.body?.cancel()
-				throw new Error('Redirect contained an invalid Location URL')
+				if (response.body) cancelReader(response.body)
+				throw (
+					options?.redirectError?.('invalid') ??
+					new SafeFetchError('redirect', 'Redirect contained an invalid Location URL')
+				)
 			}
-			currentUrl = parseRequestUrl(nextUrl.toString())
-			void response.body?.cancel()
+			if (response.body) cancelReader(response.body)
+			currentUrl = parseRequestUrl(nextUrl.toString(), options?.urlValidator)
 
-			currentHeaders = headersForRedirect(currentHeaders)
+			currentHeaders = headersForRedirect(currentHeaders, options?.redirectHeadersToStrip)
 			if (response.status === 303 || ((response.status === 301 || response.status === 302) && method === 'POST')) {
 				method = 'GET'
 				body = undefined
+				for (const name of options?.methodChangeHeadersToStrip ?? []) currentHeaders.delete(name)
 			}
 			redirects++
 		}

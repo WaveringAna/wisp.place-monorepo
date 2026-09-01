@@ -5,6 +5,13 @@
  * not echo raw values because endpoint URLs can contain credentials.
  */
 
+import {
+	DEFAULT_CACHE_INVALIDATION_STREAM,
+	DEFAULT_REVALIDATE_DLQ_STREAM,
+	DEFAULT_REVALIDATE_STREAM,
+	resolveCacheInvalidationStreamMaxLen,
+} from '@wispplace/constants'
+
 export type ConfigEnv = Readonly<Record<string, string | undefined>>
 
 export interface FirehoseConfig {
@@ -63,10 +70,9 @@ export interface FirehoseConfig {
 const DEFAULT_DATABASE_URL = 'postgres://postgres:postgres@localhost:5432/wisp'
 const DEFAULT_FIREHOSE_SERVICE = 'wss://bsky.network'
 const DEFAULT_HEALTH_PORT = 3001
-const DEFAULT_REVALIDATE_STREAM = 'wisp:revalidate'
+// canonical revalidate stream names come from @wispplace/constants
 const DEFAULT_REVALIDATE_GROUP = 'firehose-service'
-const DEFAULT_REVALIDATE_DLQ_STREAM = 'wisp:revalidate:dlq'
-const DEFAULT_CACHE_INVALIDATION_STREAM = 'wisp:cache-invalidate-stream'
+
 const DEFAULT_LEADER_TTL_MS = 30_000
 const DEFAULT_LEADER_RENEW_INTERVAL_MS = 10_000
 const DEFAULT_LEADER_POLL_INTERVAL_MS = 5_000
@@ -416,12 +422,7 @@ function resolveQueueConfig(env: ConfigEnv): ResolvedQueueConfig {
 			DEFAULT_CACHE_INVALIDATION_STREAM,
 			'WISP_CACHE_INVALIDATION_STREAM',
 		),
-		cacheInvalidationStreamMaxLen: resolveBoundedInteger(
-			env.WISP_CACHE_INVALIDATION_STREAM_MAXLEN,
-			10_000,
-			1,
-			1_000_000,
-		),
+		cacheInvalidationStreamMaxLen: resolveCacheInvalidationStreamMaxLen(env.WISP_CACHE_INVALIDATION_STREAM_MAXLEN),
 	}
 }
 

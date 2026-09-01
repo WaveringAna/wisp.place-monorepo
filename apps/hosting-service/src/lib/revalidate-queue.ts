@@ -1,9 +1,10 @@
+import { DEFAULT_REVALIDATE_STREAM, DEFAULT_REVALIDATE_STREAM_CAPACITY } from '@wispplace/constants'
 import Redis from 'ioredis'
 import { recordRevalidateResult } from './revalidate-metrics'
 
 const redisUrl = process.env.REDIS_URL
-const streamName = process.env.WISP_REVALIDATE_STREAM || 'wisp:revalidate'
-const MAX_REVALIDATE_STREAM_CAPACITY = 1_000_000
+const streamName = process.env.WISP_REVALIDATE_STREAM || DEFAULT_REVALIDATE_STREAM
+const MAX_REVALIDATE_STREAM_CAPACITY = DEFAULT_REVALIDATE_STREAM_CAPACITY
 const MAX_REVALIDATE_DEDUPE_TTL_SECONDS = 7 * 24 * 60 * 60
 const streamMaxLen = parseBoundedPositiveInt(
 	process.env.WISP_REVALIDATE_STREAM_MAXLEN,

@@ -424,16 +424,16 @@ return {acknowledged, deleted}
  * quarantine write.
  */
 export const QUARANTINE_REVALIDATION_SCRIPT = `
-local dlqId = redis.call('XADD', KEYS[2], 'MAXLEN', '~', ARGV[10], '*',
+local dlqId = redis.call('XADD', KEYS[2], 'MAXLEN', '~', ARGV[11], '*',
   'sourceId', ARGV[2],
   'did', ARGV[3],
   'rkey', ARGV[4],
   'reason', ARGV[5],
   'errorCode', ARGV[6],
   'error', ARGV[7],
-  'classification', ARGV[8],
-  'attempts', ARGV[9],
-  'quarantinedAt', ARGV[11])
+  'classification', ARGV[9],
+  'attempts', ARGV[8],
+  'quarantinedAt', ARGV[10])
 local acknowledged = redis.call('XACK', KEYS[1], ARGV[1], ARGV[2])
 if acknowledged ~= 1 then return {acknowledged, dlqId, 0} end
 local deleted = redis.call('XDEL', KEYS[1], ARGV[2])

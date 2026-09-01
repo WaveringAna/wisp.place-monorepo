@@ -49,7 +49,7 @@ export interface CursorRepository {
 	save(stream: StreamName, cursor: number, relay: string): Promise<void>
 }
 
-export interface PriorReferenceSnapshot {
+interface PriorReferenceSnapshot {
 	references: readonly string[]
 	timeUs?: number
 	rev?: string
@@ -62,7 +62,7 @@ export interface PriorReferenceRepository {
 	delete(eventAtUri: string, timeUs: number, rev: string): Promise<void>
 }
 
-export interface DurableDeliveryEvent {
+interface DurableDeliveryEvent {
 	relay: string
 	timeUs: number
 	rev: string
@@ -74,12 +74,12 @@ export interface DurableDeliveryEvent {
 	record?: unknown
 }
 
-export type EnqueueWebhookDeliveries = (
+type EnqueueWebhookDeliveries = (
 	entries: readonly WebhookEntry[],
 	event: DurableDeliveryEvent,
 ) => Promise<{ enqueued: number; deduplicated: number }>
 
-export interface FirehoseStartOptions {
+interface FirehoseStartOptions {
 	/** Test seam. Production uses the durable DB cursor repository. */
 	cursorRepository?: CursorRepository
 	/** Test seam. Production requires the durable DB prior-reference repository. */
@@ -1206,16 +1206,6 @@ export async function startFirehose(options: FirehoseStartOptions = {}): Promise
 		registryJetstream = null
 		throw error
 	}
-}
-
-/** Release startup-captured work only after reconciliation/fencing completes. */
-export function resumeFirehose(): void {
-	if (!firehoseStarted || stopping || !intakePaused) return
-	intakePaused = false
-	for (const client of allClients) client.resume()
-	// Rebuild all subscriptions from durable cursors after a paused capture. A
-	// registration replay supplies a more specific rewind hint when needed.
-	scheduleReconfigure(undefined, true)
 }
 
 /** Stop accepting new socket messages. Call drainFirehose before closing the DB. */

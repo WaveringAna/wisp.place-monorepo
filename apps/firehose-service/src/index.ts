@@ -8,6 +8,7 @@
  */
 
 import { type ServerType, serve } from '@hono/node-server'
+import { onceAsync, settleWithTimeout } from '@wispplace/graceful-shutdown'
 import { createLogger, initializeGrafanaExporters, shutdownGrafanaExporters } from '@wispplace/observability'
 import { observabilityErrorHandler, observabilityMiddleware } from '@wispplace/observability/middleware/hono'
 import { safeFetchJson } from '@wispplace/safe-fetch'
@@ -68,7 +69,6 @@ type ServiceLifecycle = 'starting' | 'running' | 'draining' | 'stopped'
 
 let serviceLifecycle: ServiceLifecycle = 'starting'
 let isShuttingDown = false
-let shutdownPromise: Promise<void> | null = null
 let healthServer: ServerType | null = null
 let leaderAbortController: AbortController | null = null
 let leaderElectionPromise: Promise<void> | null = null
@@ -237,21 +237,9 @@ async function runShutdownStep(name: string, operation: () => Promise<void>): Pr
 	}
 }
 
-async function settlesWithinShutdownGrace(work: Promise<void> | null): Promise<boolean> {
-	if (!work) return true
-	return await new Promise((resolve) => {
-		const timer = setTimeout(() => resolve(false), config.firehoseDrainGraceMs)
-		void work.then(
-			() => {
-				clearTimeout(timer)
-				resolve(true)
-			},
-			() => {
-				clearTimeout(timer)
-				resolve(false)
-			},
-		)
-	})
+function settlesWithinShutdownGrace(work: Promise<void> | null): Promise<boolean> {
+	if (!work) return Promise.resolve(true)
+	return settleWithTimeout(work, config.firehoseDrainGraceMs).then((result) => result.status === 'settled')
 }
 
 async function shutdownInternal(signal: string): Promise<void> {
@@ -354,10 +342,7 @@ async function shutdownInternal(signal: string): Promise<void> {
 }
 
 /** Idempotent signal entry point. Every caller observes the same teardown. */
-function shutdown(signal: string): Promise<void> {
-	if (!shutdownPromise) shutdownPromise = shutdownInternal(signal)
-	return shutdownPromise
-}
+const shutdown = onceAsync(shutdownInternal)
 
 process.on('SIGINT', () => {
 	void shutdown('SIGINT')

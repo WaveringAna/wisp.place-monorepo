@@ -5,6 +5,7 @@ WORKDIR /app
 
 # Copy workspace configuration
 COPY package.json bunfig.toml tsconfig.json bun.lock* ./
+COPY patches ./patches
 
 # Copy all workspace package.json files first (for dependency resolution)
 COPY cli ./cli

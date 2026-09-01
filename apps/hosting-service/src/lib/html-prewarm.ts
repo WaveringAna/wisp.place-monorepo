@@ -6,6 +6,7 @@ const logger = createLogger('html-prewarm')
 const warmedSites = new Set<string>()
 const prewarmGeneration = new Map<string, number>()
 const prewarmInFlight = new Map<string, { generation: number; promise: Promise<void> }>()
+const MAX_HTML_PREWARM_KEYS = 1_000
 let prewarmEpoch = 0
 
 function getSiteKey(did: string, rkey: string): string {
@@ -17,41 +18,51 @@ function isHtmlStorageKey(key: string): boolean {
 	return normalized.endsWith('.html') || normalized.endsWith('.htm')
 }
 
+function isPrewarmEligiblePath(path: string): boolean {
+	const normalized = (path.startsWith('/') ? path.slice(1) : path).toLowerCase()
+	return (
+		!normalized.startsWith('.rewritten/') && !normalized.endsWith('.metadata.json') && !normalized.endsWith('.meta')
+	)
+}
+
 async function loadSiteHtmlKeysIntoHotTier(
 	did: string,
 	rkey: string,
+	manifestPaths: readonly string[],
 ): Promise<{ scannedKeys: number; warmedHtmlKeys: number; failedKeys: number }> {
 	const prefix = `${did}/${rkey}/`
-	let scannedKeys = 0
+	const htmlKeys = new Set<string>()
+	for (const manifestPath of manifestPaths) {
+		if (htmlKeys.size >= MAX_HTML_PREWARM_KEYS) break
+		if (typeof manifestPath !== 'string' || !isPrewarmEligiblePath(manifestPath)) continue
+		const normalizedPath = manifestPath.startsWith('/') ? manifestPath.slice(1) : manifestPath
+		if (isHtmlStorageKey(normalizedPath)) htmlKeys.add(`${prefix}${normalizedPath}`)
+	}
+
 	let warmedHtmlKeys = 0
 	let failedKeys = 0
-
-	for await (const key of storage.listKeys(prefix)) {
-		scannedKeys++
-		if (!isHtmlStorageKey(key)) continue
-
+	for (const key of htmlKeys) {
 		// Isolate each key: one unreadable entry (e.g. a concurrent invalidation removing it
-		// mid-scan) must not abandon the rest of the site's HTML. An escaping error also
-		// skipped the warmedSites bookkeeping in the caller, so every later request re-ran
-		// this entire listing — the repeated scan this cache exists to prevent.
+		// mid-warmup) must not abandon the rest of the site's HTML.
 		try {
 			// getWithMetadata uses eager promotion and moves the key into hot tier.
 			const result = await storage.getWithMetadata(key)
-			if (result) {
-				warmedHtmlKeys++
-			}
+			if (result) warmedHtmlKeys++
 		} catch (err) {
 			failedKeys++
 			logger.debug(`HTML prewarm skipped ${key}`, { error: err })
 		}
 	}
 
-	return { scannedKeys, warmedHtmlKeys, failedKeys }
+	return { scannedKeys: htmlKeys.size, warmedHtmlKeys, failedKeys }
 }
 
-export function triggerSiteHtmlHotCacheWarmup(did: string, rkey: string): void {
+export function triggerSiteHtmlHotCacheWarmup(did: string, rkey: string, manifestPaths?: readonly string[]): void {
 	const siteKey = getSiteKey(did, rkey)
-	if (warmedSites.has(siteKey)) return
+	// A manifest is authoritative and already loaded on the request path. Legacy
+	// callers without one intentionally do nothing: never start an unbounded cold
+	// LIST as a side effect of a request.
+	if (!manifestPaths || warmedSites.has(siteKey)) return
 
 	const generation = prewarmGeneration.get(siteKey) ?? 0
 	const epoch = prewarmEpoch
@@ -62,14 +73,13 @@ export function triggerSiteHtmlHotCacheWarmup(did: string, rkey: string): void {
 		generation,
 		promise: (async () => {
 			try {
-				const { scannedKeys, warmedHtmlKeys, failedKeys } = await loadSiteHtmlKeysIntoHotTier(did, rkey)
+				const { scannedKeys, warmedHtmlKeys, failedKeys } = await loadSiteHtmlKeysIntoHotTier(did, rkey, manifestPaths)
 				const latestGeneration = prewarmGeneration.get(siteKey) ?? 0
 				if (prewarmEpoch !== epoch || latestGeneration !== generation) return
 
-				// Remember successful scans even when there are no matching keys so repeated
-				// requests for the same missing/empty prefix cannot force repeated storage scans.
-				// Individually skipped keys still count as a completed scan: they are re-fetched
-				// on demand by the normal serving path, which is far cheaper than re-listing.
+				// Remember a completed warmup even when there are no matching keys so repeated
+				// requests for the same site do not repeat manifest-backed reads. Individually
+				// skipped keys are re-fetched on demand by the normal serving path.
 				warmedSites.add(siteKey)
 
 				logger.debug(`HTML prewarm finished for ${did}/${rkey}`, {

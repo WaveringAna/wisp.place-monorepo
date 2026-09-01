@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import { config } from '../config'
-import { enqueueSiteRevalidationWithRedis, type RevalidationQueueClient } from './cache-invalidation'
+import {
+	type CacheInvalidationPublisherReadiness,
+	enqueueSiteRevalidationWithRedis,
+	type RevalidationQueueClient,
+	waitForCacheInvalidationPublisherReady,
+} from './cache-invalidation'
 import { SITE_DELETE_TOMBSTONE_REASON } from './revalidate-queue'
 
 const DID = 'did:plc:test'
@@ -15,6 +20,52 @@ class FakeQueue implements RevalidationQueueClient {
 		return this.response
 	}
 }
+
+class FakePublisherReadiness implements CacheInvalidationPublisherReadiness {
+	status = 'connecting'
+	private listeners = new Map<string, Set<(...args: unknown[]) => void>>()
+
+	once(event: string, listener: (...args: unknown[]) => void): void {
+		const onceListener = (...args: unknown[]) => {
+			this.removeListener(event, onceListener)
+			listener(...args)
+		}
+		const listeners = this.listeners.get(event) ?? new Set()
+		listeners.add(onceListener)
+		this.listeners.set(event, listeners)
+	}
+
+	removeListener(event: string, listener: (...args: unknown[]) => void): void {
+		this.listeners.get(event)?.delete(listener)
+	}
+
+	emit(event: string, ...args: unknown[]): void {
+		for (const listener of [...(this.listeners.get(event) ?? [])]) listener(...args)
+	}
+}
+
+describe('cache invalidation publisher readiness', () => {
+	test('waits for the eager Redis connection before allowing the first publish', async () => {
+		const redis = new FakePublisherReadiness()
+		let ready = false
+		const waiting = waitForCacheInvalidationPublisherReady(redis, 1_000).then(() => {
+			ready = true
+		})
+
+		await Promise.resolve()
+		expect(ready).toBe(false)
+		redis.status = 'ready'
+		redis.emit('ready')
+		await waiting
+		expect(ready).toBe(true)
+	})
+
+	test('returns immediately for an already-ready publisher', async () => {
+		const redis = new FakePublisherReadiness()
+		redis.status = 'ready'
+		await expect(waitForCacheInvalidationPublisherReady(redis, 1_000)).resolves.toBeUndefined()
+	})
+})
 
 describe('enqueueSiteRevalidationWithRedis', () => {
 	test('uses one atomic script that proves dedupe against an existing stream ID', async () => {

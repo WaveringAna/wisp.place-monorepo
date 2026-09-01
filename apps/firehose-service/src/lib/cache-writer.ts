@@ -160,7 +160,14 @@ const pdsIdentityFetch: Parameters<typeof getPdsForDid>[1] = (url, options) =>
 	})
 const pdsEndpointOptions = allowDevLocalPdsFetch ? { allowLoopback: true } : undefined
 const pdsRequestOptions = allowDevLocalPdsFetch ? { allowLocalhost: true } : undefined
-const MAX_PDS_RECORD_RESPONSE_BYTES = 64 * 1024
+/**
+ * getRecord responses carry the full site/subfs directory record. Chunked subfs
+ * publications legitimately exceed 64 KiB (production records up to ~112 KiB
+ * failed revalidation as FETCH_FAILED), so the bound must admit them while
+ * staying a hard streamed cap. safeFetch enforces this limit before parsing,
+ * and the per-revalidation transfer budget still bounds aggregate bytes.
+ */
+export const MAX_PDS_RECORD_RESPONSE_BYTES = 1024 * 1024
 
 export type PdsRecordJsonResponse<T> = { kind: 'present'; value: T } | { kind: 'absent' }
 
@@ -260,7 +267,8 @@ function createPdsEndpointResolver(rootDid: string, rootPdsEndpoint: string): Pd
 	}
 }
 
-async function fetchSubfsRecord(
+/** Exported for boundary tests of the shared PDS record size limit. */
+export async function fetchSubfsRecord(
 	subject: SubfsSubject,
 	resolvePdsEndpoint: PdsEndpointResolver,
 	resources?: RevalidationResources,
@@ -1886,7 +1894,7 @@ const defaultSiteUpdateHandlerDependencies: SiteUpdateHandlerDependencies = {
  * locked reconciliation path. Lookup/validation failures are thrown so the
  * caller can retain/requeue the event instead of acknowledging uncertain state.
  */
-export async function reconcileSiteUpdateUnderLock(
+async function reconcileSiteUpdateUnderLock(
 	did: string,
 	rkey: string,
 	_recordHint: WispFsRecord,
@@ -1911,6 +1919,23 @@ export async function reconcileSiteUpdateUnderLock(
 }
 
 /**
+ * Rebind a lock callback's resources to the lock-safety signal so a lost lock
+ * session aborts downloads mid-flight instead of writing without mutual
+ * exclusion. Resources without a signal are left untouched.
+ */
+function resourcesWithLockSignal<T extends RevalidationResources | undefined>(resources: T, signal: AbortSignal): T {
+	return (resources ? { ...resources, signal } : resources) as T
+}
+
+function optionsWithLockSignal<T extends { resources?: RevalidationResources } | undefined>(
+	options: T,
+	signal: AbortSignal,
+): T {
+	if (!options?.resources) return options
+	return { ...options, resources: { ...options.resources, signal } } as T
+}
+
+/**
  * Handle a site create/update event under one site lock and one updating marker.
  * The passed firehose record is retained as a hint for API compatibility, but
  * the authoritative record is fetched only after this function acquires the
@@ -1927,7 +1952,15 @@ export async function handleSiteCreateOrUpdate(
 	return dependencies.withSiteWriteLock(
 		did,
 		rkey,
-		() => reconcileSiteUpdateUnderLock(did, rkey, record, recordCid, options, dependencies),
+		(lockSignal) =>
+			reconcileSiteUpdateUnderLock(
+				did,
+				rkey,
+				record,
+				recordCid,
+				optionsWithLockSignal(options, lockSignal),
+				dependencies,
+			),
 		options?.resources?.signal,
 	)
 }
@@ -2052,7 +2085,7 @@ export async function executeSiteDelete(
 }
 
 /** Reconcile a delete against the authoritative PDS state while the site lock is held. */
-export async function reconcileSiteDeleteUnderLock(
+async function reconcileSiteDeleteUnderLock(
 	did: string,
 	rkey: string,
 	dependencies: SiteDeleteHandlerDependencies = defaultSiteDeleteHandlerDependencies,
@@ -2092,8 +2125,8 @@ export async function handleSiteDelete(
 	return await dependencies.withSiteWriteLock(
 		did,
 		rkey,
-		async () => {
-			await reconcileSiteDeleteUnderLock(did, rkey, dependencies, resources)
+		async (lockSignal) => {
+			await reconcileSiteDeleteUnderLock(did, rkey, dependencies, resourcesWithLockSignal(resources, lockSignal))
 		},
 		resources?.signal,
 	)
@@ -2133,7 +2166,7 @@ const defaultSettingsWriteDependencies: SettingsWriteDependencies = {
  * `commitSiteLedger` uses this inner variant to avoid recursively acquiring
  * the same session-scoped advisory lock.
  */
-export async function handleSettingsUpdateLocked(
+async function handleSettingsUpdateLocked(
 	did: string,
 	rkey: string,
 	settings: WispSettings,
@@ -2171,7 +2204,7 @@ export async function handleSettingsUpdateLocked(
  * retryable, invalid, or failed lookup throws before either cache primitive is
  * called, so uncertain state remains available for retry.
  */
-export async function reconcileSettingsUnderLock(
+async function reconcileSettingsUnderLock(
 	did: string,
 	rkey: string,
 	options?: SettingsUpdateOptions,
@@ -2221,13 +2254,13 @@ export async function handleSettingsUpdate(
 	return dependencies.withSiteWriteLock(
 		did,
 		rkey,
-		() => reconcileSettingsUnderLock(did, rkey, options, dependencies),
+		(lockSignal) => reconcileSettingsUnderLock(did, rkey, optionsWithLockSignal(options, lockSignal), dependencies),
 		options?.resources?.signal,
 	)
 }
 
 /** Perform a settings delete while the caller already holds the site lock. */
-export async function handleSettingsDeleteLocked(
+async function handleSettingsDeleteLocked(
 	did: string,
 	rkey: string,
 	dependencies: SettingsWriteDependencies = defaultSettingsWriteDependencies,
@@ -2259,7 +2292,13 @@ export async function handleSettingsDelete(
 	return dependencies.withSiteWriteLock(
 		did,
 		rkey,
-		() => reconcileSettingsUnderLock(did, rkey, reconciliationOptions, dependencies, effectiveResources),
+		(lockSignal) => {
+			const fencedResources = resourcesWithLockSignal(effectiveResources, lockSignal)
+			const fencedOptions = reconciliationOptions
+				? { ...reconciliationOptions, resources: fencedResources }
+				: reconciliationOptions
+			return reconcileSettingsUnderLock(did, rkey, fencedOptions, dependencies, fencedResources)
+		},
 		effectiveResources?.signal,
 	)
 }

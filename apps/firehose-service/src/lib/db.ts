@@ -21,12 +21,49 @@ const sql = postgres(config.databaseUrl, {
  * main query pool would starve ordinary queries (the connection-pooling
  * starvation class of bug). Each slot is a one-connection postgres client, so
  * it remains pinned for the holder and can be physically closed on quarantine.
+ * While a slot is held its session is kept alive by lock heartbeats (see
+ * withReservedSiteWriteLock) so proxies cannot idle-kill it mid-sync.
  */
-export const LOCK_POOL_SIZE = 10
+const LOCK_POOL_SIZE = 10
 /** A reserve must never wait forever for a leaked or wedged lock holder. */
 export const LOCK_POOL_RESERVE_TIMEOUT_MS = 30_000
+/**
+ * Grace period, in seconds, before a retiring lock-pool root client
+ * force-destroys its sockets. postgres.js defers sub-1KiB protocol writes
+ * through `setImmediate` and schedules writes without re-checking the socket,
+ * so its immediate-destroy path (`end({ timeout: 0 })`) can race or follow a
+ * cleared socket and crash the process with an uncaught `socket.write`
+ * TypeError outside every Promise rejection (observed at postgres@3.4.9
+ * connection.js:255 on Bun 1.3.14; no fixed release exists upstream). A
+ * positive timeout lets the driver's graceful end path settle queued writes
+ * first, while `end` still resolves within the bound because postgres.js
+ * force-destroys sockets after the timeout. Quarantined advisory-lock sessions
+ * therefore still physically close.
+ */
+export const LOCK_POOL_RETIRE_TIMEOUT_SECONDS = 1
+/**
+ * Bound on how long a blocked advisory-lock acquisition may wait. Proxies in
+ * front of PostgreSQL idle-kill sessions after 60s without traffic, and a
+ * blocked acquisition cannot heartbeat on its own session, so any wait beyond
+ * that bound would die as CONNECTION_CLOSED anyway; failing at 45s keeps the
+ * failure a clean, retryable lock timeout.
+ */
+export const LOCK_ACQUIRE_LOCK_TIMEOUT = '45s'
+/**
+ * Interval between liveness probes sent on a reserved advisory-lock session
+ * while the lock callback runs. Proxies in front of PostgreSQL idle-kill
+ * sessions after 60s without traffic, and a lock callback legitimately stays
+ * idle for minutes while blobs download; a probe well below that bound keeps
+ * the session (and therefore the session-scoped advisory lock) alive.
+ */
+export const LOCK_HEARTBEAT_INTERVAL_MS = 15_000
+/**
+ * A liveness probe that cannot complete within this bound means the lock
+ * session (and with it the advisory lock) must be presumed lost.
+ */
+export const LOCK_HEARTBEAT_TIMEOUT_MS = 10_000
 
-export interface SiteWriteLockQuery<T = unknown> extends PromiseLike<T> {
+interface SiteWriteLockQuery<T = unknown> extends PromiseLike<T> {
 	/** postgres.js exposes this on pending queries to send a cancel request. */
 	cancel?: () => unknown
 }
@@ -68,7 +105,7 @@ interface LockPoolWaiter {
 	abortListener?: () => void
 }
 
-export interface SiteWriteLockPoolOptions {
+interface SiteWriteLockPoolOptions {
 	/** Number of one-connection postgres clients kept in this pool. */
 	size?: number
 	/** Maximum time spent waiting for a reserved slot/session. */
@@ -202,7 +239,7 @@ export class SiteWriteLockPool {
 					this.directActivations.delete(activation)
 					if (signal && activation.abortListener) signal.removeEventListener('abort', activation.abortListener)
 					if (activation.settled || this.closed) {
-						void connection.close({ timeout: 0 }).catch(() => undefined)
+						void connection.close({ timeout: LOCK_POOL_RETIRE_TIMEOUT_SECONDS }).catch(() => undefined)
 						return
 					}
 					activation.settled = true
@@ -229,7 +266,7 @@ export class SiteWriteLockPool {
 					} catch {
 						// The root client is being retired below.
 					}
-					void this.retire(slot, { timeout: 0 }).catch(() => undefined)
+					void this.retire(slot, { timeout: LOCK_POOL_RETIRE_TIMEOUT_SECONDS }).catch(() => undefined)
 					throw new Error('Site write lock pool is closed')
 				}
 				return this.reservation(slot, reserved)
@@ -237,7 +274,8 @@ export class SiteWriteLockPool {
 			.catch((error) => {
 				// Retirement is tracked separately so a reserve timeout remains
 				// bounded even when closing the physical root is slow.
-				if (!this.retiring.has(slot)) void this.retire(slot, { timeout: 0 }).catch(() => undefined)
+				if (!this.retiring.has(slot))
+					void this.retire(slot, { timeout: LOCK_POOL_RETIRE_TIMEOUT_SECONDS }).catch(() => undefined)
 				throw error
 			})
 	}
@@ -325,7 +363,7 @@ export class SiteWriteLockPool {
 			} catch (error) {
 				// A release failure leaves session state uncertain just like an unlock
 				// failure. Quarantine this one slot and continue dispatching waiters.
-				void this.retire(slot, { timeout: 0 }).catch(() => undefined)
+				void this.retire(slot, { timeout: LOCK_POOL_RETIRE_TIMEOUT_SECONDS }).catch(() => undefined)
 				logger.error('[DB] Failed to release reserved site-write connection', undefined, {
 					errorKind: databaseErrorKind(error),
 				})
@@ -404,7 +442,7 @@ export class SiteWriteLockPool {
 		clearTimeout(waiter.timer)
 		if (waiter.deadline <= Date.now()) {
 			this.settleWaiter(waiter, new Error('Timed out waiting for a site write lock connection'))
-			void this.retire(slot, { timeout: 0 }).catch(() => undefined)
+			void this.retire(slot, { timeout: LOCK_POOL_RETIRE_TIMEOUT_SECONDS }).catch(() => undefined)
 			return
 		}
 		this.assignedWaiters.add(waiter)
@@ -413,7 +451,7 @@ export class SiteWriteLockPool {
 				this.assignedWaiters.delete(waiter)
 				if (waiter.settled || this.closed) {
 					this.clearWaiterAbortListener(waiter)
-					void connection.close({ timeout: 0 }).catch(() => undefined)
+					void connection.close({ timeout: LOCK_POOL_RETIRE_TIMEOUT_SECONDS }).catch(() => undefined)
 					return
 				}
 				waiter.settled = true
@@ -483,7 +521,7 @@ const lockPool = new SiteWriteLockPool()
  * The unified per-site write-lock key. Shared verbatim with other cache
  * writers so all writers to a site's cache mutually exclude.
  */
-export function siteWriteLockKey(did: string, rkey: string): string {
+function siteWriteLockKey(did: string, rkey: string): string {
 	return `site-write:${did}:${rkey}`
 }
 
@@ -571,24 +609,109 @@ export class SiteWriteLockAcquisitionError extends Error {
 }
 
 /**
+ * The advisory-lock session died while the lock callback was running, so the
+ * session-scoped lock was released by the server and mutual exclusion can no
+ * longer be guaranteed. The callback receives an aborting signal the moment the
+ * loss is detected; this error means its writes after that point may have raced
+ * with another writer and the work should be retried.
+ */
+export class SiteWriteLockLostError extends Error {
+	readonly errorKind: string
+
+	constructor(cause: unknown) {
+		super('Site write lock session was lost while the callback ran')
+		this.name = 'SiteWriteLockLostError'
+		this.errorKind = databaseErrorKind(cause)
+	}
+}
+
+/** Liveness-probe tuning for a held site-write lock; production uses the defaults. */
+export interface LockHeartbeatOptions {
+	/** Interval between probes; defaults to {@link LOCK_HEARTBEAT_INTERVAL_MS}. */
+	intervalMs?: number
+	/** A probe slower than this bound presumes the lock session is lost. */
+	timeoutMs?: number
+}
+
+interface LockHeartbeatMonitor {
+	stop(): void
+}
+
+/**
+ * Probe the reserved session on a fixed interval while a lock callback runs.
+ * Each probe is an ordinary query on the same session; anything but a prompt
+ * success means the session — and with it the session-scoped advisory lock —
+ * must be presumed lost. Probes are crash-safe only because the patched
+ * postgres.js rejects queries on a closed socket instead of throwing inside a
+ * `setImmediate` write callback (see patches/postgres@3.4.9.patch).
+ */
+function startLockHeartbeat(
+	conn: SiteWriteLockConnection,
+	options: LockHeartbeatOptions,
+	onLost: (error: unknown) => void,
+): LockHeartbeatMonitor {
+	const intervalMs = options.intervalMs ?? LOCK_HEARTBEAT_INTERVAL_MS
+	const timeoutMs = options.timeoutMs ?? LOCK_HEARTBEAT_TIMEOUT_MS
+	let timer: ReturnType<typeof setInterval> | null = null
+	let probing = false
+	let stopped = false
+	const tick = () => {
+		if (stopped || probing) return
+		probing = true
+		const timeout = new Promise<never>((_resolve, reject) => {
+			const handle = setTimeout(() => reject(new Error('Site write lock heartbeat timed out')), timeoutMs)
+			;(handle as unknown as { unref?: () => void }).unref?.()
+		})
+		// A probe that loses the race must not surface as unhandled later.
+		void timeout.catch(() => undefined)
+		void Promise.race([runCancellableLockQuery(() => conn`SELECT 1`), timeout]).then(
+			() => {
+				probing = false
+			},
+			(error) => {
+				stopped = true
+				if (timer) clearInterval(timer)
+				onLost(error)
+			},
+		)
+	}
+	timer = setInterval(tick, intervalMs)
+	;(timer as unknown as { unref?: () => void }).unref?.()
+	return {
+		stop: () => {
+			stopped = true
+			if (timer) clearInterval(timer)
+			timer = null
+		},
+	}
+}
+
+/**
  * Run `fn` on an already-reserved connection while holding the per-site lock.
- * The connection is released after normal acquisition/callback paths. An unlock
- * failure closes its physical session so a potentially lock-owning backend
- * cannot be reused or permanently consume a pool slot.
+ * `fn` receives a signal that aborts when the caller aborts or when the lock
+ * session is lost, so long downloads can stop instead of writing without
+ * mutual exclusion. The connection is released after normal
+ * acquisition/callback paths. An unlock failure or a detected session loss
+ * closes its physical session so a potentially lock-owning backend cannot be
+ * reused or permanently consume a pool slot.
  */
 export async function withReservedSiteWriteLock<T>(
 	conn: SiteWriteLockConnection,
 	did: string,
 	rkey: string,
-	fn: () => Promise<T>,
+	fn: (signal: AbortSignal) => Promise<T>,
 	signal?: AbortSignal,
+	heartbeat: LockHeartbeatOptions = {},
 ): Promise<T> {
 	const lockId = siteWriteLockId(did, rkey)
 	let held = false
+	let lockLost = false
 	let connectionSafeToRelease = true
+	const lockLoss = new AbortController()
+	const safetySignal = signal ? AbortSignal.any([signal, lockLoss.signal]) : lockLoss.signal
 	try {
 		try {
-			await runCancellableLockQuery(() => conn`SET lock_timeout = '120s'`, signal)
+			await runCancellableLockQuery(() => conn`SET lock_timeout = '45s'`, signal)
 			await runCancellableLockQuery(() => conn`SELECT pg_advisory_lock(${lockId}::bigint)`, signal)
 			held = true
 		} catch (error) {
@@ -597,7 +720,7 @@ export async function withReservedSiteWriteLock<T>(
 				// session to the pool unless it has been physically closed.
 				connectionSafeToRelease = false
 				try {
-					await conn.close({ timeout: 0 })
+					await conn.close({ timeout: LOCK_POOL_RETIRE_TIMEOUT_SECONDS })
 				} catch (closeError) {
 					logger.error('[DB] Failed to close aborted site-write lock connection', undefined, {
 						did,
@@ -614,37 +737,76 @@ export async function withReservedSiteWriteLock<T>(
 			throw new SiteWriteLockAcquisitionError(error)
 		}
 
+		const monitor = startLockHeartbeat(conn, heartbeat, (error) => {
+			lockLost = true
+			lockLoss.abort(error instanceof Error ? error : new Error('Site write lock session was lost'))
+		})
 		try {
 			if (signal?.aborted) throw abortReason(signal)
-			return await fn()
-		} finally {
-			if (held) {
-				let unlockFailure: unknown
-				try {
-					const result = await conn`SELECT pg_advisory_unlock(${lockId}::bigint) AS unlocked`
-					if (!advisoryUnlockReturnedTrue(result)) unlockFailure = new Error('Advisory lock was not released')
-				} catch (error) {
-					unlockFailure = error
-				}
-
-				if (unlockFailure) {
-					// Advisory locks are session-scoped. A thrown unlock or a false
-					// result means this session must never return to the reusable pool.
-					connectionSafeToRelease = false
-					logger.error('[DB] Failed to release site-write lock; quarantining connection', undefined, {
+			const callback = Promise.resolve(fn(safetySignal))
+			// The callback can outlive the lock; observe its eventual failure
+			// without letting it surface as an unhandled rejection.
+			void callback.catch((callbackError) => {
+				if (lockLost) {
+					logger.warn('[DB] Lock callback failed after lock session loss', {
 						did,
 						rkey,
-						errorKind: databaseErrorKind(unlockFailure),
+						errorKind: databaseErrorKind(callbackError),
 					})
+				}
+			})
+			const lost = new Promise<never>((_resolve, reject) => {
+				lockLoss.signal.addEventListener('abort', () => reject(new SiteWriteLockLostError(lockLoss.signal.reason)), {
+					once: true,
+				})
+			})
+			// Fail fast on lock loss: waiting for a callback that no longer runs
+			// under mutual exclusion would hide a fencing breach.
+			return await Promise.race([callback, lost])
+		} finally {
+			monitor.stop()
+			if (held) {
+				if (lockLost) {
+					// The session — and with it the server-side advisory lock — is
+					// gone. Skip the pointless unlock query and retire the session.
+					connectionSafeToRelease = false
 					try {
-						await conn.close({ timeout: 0 })
+						await conn.close({ timeout: LOCK_POOL_RETIRE_TIMEOUT_SECONDS })
 					} catch (closeError) {
-						// Cleanup must not replace a callback failure or expose driver details.
-						logger.error('[DB] Failed to close quarantined site-write lock connection', undefined, {
+						logger.error('[DB] Failed to close lost site-write lock connection', undefined, {
 							did,
 							rkey,
 							errorKind: databaseErrorKind(closeError),
 						})
+					}
+				} else {
+					let unlockFailure: unknown
+					try {
+						const result = await conn`SELECT pg_advisory_unlock(${lockId}::bigint) AS unlocked`
+						if (!advisoryUnlockReturnedTrue(result)) unlockFailure = new Error('Advisory lock was not released')
+					} catch (error) {
+						unlockFailure = error
+					}
+
+					if (unlockFailure) {
+						// Advisory locks are session-scoped. A thrown unlock or a false
+						// result means this session must never return to the reusable pool.
+						connectionSafeToRelease = false
+						logger.error('[DB] Failed to release site write lock; quarantining connection', undefined, {
+							did,
+							rkey,
+							errorKind: databaseErrorKind(unlockFailure),
+						})
+						try {
+							await conn.close({ timeout: LOCK_POOL_RETIRE_TIMEOUT_SECONDS })
+						} catch (closeError) {
+							// Cleanup must not replace a callback failure or expose driver details.
+							logger.error('[DB] Failed to close quarantined site-write lock connection', undefined, {
+								did,
+								rkey,
+								errorKind: databaseErrorKind(closeError),
+							})
+						}
 					}
 				}
 			}
@@ -672,12 +834,18 @@ export async function withReservedSiteWriteLock<T>(
  * Uses a blocking acquire bounded by lock_timeout so a stuck holder cannot wedge
  * the queue forever. An acquisition timeout or database error fails closed: the
  * caller receives an error and can retry without writing concurrently.
+ *
+ * While `fn` runs, the lock session is kept alive with periodic liveness
+ * probes (proxies idle-kill idle sessions at 60s) and `fn` receives a signal
+ * that aborts on caller abort or on lock-session loss, so a lost advisory lock
+ * stops the protected work instead of silently writing without exclusion.
  */
 export async function withSiteWriteLock<T>(
 	did: string,
 	rkey: string,
-	fn: () => Promise<T>,
+	fn: (signal: AbortSignal) => Promise<T>,
 	signal?: AbortSignal,
+	heartbeat: LockHeartbeatOptions = {},
 ): Promise<T> {
 	let conn: SiteWriteLockConnection
 
@@ -692,7 +860,7 @@ export async function withSiteWriteLock<T>(
 		throw new SiteWriteLockAcquisitionError(error)
 	}
 
-	return await withReservedSiteWriteLock(conn, did, rkey, fn, signal)
+	return await withReservedSiteWriteLock(conn, did, rkey, fn, signal, heartbeat)
 }
 
 // Read functions
@@ -715,14 +883,6 @@ export async function getSiteSettingsCache(did: string, rkey: string): Promise<S
     LIMIT 1
   `
 	return result[0] || null
-}
-
-export async function listAllSiteCaches(): Promise<SiteCache[]> {
-	return await sql<SiteCache[]>`
-    SELECT did, rkey, record_cid, file_cids, cached_at, updated_at
-    FROM site_cache
-    ORDER BY updated_at DESC
-  `
 }
 
 /**
@@ -824,10 +984,6 @@ export async function upsertSiteCache(
 /** Keep an empty durable manifest so hosting can distinguish a confirmed delete from a projection/storage outage. */
 export async function markSiteCacheDeleted(did: string, rkey: string): Promise<void> {
 	await upsertSiteCache(did, rkey, DELETED_SITE_RECORD_CID, {})
-}
-
-export async function deleteSiteCache(did: string, rkey: string): Promise<void> {
-	await sql`DELETE FROM site_cache WHERE did = ${did} AND rkey = ${rkey}`
 }
 
 export async function upsertSiteSettingsCache(

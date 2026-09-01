@@ -193,6 +193,10 @@ export class JetstreamClient {
 	private running = 0
 	private flushing = false
 	private failed = false
+	// Queue pressure is recoverable. Keep accepted events and reconnect only
+	// after they have drained and advanced the durable cursor.
+	private backpressured = false
+	private reconnectWhenDrained = false
 	private quarantined = false
 	private protocolFailures = 0
 	private lastProgressAt = 0
@@ -246,7 +250,15 @@ export class JetstreamClient {
 	}
 
 	start(): void {
-		if (this.destroyed || !this.accepting || this.ws || this.reconnectTimer) return
+		if (
+			this.destroyed ||
+			!this.accepting ||
+			this.ws ||
+			this.reconnectTimer ||
+			this.backpressured ||
+			this.reconnectWhenDrained
+		)
+			return
 		this.connect()
 	}
 
@@ -255,7 +267,7 @@ export class JetstreamClient {
 	}
 
 	private connect(): void {
-		if (this.destroyed || !this.accepting || this.ws) return
+		if (this.destroyed || !this.accepting || this.ws || this.backpressured || this.reconnectWhenDrained) return
 		this.failed = false
 		const generation = ++this.generation
 		let ws: WebSocket
@@ -273,7 +285,15 @@ export class JetstreamClient {
 			callback(this.opts.onConnect)
 		}
 		ws.onmessage = (message) => {
-			if (this.ws !== ws || generation !== this.generation || this.destroyed || !this.accepting) return
+			if (
+				this.ws !== ws ||
+				generation !== this.generation ||
+				this.destroyed ||
+				!this.accepting ||
+				this.failed ||
+				this.backpressured
+			)
+				return
 			const text = messageText(message.data, this.maxEventBytes)
 			if (!text) {
 				this.quarantine(new Error('Jetstream message exceeded the intake limit'))
@@ -290,11 +310,15 @@ export class JetstreamClient {
 				return
 			}
 			if (this.queue.length >= this.maxQueue) {
-				this.fail(new Error('Jetstream intake queue is full'), 'queue')
+				// A close cannot put the already received frame back on the wire.
+				// This should only be reachable after an event-loop race; retain the
+				// bounded queue and let the relay replay this frame from the last ack.
+				this.applyBackpressure(new Error('Jetstream intake queue is full'))
 				return
 			}
 			this.queue.push({ event, state: 'queued' })
 			this.pump()
+			if (this.queue.length >= this.maxQueue) this.applyBackpressure(new Error('Jetstream intake queue is full'))
 		}
 		ws.onerror = () => {
 			if (this.ws !== ws || generation !== this.generation || this.destroyed || !this.accepting) return
@@ -307,7 +331,21 @@ export class JetstreamClient {
 			const wasConnected = this.connected
 			this.connected = false
 			if (wasConnected) callback(this.opts.onDisconnect)
-			if (!this.destroyed && this.accepting) this.scheduleReconnect()
+			if (!this.destroyed && this.accepting) {
+				// Never replay from a stale cursor while accepted work is still
+				// draining, even when the relay (rather than queue pressure) closed
+				// the socket.
+				if (
+					this.backpressured ||
+					this.reconnectWhenDrained ||
+					this.queue.length !== 0 ||
+					this.running !== 0 ||
+					this.flushing
+				) {
+					this.reconnectWhenDrained = true
+					this.reconnectAfterDrain()
+				} else this.scheduleReconnect()
+			}
 		}
 	}
 
@@ -361,6 +399,7 @@ export class JetstreamClient {
 			}
 		} finally {
 			this.flushing = false
+			this.notifyDrained()
 		}
 	}
 
@@ -371,8 +410,42 @@ export class JetstreamClient {
 		report(this.opts, error)
 	}
 
+	private applyBackpressure(error: Error): void {
+		if (this.destroyed || this.failed || this.backpressured) return
+		this.backpressured = true
+		this.lastFailureKind = 'queue'
+		this.lastFailureAt = Date.now()
+		this.report(error)
+		try {
+			this.ws?.close()
+		} catch {
+			// A close race is benign.
+		}
+		// onclose schedules only after this bounded queue drains. If a custom
+		// socket closes synchronously, this remains a no-op until then.
+		this.reconnectAfterDrain()
+	}
+
+	private reconnectAfterDrain(): void {
+		if (
+			(!this.backpressured && !this.reconnectWhenDrained) ||
+			this.destroyed ||
+			!this.accepting ||
+			this.ws ||
+			this.queue.length !== 0 ||
+			this.running !== 0 ||
+			this.flushing
+		)
+			return
+		this.backpressured = false
+		this.reconnectWhenDrained = false
+		this.scheduleReconnect()
+	}
+
 	private quarantine(error: Error): void {
 		if (this.destroyed || this.failed) return
+		this.backpressured = false
+		this.reconnectWhenDrained = false
 		this.quarantined = true
 		this.protocolFailures = Math.min(this.protocolFailures + 1, this.reconnectMaxExponent + 1)
 		this.lastFailureKind = 'protocol'
@@ -394,6 +467,11 @@ export class JetstreamClient {
 
 	private fail(error: Error, kind: 'queue' | 'handler' | 'cursor' = 'handler'): void {
 		if (this.destroyed || this.failed) return
+		this.backpressured = false
+		// A disconnected socket can fail while sibling handlers still own work.
+		// Drop their unacknowledged queue entries, but do not replay over those
+		// side effects until every in-flight handler and cursor flush has settled.
+		this.reconnectWhenDrained = this.running !== 0 || this.flushing
 		this.lastFailureKind = kind
 		this.lastFailureAt = Date.now()
 		this.failed = true
@@ -411,7 +489,8 @@ export class JetstreamClient {
 	}
 
 	private scheduleReconnect(error?: Error, kind?: 'connect'): void {
-		if (this.destroyed || !this.accepting || this.reconnectTimer) return
+		if (this.destroyed || !this.accepting || this.reconnectTimer || this.backpressured || this.reconnectWhenDrained)
+			return
 		if (error) {
 			if (kind) {
 				this.lastFailureKind = kind
@@ -444,7 +523,7 @@ export class JetstreamClient {
 	}
 
 	get isConnected(): boolean {
-		return this.connected && !this.quarantined
+		return this.connected && !this.failed && !this.quarantined && !this.backpressured
 	}
 
 	get isQuarantined(): boolean {
@@ -501,6 +580,7 @@ export class JetstreamClient {
 
 	private notifyDrained(): void {
 		if (this.queue.length !== 0 || this.running !== 0 || this.flushing) return
+		this.reconnectAfterDrain()
 		for (const resolve of this.drainWaiters) resolve()
 		this.drainWaiters.clear()
 	}
@@ -511,6 +591,8 @@ export class JetstreamClient {
 		this.destroyed = true
 		this.accepting = false
 		this.paused = false
+		this.backpressured = false
+		this.reconnectWhenDrained = false
 		if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
 		this.reconnectTimer = null
 		this.queue = []

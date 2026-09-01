@@ -155,10 +155,14 @@ export function getCacheInvalidationHealthResponse(
 	storageSnapshot: StorageReadHealthSnapshot = getStorageReadHealthSnapshot(),
 ) {
 	const replayHealthy = snapshot.replayConnected && snapshot.replayState === 'healthy'
+	// Fail closed: the live pub/sub subscriber and the replay tail must both be
+	// attached before invalidation can be called healthy. Reporting 'ok' with a
+	// dead subscriber hides live-path outages behind replay's fallback.
+	const subscriberHealthy = snapshot.subscriberConnected
 	const storageHealthy = storageSnapshot.status === 'healthy' || storageSnapshot.status === 'not-configured'
 
 	return {
-		status: (!configured || replayHealthy) && storageHealthy ? 'ok' : 'degraded',
+		status: (!configured || (subscriberHealthy && replayHealthy)) && storageHealthy ? 'ok' : 'degraded',
 		cacheInvalidation: {
 			configured,
 			subscriberConnected: snapshot.subscriberConnected,
@@ -168,6 +172,7 @@ export function getCacheInvalidationHealthResponse(
 			gapCount: snapshot.gapCount,
 			lastGapAt: snapshot.lastGapAt,
 			lastGapRecoveryAt: snapshot.lastGapRecoveryAt,
+			subscriberRecreations: snapshot.subscriberRecreations,
 		},
 		storage: {
 			configured: storageSnapshot.configured,
@@ -181,9 +186,19 @@ export function getCacheInvalidationHealthResponse(
 	}
 }
 
-app.get('/health', (c) =>
-	c.json(getCacheInvalidationHealthResponse(getCacheInvalidationHealthSnapshot(), Boolean(process.env.REDIS_URL))),
-)
+app.get('/health', (c) => {
+	const response = getCacheInvalidationHealthResponse(
+		getCacheInvalidationHealthSnapshot(),
+		Boolean(process.env.REDIS_URL),
+	)
+	// Fail closed: a degraded invalidation pipeline must surface as an unhealthy
+	// probe (HTTP 503), not a 200 that orchestrators read as ready.
+	return c.json(response, response.status === 'ok' ? 200 : 503)
+})
+
+// Liveness only: the process is up and serving HTTP. Dependency readiness is
+// /health, which fails closed whenever invalidation or storage is degraded.
+app.get('/live', (c) => c.json({ status: 'ok' }))
 
 type SiteRequest = {
 	url: URL

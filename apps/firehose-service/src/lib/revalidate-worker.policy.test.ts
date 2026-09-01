@@ -4,6 +4,7 @@ import { AuthoritativeSettingsRecordError } from './cache-writer'
 import {
 	classifyRevalidationError,
 	processRevalidationMessage,
+	quarantineRevalidationMessage,
 	type RevalidateRedisClient,
 	type RevalidateWorkerDependencies,
 	type RevalidateWorkerRuntimeConfig,
@@ -37,6 +38,44 @@ function fakeRedis(): {
 		},
 		evals,
 		sets,
+	}
+}
+
+interface DlqXaddContract {
+	maxLenArgv: number
+	fields: Array<readonly [string, number]>
+}
+
+function parseDlqXaddContract(script: string): DlqXaddContract {
+	const xaddStart = script.indexOf("local dlqId = redis.call('XADD'")
+	const ackStart = script.indexOf('\nlocal acknowledged', xaddStart)
+	if (xaddStart < 0 || ackStart < 0) throw new Error('Expected a quarantine XADD followed by XACK')
+
+	const xadd = script.slice(xaddStart, ackStart)
+	const maxLenMatch = xadd.match(/'MAXLEN', '~', ARGV\[(\d+)\], '\*'/)
+	if (!maxLenMatch?.[1]) throw new Error('Expected a MAXLEN ARGV reference in quarantine XADD')
+
+	const fields = Array.from(xadd.matchAll(/'([A-Za-z][A-Za-z0-9]*)', ARGV\[(\d+)\]/g)).map((match) => {
+		const [, field, argv] = match
+		if (!field || !argv) throw new Error('Expected a field ARGV reference in quarantine XADD')
+		return [field, Number(argv)] as const
+	})
+
+	return { maxLenArgv: Number(maxLenMatch[1]), fields }
+}
+
+function resolveDlqXaddContract(call: EvalCall): { maxLen: string; fields: Record<string, string> } {
+	const contract = parseDlqXaddContract(call.script)
+	const argv = call.args.slice(call.keyCount)
+	const argAt = (argvIndex: number): string => {
+		const value = argv[argvIndex - 1]
+		if (value === undefined) throw new Error(`Missing ARGV[${argvIndex}] in quarantine call`)
+		return value
+	}
+
+	return {
+		maxLen: argAt(contract.maxLenArgv),
+		fields: Object.fromEntries(contract.fields.map(([field, argvIndex]) => [field, argAt(argvIndex)])),
 	}
 }
 
@@ -103,6 +142,74 @@ describe('strict revalidation poison handling', () => {
 			'MALFORMED_MESSAGE',
 			'Revalidation failed: MALFORMED_MESSAGE',
 		])
+		expect(call.script.indexOf("redis.call('XADD'")).toBeLessThan(call.script.indexOf("redis.call('XACK'"))
+		expect(call.script.indexOf("redis.call('XACK'")).toBeLessThan(call.script.indexOf("redis.call('XDEL'"))
+	})
+
+	test('maps quarantine ARGVs to every DLQ field and MAXLEN', async () => {
+		const id = '91-2'
+		const { redis, evals } = fakeRedis()
+
+		await quarantineRevalidationMessage(
+			redis,
+			{ fields: {}, did: 'did:plc:contract', rkey: 'docs/index.html', reason: 'storage-miss:docs/index.html' },
+			id,
+			new Error('upstream timeout'),
+			7,
+			'transient',
+			'UPSTREAM_TIMEOUT',
+		)
+
+		expect(evals).toHaveLength(1)
+		const [call] = evals
+		if (!call) throw new Error('Expected quarantine script call')
+		const quarantinedAt = call.args[call.keyCount + 9]
+		if (!quarantinedAt) throw new Error('Expected a quarantine timestamp argument')
+		expect(quarantinedAt).toMatch(/^\d+$/)
+		expect(call.keyCount).toBe(2)
+		expect(call.args.slice(0, 2)).toEqual([config.revalidateStream, config.revalidateDlqStream])
+		expect(call.args.slice(call.keyCount)).toEqual([
+			config.revalidateGroup,
+			id,
+			'did:plc:contract',
+			'docs/index.html',
+			'storage-miss:docs/index.html',
+			'UPSTREAM_TIMEOUT',
+			'upstream timeout',
+			'7',
+			'transient',
+			expect.any(String),
+			String(config.revalidateDlqStreamMaxLen),
+		])
+
+		expect(parseDlqXaddContract(call.script)).toEqual({
+			maxLenArgv: 11,
+			fields: [
+				['sourceId', 2],
+				['did', 3],
+				['rkey', 4],
+				['reason', 5],
+				['errorCode', 6],
+				['error', 7],
+				['classification', 9],
+				['attempts', 8],
+				['quarantinedAt', 10],
+			],
+		})
+		expect(resolveDlqXaddContract(call)).toEqual({
+			maxLen: String(config.revalidateDlqStreamMaxLen),
+			fields: {
+				sourceId: id,
+				did: 'did:plc:contract',
+				rkey: 'docs/index.html',
+				reason: 'storage-miss:docs/index.html',
+				errorCode: 'UPSTREAM_TIMEOUT',
+				error: 'upstream timeout',
+				classification: 'transient',
+				attempts: '7',
+				quarantinedAt,
+			},
+		})
 		expect(call.script.indexOf("redis.call('XADD'")).toBeLessThan(call.script.indexOf("redis.call('XACK'"))
 		expect(call.script.indexOf("redis.call('XACK'")).toBeLessThan(call.script.indexOf("redis.call('XDEL'"))
 	})

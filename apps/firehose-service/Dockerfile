@@ -7,6 +7,7 @@ WORKDIR /app
 
 # Copy workspace configuration files
 COPY package.json bun.lock tsconfig.json ./
+COPY patches ./patches
 
 # Copy all workspace packages (needed for workspace: dependencies)
 COPY packages ./packages

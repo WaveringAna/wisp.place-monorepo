@@ -4,6 +4,7 @@ import {
 	assertSafeWebhookUrlSyntax,
 	isPublicWebhookIpAddress,
 	pinnedWebhookFetch,
+	WebhookUrlError,
 } from './webhook-url'
 
 describe('webhook URL validation', () => {
@@ -42,14 +43,15 @@ describe('webhook URL validation', () => {
 	})
 
 	test('rejects mixed public/private DNS answers', async () => {
-		await expect(
-			assertSafeWebhookUrl('https://mixed.example/webhook', {
-				resolver: async () => [
-					{ address: '8.8.8.8', family: 4 },
-					{ address: '10.0.0.7', family: 4 },
-				],
-			}),
-		).rejects.toThrow('private address')
+		const error = await assertSafeWebhookUrl('https://mixed.example/webhook', {
+			resolver: async () => [
+				{ address: '8.8.8.8', family: 4 },
+				{ address: '10.0.0.7', family: 4 },
+			],
+		}).catch((reason: unknown) => reason)
+		expect(error).toBeInstanceOf(WebhookUrlError)
+		expect((error as WebhookUrlError).kind).toBe('blocked_destination')
+		expect((error as Error).message).toContain('private address')
 	})
 
 	test('pins the validated answer at the transport and never performs a second DNS lookup', async () => {
@@ -141,5 +143,145 @@ describe('webhook URL validation', () => {
 			if (oldGate === undefined) delete process.env.WISP_ALLOW_LOCALHOST_FETCH
 			else process.env.WISP_ALLOW_LOCALHOST_FETCH = oldGate
 		}
+	})
+
+	test('enforces HTTPS on every redirect', async () => {
+		const error = await pinnedWebhookFetch('https://public.example/start', {
+			resolver: async () => [{ address: '8.8.8.8', family: 4 }],
+			transport: async () => new Response('', { status: 302, headers: { Location: 'http://public.example/final' } }),
+		}).catch((reason: unknown) => reason)
+		expect(error).toBeInstanceOf(WebhookUrlError)
+		expect((error as WebhookUrlError).kind).toBe('invalid_url')
+	})
+
+	test('preserves request headers while stripping them only when a redirect changes to GET', async () => {
+		const requests: Array<{ method: string; body: string | Uint8Array | undefined; headers: Headers }> = []
+		const response = await pinnedWebhookFetch('https://first.example/webhook', {
+			resolver: async () => [{ address: '8.8.8.8', family: 4 }],
+			headers: {
+				'Content-Type': 'application/json',
+				'X-Webhook-Signature': 'sha256=never-forward',
+			},
+			body: '{}',
+			transport: async (request) => {
+				requests.push({ method: request.method, body: request.body, headers: request.headers })
+				return requests.length === 1
+					? new Response('', { status: 302, headers: { Location: 'https://second.example/hook' } })
+					: new Response('', { status: 204 })
+			},
+		})
+		expect(response.status).toBe(204)
+		expect(requests).toHaveLength(2)
+		expect(requests[0]?.headers.get('content-type')).toBe('application/json')
+		expect(requests[0]?.headers.get('content-length')).toBe('2')
+		expect(requests[0]?.headers.get('user-agent')).toBeNull()
+		expect(requests[1]?.method).toBe('GET')
+		expect(requests[1]?.body).toBeUndefined()
+		expect(requests[1]?.headers.get('content-type')).toBeNull()
+		expect(requests[1]?.headers.get('content-length')).toBeNull()
+	})
+
+	test('keeps bounded response and request failures in the webhook error contract', async () => {
+		const requestError = await pinnedWebhookFetch('https://public.example/webhook', {
+			body: 'too large',
+			maxRequestBytes: 2,
+		}).catch((reason: unknown) => reason)
+		expect(requestError).toBeInstanceOf(WebhookUrlError)
+		expect((requestError as WebhookUrlError).kind).toBe('request_too_large')
+
+		const responseError = await pinnedWebhookFetch('https://public.example/webhook', {
+			resolver: async () => [{ address: '8.8.8.8', family: 4 }],
+			maxResponseBytes: 2,
+			transport: async () => new Response('too large', { headers: { 'content-length': '9' } }),
+		}).catch((reason: unknown) => reason)
+		expect(responseError).toBeInstanceOf(WebhookUrlError)
+		expect((responseError as WebhookUrlError).kind).toBe('response_too_large')
+
+		const body = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(new Uint8Array([1, 2, 3]))
+				controller.close()
+			},
+		})
+		const streamedResponse = await pinnedWebhookFetch('https://public.example/webhook', {
+			resolver: async () => [{ address: '8.8.8.8', family: 4 }],
+			maxResponseBytes: 2,
+			transport: async () => new Response(body),
+		})
+		let streamedError: unknown
+		try {
+			await streamedResponse.arrayBuffer()
+		} catch (error) {
+			streamedError = error
+		}
+		expect(streamedError).toBeInstanceOf(WebhookUrlError)
+		expect((streamedError as WebhookUrlError).kind).toBe('response_too_large')
+	})
+
+	test('preserves an explicitly classified resolver error', async () => {
+		const expected = new WebhookUrlError('timeout', 'Webhook request timed out')
+		const actual = await assertSafeWebhookUrl('https://resolver.example/hook', {
+			resolver: async () => {
+				throw expected
+			},
+		}).catch((reason: unknown) => reason)
+		expect(actual).toBe(expected)
+	})
+
+	test('maps resolver failures and transport failures without exposing details', async () => {
+		const dnsError = await assertSafeWebhookUrl('https://dns.example/hook', {
+			resolver: async () => {
+				throw new Error('resolver secret')
+			},
+		}).catch((reason: unknown) => reason)
+		expect(dnsError).toBeInstanceOf(WebhookUrlError)
+		expect((dnsError as WebhookUrlError).kind).toBe('dns')
+		expect((dnsError as Error).message).not.toContain('secret')
+
+		const networkError = await pinnedWebhookFetch('https://public.example/webhook', {
+			resolver: async () => [{ address: '8.8.8.8', family: 4 }],
+			transport: async () => {
+				throw new Error('transport secret')
+			},
+		}).catch((reason: unknown) => reason)
+		expect(networkError).toBeInstanceOf(WebhookUrlError)
+		expect((networkError as WebhookUrlError).kind).toBe('network')
+		expect((networkError as Error).message).not.toContain('secret')
+	})
+
+	test('preserves timeout and redirect-limit error kinds', async () => {
+		const timeoutError = await pinnedWebhookFetch('https://slow.example/webhook', {
+			resolver: async () => [{ address: '8.8.8.8', family: 4 }],
+			timeoutMs: 10,
+			transport: async ({ signal }) =>
+				new Promise<Response>((_resolve, reject) =>
+					signal.addEventListener('abort', () => reject(signal.reason), { once: true }),
+				),
+		}).catch((reason: unknown) => reason)
+		expect(timeoutError).toBeInstanceOf(WebhookUrlError)
+		expect((timeoutError as WebhookUrlError).kind).toBe('timeout')
+
+		const response = await pinnedWebhookFetch('https://slow-body.example/webhook', {
+			resolver: async () => [{ address: '8.8.8.8', family: 4 }],
+			timeoutMs: 10,
+			transport: async () => new Response(new ReadableStream<Uint8Array>()),
+		})
+		let bodyTimeoutError: unknown
+		try {
+			await response.arrayBuffer()
+		} catch (error) {
+			bodyTimeoutError = error
+		}
+		expect(bodyTimeoutError).toBeInstanceOf(WebhookUrlError)
+		expect((bodyTimeoutError as WebhookUrlError).kind).toBe('timeout')
+
+		const redirectError = await pinnedWebhookFetch('https://public.example/webhook', {
+			resolver: async () => [{ address: '8.8.8.8', family: 4 }],
+			maxRedirects: 0,
+			transport: async () => new Response('', { status: 302, headers: { Location: '/again' } }),
+		}).catch((reason: unknown) => reason)
+		expect(redirectError).toBeInstanceOf(WebhookUrlError)
+		expect((redirectError as WebhookUrlError).kind).toBe('redirect')
+		expect((redirectError as Error).message).toBe('Webhook redirect limit exceeded')
 	})
 })

@@ -20,7 +20,7 @@
   },
   "scripts": {
     "test": "NODE_ENV=test bun test --isolate",
-		"dev": "NODE_ENV=development bun run build && NODE_ENV=development bun run --watch apps/main-app/src/index.ts",
+    "dev": "NODE_ENV=development bun run build && NODE_ENV=development bun run --watch apps/main-app/src/index.ts",
     "dev:infra": "./scripts/dev-infra.sh up",
     "dev:infra:down": "./scripts/dev-infra.sh down",
     "start": "bun run apps/main-app/src/index.ts",
@@ -65,5 +65,8 @@
     "@oven/bun-linux-x64": "^1.3.14",
     "@types/bun": "^1.3.14",
     "@typescript/native-preview": "^7.0.0-dev.20260707.2"
+  },
+  "patchedDependencies": {
+    "postgres@3.4.9": "patches/postgres@3.4.9.patch"
   }
 }

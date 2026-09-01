@@ -31,7 +31,7 @@ import { requireAuth, SESSION_COOKIE_NAME } from '../lib/wisp-auth'
 
 const logger = createLogger('main-app')
 
-export function isValidSiteName(siteName: string): boolean {
+function isValidSiteName(siteName: string): boolean {
 	if (!siteName || typeof siteName !== 'string') return false
 	if (siteName.length < 1 || siteName.length > 512) return false
 	if (siteName === '.' || siteName === '..') return false

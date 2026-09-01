@@ -21,6 +21,7 @@ describe('hosting server', () => {
 			'replayState',
 			'retrying',
 			'subscriberConnected',
+			'subscriberRecreations',
 		])
 		expect(typeof body.cacheInvalidation.configured).toBe('boolean')
 		expect(typeof body.cacheInvalidation.replayConnected).toBe('boolean')
@@ -57,6 +58,7 @@ describe('hosting server', () => {
 				gapCount: 1,
 				lastGapRecoveryAt: null,
 				retrying: true,
+				subscriberRecreations: 0,
 			},
 			true,
 			{
@@ -85,6 +87,7 @@ describe('hosting server', () => {
 				gapCount: 1,
 				lastGapAt: 123,
 				lastGapRecoveryAt: null,
+				subscriberRecreations: 0,
 			},
 			storage: {
 				configured: true,
@@ -97,6 +100,48 @@ describe('hosting server', () => {
 			},
 		})
 		expect(JSON.stringify(response)).not.toContain('internal-stream-cursor')
+	})
+
+	test('fails closed when the pub/sub subscriber is down even if replay is healthy', () => {
+		const response = getCacheInvalidationHealthResponse(
+			{
+				subscriberConnected: false,
+				replayConnected: true,
+				replayState: 'healthy',
+				cursor: 'internal-stream-cursor',
+				lastEventAt: 1,
+				lastErrorAt: null,
+				lastGapAt: null,
+				gapCount: 0,
+				lastGapRecoveryAt: null,
+				retrying: false,
+				subscriberRecreations: 2,
+			},
+			true,
+			{
+				configured: true,
+				status: 'healthy',
+				breaker: 'closed',
+				consecutiveFailures: 0,
+				totalFailures: 0,
+				totalSuccesses: 1,
+				circuitRejections: 0,
+				lastSuccessAt: 1,
+				lastFailureAt: null,
+				lastErrorKind: null,
+				lastSuccessAgeMs: 0,
+			},
+		)
+
+		expect(response.status).toBe('degraded')
+		expect(response.cacheInvalidation.subscriberConnected).toBe(false)
+		expect(response.cacheInvalidation.subscriberRecreations).toBe(2)
+	})
+
+	test('serves a liveness-only /live endpoint', async () => {
+		const response = await app.request('https://wisp.place/live')
+		expect(response.status).toBe(200)
+		expect((await response.json()) as { status: string }).toEqual({ status: 'ok' })
 	})
 })
 

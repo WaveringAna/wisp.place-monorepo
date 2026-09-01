@@ -1,7 +1,7 @@
 import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process'
 import { decodeSupervisorState, encodeSupervisorMessage, type SupervisorStateMessage } from './supervisor-protocol'
 
-export interface SupervisorProcessLike {
+interface SupervisorProcessLike {
 	readonly stdin: { write(data: string): boolean; once(event: string, listener: (...args: unknown[]) => void): unknown }
 	readonly stdout: {
 		setEncoding(encoding: string): unknown
@@ -11,7 +11,7 @@ export interface SupervisorProcessLike {
 	once(event: string, listener: (...args: unknown[]) => void): unknown
 }
 
-export type SupervisorProcessSpawner = (
+type SupervisorProcessSpawner = (
 	file: string,
 	args: readonly string[],
 	options: {
@@ -20,7 +20,7 @@ export type SupervisorProcessSpawner = (
 	},
 ) => SupervisorProcessLike
 
-export interface SupervisorClientOptions {
+interface SupervisorClientOptions {
 	readonly executable?: string
 	readonly parentPid?: number
 	readonly environment?: NodeJS.ProcessEnv
@@ -208,8 +208,4 @@ export class SupervisorClient {
 			this.onFailure?.(error)
 		}
 	}
-}
-
-export function createSupervisorClient(options: SupervisorClientOptions = {}): SupervisorClient {
-	return new SupervisorClient(options)
 }

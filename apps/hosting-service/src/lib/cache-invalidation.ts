@@ -12,6 +12,12 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, rename, writeFile } from 'node:fs/promises'
 import { basename, dirname, resolve } from 'node:path'
+import {
+	type CacheInvalidationMessage,
+	DEFAULT_CACHE_INVALIDATION_CHANNEL,
+	DEFAULT_CACHE_INVALIDATION_STREAM,
+	decodeCacheInvalidationMessage,
+} from '@wispplace/constants'
 import { createLogger } from '@wispplace/observability'
 import type { StorageTier } from '@wispplace/tiered-storage'
 import Redis from 'ioredis'
@@ -20,8 +26,8 @@ import { resetAllHtmlHotCacheWarmups, resetSiteHtmlHotCacheWarmup } from './html
 import { hotTier, storage, warmTier } from './storage'
 
 const logger = createLogger('cache-invalidation')
-const CHANNEL = 'wisp:cache-invalidate'
-const STREAM = process.env.WISP_CACHE_INVALIDATION_STREAM || 'wisp:cache-invalidate-stream'
+const CHANNEL = DEFAULT_CACHE_INVALIDATION_CHANNEL
+const STREAM = process.env.WISP_CACHE_INVALIDATION_STREAM || DEFAULT_CACHE_INVALIDATION_STREAM
 const STREAM_BLOCK_MS = parsePositiveInt(process.env.WISP_CACHE_INVALIDATION_BLOCK_MS, 5000)
 const STREAM_BATCH_COUNT = parsePositiveInt(process.env.WISP_CACHE_INVALIDATION_BATCH_COUNT, 100)
 const STREAM_BLOCKING_GRACE_MS = parsePositiveInt(process.env.WISP_CACHE_INVALIDATION_BLOCKING_GRACE_MS, 1000)
@@ -37,6 +43,11 @@ const STREAM_SOCKET_TIMEOUT_MS = Math.max(
 // pub/sub subscriber. PING stays valid once ioredis enters subscriber mode, and a
 // 60s cadence tolerates missed heartbeats below the raised 180s HAProxy bound.
 const SUBSCRIBER_PING_INTERVAL_MS = 60_000
+// Supervised PONG deadline: HAProxy closes idle subscriber sockets without
+// ioredis firing an error, so a client whose PINGs stop settling within this
+// window is recreated.
+const SUBSCRIBER_SUPERVISOR_INTERVAL_MS = 30_000
+const SUBSCRIBER_RECREATE_AFTER_MS = 180_000
 
 function getCursorFile(): string {
 	return (
@@ -46,18 +57,7 @@ function getCursorFile(): string {
 }
 const STREAM_ID_PATTERN = /^\d+-\d+$/
 
-type CacheInvalidationAction = 'updating' | 'update' | 'delete' | 'settings' | 'domain'
-
-export interface CacheInvalidationMessage {
-	did?: string
-	rkey?: string
-	action: CacheInvalidationAction
-	domain?: string
-	domainKind?: 'wisp' | 'custom'
-	customDomainId?: string
-	token?: string
-	streamId?: string
-}
+export type { CacheInvalidationMessage } from '@wispplace/constants'
 
 // Sites currently being downloaded by the firehose-service.
 // Maps `${did}/${rkey}` → current update token and timestamp.
@@ -272,6 +272,7 @@ export interface CacheInvalidationHealthSnapshot {
 	gapCount: number
 	lastGapRecoveryAt: number | null
 	retrying: boolean
+	subscriberRecreations: number
 }
 
 export interface CacheInvalidationRedisOptions {
@@ -280,6 +281,7 @@ export interface CacheInvalidationRedisOptions {
 	blockingTimeout?: number
 	blockingTimeoutGrace?: number
 	socketTimeout?: number
+	autoResubscribe?: boolean
 }
 
 export type CacheInvalidationRedisFactory = (redisUrl: string, options: CacheInvalidationRedisOptions) => Redis
@@ -296,6 +298,11 @@ export interface CacheInvalidationSubscriberHeartbeatOptions {
 	scheduleInterval?: CacheInvalidationHeartbeatIntervalScheduler
 }
 
+export interface CacheInvalidationSubscriberSupervisorOptions {
+	scheduleInterval?: CacheInvalidationHeartbeatIntervalScheduler
+	recreateAfterMs?: number
+}
+
 const defaultRedisClientFactory: CacheInvalidationRedisFactory = (redisUrl, options) => new Redis(redisUrl, options)
 
 // The keepalive must never hold the event loop open during shutdown.
@@ -307,6 +314,24 @@ const scheduleRealHeartbeatInterval: CacheInvalidationHeartbeatIntervalScheduler
 
 let subscriber: Redis | null = null
 let cancelSubscriberHeartbeat: (() => void) | null = null
+let cancelSubscriberSupervisor: (() => void) | null = null
+// Recreating bumps the generation first so stale client callbacks are no-ops.
+let subscriberGeneration = 0
+let subscriberRecreations = 0
+let subscriberLastPongAt: number | null = null
+// 'ready' alone is not connected; health requires the SUBSCRIBE ack.
+let subscriberSubscriptionAcked = false
+let subscriberReadyAttempt = 0
+let subscriberUnhealthySince: number | null = null
+let subscriberContext: {
+	redisUrl: string
+	factory: CacheInvalidationRedisFactory
+	scheduleHeartbeatInterval: CacheInvalidationHeartbeatIntervalScheduler
+} | null = null
+// Start-once/stop-once: repeated start is a no-op; stop is one shared promise.
+type CacheInvalidationLifecycleState = 'idle' | 'active' | 'stopping'
+let lifecycleState: CacheInvalidationLifecycleState = 'idle'
+let stopPromise: Promise<void> | null = null
 let replayClient: Redis | null = null
 let stopReplayRequested = false
 let replayLoop: Promise<void> | null = null
@@ -326,6 +351,7 @@ let cacheInvalidationHealth: CacheInvalidationHealthSnapshot = {
 	gapCount: 0,
 	lastGapRecoveryAt: null,
 	retrying: false,
+	subscriberRecreations: 0,
 }
 
 export function getCacheInvalidationHealthSnapshot(): CacheInvalidationHealthSnapshot {
@@ -601,88 +627,20 @@ async function ensureReplayCursorIsRetained(client: Redis): Promise<boolean> {
 	return true
 }
 
-function parseJsonInvalidationMessage(message: string): Partial<CacheInvalidationMessage> | null {
-	try {
-		return JSON.parse(message) as Partial<CacheInvalidationMessage>
-	} catch {
-		return null
-	}
-}
-
-function isCacheInvalidationAction(value: unknown): value is CacheInvalidationAction {
-	return value === 'updating' || value === 'update' || value === 'delete' || value === 'settings' || value === 'domain'
-}
-
-function isCacheInvalidationDomainKind(value: unknown): value is 'wisp' | 'custom' {
-	return value === 'wisp' || value === 'custom'
-}
-
-function optionalString(value: unknown): string | undefined {
-	return typeof value === 'string' ? value : undefined
-}
-
-function parseDomainInvalidationMessage(
-	parsed: Partial<CacheInvalidationMessage>,
-	streamId: string | undefined,
-): CacheInvalidationMessage | null {
-	if (typeof parsed.domain !== 'string') return null
-	if (parsed.domainKind !== undefined && !isCacheInvalidationDomainKind(parsed.domainKind)) return null
-	return {
-		action: 'domain',
-		domain: parsed.domain,
-		domainKind: parsed.domainKind,
-		customDomainId: optionalString(parsed.customDomainId),
-		streamId,
-	}
-}
-
-function parseSiteInvalidationMessage(
-	parsed: Partial<CacheInvalidationMessage>,
-	action: Exclude<CacheInvalidationAction, 'domain'>,
-	streamId: string | undefined,
-): CacheInvalidationMessage | null {
-	if (typeof parsed.did !== 'string' || typeof parsed.rkey !== 'string') return null
-	return {
-		did: parsed.did,
-		rkey: parsed.rkey,
-		action,
-		domain: optionalString(parsed.domain),
-		domainKind: isCacheInvalidationDomainKind(parsed.domainKind) ? parsed.domainKind : undefined,
-		customDomainId: optionalString(parsed.customDomainId),
-		token: optionalString(parsed.token),
-		streamId,
-	}
-}
-
 export function parseCacheInvalidationMessage(message: string): CacheInvalidationMessage | null {
-	const parsed = parseJsonInvalidationMessage(message)
-	if (!parsed || !isCacheInvalidationAction(parsed.action)) return null
-
-	const streamId = normalizeStreamId(parsed.streamId)
-	if (parsed.action === 'domain') return parseDomainInvalidationMessage(parsed, streamId)
-	return parseSiteInvalidationMessage(parsed, parsed.action, streamId)
+	const parsed = decodeCacheInvalidationMessage(message)
+	if (!parsed) return null
+	parsed.streamId = normalizeStreamId(typeof parsed.streamId === 'string' ? parsed.streamId : undefined)
+	return parsed
 }
 
 export function parseCacheInvalidationStreamEntry(streamId: string, fields: string[]): CacheInvalidationMessage | null {
 	const payload: Record<string, string> = {}
-
 	for (let index = 0; index < fields.length - 1; index += 2) {
 		payload[fields[index]!] = fields[index + 1]!
 	}
-
-	const parsed = parseCacheInvalidationMessage(
-		JSON.stringify({
-			did: payload.did,
-			rkey: payload.rkey,
-			action: payload.action,
-			domain: payload.domain,
-			domainKind: payload.domainKind,
-			customDomainId: payload.customDomainId,
-			token: payload.token,
-			streamId,
-		}),
-	)
-	return parsed
+	delete payload.ts
+	return parseCacheInvalidationMessage(JSON.stringify({ ...payload, streamId }))
 }
 
 /** Directly invalidate one tier by listing and deleting all keys with the given prefix. */
@@ -920,6 +878,25 @@ export function getLastProcessedStreamIdForTests(): string {
 export async function resetCacheInvalidationReplayForTests(): Promise<void> {
 	await processingQueue
 	await cursorPersistQueue.catch(() => undefined)
+	// A previous test's in-flight stop must finish before the lifecycle reset,
+	// otherwise its teardown tail can race the next test's start.
+	if (stopPromise) await stopPromise
+	// Subscriber lifecycle reset so each test starts from 'idle' again.
+	stopSubscriberHeartbeat()
+	stopSubscriberSupervisor()
+	subscriberContext = null
+	subscriberGeneration += 1
+	subscriberReadyAttempt += 1
+	subscriberRecreations = 0
+	subscriberSubscriptionAcked = false
+	subscriberLastPongAt = null
+	subscriberUnhealthySince = null
+	subscriber = null
+	replayClient = null
+	stopReplayRequested = false
+	replayLoop = null
+	lifecycleState = 'idle'
+	stopPromise = null
 	lastProcessedStreamId = '0-0'
 	replayCursorIsEstablished = false
 	processingQueue = Promise.resolve()
@@ -936,6 +913,7 @@ export async function resetCacheInvalidationReplayForTests(): Promise<void> {
 		gapCount: 0,
 		lastGapRecoveryAt: null,
 		retrying: false,
+		subscriberRecreations: 0,
 	}
 }
 
@@ -1154,34 +1132,223 @@ function startSubscriberHeartbeat(client: Redis, scheduleInterval: CacheInvalida
 	// state instead of stacking a second interval for the same subscriber.
 	stopSubscriberHeartbeat()
 	const heartbeat = scheduleInterval(() => {
+		if (cancelSubscriberHeartbeat !== heartbeat) return
+		const generation = subscriberGeneration
 		// Attach the rejection handler immediately: a PING against a half-open or
 		// reconnecting connection must never surface as an unhandled rejection.
-		client.ping().catch((err) => {
-			// A PING still in flight after this heartbeat was cancelled by stop,
-			// close/end, or a reconnect that already restarted it is expected
-			// teardown noise, not a new failure.
-			if (cancelSubscriberHeartbeat !== heartbeat) return
-			recordCacheInvalidationError()
-			logger.error('[CacheInvalidation] Redis subscriber heartbeat ping failed', undefined, {
-				operation: 'redis-subscriber-heartbeat',
-				errorKind: errorKind(err),
+		client
+			.ping()
+			.then(() => {
+				if (cancelSubscriberHeartbeat !== heartbeat) return
+				if (generation !== subscriberGeneration || subscriber !== client) return
+				subscriberLastPongAt = Date.now()
 			})
-		})
+			.catch((err) => {
+				// A PING in flight after stop, close/end, or a reconnect that
+				// restarted the heartbeat is expected teardown noise.
+				if (cancelSubscriberHeartbeat !== heartbeat) return
+				recordCacheInvalidationError()
+				logger.error('[CacheInvalidation] Redis subscriber heartbeat ping failed', undefined, {
+					operation: 'redis-subscriber-heartbeat',
+					errorKind: errorKind(err),
+				})
+				recreateSubscriberClient('heartbeat-ping-failed')
+			})
 	}, SUBSCRIBER_PING_INTERVAL_MS)
 	cancelSubscriberHeartbeat = heartbeat
 	logger.info('[CacheInvalidation] Redis subscriber heartbeat started', {
 		operation: 'redis-subscriber-heartbeat-start',
 		pingIntervalMs: SUBSCRIBER_PING_INTERVAL_MS,
+		pongDeadlineMs: SUBSCRIBER_RECREATE_AFTER_MS,
 	})
+}
+
+function createSubscriberClient(
+	generation: number,
+	ctx: {
+		redisUrl: string
+		factory: CacheInvalidationRedisFactory
+		scheduleHeartbeatInterval: CacheInvalidationHeartbeatIntervalScheduler
+	},
+): void {
+	// No ioredis socketTimeout: it is cleared by any inbound data and cannot
+	// bound a swallowed PING. Liveness is the heartbeat plus the supervisor.
+	const client = ctx.factory(ctx.redisUrl, {
+		maxRetriesPerRequest: 2,
+		enableReadyCheck: true,
+		// autoResubscribe re-sends SUBSCRIBE without a callback, so the ack
+		// could never re-fire. Every 'ready' issues its own fenced subscribe.
+		autoResubscribe: false,
+	})
+	subscriber = client
+	subscriberSubscriptionAcked = false
+	subscriberLastPongAt = null
+	subscriberUnhealthySince = null
+	const isCurrent = () => generation === subscriberGeneration && subscriber === client
+
+	client.on('error', (err) => {
+		if (!isCurrent()) return
+		subscriberReadyAttempt += 1
+		subscriberSubscriptionAcked = false
+		cacheInvalidationHealth.subscriberConnected = false
+		recordCacheInvalidationError()
+		logger.error('[CacheInvalidation] Redis subscriber error', undefined, {
+			operation: 'redis-subscriber',
+			errorKind: errorKind(err),
+		})
+	})
+	client.on('close', () => {
+		if (!isCurrent()) return
+		subscriberReadyAttempt += 1
+		subscriberSubscriptionAcked = false
+		cacheInvalidationHealth.subscriberConnected = false
+		// The connection is gone; a keepalive PING can only fail or queue until
+		// the client reconnects and 'ready' restarts the heartbeat.
+		stopSubscriberHeartbeat()
+	})
+	client.on('end', () => {
+		if (!isCurrent()) return
+		subscriberReadyAttempt += 1
+		subscriberSubscriptionAcked = false
+		cacheInvalidationHealth.subscriberConnected = false
+		stopSubscriberHeartbeat()
+	})
+
+	client.on('ready', () => {
+		if (!isCurrent()) return
+		// Health needs the SUBSCRIBE ack for THIS connection; until it lands
+		// the supervisor clocks this client for replacement.
+		const attempt = ++subscriberReadyAttempt
+		logger.info('[CacheInvalidation] Redis subscriber connected', { operation: 'redis-subscriber-ready' })
+		startSubscriberHeartbeat(client, ctx.scheduleHeartbeatInterval)
+		// One explicit SUBSCRIBE per (re)connect, fenced by generation and attempt.
+		client.subscribe(CHANNEL, (err) => {
+			if (!isCurrent() || attempt !== subscriberReadyAttempt) return
+			if (err) {
+				subscriberSubscriptionAcked = false
+				cacheInvalidationHealth.subscriberConnected = false
+				recordCacheInvalidationError()
+				logger.error('[CacheInvalidation] Redis subscription failed', undefined, {
+					operation: 'redis-subscribe',
+					channel: CHANNEL,
+					errorKind: errorKind(err),
+				})
+			} else {
+				subscriberSubscriptionAcked = true
+				subscriberUnhealthySince = null
+				cacheInvalidationHealth.subscriberConnected = true
+				logger.info('[CacheInvalidation] Redis subscription established', {
+					operation: 'redis-subscribe',
+					channel: CHANNEL,
+				})
+			}
+		})
+	})
+
+	client.on('message', (_channel: string, message: string) => {
+		if (!isCurrent()) return
+		const parsed = parseCacheInvalidationMessage(message)
+		if (!parsed) {
+			recordCacheInvalidationError()
+			logger.warn('[CacheInvalidation] Invalid pub/sub message discarded', { operation: 'pubsub-message-invalid' })
+			return
+		}
+
+		void enqueueCacheInvalidation(parsed, 'pubsub').catch((err) => {
+			if (!isCurrent()) return
+			recordCacheInvalidationError()
+			logger.error('[CacheInvalidation] Pub/sub message processing failed', undefined, {
+				operation: 'pubsub-message-process',
+				errorKind: errorKind(err),
+			})
+		})
+	})
+}
+
+function stopSubscriberSupervisor(): void {
+	if (cancelSubscriberSupervisor === null) return
+	cancelSubscriberSupervisor()
+	cancelSubscriberSupervisor = null
+	subscriberUnhealthySince = null
+}
+
+function startSubscriberSupervisor(
+	scheduleInterval: CacheInvalidationHeartbeatIntervalScheduler,
+	recreateAfterMs: number,
+): void {
+	stopSubscriberSupervisor()
+	cancelSubscriberSupervisor = scheduleInterval(() => {
+		const ctx = subscriberContext
+		if (lifecycleState !== 'active' || ctx === null) return
+		const client = subscriber
+		const now = Date.now()
+		// Connected + acked + PONGs settling within the recreate window.
+		if (client && client.status === 'ready' && subscriberSubscriptionAcked) {
+			if (subscriberLastPongAt === null || now - subscriberLastPongAt >= recreateAfterMs) {
+				if (subscriberUnhealthySince === null) subscriberUnhealthySince = now
+				else if (now - subscriberUnhealthySince >= recreateAfterMs) {
+					recreateSubscriberClient('supervisor-pong-stale')
+				}
+				return
+			}
+			subscriberUnhealthySince = null
+			return
+		}
+		// Reconnecting / never connected / ready-without-ack: clock to recreate.
+		if (subscriberUnhealthySince === null) {
+			subscriberUnhealthySince = now
+			return
+		}
+		if (now - subscriberUnhealthySince >= recreateAfterMs) {
+			recreateSubscriberClient('supervisor-unhealthy-timeout')
+		}
+	}, SUBSCRIBER_SUPERVISOR_INTERVAL_MS)
+	logger.info('[CacheInvalidation] Redis subscriber supervisor started', {
+		operation: 'subscriber-supervisor-start',
+		intervalMs: SUBSCRIBER_SUPERVISOR_INTERVAL_MS,
+		recreateAfterMs,
+	})
+}
+
+function recreateSubscriberClient(reason: string): void {
+	const ctx = subscriberContext
+	if (ctx === null || lifecycleState !== 'active') return
+	subscriberGeneration += 1
+	subscriberRecreations += 1
+	cacheInvalidationHealth.subscriberRecreations = subscriberRecreations
+	cacheInvalidationHealth.subscriberConnected = false
+	subscriberReadyAttempt += 1
+	subscriberSubscriptionAcked = false
+	subscriberLastPongAt = null
+	subscriberUnhealthySince = null
+	stopSubscriberHeartbeat()
+	const stale = subscriber
+	subscriber = null
+	logger.warn('[CacheInvalidation] Redis subscriber wedged; recreating client', {
+		operation: 'subscriber-recreate',
+		reason,
+		recreations: subscriberRecreations,
+	})
+	stale?.disconnect()
+	createSubscriberClient(subscriberGeneration, ctx)
 }
 
 function startCacheInvalidationSubscriberWithFactory(
 	redisClientFactory: CacheInvalidationRedisFactory,
 	gapRecoveryOverrides?: CacheInvalidationGapRecoveryDependencies,
 	heartbeatOptions?: CacheInvalidationSubscriberHeartbeatOptions,
+	supervisorOptions?: CacheInvalidationSubscriberSupervisorOptions,
 ): void {
-	stopSubscriberHeartbeat()
+	if (lifecycleState !== 'idle' || stopPromise !== null) {
+		logger.warn('[CacheInvalidation] Cache invalidation start ignored; lifecycle already active or stopping', {
+			operation: 'subscriber-start-ignored',
+			lifecycleState,
+		})
+		return
+	}
 	const scheduleHeartbeatInterval = heartbeatOptions?.scheduleInterval ?? scheduleRealHeartbeatInterval
+	const scheduleSupervisorInterval = supervisorOptions?.scheduleInterval ?? scheduleRealHeartbeatInterval
+	const recreateAfterMs = supervisorOptions?.recreateAfterMs ?? SUBSCRIBER_RECREATE_AFTER_MS
 	cacheInvalidationGapRecoveryDependencies = getCacheInvalidationGapRecoveryDependencies(gapRecoveryOverrides)
 	const redisUrl = process.env.REDIS_URL
 	if (!redisUrl) {
@@ -1196,6 +1363,9 @@ function startCacheInvalidationSubscriberWithFactory(
 		return
 	}
 
+	lifecycleState = 'active'
+	subscriberRecreations = 0
+
 	cacheInvalidationHealth = {
 		subscriberConnected: false,
 		replayConnected: false,
@@ -1207,6 +1377,7 @@ function startCacheInvalidationSubscriberWithFactory(
 		gapCount: 0,
 		lastGapRecoveryAt: null,
 		retrying: false,
+		subscriberRecreations: 0,
 	}
 	loadCursorFromDisk()
 	stopReplayRequested = false
@@ -1214,71 +1385,16 @@ function startCacheInvalidationSubscriberWithFactory(
 	logger.info('[CacheInvalidation] Connecting to Redis subscriber', {
 		operation: 'subscriber-start',
 		redisConfigured: true,
+		pingIntervalMs: SUBSCRIBER_PING_INTERVAL_MS,
+		pongDeadlineMs: SUBSCRIBER_RECREATE_AFTER_MS,
+		supervisorIntervalMs: SUBSCRIBER_SUPERVISOR_INTERVAL_MS,
+		recreateAfterMs,
 	})
-	subscriber = redisClientFactory(redisUrl, {
-		maxRetriesPerRequest: 2,
-		enableReadyCheck: true,
-	})
+	subscriberContext = { redisUrl, factory: redisClientFactory, scheduleHeartbeatInterval }
+	createSubscriberClient(subscriberGeneration, subscriberContext)
+	startSubscriberSupervisor(scheduleSupervisorInterval, recreateAfterMs)
+
 	replayClient = createReplayClient(redisUrl, redisClientFactory)
-
-	subscriber.on('error', (err) => {
-		cacheInvalidationHealth.subscriberConnected = false
-		recordCacheInvalidationError()
-		logger.error('[CacheInvalidation] Redis subscriber error', undefined, {
-			operation: 'redis-subscriber',
-			errorKind: errorKind(err),
-		})
-	})
-	subscriber.on('close', () => {
-		cacheInvalidationHealth.subscriberConnected = false
-		// The connection is gone; a keepalive PING can only fail or queue until
-		// the client reconnects and 'ready' restarts the heartbeat.
-		stopSubscriberHeartbeat()
-	})
-	subscriber.on('end', () => {
-		cacheInvalidationHealth.subscriberConnected = false
-		stopSubscriberHeartbeat()
-	})
-
-	subscriber.on('ready', () => {
-		cacheInvalidationHealth.subscriberConnected = true
-		logger.info('[CacheInvalidation] Redis subscriber connected', { operation: 'redis-subscriber-ready' })
-		if (!subscriber) return
-		startSubscriberHeartbeat(subscriber, scheduleHeartbeatInterval)
-	})
-
-	subscriber.subscribe(CHANNEL, (err) => {
-		if (err) {
-			recordCacheInvalidationError()
-			logger.error('[CacheInvalidation] Redis subscription failed', undefined, {
-				operation: 'redis-subscribe',
-				channel: CHANNEL,
-				errorKind: errorKind(err),
-			})
-		} else {
-			logger.info('[CacheInvalidation] Redis subscription established', {
-				operation: 'redis-subscribe',
-				channel: CHANNEL,
-			})
-		}
-	})
-
-	subscriber.on('message', (_channel: string, message: string) => {
-		const parsed = parseCacheInvalidationMessage(message)
-		if (!parsed) {
-			recordCacheInvalidationError()
-			logger.warn('[CacheInvalidation] Invalid pub/sub message discarded', { operation: 'pubsub-message-invalid' })
-			return
-		}
-
-		void enqueueCacheInvalidation(parsed, 'pubsub').catch((err) => {
-			recordCacheInvalidationError()
-			logger.error('[CacheInvalidation] Pub/sub message processing failed', undefined, {
-				operation: 'pubsub-message-process',
-				errorKind: errorKind(err),
-			})
-		})
-	})
 
 	ensureReplayLoopStarted()
 }
@@ -1297,16 +1413,40 @@ export function startCacheInvalidationSubscriberForTests(
 	redisClientFactory: CacheInvalidationRedisFactory,
 	gapRecoveryOverrides?: CacheInvalidationGapRecoveryDependencies,
 	heartbeatOptions?: CacheInvalidationSubscriberHeartbeatOptions,
+	supervisorOptions?: CacheInvalidationSubscriberSupervisorOptions,
 ): void {
-	startCacheInvalidationSubscriberWithFactory(redisClientFactory, gapRecoveryOverrides, heartbeatOptions)
+	startCacheInvalidationSubscriberWithFactory(
+		redisClientFactory,
+		gapRecoveryOverrides,
+		heartbeatOptions,
+		supervisorOptions,
+	)
 }
 
-export async function stopCacheInvalidationSubscriber(): Promise<void> {
+export function stopCacheInvalidationSubscriber(): Promise<void> {
+	if (stopPromise !== null) return stopPromise
+	if (lifecycleState === 'idle') return Promise.resolve()
+	stopPromise = performCacheInvalidationStop().finally(() => {
+		stopPromise = null
+	})
+	return stopPromise
+}
+
+async function performCacheInvalidationStop(): Promise<void> {
+	if (lifecycleState === 'idle') return
+	lifecycleState = 'stopping'
 	stopReplayRequested = true
 	cancelReplayRetryWait?.()
 	// Clear the keepalive first so no PING races the closing socket, and an
 	// in-flight PING rejection is treated as expected teardown noise.
 	stopSubscriberHeartbeat()
+	stopSubscriberSupervisor()
+	subscriberContext = null
+	subscriberGeneration += 1
+	subscriberReadyAttempt += 1
+	subscriberSubscriptionAcked = false
+	subscriberLastPongAt = null
+	subscriberUnhealthySince = null
 	cacheInvalidationHealth.subscriberConnected = false
 	cacheInvalidationHealth.replayConnected = false
 	cacheInvalidationHealth.retrying = false
@@ -1325,4 +1465,5 @@ export async function stopCacheInvalidationSubscriber(): Promise<void> {
 	await replayLoop
 	await processingQueue
 	await cursorPersistQueue.catch(() => undefined)
+	lifecycleState = 'idle'
 }

@@ -124,20 +124,6 @@ export async function deleteFile(key: string): Promise<void> {
 }
 
 /**
- * Delete multiple files from S3
- */
-export async function deleteFiles(keys: string[]): Promise<void> {
-	await Promise.all(keys.map((key) => storage.delete(key)))
-}
-
-/**
- * Check if a file exists in S3
- */
-export async function fileExists(key: string): Promise<boolean> {
-	return await storage.exists(key)
-}
-
-/**
  * List all files with a given prefix
  */
 export async function listFiles(prefix: string): Promise<string[]> {

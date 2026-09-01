@@ -6,16 +6,49 @@
  * is updated or deleted via the firehose.
  */
 
+import { DEFAULT_CACHE_INVALIDATION_CHANNEL, publishCacheInvalidationEvent } from '@wispplace/constants'
 import { createLogger } from '@wispplace/observability'
 import Redis from 'ioredis'
 import { config } from '../config'
 import { isSiteDeleteTombstoneReason } from './revalidate-queue'
 
 const logger = createLogger('firehose-service')
-const CHANNEL = 'wisp:cache-invalidate'
 
 let publisher: Redis | null = null
+let publisherReadyTimeoutMs = 5_000
 let loggedMissingRedis = false
+
+export interface CacheInvalidationPublisherReadiness {
+	readonly status: string
+	once(event: string, listener: (...args: unknown[]) => void): unknown
+	removeListener(event: string, listener: (...args: unknown[]) => void): unknown
+}
+
+/** Wait for the eager ioredis connection before issuing commands with offline queuing disabled. */
+export async function waitForCacheInvalidationPublisherReady(
+	redis: CacheInvalidationPublisherReadiness,
+	timeoutMs: number,
+): Promise<void> {
+	if (redis.status === 'ready') return
+
+	await new Promise<void>((resolve, reject) => {
+		let settled = false
+		const finish = (error?: unknown) => {
+			if (settled) return
+			settled = true
+			clearTimeout(timer)
+			redis.removeListener('ready', onReady)
+			redis.removeListener('error', onError)
+			if (error === undefined) resolve()
+			else reject(error)
+		}
+		const onReady = () => finish()
+		const onError = (error: unknown) => finish(error)
+		const timer = setTimeout(() => finish(new Error(`Redis publisher was not ready within ${timeoutMs}ms`)), timeoutMs)
+		redis.once('ready', onReady)
+		redis.once('error', onError)
+	})
+}
 
 function getPublisher(): Redis | null {
 	if (!config.redisUrl) {
@@ -29,6 +62,7 @@ function getPublisher(): Redis | null {
 	if (!publisher) {
 		logger.info('[CacheInvalidation] Connecting to Redis for publishing')
 		const commandTimeout = Math.max(100, Math.min(5_000, Math.floor(config.leaderTtlMs / 4)))
+		publisherReadyTimeoutMs = commandTimeout
 		publisher = new Redis(config.redisUrl, {
 			maxRetriesPerRequest: 0,
 			enableReadyCheck: true,
@@ -59,25 +93,17 @@ export async function publishCacheInvalidation(
 	if (!redis) return
 
 	try {
-		const streamId = await redis.xadd(
+		await waitForCacheInvalidationPublisherReady(redis, publisherReadyTimeoutMs)
+		const streamId = await publishCacheInvalidationEvent(
+			redis,
+			{ did, rkey, action, token },
+			DEFAULT_CACHE_INVALIDATION_CHANNEL,
 			config.cacheInvalidationStream,
-			'MAXLEN',
-			'~',
-			config.cacheInvalidationStreamMaxLen.toString(),
-			'*',
-			'did',
-			did,
-			'rkey',
-			rkey,
-			'action',
-			action,
-			...(token ? (['token', token] as const) : []),
-			'ts',
-			Date.now().toString(),
+			config.cacheInvalidationStreamMaxLen,
 		)
-		const message = JSON.stringify({ did, rkey, action, token, streamId })
-		logger.debug(`[CacheInvalidation] Publishing ${action} for ${did}/${rkey} to ${CHANNEL} (stream ${streamId})`)
-		await redis.publish(CHANNEL, message)
+		logger.debug(
+			`[CacheInvalidation] Publishing ${action} for ${did}/${rkey} to ${DEFAULT_CACHE_INVALIDATION_CHANNEL} (stream ${streamId})`,
+		)
 	} catch (err) {
 		logger.error('[CacheInvalidation] Failed to publish', err)
 	}

@@ -33,6 +33,16 @@ let inFlight = 0
 let lastFailureLogAt = 0
 const activePublishes = new Set<Promise<unknown>>()
 
+type RedisClientFactory = (url: string) => RedisClient
+const defaultRedisClientFactory: RedisClientFactory = (url) => new RedisClient(url)
+let redisClientFactory: RedisClientFactory = defaultRedisClientFactory
+
+/** Test seam for exercising connection/readiness without a live Redis server. */
+export function setRedisClientFactoryForTests(factory?: RedisClientFactory): void {
+	if (publisher || reconnectTimer) throw new Error('Cannot replace an active Redis client')
+	redisClientFactory = factory ?? defaultRedisClientFactory
+}
+
 function incrementDropped(): void {
 	dropped = Math.min(Number.MAX_SAFE_INTEGER, dropped + 1)
 }
@@ -97,8 +107,9 @@ function scheduleReconnect(): void {
 
 async function createPublisher(): Promise<void> {
 	if (closing || !config.redisUrl || publisher) return
+	let client: RedisClient | undefined
 	try {
-		const client = new RedisClient(config.redisUrl)
+		client = redisClientFactory(config.redisUrl)
 		publisher = client
 		connected = false
 		client.onconnect = () => {
@@ -116,8 +127,16 @@ async function createPublisher(): Promise<void> {
 				scheduleReconnect()
 			}
 		}
+		// RedisClient is lazy: constructing it does not complete AUTH/PING. Await
+		// connect so health reflects command readiness rather than object creation.
+		await client.connect()
+		if (publisher === client && !closing) connected = true
 	} catch {
-		connected = false
+		if (publisher === client) {
+			publisher = null
+			connected = false
+		}
+		closeClient(client ?? null)
 		safeLog('[Redis] publisher connection failed')
 		scheduleReconnect()
 	}
@@ -230,5 +249,6 @@ export function resetRedisPublisherForTests(): void {
 	loggedMissingRedis = false
 	dropped = 0
 	lastFailureLogAt = 0
+	redisClientFactory = defaultRedisClientFactory
 	closeClient(client)
 }

@@ -161,6 +161,106 @@ describe('webhook startup backfill PDS transport and snapshot validation', () =>
 		expect(completed).toEqual([{ ownerDid: DID, generation: 1 }])
 	})
 
+	test('treats an explicit repo-absence response as an authoritative empty snapshot', async () => {
+		reset()
+		knownDids = [DID]
+		const result = await runStartupBackfill({
+			fetcher: async (url) => {
+				if (url === 'https://example.com/.well-known/did.json') return didDocument('https://pds.example')
+				return new Response(JSON.stringify({ error: 'RepoNotFound', message: 'Repo not found' }), { status: 400 })
+			},
+			onOwnerTransition: (did, status) => {
+				transitions.push({ did, status })
+			},
+		})
+
+		expect(result).toEqual({ found: 0, failed: 0 })
+		expect(appliedPages).toEqual([])
+		expect(completed).toEqual([{ ownerDid: DID, generation: 1 }])
+		expect(failed).toEqual([])
+		expect(transitions).toEqual([
+			{ did: DID, status: 'scanning' },
+			{ did: DID, status: 'complete' },
+		])
+	})
+
+	test('treats the PDS InvalidRequest repo-absence form as an authoritative empty snapshot', async () => {
+		reset()
+		knownDids = [DID]
+		const result = await runStartupBackfill({
+			fetcher: async (url) => {
+				if (url === 'https://example.com/.well-known/did.json') return didDocument('https://pds.example')
+				return new Response(JSON.stringify({ error: 'InvalidRequest', message: `Could not find repo: ${DID}` }), {
+					status: 400,
+				})
+			},
+		})
+
+		expect(result).toEqual({ found: 0, failed: 0 })
+		expect(completed).toEqual([{ ownerDid: DID, generation: 1 }])
+		expect(failed).toEqual([])
+	})
+
+	test('does not prune a partial snapshot when repo absence arrives after a page', async () => {
+		reset()
+		knownDids = [DID]
+		const result = await runStartupBackfill({
+			fetcher: async (url) => {
+				if (url === 'https://example.com/.well-known/did.json') return didDocument('https://pds.example')
+				if (!new URL(url).searchParams.has('cursor')) {
+					return new Response(
+						JSON.stringify({
+							records: [{ uri: recordUri(DID, 'one'), cid: 'a', value: validRecord }],
+							cursor: 'next',
+						}),
+					)
+				}
+				return new Response(JSON.stringify({ error: 'RepoNotFound', message: 'Repo not found' }), { status: 400 })
+			},
+		})
+
+		expect(result).toEqual({ found: 0, failed: 1 })
+		expect(appliedPages.map((page) => page.records.map((record) => record.rkey))).toEqual([['one']])
+		expect(completed).toEqual([])
+		expect(failed).toEqual([{ ownerDid: DID, generation: 1 }])
+	})
+
+	test('does not treat an empty cursor page followed by repo absence as complete', async () => {
+		reset()
+		knownDids = [DID]
+		const result = await runStartupBackfill({
+			fetcher: async (url) => {
+				if (url === 'https://example.com/.well-known/did.json') return didDocument('https://pds.example')
+				if (!new URL(url).searchParams.has('cursor')) {
+					return new Response(JSON.stringify({ records: [], cursor: 'next' }))
+				}
+				return new Response(JSON.stringify({ error: 'RepoNotFound', message: 'Repo not found' }), { status: 400 })
+			},
+		})
+
+		expect(result).toEqual({ found: 0, failed: 1 })
+		expect(appliedPages).toEqual([{ ownerDid: DID, records: [] }])
+		expect(completed).toEqual([])
+		expect(failed).toEqual([{ ownerDid: DID, generation: 1 }])
+	})
+
+	test('keeps unknown client errors and gateway failures retryable', async () => {
+		for (const response of [
+			new Response(JSON.stringify({ error: 'InvalidRequest', message: 'bad request' }), { status: 400 }),
+			new Response(JSON.stringify({ error: 'BadGateway' }), { status: 502 }),
+		]) {
+			reset()
+			knownDids = [DID]
+			const result = await runStartupBackfill({
+				fetcher: async (url) =>
+					url === 'https://example.com/.well-known/did.json' ? didDocument('https://pds.example') : response,
+			})
+			expect(result).toEqual({ found: 0, failed: 1 })
+			expect(failed).toEqual([{ ownerDid: DID, generation: 1 }])
+			expect(completed).toEqual([])
+		}
+	})
+
 	test('omits unsafe endpoint rows while completing the authoritative owner snapshot', async () => {
 		reset()
 		const unsafeUrls = [

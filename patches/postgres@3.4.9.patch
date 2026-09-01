@@ -1,0 +1,37 @@
+diff --git a/src/connection.js b/src/connection.js
+index 1b1cccde43b4570d5d071d6ffaab2669b3c2065a..c2c6a0d22e251a8278981dd0418e07cfdd84d315 100644
+--- a/src/connection.js
++++ b/src/connection.js
+@@ -154,8 +154,8 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+   }
+ 
+   function execute(q) {
+-    if (terminated)
+-      return queryError(q, Errors.connection('CONNECTION_DESTROYED', options))
++    if (terminated || !socket)
++      return queryError(q, Errors.connection('CONNECTION_DESTROYED', options, null))
+ 
+     if (stream)
+       return queryError(q, Errors.generic('COPY_IN_PROGRESS', 'You cannot execute queries during copy'))
+@@ -176,7 +176,7 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+         && sent.length < max_pipeline
+         && (!q.options.onexecute || q.options.onexecute(connection))
+     } catch (error) {
+-      sent.length === 0 && write(Sync)
++      sent.length === 0 && socket && write(Sync)
+       errored(error)
+       return true
+     }
+@@ -252,6 +252,12 @@ function Connection(options, queues = {}, { onopen = noop, onend = noop, onclose
+   }
+ 
+   function nextWrite(fn) {
++    if (!socket) {
++      nextWriteTimer !== null && clearImmediate(nextWriteTimer)
++      chunk = nextWriteTimer = null
++      errored(Errors.connection('CONNECTION_CLOSED', options, null))
++      return false
++    }
+     const x = socket.write(chunk, fn)
+     nextWriteTimer !== null && clearImmediate(nextWriteTimer)
+     chunk = nextWriteTimer = null

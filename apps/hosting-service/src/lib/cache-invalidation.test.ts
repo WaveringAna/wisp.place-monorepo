@@ -30,6 +30,7 @@ let notifyReplayRead: (() => void) | null = null
 class FakeRedis {
 	readonly xreadArguments: unknown[][] = []
 	readonly options: Record<string, unknown> | undefined
+	status = 'ready'
 	pingCount = 0
 	pingError: Error | null = null
 	disconnected = false
@@ -54,8 +55,23 @@ class FakeRedis {
 		}
 	}
 
-	subscribe(_channel: string, callback: (error: Error | null) => void): void {
-		callback(null)
+	deferredSubscribeAck = false
+	subscribeError: Error | null = null
+	subscribeCalls: string[] = []
+	private subscribeCallback: ((error: Error | null) => void) | null = null
+
+	subscribe(channel: string, callback: (error: Error | null) => void): void {
+		this.subscribeCalls.push(channel)
+		if (this.deferredSubscribeAck) {
+			this.subscribeCallback = callback
+			return
+		}
+		callback(this.subscribeError)
+	}
+
+	ackSubscribe(): void {
+		this.subscribeCallback?.(this.subscribeError)
+		this.subscribeCallback = null
 	}
 
 	async ping(): Promise<string> {
@@ -874,29 +890,143 @@ describe('cache invalidation subscriber heartbeat', () => {
 		await stopCacheInvalidationSubscriber()
 	})
 
-	test('ping failures are contained and the heartbeat keeps pinging', async () => {
+	test('a failed keepalive ping recreates the wedged subscriber and fences stale clients', async () => {
 		const scheduler = new FakeHeartbeatScheduler()
 		const subscriberClient = await startHeartbeatSubscriber(scheduler)
-		subscriberClient.pingError = new Error('subscriber keepalive failed')
 		subscriberClient.emit('ready')
-
 		scheduler.fireActiveTicks()
 		expect(subscriberClient.pingCount).toBe(1)
+
+		subscriberClient.pingError = new Error('subscriber keepalive failed')
+		scheduler.fireActiveTicks()
 		await flushAsyncWork()
+
 		expect(getCacheInvalidationHealthSnapshot().lastErrorAt).not.toBeNull()
+		expect(getCacheInvalidationHealthSnapshot().subscriberRecreations).toBe(1)
+		expect(subscriberClient.disconnected).toBe(true)
+		expect(getCacheInvalidationHealthSnapshot().subscriberConnected).toBe(false)
+
+		// The replacement client restores health on ready + SUBSCRIBE ack, and
+		// the heartbeat continues against the new client.
+		const replacement = redisClients[2]
+		if (!replacement) throw new Error('replacement subscriber was not created')
+		replacement.emit('ready')
+		scheduler.fireActiveTicks()
 		expect(getCacheInvalidationHealthSnapshot().subscriberConnected).toBe(true)
+		expect(replacement.pingCount).toBe(1)
 
-		// The interval survives the failure and keeps pinging.
-		scheduler.fireActiveTicks()
-		expect(subscriberClient.pingCount).toBe(2)
-		await flushAsyncWork()
-
-		subscriberClient.pingError = null
-		scheduler.fireActiveTicks()
-		expect(subscriberClient.pingCount).toBe(3)
+		// A stale client's late events are generation-fenced: a close from the
+		// old client cannot flip the new client's health.
+		subscriberClient.emit('close')
 		expect(getCacheInvalidationHealthSnapshot().subscriberConnected).toBe(true)
 
 		await stopCacheInvalidationSubscriber()
+	})
+
+	test('autoResubscribe is disabled so each ready issues its own acked SUBSCRIBE', async () => {
+		const scheduler = new FakeHeartbeatScheduler()
+		const subscriberClient = await startHeartbeatSubscriber(scheduler)
+		expect(subscriberClient.options?.autoResubscribe).toBe(false)
+
+		subscriberClient.emit('ready')
+		subscriberClient.emit('ready')
+		expect(subscriberClient.subscribeCalls).toEqual(['wisp:cache-invalidate', 'wisp:cache-invalidate'])
+		expect(getCacheInvalidationHealthSnapshot().subscriberConnected).toBe(true)
+
+		await stopCacheInvalidationSubscriber()
+	})
+
+	test('ready alone is not connected until the SUBSCRIBE ack arrives', async () => {
+		const scheduler = new FakeHeartbeatScheduler()
+		const subscriberClient = await startHeartbeatSubscriber(scheduler)
+		subscriberClient.deferredSubscribeAck = true
+		subscriberClient.emit('ready')
+
+		expect(getCacheInvalidationHealthSnapshot().subscriberConnected).toBe(false)
+
+		subscriberClient.ackSubscribe()
+		expect(getCacheInvalidationHealthSnapshot().subscriberConnected).toBe(true)
+
+		await stopCacheInvalidationSubscriber()
+	})
+
+	test('a failed SUBSCRIBE ack leaves the subscriber unconnected and records an error', async () => {
+		const scheduler = new FakeHeartbeatScheduler()
+		const subscriberClient = await startHeartbeatSubscriber(scheduler)
+		subscriberClient.subscribeError = new Error('NOPERM denied')
+		subscriberClient.emit('ready')
+
+		expect(getCacheInvalidationHealthSnapshot().subscriberConnected).toBe(false)
+		expect(getCacheInvalidationHealthSnapshot().lastErrorAt).not.toBeNull()
+
+		await stopCacheInvalidationSubscriber()
+	})
+
+	test('supervisor recreates a subscriber that stays ready without a SUBSCRIBE ack', async () => {
+		const scheduler = new FakeHeartbeatScheduler()
+		const supervisorScheduler = new FakeHeartbeatScheduler()
+		process.env.REDIS_URL = 'redis://cache-invalidation-test'
+		startCacheInvalidationSubscriberForTests(
+			(redisUrl, options) => new FakeRedis(redisUrl, options) as unknown as Redis,
+			undefined,
+			{ scheduleInterval: scheduler.schedule },
+			{ scheduleInterval: supervisorScheduler.schedule, recreateAfterMs: 1 },
+		)
+		await flushAsyncWork()
+		const subscriberClient = redisClients[0]
+		if (!subscriberClient) throw new Error('subscriber client was not created')
+		subscriberClient.deferredSubscribeAck = true
+		subscriberClient.emit('ready')
+
+		// recreateAfterMs=1: the first supervisor tick records the unhealthy
+		// start; a tick after the bound recreates the client.
+		supervisorScheduler.fireActiveTicks()
+		await new Promise((resolve) => setTimeout(resolve, 2))
+		supervisorScheduler.fireActiveTicks()
+		await flushAsyncWork()
+		expect(getCacheInvalidationHealthSnapshot().subscriberRecreations).toBe(1)
+		expect(subscriberClient.disconnected).toBe(true)
+
+		const replacement = redisClients[2]
+		if (!replacement) throw new Error('replacement subscriber was not created')
+		replacement.emit('ready')
+		expect(getCacheInvalidationHealthSnapshot().subscriberConnected).toBe(true)
+
+		await stopCacheInvalidationSubscriber()
+	})
+
+	test('start-once: a repeated full start is ignored and creates no duplicate clients', async () => {
+		const scheduler = new FakeHeartbeatScheduler()
+		const subscriberClient = await startHeartbeatSubscriber(scheduler)
+		startCacheInvalidationSubscriberForTests(
+			(redisUrl, options) => new FakeRedis(redisUrl, options) as unknown as Redis,
+			undefined,
+			{ scheduleInterval: scheduler.schedule },
+		)
+		await flushAsyncWork()
+		expect(redisClients).toHaveLength(2)
+
+		subscriberClient.emit('ready')
+		expect(getCacheInvalidationHealthSnapshot().subscriberConnected).toBe(true)
+		await stopCacheInvalidationSubscriber()
+	})
+
+	test('stop-once: concurrent stops share one idempotent teardown', async () => {
+		const scheduler = new FakeHeartbeatScheduler()
+		const subscriberClient = await startHeartbeatSubscriber(scheduler)
+		subscriberClient.emit('ready')
+
+		const [first, second] = [stopCacheInvalidationSubscriber(), stopCacheInvalidationSubscriber()]
+		await Promise.all([first, second])
+		await stopCacheInvalidationSubscriber()
+
+		expect(subscriberClient.disconnected).toBe(true)
+		expect(redisClients[1]?.disconnected).toBe(true)
+		expect(getCacheInvalidationHealthSnapshot()).toMatchObject({
+			subscriberConnected: false,
+			replayConnected: false,
+			replayState: 'stopped',
+		})
 	})
 
 	test('stopping the subscriber cancels the heartbeat so no further pings fire', async () => {

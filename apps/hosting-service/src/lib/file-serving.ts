@@ -1078,6 +1078,7 @@ interface FileRequestOptions extends FileResolverOptions {
 
 interface RedirectRequestOptions extends CachedRequestOptions {
 	indexFiles: string[]
+	redirectsPresent: boolean
 	trace: RequestTrace | null
 	resolveFile(filePath: string): Promise<Response>
 }
@@ -1391,6 +1392,7 @@ async function serveRedirectTarget(
 
 async function serveRedirectResponse(options: RedirectRequestOptions): Promise<Response | null> {
 	const { did, rkey, filePath, fullUrl, indexFiles, requestHeaders, resolveFile, strategy, trace } = options
+	if (!options.redirectsPresent) return null
 	const redirectRules = await cache.getOrFetch('redirectRules', `${did}:${rkey}`, () =>
 		span(trace, 'storage:redirectRules', () => loadRedirectRules(did, rkey)),
 	)
@@ -1433,80 +1435,35 @@ async function serveFileRequest(options: FileRequestOptions): Promise<Response> 
 	}
 }
 
-type FileResolutionStage = () => Promise<Response | null>
-type FileResolutionOutcome = { kind: 'response'; response: Response } | { kind: 'not-found' }
-
-async function runFileResolutionStages(stages: Iterable<FileResolutionStage>): Promise<FileResolutionOutcome> {
-	for (const stage of stages) {
-		const response = await stage()
-		if (response) return { kind: 'response', response }
-	}
-	return { kind: 'not-found' }
-}
-
-async function serveDirectoryRequestStage(
-	options: FileRequestOptions,
-	resolver: FileResolver,
-	requestPath: string,
-	isDirectoryPathRequest: boolean,
-	indexFiles: string[],
-): Promise<Response | null> {
-	const indexResponse = await serveExpectedCandidates(
-		options,
-		resolver,
-		directoryRequestCandidates(requestPath, isDirectoryPathRequest, indexFiles),
-	)
-	return indexResponse ?? (await serveDirectoryListing(options, resolver, requestPath))
-}
-
-async function serveFileAndIndexStage(
-	options: FileRequestOptions,
-	resolver: FileResolver,
-	fileRequestPath: string,
-	indexFiles: string[],
-): Promise<Response | null> {
-	return await serveExpectedCandidates(options, resolver, fileAndIndexCandidates(fileRequestPath, indexFiles))
-}
-
-async function serveCleanUrlStage(
-	options: FileRequestOptions,
-	resolver: FileResolver,
-	fileRequestPath: string,
-	indexFiles: string[],
-): Promise<Response | null> {
-	return await serveExpectedCandidates(options, resolver, cleanUrlCandidates(fileRequestPath, indexFiles))
-}
-
-async function serveFallbackResolutionStage(
-	options: FileRequestOptions,
-	resolver: FileResolver,
-): Promise<Response | null> {
-	const configuredFallback = await serveConfiguredFallbacks(options, resolver)
-	if (configuredFallback) return configuredFallback
-
-	const conventional404 = await serveFirstFallbackFile(options, resolver, ['404.html', 'not_found.html'], 404)
-	return conventional404 ?? (await serveDirectoryListing(options, resolver, '', 404))
-}
-
 async function resolveFileRequest(options: FileRequestOptions): Promise<Response> {
 	const resolver = createFileResolver(options)
 	const indexFiles = getIndexFiles(options.settings)
 	const { isDirectoryPathRequest, requestPath } = normalizeRequestPath(options.filePath)
 	const fileRequestPath = requestPath || indexFiles[0] || 'index.html'
-	const stages: FileResolutionStage[] = []
+	let response: Response | null = null
 
 	if (!requestPath || !hasFileExtension(requestPath)) {
-		stages.push(() => serveDirectoryRequestStage(options, resolver, requestPath, isDirectoryPathRequest, indexFiles))
+		response =
+			(await serveExpectedCandidates(
+				options,
+				resolver,
+				directoryRequestCandidates(requestPath, isDirectoryPathRequest, indexFiles),
+			)) ?? (await serveDirectoryListing(options, resolver, requestPath))
 	}
-	stages.push(() => serveFileAndIndexStage(options, resolver, fileRequestPath, indexFiles))
-	if (options.settings?.cleanUrls && !hasFileExtension(fileRequestPath)) {
-		stages.push(() => serveCleanUrlStage(options, resolver, fileRequestPath, indexFiles))
-	}
-	stages.push(() => serveFallbackResolutionStage(options, resolver))
 
-	const outcome = await runFileResolutionStages(stages)
-	if (outcome.kind === 'response') return outcome.response
-	return (await resolver.expectedMissResponse()) ?? buildStyled404Response()
+	response ??= await serveExpectedCandidates(options, resolver, fileAndIndexCandidates(fileRequestPath, indexFiles))
+	if (options.settings?.cleanUrls && !hasFileExtension(fileRequestPath)) {
+		response ??= await serveExpectedCandidates(options, resolver, cleanUrlCandidates(fileRequestPath, indexFiles))
+	}
+
+	if (!response) {
+		response =
+			(await serveConfiguredFallbacks(options, resolver)) ??
+			(await serveFirstFallbackFile(options, resolver, ['404.html', 'not_found.html'], 404)) ??
+			(await serveDirectoryListing(options, resolver, '', 404))
+	}
+
+	return response ?? (await resolver.expectedMissResponse()) ?? buildStyled404Response()
 }
 
 async function resolveCachedRequest(options: CachedRequestOptions, trace: RequestTrace | null): Promise<Response> {
@@ -1517,8 +1474,6 @@ async function resolveCachedRequest(options: CachedRequestOptions, trace: Reques
 		await enqueueRevalidate(did, rkey, 'storage-miss:manifest')
 		return buildStorageMissResponse(requestHeaders)
 	}
-	triggerSiteHtmlHotCacheWarmup(did, rkey)
-
 	const settings = await span(trace, 'db:settings', () => getCachedSettings(did, rkey))
 	const indexFiles = getIndexFiles(settings)
 	const resolveFile = (path: string) =>
@@ -1533,8 +1488,18 @@ async function resolveCachedRequest(options: CachedRequestOptions, trace: Reques
 			expectedFileCids: siteFileCids,
 		})
 
-	const redirectResponse = await serveRedirectResponse({ ...options, indexFiles, resolveFile, trace })
-	return redirectResponse ?? (await resolveFile(filePath))
+	const redirectResponse = await serveRedirectResponse({
+		...options,
+		indexFiles,
+		redirectsPresent: siteFileCids._redirects !== undefined,
+		resolveFile,
+		trace,
+	})
+	const response = redirectResponse ?? (await resolveFile(filePath))
+	// Start the manifest-backed warmup only after the requested response has
+	// resolved, so unrelated HTML reads cannot delay this request.
+	triggerSiteHtmlHotCacheWarmup(did, rkey, Object.keys(siteFileCids))
+	return response
 }
 
 async function serveCachedRequest(options: CachedRequestOptions): Promise<Response> {

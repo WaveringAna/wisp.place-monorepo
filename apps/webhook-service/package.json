@@ -14,8 +14,10 @@
     "@atproto/syntax": "^0.5.0",
     "@wispplace/atproto-utils": "workspace:*",
     "@wispplace/bun-firehose": "workspace:*",
+    "@wispplace/graceful-shutdown": "workspace:*",
     "@wispplace/lexicons": "workspace:*",
     "@wispplace/observability": "workspace:*",
+    "@wispplace/safe-fetch": "workspace:*",
     "lru-cache": "^11.2.6"
   },
   "devDependencies": {

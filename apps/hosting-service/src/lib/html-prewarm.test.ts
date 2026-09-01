@@ -1,9 +1,8 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test'
 
-const cachedKeys = new Set<string>()
 const promotedKeys: string[] = []
-/** Keys whose read throws, standing in for a concurrent invalidation removing one mid-scan. */
 const failingKeys = new Set<string>()
+let listKeysCalls = 0
 
 const fakeStorage = {
 	async getWithMetadata(key: string) {
@@ -24,18 +23,20 @@ const fakeStorage = {
 			source: 'cold' as const,
 		}
 	},
-	async *listKeys(prefix?: string): AsyncIterableIterator<string> {
-		for (const key of cachedKeys) {
-			if (!prefix || key.startsWith(prefix)) {
-				yield key
-			}
-		}
+	listKeys(): AsyncIterableIterator<string> {
+		listKeysCalls++
+		return {
+			next: async () => {
+				throw new Error('manifest-backed prewarm must not list storage')
+			},
+			[Symbol.asyncIterator]() {
+				return this
+			},
+		} as AsyncIterableIterator<string>
 	},
 }
 
-mock.module('./storage', () => ({
-	storage: fakeStorage,
-}))
+mock.module('./storage', () => ({ storage: fakeStorage }))
 
 const {
 	resetHtmlHotCacheWarmupForTests,
@@ -46,91 +47,72 @@ const {
 
 const DID = 'did:plc:test'
 const RKEY = 'site'
+const key = (path: string) => `${DID}/${RKEY}/${path}`
+
+function warmup(paths: readonly string[]): Promise<void> {
+	triggerSiteHtmlHotCacheWarmup(DID, RKEY, paths)
+	return waitForSiteHtmlHotCacheWarmupForTests(DID, RKEY)
+}
 
 describe('HTML prewarm', () => {
 	beforeEach(() => {
-		cachedKeys.clear()
 		promotedKeys.length = 0
 		failingKeys.clear()
+		listKeysCalls = 0
 		resetHtmlHotCacheWarmupForTests()
 	})
 
-	// A concurrent deletePrefix() can rename a site's directory away mid-scan, so a read
-	// that already passed listKeys can still fail. That must not cost the rest of the site.
-	test('one failing key does not abort the rest of the site', async () => {
-		cachedKeys.add(`${DID}/${RKEY}/index.html`)
-		cachedKeys.add(`${DID}/${RKEY}/a.html`)
-		cachedKeys.add(`${DID}/${RKEY}/b.html`)
-		failingKeys.add(`${DID}/${RKEY}/a.html`)
+	test('warms only HTML paths from the authoritative manifest without listing storage', async () => {
+		await warmup([
+			'index.html',
+			'nested/about.htm',
+			'docs/guide.HTML',
+			'style.css',
+			'_redirects',
+			'.rewritten/index.html',
+			'.metadata.json',
+		])
 
-		triggerSiteHtmlHotCacheWarmup(DID, RKEY)
-		await waitForSiteHtmlHotCacheWarmupForTests(DID, RKEY)
-
-		expect(promotedKeys.sort()).toEqual(
-			[`${DID}/${RKEY}/a.html`, `${DID}/${RKEY}/b.html`, `${DID}/${RKEY}/index.html`].sort(),
-		)
+		expect(promotedKeys.sort()).toEqual([key('docs/guide.HTML'), key('index.html'), key('nested/about.htm')].sort())
+		expect(listKeysCalls).toBe(0)
 	})
 
-	// The regression that mattered most: a thrown key skipped warmedSites.add(), so every
-	// later request re-ran the full listing forever.
-	test('a partially failed scan still marks the site warm', async () => {
-		cachedKeys.add(`${DID}/${RKEY}/index.html`)
-		cachedKeys.add(`${DID}/${RKEY}/a.html`)
-		failingKeys.add(`${DID}/${RKEY}/a.html`)
+	test('normalizes leading slashes before excluding rewritten and metadata paths', async () => {
+		await warmup(['/.rewritten/foo.html', '/.metadata.json', '/nested/page.html'])
 
-		triggerSiteHtmlHotCacheWarmup(DID, RKEY)
-		await waitForSiteHtmlHotCacheWarmupForTests(DID, RKEY)
-		expect(promotedKeys).toHaveLength(2)
-
-		// Second request must not rescan.
-		triggerSiteHtmlHotCacheWarmup(DID, RKEY)
-		await waitForSiteHtmlHotCacheWarmupForTests(DID, RKEY)
-		expect(promotedKeys).toHaveLength(2)
+		expect(promotedKeys).toEqual([key('nested/page.html')])
 	})
 
-	test('loads all HTML keys for a site on first hit', async () => {
-		cachedKeys.add(`${DID}/${RKEY}/index.html`)
-		cachedKeys.add(`${DID}/${RKEY}/nested/about.htm`)
-		cachedKeys.add(`${DID}/${RKEY}/docs/guide.HTML`)
-		cachedKeys.add(`${DID}/${RKEY}/style.css`)
-		cachedKeys.add(`${DID}/other-site/index.html`)
+	test('one failing key does not abort the rest of the manifest', async () => {
+		failingKeys.add(key('a.html'))
+		await warmup(['index.html', 'a.html', 'b.html'])
 
-		triggerSiteHtmlHotCacheWarmup(DID, RKEY)
-		await waitForSiteHtmlHotCacheWarmupForTests(DID, RKEY)
+		expect(promotedKeys.sort()).toEqual([key('a.html'), key('b.html'), key('index.html')].sort())
+	})
 
-		expect(promotedKeys.sort()).toEqual(
-			[`${DID}/${RKEY}/docs/guide.HTML`, `${DID}/${RKEY}/index.html`, `${DID}/${RKEY}/nested/about.htm`].sort(),
-		)
+	test('a partially failed warmup still marks the site warm', async () => {
+		failingKeys.add(key('a.html'))
+		await warmup(['index.html', 'a.html'])
+		expect(promotedKeys).toHaveLength(2)
 
-		triggerSiteHtmlHotCacheWarmup(DID, RKEY)
-		await waitForSiteHtmlHotCacheWarmupForTests(DID, RKEY)
-
-		expect(promotedKeys).toHaveLength(3)
+		await warmup(['index.html', 'a.html'])
+		expect(promotedKeys).toHaveLength(2)
 	})
 
 	test('reset allows a site to be prewarmed again', async () => {
-		cachedKeys.add(`${DID}/${RKEY}/index.html`)
-
-		triggerSiteHtmlHotCacheWarmup(DID, RKEY)
-		await waitForSiteHtmlHotCacheWarmupForTests(DID, RKEY)
+		await warmup(['index.html'])
 		expect(promotedKeys).toHaveLength(1)
 
 		resetSiteHtmlHotCacheWarmup(DID, RKEY)
-
-		triggerSiteHtmlHotCacheWarmup(DID, RKEY)
-		await waitForSiteHtmlHotCacheWarmupForTests(DID, RKEY)
+		await warmup(['index.html'])
 		expect(promotedKeys).toHaveLength(2)
 	})
 
-	test('site with no cached keys is marked warm after a successful empty scan', async () => {
+	test('legacy callers without a manifest do not trigger a storage scan', async () => {
 		triggerSiteHtmlHotCacheWarmup(DID, RKEY)
 		await waitForSiteHtmlHotCacheWarmupForTests(DID, RKEY)
-		expect(promotedKeys).toHaveLength(0)
 
-		cachedKeys.add(`${DID}/${RKEY}/index.html`)
-
-		triggerSiteHtmlHotCacheWarmup(DID, RKEY)
-		await waitForSiteHtmlHotCacheWarmupForTests(DID, RKEY)
 		expect(promotedKeys).toHaveLength(0)
+		expect(listKeysCalls).toBe(0)
 	})
 })
