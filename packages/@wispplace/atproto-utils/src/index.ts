@@ -33,6 +33,9 @@ export {
 	unsafeRawIdentityGet,
 	validatePdsEndpoint,
 } from './identity'
+// DNS-pinned keep-alive connection pooling
+export type { PinnedAgentAddress, PinnedAgentFamily } from './pinned-agent'
+export { closePinnedKeepAliveAgents, pinnedKeepAliveAgent } from './pinned-agent'
 export type {
 	ExpandedSubfs,
 	ExpandSubfsOptions,

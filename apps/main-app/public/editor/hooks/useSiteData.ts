@@ -51,27 +51,13 @@ export function useSiteData() {
 				fetch('/api/user/private-sites').catch(() => null),
 			])
 			const data = await response.json()
-			const sitesData: Site[] = data.sites || []
-
-			// Fetch domain info for each site
-			const sitesWithDomains = await Promise.all(
-				sitesData.map(async (site) => {
-					try {
-						const domainsResponse = await fetch(`/api/user/site/${site.rkey}/domains`)
-						const domainsData = await domainsResponse.json()
-						return {
-							...site,
-							domains: domainsData.domains || [],
-						}
-					} catch (err) {
-						console.error(`Failed to fetch domains for site ${site.rkey}:`, err)
-						return {
-							...site,
-							domains: [],
-						}
-					}
-				}),
-			)
+			// /api/user/sites already returns each site's domains. It used to be one
+			// extra request per site, and every one of those had to re-establish the
+			// caller's session before it could answer.
+			const sitesWithDomains: SiteWithDomains[] = (data.sites || []).map((site: SiteWithDomains) => ({
+				...site,
+				domains: site.domains || [],
+			}))
 
 			let privateSites: SiteWithDomains[] = []
 			if (privateResponse?.ok) {

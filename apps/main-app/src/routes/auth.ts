@@ -9,7 +9,7 @@ import {
 	missingGrantedCapabilities,
 	unmarkLegacyScopeState,
 } from '../lib/oauth-authorize'
-import { authenticateRequest, SESSION_COOKIE_NAME } from '../lib/wisp-auth'
+import { authenticateRequest, invalidateSessionCache, SESSION_COOKIE_NAME } from '../lib/wisp-auth'
 import { resolvePrivateShareState } from './private-redeem'
 
 const logger = createLogger('main-app')
@@ -94,6 +94,9 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 					return c.redirect('/?error=auth_failed')
 				}
 
+				// A new grant supersedes whatever this node last restored for the DID.
+				invalidateSessionCache(session.did)
+
 				const cookieSession = c.cookie
 				cookieSession[SESSION_COOKIE_NAME].set({
 					value: session.did,
@@ -157,6 +160,9 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 
 				// If we have a DID, try to revoke the OAuth session
 				if (did && typeof did === 'string') {
+					// Drop the cached session first: a concurrent request must not be
+					// handed a session this logout is about to revoke.
+					invalidateSessionCache(did)
 					try {
 						await client.revoke(did)
 						logger.debug('[Auth] Revoked OAuth session for', did as any)

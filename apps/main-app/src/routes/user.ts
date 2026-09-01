@@ -89,11 +89,12 @@ export const userRoutes = (
 		})
 		/**
 		 * GET /api/user/sites
-		 * Success: { sites }
+		 * Success: { sites } — each site carries its own `domains` array, so the
+		 * list view needs one request rather than one per site.
 		 */
 		.get('/sites', async ({ auth }) => {
 			try {
-				const sites = await eventualRead.getSitesForDid(auth.did)
+				const sites = await eventualRead.getSitesWithDomainsForDid(auth.did)
 				return { sites }
 			} catch {
 				logger.error('[User] Sites error')

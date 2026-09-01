@@ -61,8 +61,10 @@ On failure: `{ "error": "Authentication failed", "details": "..." }`
 ```
 
 ### `GET /api/user/sites`
+Each site carries its own `domains`, so listing sites and their domains is a
+single request.
 ```json
-{ "sites": [ /* site rows */ ] }
+{ "sites": [ { "did": "did:plc:...", "rkey": "site-rkey", "display_name": "site-rkey", "created_at": 0, "updated_at": 0, "domains": [ /* domain rows */ ] } ] }
 ```
 
 ### `GET /api/user/domains`
@@ -79,6 +81,8 @@ On failure: `{ "error": "Authentication failed", "details": "..." }`
 ```
 
 ### `GET /api/user/site/:rkey/domains`
+Domains for one site. `GET /api/user/sites` already includes these, so prefer it
+when listing.
 ```json
 { "rkey": "site-rkey", "domains": [ /* domain rows */ ] }
 ```

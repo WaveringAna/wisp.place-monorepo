@@ -3,6 +3,7 @@ process.getBuiltinModule = require
 
 import { cors } from '@elysiajs/cors'
 import { staticPlugin } from '@elysiajs/static'
+import { closePinnedKeepAliveAgents } from '@wispplace/atproto-utils'
 import { BASE_HOST, MAX_PUBLIC_UPLOAD_REQUEST_SIZE } from '@wispplace/constants'
 import { createLogger, initializeGrafanaExporters, logCollector, redactSecretPath } from '@wispplace/observability'
 import { observabilityMiddleware } from '@wispplace/observability/middleware/elysia'
@@ -573,6 +574,10 @@ const shutdown = (): void => {
 
 		const clientTasks = [
 			{ name: 'Redis', promise: Promise.resolve().then(() => closeRedisClient()) },
+			{
+				name: 'pinned HTTP connection pool',
+				promise: Promise.resolve().then(() => closePinnedKeepAliveAgents()),
+			},
 			{ name: 'OAuth lock database', promise: closeOAuthLockDatabase() },
 			{ name: 'site upload lock database', promise: closeSiteUploadLockDatabase() },
 			{ name: 'database', promise: closeDatabase() },

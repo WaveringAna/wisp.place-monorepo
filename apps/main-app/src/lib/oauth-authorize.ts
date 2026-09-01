@@ -1,7 +1,7 @@
 import type { NodeOAuthClient, OAuthSession } from '@atproto/oauth-client-node'
 import { describeCapability, missingCapabilities, wispAppRequiredCapabilities } from '@wispplace/constants'
 import { createLogger } from '@wispplace/observability'
-import { OAUTH_LEGACY_SCOPE, OAUTH_SCOPE } from './oauth-client'
+import { OAUTH_LEGACY_SCOPE, OAUTH_SCOPE, recentGrantedScope } from './oauth-client'
 
 const logger = createLogger('main-app')
 
@@ -95,8 +95,12 @@ export const authorizeWispLegacy = async (
  */
 export const missingGrantedCapabilities = async (session: OAuthSession): Promise<string[]> => {
 	try {
-		const tokenInfo = await session.getTokenInfo(false)
-		return missingCapabilities(tokenInfo.scope, wispAppRequiredCapabilities()).map(describeCapability)
+		// This process stored the session moments ago, so the scope is usually
+		// already known. Asking the session for it instead would take the
+		// cluster-wide advisory lock and read the primary to recover a value that
+		// never changes for the life of the grant.
+		const scope = recentGrantedScope(session.did) ?? (await session.getTokenInfo(false)).scope
+		return missingCapabilities(scope, wispAppRequiredCapabilities()).map(describeCapability)
 	} catch (err) {
 		// Never block a login on an introspection failure.
 		logger.warn('[Auth] Could not read granted scope', { err: err instanceof Error ? err.message : String(err) })

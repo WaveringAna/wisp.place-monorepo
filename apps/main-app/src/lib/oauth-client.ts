@@ -7,6 +7,7 @@ import { createClientMetadata } from './oauth-client-metadata'
 import { createOAuthFetch } from './oauth-fetch'
 import { withReservedOAuthLock } from './oauth-lock'
 import { SlingshotHandleResolver } from './slingshot-handle-resolver'
+import { createTtlMemoryStore } from './ttl-memory-store'
 
 export { createClientMetadata, OAUTH_LEGACY_SCOPE, OAUTH_SCOPE } from './oauth-client-metadata'
 
@@ -126,9 +127,26 @@ const stateStore = {
 	},
 }
 
+/**
+ * The scope granted by the most recently stored session, per subject.
+ *
+ * The OAuth callback has to know what the authorization server actually granted
+ * so it can detect a server that accepted the `include:place.wisp.*` permission
+ * sets and then dropped them. Asking the session for it costs a full advisory
+ * lock cycle and a read on the primary, microseconds after this process wrote
+ * the very value being read. Only the scope string is remembered — never a
+ * token — so nothing here can serve a stale credential to a refresh.
+ */
+const grantedScopes = createTtlMemoryStore<string, string>({ ttlMs: 60_000, max: 500 })
+
+/** The granted scope recorded when this process last stored a session. */
+export const recentGrantedScope = (sub: string): string | undefined => grantedScopes.get(sub)
+
 const sessionStore = {
 	async set(sub: string, data: any) {
 		console.debug('[sessionStore] set', sub)
+		const scope = data?.tokenSet?.scope
+		if (typeof scope === 'string') grantedScopes.set(sub, scope)
 		const expiresAt = Math.floor(Date.now() / 1000) + SESSION_TIMEOUT
 		await db`
             INSERT INTO oauth_sessions (sub, data, updated_at, expires_at)
@@ -160,6 +178,7 @@ const sessionStore = {
 	},
 	async del(sub: string) {
 		console.debug('[sessionStore] del', sub)
+		grantedScopes.del(sub)
 		await db`DELETE FROM oauth_sessions WHERE sub = ${sub}`
 	},
 }
@@ -282,6 +301,17 @@ export const rotateKeysIfNeeded = async (): Promise<boolean> => {
 	}
 }
 
+// A cache miss on any of these costs a request to a PDS that may be a hemisphere
+// away, and none of the cached values change on a scale of minutes. The library
+// defaults to 60s, which guarantees a cold fetch on every login because the
+// consent screen alone takes longer than that.
+const METADATA_CACHE_TTL_MS = 15 * 60_000
+const METADATA_CACHE_MAX = 500
+// Nonces are single-origin and rotate on the server's schedule. A stale one
+// costs one extra round trip and self-heals, so it may be held as long as the
+// metadata; too short a TTL guarantees the challenge on every login instead.
+const DPOP_NONCE_CACHE_TTL_MS = 10 * 60_000
+
 export const getOAuthClient = async (config: {
 	domain: `http://${string}` | `https://${string}`
 	clientName: string
@@ -296,5 +326,14 @@ export const getOAuthClient = async (config: {
 		sessionStore,
 		requestLock: requestPgLock,
 		handleResolver: new SlingshotHandleResolver(),
+		authorizationServerMetadataCache: createTtlMemoryStore({
+			ttlMs: METADATA_CACHE_TTL_MS,
+			max: METADATA_CACHE_MAX,
+		}),
+		protectedResourceMetadataCache: createTtlMemoryStore({
+			ttlMs: METADATA_CACHE_TTL_MS,
+			max: METADATA_CACHE_MAX,
+		}),
+		dpopNonceCache: createTtlMemoryStore({ ttlMs: DPOP_NONCE_CACHE_TTL_MS, max: METADATA_CACHE_MAX }),
 	})
 }

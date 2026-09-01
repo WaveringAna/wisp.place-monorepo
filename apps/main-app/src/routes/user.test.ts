@@ -16,7 +16,16 @@ mock.module('../lib/db', () => ({
 	eventualRead: {
 		getDomainsForDid: async () => ({ customDomains: [], wispDomains: [] }),
 		getDomainsForSite: async () => [],
-		getSitesForDid: async () => [],
+		getSitesWithDomainsForDid: async () => [
+			{
+				created_at: 1,
+				did: DID,
+				display_name: 'site-a',
+				domains: [{ domain: 'site-a.wisp.place', type: 'wisp' }],
+				rkey: 'site-a',
+				updated_at: 1,
+			},
+		],
 		getSupporterStatus: async () => true,
 		getUserStatus: async () => ({ domain: null, sites: [] }),
 	},
@@ -45,6 +54,25 @@ describe('user identity lookup transport', () => {
 		expect(response.status).toBe(200)
 		expect(await responseJson(response)).toEqual({ did: DID, handle: 'alice.example', isSupporter: true })
 		expect(requests).toEqual(['https://example.com/.well-known/did.json'])
+	})
+
+	test('serves each site with its domains so the list view needs one request', async () => {
+		const app = userRoutes({} as never, 'test-cookie-secret', async () => new Response('{}'))
+
+		const response = await app.handle(new Request('http://localhost/api/user/sites'))
+		expect(response.status).toBe(200)
+		expect(await responseJson(response)).toEqual({
+			sites: [
+				{
+					created_at: 1,
+					did: DID,
+					display_name: 'site-a',
+					domains: [{ domain: 'site-a.wisp.place', type: 'wisp' }],
+					rkey: 'site-a',
+					updated_at: 1,
+				},
+			],
+		})
 	})
 
 	test('returns an unknown handle without logging a raw identity error', async () => {

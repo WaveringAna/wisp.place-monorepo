@@ -9,6 +9,7 @@ import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import { isIP } from 'node:net'
 import { Readable } from 'node:stream'
+import { pinnedKeepAliveAgent } from './pinned-agent'
 
 const HANDLE_RESOLVER = 'https://slingshot.microcosm.blue/xrpc/com.atproto.identity.resolveHandle'
 const PLC_DIRECTORY = 'https://plc.directory'
@@ -322,7 +323,9 @@ const pinnedTransport: PinnedIdentityTransport = async ({ url, address, signal, 
 				path: `${url.pathname}${url.search}`,
 				method: 'GET',
 				headers: { Accept: 'application/json' },
-				agent: false,
+				// Pooled per validated address, so a reused socket is always already
+				// connected to an answer that passed validation. See pinned-agent.ts.
+				agent: pinnedKeepAliveAgent(url, address),
 				servername:
 					url.protocol === 'https:' && isIP(hostname(url.hostname)) === 0 ? hostname(url.hostname) : undefined,
 				// This lookup is the connection path, not merely a preflight check.

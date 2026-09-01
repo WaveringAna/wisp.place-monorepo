@@ -15,6 +15,7 @@ import {
 	type IdentityResolvedAddress,
 	isIdentityLoopbackDevelopmentAllowed,
 	isPublicIdentityAddress,
+	pinnedKeepAliveAgent,
 } from '@wispplace/atproto-utils'
 
 const DEFAULT_TIMEOUT_MS = 10_000
@@ -224,7 +225,11 @@ const nodeTransport: OAuthTransport = async ({ url, address, method, headers, bo
 				path: `${url.pathname}${url.search}`,
 				method,
 				headers: Object.fromEntries(headers.entries()),
-				agent: false,
+				// Pooled per validated address. An OAuth login makes five to eight
+				// calls to the same authorization server; without reuse each one paid
+				// a full TLS handshake, which dominated login latency from a distant
+				// region. See @wispplace/atproto-utils/pinned-agent.
+				agent: pinnedKeepAliveAgent(url, address),
 				servername:
 					url.protocol === 'https:' && isIP(normalizeHostname(url.hostname)) === 0
 						? normalizeHostname(url.hostname)
