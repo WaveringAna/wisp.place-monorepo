@@ -44,6 +44,16 @@ describe('SlingshotHandleResolver transport and validation', () => {
 		expect(await http.resolve('alice.example')).toBeNull()
 	})
 
+	test('does not convert transient transport failures into cacheable null results', async () => {
+		const resolver = new SlingshotHandleResolver(ENDPOINT, {
+			resolver: async () => [PUBLIC_ADDRESS],
+			transport: async () => {
+				throw new Error('socket unavailable')
+			},
+		})
+		await expect(resolver.resolve('alice.example')).rejects.toThrow('temporarily unavailable')
+	})
+
 	test('propagates caller cancellation through the pinned request', async () => {
 		const controller = new AbortController()
 		const resolver = new SlingshotHandleResolver(ENDPOINT, {

@@ -22,26 +22,26 @@
 	--nav-height: 3.5rem;
 	--noise-opacity: 0.18;
 
-	/* Light — warm beige */
-	--bg: oklch(0.92 0.012 35);
-	--bg-alt: oklch(0.88 0.01 35);
-	--bg-accent: oklch(0.86 0.012 35);
-	--text: oklch(0.15 0.015 30);
-	--text-muted: oklch(0.42 0.02 30);
-	--text-subtle: oklch(0.58 0.02 30);
-	--accent: oklch(0.65 0.18 345);
-	--accent-high: oklch(0.48 0.22 345);
-	--accent-low: oklch(0.9 0.06 345);
-	--border: oklch(0.6 0.02 30);
+	/* Light — rose/bone */
+	--bg: oklch(0.986 0.008 345);
+	--bg-alt: oklch(0.958 0.021 348);
+	--bg-accent: oklch(0.945 0.026 348);
+	--text: oklch(0.26 0.031 352);
+	--text-muted: oklch(0.45 0.031 350);
+	--text-subtle: oklch(0.49 0.028 350);
+	--accent: oklch(0.50 0.160 9);
+	--accent-high: oklch(0.42 0.140 9);
+	--accent-low: oklch(0.905 0.040 348);
+	--border: oklch(0.875 0.035 348);
 
 	/* Terminal / code chrome */
-	--term-bg: #f6f8fa;
-	--term-header: #eaeef2;
-	--term-border: oklch(0.6 0.02 30);
-	--term-title: #57606a;
-	--term-text: #1f2328;
-	--term-prompt: #6639ba;
-	--term-muted: #656d76;
+	--term-bg: #faf5f5;
+	--term-header: #f1e7e7;
+	--term-border: oklch(0.875 0.035 348);
+	--term-title: #6a6a6a;
+	--term-text: #333333;
+	--term-prompt: #a6485c;
+	--term-muted: #6a6a6a;
 	--term-success: #1a7f37;
 	--term-cyan: #0969da;
 

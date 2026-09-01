@@ -6,7 +6,7 @@
     "test": "NODE_ENV=test bun test",
     "dev": "NODE_ENV=development bun run build && NODE_ENV=development bun run --watch src/index.ts",
     "start": "bun run src/index.ts",
-    "build:css": "bunx @tailwindcss/cli -i public/styles/global.css -o dist/styles.css --minify",
+    "build:css": "tailwindcss -i public/styles/global.css -o dist/styles.css --minify",
     "build": "bun run build.ts && bun run build:css",
     "check": "tsc --noEmit",
     "screenshot": "bun run scripts/screenshot-sites.ts"

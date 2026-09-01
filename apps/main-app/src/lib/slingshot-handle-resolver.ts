@@ -94,9 +94,16 @@ export class SlingshotHandleResolver implements HandleResolver {
 		} catch (error) {
 			if (options?.signal?.aborted) throw error
 			if (error instanceof Error && error.name === 'AbortError') throw error
-			// Do not log errors from a remote server: they may contain URLs,
-			// response bodies, or credentials supplied by that server.
-			logger.warn('[SlingshotHandleResolver] Handle resolution failed', { handle: logHandle })
+			// Do not turn a transient network failure into a cacheable “handle not
+			// found” result. The OAuth client may safely cache authoritative nulls,
+			// but a rejected lookup remains retryable on the next request.
+			const transient =
+				error instanceof Error &&
+				(error.message === 'Identity request failed' ||
+					error.message === 'Identity request timed out' ||
+					typeof (error as Error & { code?: unknown }).code === 'string')
+			logger.warn('[SlingshotHandleResolver] Handle resolution failed', { handle: logHandle, transient })
+			if (transient) throw new Error('Handle resolver temporarily unavailable')
 			return null
 		}
 	}

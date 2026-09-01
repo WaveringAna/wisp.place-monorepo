@@ -6,58 +6,56 @@
 :root {
   color-scheme: light;
 
-  /* Warm beige background inspired by Sunset design */
-  --background: oklch(0.92 0.012 35);
-  /* Very dark brown text for strong contrast */
-  --foreground: oklch(0.15 0.015 30);
+  /* Rose/bone base */
+  --background: oklch(0.986 0.008 345);
+  --foreground: oklch(0.26 0.031 352);
 
-  /* Slightly lighter card background for elevation */
-  --card: oklch(0.95 0.008 35);
-  --card-foreground: oklch(0.15 0.015 30);
+  /* Crisp card elevation */
+  --card: oklch(0.996 0.003 345);
+  --card-foreground: oklch(0.26 0.031 352);
 
-  --popover: oklch(0.96 0.006 35);
-  --popover-foreground: oklch(0.15 0.015 30);
+  --popover: oklch(0.996 0.003 345);
+  --popover-foreground: oklch(0.26 0.031 352);
 
-  /* Dark brown primary - darker for better contrast */
-  --primary: oklch(0.30 0.025 35);
-  --primary-foreground: oklch(0.96 0.008 35);
+  /* Berry primary actions */
+  --primary: oklch(0.50 0.160 9);
+  --primary-foreground: oklch(0.996 0.003 345);
 
-  /* Bubblegum pink accent */
-  --accent: #ff5c8a;
-  --accent-foreground: oklch(0.15 0.015 30);
+  /* Berry accent - links, tints, focus */
+  --accent: oklch(0.50 0.160 9);
+  --accent-foreground: oklch(0.996 0.003 345);
 
-  /* Darker taupe secondary for better contrast */
-  --secondary: oklch(0.85 0.012 30);
-  --secondary-foreground: oklch(0.25 0.02 30);
+  /* Blush secondary surfaces */
+  --secondary: oklch(0.958 0.021 348);
+  --secondary-foreground: oklch(0.26 0.031 352);
 
-  /* Muted areas with better distinction */
-  --muted: oklch(0.88 0.01 35);
-  --muted-foreground: oklch(0.35 0.02 30);
+  /* Rose tinted muted areas */
+  --muted: oklch(0.945 0.026 348);
+  --muted-foreground: oklch(0.45 0.031 350);
 
-  /* Significantly darker border for visibility */
-  --border: oklch(0.65 0.02 30);
-  /* Input backgrounds - distinct from card background */
-  --input: oklch(0.82 0.01 35);
-  --ring: #ff5c8a;
+  /* Rose borders */
+  --border: oklch(0.875 0.035 348);
+  --input: oklch(0.84 0.045 348);
+  --ring: oklch(0.50 0.160 9);
 
-  --destructive: oklch(0.50 0.20 25);
-  --destructive-foreground: oklch(0.98 0 0);
+  --destructive: oklch(0.513 0.165 21);
+  --destructive-foreground: oklch(0.996 0.003 345);
 
-  --chart-1: #ff5c8a;
-  --chart-2: oklch(0.32 0.04 285);
-  --chart-3: oklch(0.50 0.10 220);
-  --chart-4: oklch(0.70 0.08 130);
-  --chart-5: oklch(0.75 0.06 85);
+  --chart-1: oklch(0.50 0.160 9);
+  --chart-2: oklch(0.905 0.040 348);
+  --chart-3: oklch(0.386 0.097 12);
+  --chart-4: oklch(0.473 0.098 153);
+  --chart-5: oklch(0.479 0.134 261);
 
   --radius: 0.75rem;
-  --sidebar: oklch(0.94 0.008 35);
-  --sidebar-foreground: oklch(0.15 0.015 30);
-  --sidebar-primary: oklch(0.30 0.025 35);
-  --sidebar-primary-foreground: oklch(0.96 0.008 35);
-  --sidebar-accent: oklch(0.90 0.01 35);
-  --sidebar-accent-foreground: oklch(0.20 0.02 30);
-  --sidebar-border: oklch(0.65 0.02 30);
-  --sidebar-ring: #ff5c8a;
+  --sidebar: oklch(0.958 0.021 348);
+  --sidebar-foreground: oklch(0.26 0.031 352);
+  --sidebar-primary: oklch(0.50 0.160 9);
+  --sidebar-primary-foreground: oklch(0.996 0.003 345);
+  --sidebar-accent: oklch(0.905 0.040 348);
+  --sidebar-accent-foreground: oklch(0.42 0.140 9);
+  --sidebar-border: oklch(0.875 0.035 348);
+  --sidebar-ring: oklch(0.50 0.160 9);
 }
 
 .dark {
@@ -277,20 +275,8 @@
   }
 }
 
-@keyframes arrow-bounce {
-
-  0%,
-  100% {
-    transform: translateX(0);
-  }
-
-  50% {
-    transform: translateX(4px);
-  }
-}
-
 .arrow-animate {
-  animation: arrow-bounce 1.5s ease-in-out infinite;
+  transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 @keyframes shimmer {
@@ -315,39 +301,12 @@
 /* ========== Landing Page Animations ========== */
 
 /* Animated gradient for headline text */
-@keyframes gradient-shift {
-
-  0%,
-  100% {
-    background-position: 0% 50%;
-  }
-
-  50% {
-    background-position: 100% 50%;
-  }
-}
-
 .text-gradient-animate {
-  background: linear-gradient(90deg,
-      oklch(0.55 0.22 350),
-      oklch(0.60 0.24 10),
-      oklch(0.55 0.22 350));
-  background-size: 200% auto;
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  animation: gradient-shift 4s ease-in-out infinite;
+  color: var(--primary);
 }
 
 .dark .text-gradient-animate {
-  background: linear-gradient(90deg,
-      oklch(0.75 0.12 295),
-      oklch(0.85 0.10 5),
-      oklch(0.75 0.12 295));
-  background-size: 200% auto;
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
+  color: oklch(0.85 0.10 5);
 }
 
 /* Floating/breathing animation for hero elements */

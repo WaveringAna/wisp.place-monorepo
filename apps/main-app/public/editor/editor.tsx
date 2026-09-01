@@ -716,7 +716,7 @@ function Dashboard() {
 										</p>
 									)}
 
-									<div className="p-3 bg-muted/20 rounded-lg border-l-4 border-blue-500/50 mt-4">
+									<div className="p-3 bg-primary/5 rounded-lg border border-primary/20 mt-4">
 										<p className="text-xs text-muted-foreground">
 											<strong>Note:</strong> If no domains are selected, the site will be accessible at:{' '}
 											<span className="font-mono">

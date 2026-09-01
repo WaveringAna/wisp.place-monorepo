@@ -140,19 +140,19 @@
             <section>
                 <h2>How I Collect Information</h2>
                 <p>
-                    wisp.place uses the AT Protocol for authentication. When you log in, you authenticate directly with your Personal Data Server (PDS) — I never see your password. What I receive and store is your <strong>Decentralized Identifier (DID)</strong>, a public pseudonymous identifier that is the foundation of your AT Protocol identity. I do not collect email addresses or phone numbers.
+                    wisp.place uses the AT Protocol for authentication. When you log in, you authenticate directly with your Personal Data Server (PDS): I never see your password. What I receive and store is your <strong>Decentralized Identifier (DID)</strong>, a public pseudonymous identifier that is the foundation of your AT Protocol identity. I do not collect email addresses or phone numbers.
                 </p>
                 <p>
                     During the login process, your <strong>AT Protocol handle</strong> (e.g. <code>you.bsky.social</code>) may appear in application logs. It is not stored in the database.
                 </p>
                 <p>
-                    When you publish a site, I store metadata about it: the site name, display name, your wisp.place subdomain, any custom domains you configure, content hashes, timestamps, and your site settings. The actual files you upload live on your PDS as blobs — I hold a derived cache to serve them to visitors.
+                    When you publish a site, I store metadata about it: the site name, display name, your wisp.place subdomain, any custom domains you configure, content hashes, timestamps, and your site settings. The actual files you upload live on your PDS as blobs; I hold a derived cache to serve them to visitors.
                 </p>
                 <p>
-                    I retain server logs and collect non-personally-identifying operational data — request paths, HTTP methods, status codes, and response durations — to monitor service health and diagnose issues. <strong>I do not log IP addresses, User-Agent strings, or Referer headers.</strong>
+                    I retain server logs and collect non-personally-identifying operational data (request paths, HTTP methods, status codes, and response durations) to monitor service health and diagnose issues. <strong>I do not log IP addresses, User-Agent strings, or Referer headers.</strong>
                 </p>
                 <p>
-                    Request counts are aggregated into periodic hit totals per site. These aggregate statistics contain no personally identifying information — no IP addresses, no geographic data, no visitor identifiers of any kind — and are made available to site owners who support the project.
+                    Request counts are aggregated into periodic hit totals per site. These aggregate statistics contain no personally identifying information (no IP addresses, no geographic data, no visitor identifiers of any kind) and are made available to site owners who support the project.
                 </p>
                 <p>
                     I use a signed session cookie to keep you logged into your account. Session records are stored in the database and expire after 30 days.
@@ -252,7 +252,7 @@
             <div class="card info">
                 <h2 style="margin-top: 0;">The AT Protocol and Public Data</h2>
                 <p style="margin-bottom: 0;">
-                    wisp.place is built on the AT Protocol. Your sites, their files, and the records describing them are public on your PDS. Anyone operating a compatible service can read your published site records and blobs — this is inherent to how the protocol works and is not specific to wisp.place.
+                    wisp.place is built on the AT Protocol. Your sites, their files, and the records describing them are public on your PDS. Anyone operating a compatible service can read your published site records and blobs. This is inherent to how the protocol works and is not specific to wisp.place.
                 </p>
             </div>
 
@@ -292,11 +292,11 @@
                         </tr>
                         <tr>
                             <td>Application logs, error traces, and request metrics</td>
-                            <td>Legitimate interests (Art. 6(1)(f)) — operating and securing the service</td>
+                            <td>Legitimate interests (Art. 6(1)(f)): operating and securing the service</td>
                         </tr>
                         <tr>
                             <td>VictoriaLogs / VictoriaMetrics on self-operated infrastructure</td>
-                            <td>Legitimate interests (Art. 6(1)(f)) — service monitoring on infrastructure I control</td>
+                            <td>Legitimate interests (Art. 6(1)(f)): service monitoring on infrastructure I control</td>
                         </tr>
                     </table>
                 </div>
@@ -307,13 +307,13 @@
 
                 <p>You have the right to:</p>
                 <ul>
-                    <li><span class="bullet accent">•</span><span><strong>Access</strong> — request a copy of the personal data I hold about you</span></li>
-                    <li><span class="bullet accent">•</span><span><strong>Rectification</strong> — ask me to correct inaccurate data</span></li>
-                    <li><span class="bullet accent">•</span><span><strong>Erasure</strong> — ask me to delete your data (see retention note above)</span></li>
-                    <li><span class="bullet accent">•</span><span><strong>Restriction</strong> — ask me to limit how I process your data</span></li>
-                    <li><span class="bullet accent">•</span><span><strong>Portability</strong> — receive your data in a structured, machine-readable format</span></li>
-                    <li><span class="bullet accent">•</span><span><strong>Object</strong> — object to processing based on legitimate interests</span></li>
-                    <li><span class="bullet accent">•</span><span><strong>Lodge a complaint</strong> — with your national data protection supervisory authority</span></li>
+                    <li><span class="bullet accent">•</span><span><strong>Access</strong>: request a copy of the personal data I hold about you</span></li>
+                    <li><span class="bullet accent">•</span><span><strong>Rectification</strong>: ask me to correct inaccurate data</span></li>
+                    <li><span class="bullet accent">•</span><span><strong>Erasure</strong>: ask me to delete your data (see retention note above)</span></li>
+                    <li><span class="bullet accent">•</span><span><strong>Restriction</strong>: ask me to limit how I process your data</span></li>
+                    <li><span class="bullet accent">•</span><span><strong>Portability</strong>: receive your data in a structured, machine-readable format</span></li>
+                    <li><span class="bullet accent">•</span><span><strong>Object</strong>: object to processing based on legitimate interests</span></li>
+                    <li><span class="bullet accent">•</span><span><strong>Lodge a complaint</strong>: with your national data protection supervisory authority</span></li>
                 </ul>
 
                 <div class="alert">

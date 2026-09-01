@@ -7,16 +7,16 @@
 export const PRIVATE_ACCESS_PAGE_STYLES = `
 :root {
   color-scheme: light;
-  --private-bg: oklch(0.92 0.012 35);
-  --private-surface: oklch(0.95 0.008 35);
-  --private-text: oklch(0.15 0.015 30);
-  --private-muted: oklch(0.35 0.02 30);
-  --private-subtle: oklch(0.50 0.02 30);
-  --private-border: oklch(0.65 0.02 30);
-  --private-input: oklch(0.82 0.01 35);
-  --private-accent: #ff5c8a;
-  --private-cta-bg: oklch(0.30 0.025 35);
-  --private-cta-text: oklch(0.96 0.008 35);
+  --private-bg: oklch(0.978 0.011 17);
+  --private-surface: oklch(0.996 0.002 17);
+  --private-text: oklch(0.409 0.001 90);
+  --private-muted: oklch(0.453 0.001 90);
+  --private-subtle: oklch(0.485 0.001 90);
+  --private-border: oklch(0.716 0.078 5);
+  --private-input: oklch(0.928 0.029 18);
+  --private-accent: oklch(0.529 0.125 9);
+  --private-cta-bg: oklch(0.529 0.125 9);
+  --private-cta-text: oklch(0.996 0.002 17);
   --private-control-height: 3rem;
 }
 

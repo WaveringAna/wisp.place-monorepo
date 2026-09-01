@@ -15,28 +15,28 @@
 	--sl-content-width: 70rem;
 	--noise-opacity: 0.18;
 
-	/* Light — warm beige */
-	--sl-color-bg:          oklch(0.92 0.012 35);
-	--sl-color-bg-sidebar:  oklch(0.88 0.01 35);
-	--sl-color-bg-nav:      oklch(0.88 0.01 35);
-	--sl-color-text:        oklch(0.15 0.015 30);
-	--sl-color-text-accent: oklch(0.65 0.18 345);
-	--sl-color-accent:      oklch(0.65 0.18 345);
-	--sl-color-accent-low:  oklch(0.90 0.06 345);
-	--sl-color-accent-high: oklch(0.48 0.22 345);
-	--sl-color-border:      oklch(0.60 0.02 30);
-	--sl-color-gray-1:      oklch(0.42 0.02 30);
-	--sl-color-gray-2:      oklch(0.32 0.02 30);
-	--sl-color-gray-3:      oklch(0.25 0.02 30);
-	--sl-color-gray-4:      oklch(0.18 0.015 30);
-	--sl-color-gray-5:      oklch(0.58 0.02 30);
-	--sl-color-bg-accent:   oklch(0.86 0.012 35);
+	/* Light — rose/bone */
+	--sl-color-bg:          oklch(0.986 0.008 345);
+	--sl-color-bg-sidebar:  oklch(0.958 0.021 348);
+	--sl-color-bg-nav:      oklch(0.958 0.021 348);
+	--sl-color-text:        oklch(0.26 0.031 352);
+	--sl-color-text-accent: oklch(0.50 0.160 9);
+	--sl-color-accent:      oklch(0.50 0.160 9);
+	--sl-color-accent-low:  oklch(0.905 0.040 348);
+	--sl-color-accent-high: oklch(0.42 0.140 9);
+	--sl-color-border:      oklch(0.875 0.035 348);
+	--sl-color-gray-1:      oklch(0.45 0.031 350);
+	--sl-color-gray-2:      oklch(0.41 0.033 352);
+	--sl-color-gray-3:      oklch(0.35 0.035 352);
+	--sl-color-gray-4:      oklch(0.30 0.037 352);
+	--sl-color-gray-5:      oklch(0.49 0.028 350);
+	--sl-color-bg-accent:   oklch(0.945 0.026 348);
 
 	/* Terminal code block chrome (light) */
-	--term-bg:     #f6f8fa;
-	--term-header: #eaeef2;
-	--term-border: oklch(0.60 0.02 30);
-	--term-title:  #57606a;
+	--term-bg:     #faf5f5;
+	--term-header: #f1e7e7;
+	--term-border: oklch(0.875 0.035 348);
+	--term-title:  #6a6a6a;
 }
 
 /* Dark — slate violet */
@@ -296,7 +296,7 @@ a[aria-current="page"] .inaccessible {
 	background: var(--sl-color-bg-accent) !important;
 	border: 1px solid var(--sl-color-border) !important;
 	padding: 0.1em 0.35em !important;
-	color: var(--sl-color-text-accent) !important;
+	color: var(--sl-color-accent-high) !important;
 }
 
 /* Lists */

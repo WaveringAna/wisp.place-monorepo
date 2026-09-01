@@ -51,8 +51,7 @@ const requestPgLock: RuntimeLock = async (name, fn) => {
 	return await withReservedOAuthLock(
 		{
 			async acquire(): Promise<void> {
-				await reserved`SET lock_timeout = '30s'`
-				await reserved`SELECT pg_advisory_lock(${key})`
+				await reserved.unsafe(`SET lock_timeout = '30s'; SELECT pg_advisory_lock(${key})`)
 			},
 			async unlock(): Promise<void> {
 				await reserved`SELECT pg_advisory_unlock(${key})`
@@ -198,7 +197,13 @@ const persistKey = async (key: JoseKey) => {
             jwk = EXCLUDED.jwk,
             created_at = EXCLUDED.created_at
     `
+	keysCache = undefined
 }
+
+// 60s ttl: keys rotate ~twice a year, so cross-instance staleness after a
+// rotation self-heals well before the next sign-in checks the new keyset.
+let keysCache: { keys: JoseKey[]; fetchedAtMs: number } | undefined
+const KEYS_CACHE_TTL_MS = 60_000
 
 const loadPersistedKeys = async (): Promise<JoseKey[]> => {
 	const rows = await db`SELECT kid, jwk, created_at FROM oauth_keys ORDER BY kid`
@@ -231,9 +236,11 @@ const ensureKeys = async (): Promise<JoseKey[]> => {
 	return keys
 }
 
-// Load keys from database every time (stateless - safe for horizontal scaling)
 export const getCurrentKeys = async (): Promise<JoseKey[]> => {
-	return await loadPersistedKeys()
+	if (keysCache && Date.now() - keysCache.fetchedAtMs < KEYS_CACHE_TTL_MS) return keysCache.keys
+	const keys = await loadPersistedKeys()
+	keysCache = { keys, fetchedAtMs: Date.now() }
+	return keys
 }
 
 // Key rotation - rotate keys older than 6 months

@@ -127,8 +127,7 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				}
 
 				// Check if user has any cached sites or a claimed domain
-				const sites = await getSitesByDid(session.did)
-				const domain = await getDomainByDid(session.did)
+				const [sites, domain] = await Promise.all([getSitesByDid(session.did), getDomainByDid(session.did)])
 
 				// If no sites and no domain, redirect to onboarding
 				if (sites.length === 0 && !domain) {

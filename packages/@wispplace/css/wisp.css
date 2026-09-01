@@ -25,32 +25,32 @@
 
 :root {
     /* Background colors */
-    --wisp-bg: oklch(0.92 0.012 35);
-    --wisp-bg-alt: oklch(0.88 0.01 35);
+    --wisp-bg: oklch(0.986 0.008 345);
+    --wisp-bg-alt: oklch(0.958 0.021 348);
 
     /* Text colors */
-    --wisp-text: oklch(0.15 0.015 30);
-    --wisp-text-muted: oklch(0.35 0.02 30);
-    --wisp-text-subtle: oklch(0.50 0.02 30);
+    --wisp-text: oklch(0.26 0.031 352);
+    --wisp-text-muted: oklch(0.45 0.031 350);
+    --wisp-text-subtle: oklch(0.49 0.028 350);
 
     /* Border colors */
-    --wisp-border: oklch(0.30 0.025 35);
-    --wisp-border-light: oklch(0.65 0.02 30);
+    --wisp-border: oklch(0.50 0.160 9);
+    --wisp-border-light: oklch(0.875 0.035 348);
 
     /* Accent colors */
-    --wisp-accent: oklch(0.65 0.18 345);
-    --wisp-accent-muted: oklch(0.75 0.14 345);
+    --wisp-accent: oklch(0.50 0.160 9);
+    --wisp-accent-muted: oklch(0.905 0.040 348);
 
     /* CTA/Button colors */
-    --wisp-cta-bg: oklch(0.30 0.025 35);
-    --wisp-cta-text: oklch(0.96 0.008 35);
+    --wisp-cta-bg: oklch(0.50 0.160 9);
+    --wisp-cta-text: oklch(0.996 0.003 345);
 
     /* Semantic colors */
-    --wisp-code-bg: oklch(0.95 0.008 35);
-    --wisp-success: oklch(0.65 0.20 145);
-    --wisp-danger: oklch(0.60 0.20 25);
-    --wisp-warning: oklch(0.70 0.15 85);
-    --wisp-info: oklch(0.60 0.15 240);
+    --wisp-code-bg: oklch(0.958 0.021 348);
+    --wisp-success: oklch(0.473 0.098 153);
+    --wisp-danger: oklch(0.513 0.165 21);
+    --wisp-warning: oklch(0.508 0.105 72);
+    --wisp-info: oklch(0.479 0.134 261);
 
     /* Layout */
     --wisp-max-width: 900px;
@@ -556,12 +556,12 @@ input::placeholder, textarea::placeholder {
 
 .alert-warning {
     background: var(--wisp-code-bg);
-    border-left: 4px solid var(--wisp-warning);
+    border: 1px solid color-mix(in oklab, var(--wisp-warning) 45%, transparent);
 }
 
 .alert-danger {
     background: var(--wisp-code-bg);
-    border-left: 4px solid var(--wisp-danger);
+    border: 1px solid color-mix(in oklab, var(--wisp-danger) 45%, transparent);
 }
 
 /* ==========================================================================
