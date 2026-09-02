@@ -28,13 +28,49 @@ const lockKey = (name: string): bigint => {
 // a connection for the full duration of fn() (which makes HTTP calls to the PDS),
 // so it must not share the main query pool — otherwise a slow PDS starves the
 // pool and inner stateStore/sessionStore queries deadlock waiting for slots.
+//
+// Deliberately no maxLifetime. A connection here is reserved for the whole
+// critical section, so a lifetime cap can retire one while it still holds an
+// advisory lock: the query dies with "Max lifetime timeout reached", the lock is
+// orphaned on the server, and the slot is not reliably returned to this
+// four-connection pool. Four of those and every caller waits forever.
 const lockDb = new SQL({
 	url: databaseConfiguration.primaryUrl,
 	max: 4,
 	idleTimeout: databaseConfiguration.primaryPool.idleTimeoutSeconds,
 	connectionTimeout: databaseConfiguration.primaryPool.connectionTimeoutSeconds,
-	maxLifetime: 300,
 })
+
+/**
+ * How long to wait for a free connection in the lock pool.
+ *
+ * An unbounded wait is what turns a degraded pool into a silent outage: every
+ * sign-in stops mid-callback with nothing logged, because waiting is not an
+ * error. Refusing loudly gives the caller a 500 and leaves a trace to find.
+ */
+const LOCK_RESERVE_TIMEOUT_MS = 15_000
+
+const reserveLockConnection = async () => {
+	const reservation = lockDb.reserve()
+	let reserved = false
+	let timer: ReturnType<typeof setTimeout> | undefined
+	const expiry = new Promise<never>((_, reject) => {
+		timer = setTimeout(
+			() => reject(new Error('Timed out reserving an OAuth advisory lock connection')),
+			LOCK_RESERVE_TIMEOUT_MS,
+		)
+	})
+
+	try {
+		const connection = await Promise.race([reservation, expiry])
+		reserved = true
+		return connection
+	} finally {
+		clearTimeout(timer)
+		// A reservation that lands after we gave up must not keep the slot.
+		if (!reserved) void reservation.then((late) => late.release()).catch(() => undefined)
+	}
+}
 
 /**
  * Hold one lock connection open.
@@ -68,7 +104,7 @@ export const closeOAuthLockDatabase = (): Promise<void> => {
 
 const requestPgLock: RuntimeLock = async (name, fn) => {
 	const key = lockKey(name)
-	const reserved = await lockDb.reserve()
+	const reserved = await reserveLockConnection()
 	return await withReservedOAuthLock(
 		{
 			async acquire(): Promise<void> {
