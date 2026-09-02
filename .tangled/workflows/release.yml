@@ -72,19 +72,36 @@ steps:
         '{action: "wisp-release",
           args: {version: $version, commit: $commit, repo: $repo}}')"
 
-      # The connection is held open for the whole release: every image built
-      # in turn, then every stack deployed and verified.
-      #
-      # If THIS step times out the release does not stop — it carries on
-      # server-side. A timeout here means "unknown", not "failed". Read the
-      # Update before re-running, because a blind retry redeploys.
-      resp="$(curl -fsS --max-time 5400 \
-        -X POST "$KOMODO_ADDRESS/execute/RunAction" \
-        -H 'Content-Type: application/json' \
-        -H "X-Api-Key: $KOMODO_API_KEY" \
-        -H "X-Api-Secret: $KOMODO_API_SECRET" \
-        -d "$payload")"
+      komodo() {
+        curl -fsS -X POST "$KOMODO_ADDRESS/$1" \
+          -H 'Content-Type: application/json' \
+          -H "X-Api-Key: $KOMODO_API_KEY" \
+          -H "X-Api-Secret: $KOMODO_API_SECRET" \
+          -d "$2"
+      }
 
-      echo "$resp" | jq -r '.logs[]? | "── \(.stage)\n\(.stdout // "")\n\(.stderr // "")"'
+      # RunAction is ASYNCHRONOUS. It returns in well under a second with
+      # `success: true, status: InProgress` — that field is the initial value
+      # of a record the release has not started writing yet, not a result.
+      # Gating on it would make every tag go green no matter what happened.
+      # The only honest signal is the Update, polled until it completes.
+      started="$(komodo execute/RunAction "$payload")"
+      id="$(echo "$started" | jq -r '.id // ._id."$oid" // empty')"
+      [ -n "$id" ] || { echo "no update id in RunAction response" >&2; exit 1; }
+      echo "release started, update $id"
 
-      [ "$(echo "$resp" | jq -r '.success')" = "true" ]
+      deadline=$(( $(date +%s) + 5400 ))
+      while :; do
+        update="$(komodo read/GetUpdate "$(jq -n --arg id "$id" '{id: $id}')")"
+        [ "$(echo "$update" | jq -r '.status')" = "Complete" ] && break
+        if [ "$(date +%s)" -ge "$deadline" ]; then
+          echo "still running after 90m — giving up on waiting, NOT on the release." >&2
+          echo "it continues server-side; read update $id before re-running." >&2
+          exit 1
+        fi
+        sleep 15
+      done
+
+      echo "$update" | jq -r '.logs[]? | "── \(.stage)\n\(.stdout // "")\n\(.stderr // "")"'
+
+      [ "$(echo "$update" | jq -r '.success')" = "true" ]

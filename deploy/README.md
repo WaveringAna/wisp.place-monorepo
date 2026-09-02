@@ -109,9 +109,16 @@ credentials. Comparing the render is what catches a service being wired to
 the wrong one; printing it is what leaks one. Differences outside `image:`
 lines are reported by key only, and abort.
 
-**A CI timeout does not cancel the release.** It continues server-side.
-Treat a timed-out pipeline as *unknown* and read the Update before
-re-running, because a blind retry redeploys.
+**`RunAction` is asynchronous and its `success` field lies.** It returns in
+well under a second with `success: true, status: InProgress` — that is the
+initial value of a record the release has not started writing, not a
+result. Gating CI on it makes every tag go green regardless of outcome. The
+workflow captures the update id and polls `read/GetUpdate` until
+`status: Complete`, then reads `success` from there.
+
+**Giving up on waiting is not cancelling.** If the poll loop hits its
+deadline the release continues server-side. Treat it as *unknown* and read
+the Update before re-running, because a blind retry redeploys.
 
 **Tag pushes do not run `test.yml`** — it triggers on `branch: [main]`, and
 a tag push has no branch. Spindle has no cross-workflow `needs:`, so a tag
