@@ -3,7 +3,7 @@
   "version": "1.0.50",
   "private": true,
   "scripts": {
-    "test": "NODE_ENV=test bun test",
+    "test": "NODE_ENV=test bun test --isolate",
     "dev": "NODE_ENV=development bun run build && NODE_ENV=development bun run --watch src/index.ts",
     "start": "bun run src/index.ts",
     "build:css": "tailwindcss -i public/styles/global.css -o dist/styles.css --minify",

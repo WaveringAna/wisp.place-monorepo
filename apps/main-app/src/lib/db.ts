@@ -7,6 +7,7 @@ import {
 } from '@wispplace/atproto-utils'
 import { DELETED_SITE_RECORD_CID } from '@wispplace/constants'
 import { SQL } from 'bun'
+import { probeConnectionWithRetry, resolveConnectionWarmingIntervalMs } from './connection-warming'
 import { resolveDatabaseConfiguration } from './database-config'
 import { createDatabaseReadCircuit, type DatabaseReadProbeResult } from './database-read-circuit'
 import { assessDatabaseReadReplication } from './database-read-replication'
@@ -38,38 +39,27 @@ export const db = new SQL(databaseConfiguration.primaryUrl, createPoolOptions(da
 /**
  * How many primary connections are held open between requests.
  *
- * A node in another region pays the full Postgres handshake on a cold
- * connection: TCP, the SSLRequest round trip, the TLS handshake, then three
- * more round trips for SCRAM-SHA-256 and one for startup. Measured from a
- * Singapore node to a primary in Ashburn that is about 1.9 seconds, and with a
- * 30 second idle timeout the pool was empty for almost every sign-in.
- *
  * Two, because the widest fan-out on the primary in one request is the pair of
  * lookups at the end of the OAuth callback. A third concurrent query still
  * connects on demand; it just is not on the common path.
+ * See {@link probeConnectionWithRetry} for why this is worth doing at all.
  */
 const WARM_PRIMARY_CONNECTIONS = 2
 
 /**
  * Hold connections open so a request never pays for establishing one.
  *
- * The queries run concurrently on purpose: one at a time would keep re-using a
+ * The probes run concurrently on purpose: one at a time would keep re-using a
  * single pooled connection and leave the rest to lapse.
  */
 export const warmPrimaryConnections = async (): Promise<void> => {
-	await Promise.all(Array.from({ length: WARM_PRIMARY_CONNECTIONS }, () => db`SELECT 1`))
+	await Promise.all(
+		Array.from({ length: WARM_PRIMARY_CONNECTIONS }, () => probeConnectionWithRetry(() => db`SELECT 1`)),
+	)
 }
 
-/**
- * How often to touch an idle pool, in milliseconds.
- *
- * Comfortably inside the idle timeout, and frequent enough that a connection
- * retired at `maxLifetime` is replaced by this task rather than by a user's
- * request.
- */
-export const connectionWarmingIntervalMs = Math.max(
-	10_000,
-	Math.floor(databaseConfiguration.primaryPool.idleTimeoutSeconds * 1_000 * 0.5),
+export const connectionWarmingIntervalMs = resolveConnectionWarmingIntervalMs(
+	databaseConfiguration.primaryPool.idleTimeoutSeconds,
 )
 
 // Do not create another pool unless the operator explicitly configured a

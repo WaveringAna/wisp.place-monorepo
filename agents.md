@@ -105,6 +105,15 @@ Bun workspaces: `packages/@wisp/*`, `apps/main-app`, `apps/hosting-service`, etc
 
 PLEASE USE `bun check` to type check and `biome check --write` to lint.
 
+Run tests with `bun test --isolate` (or `bun run test`, which passes it), never a
+bare `bun test`. Several suites call `mock.module('../lib/db', ...)` with a partial
+set of exports, and without isolation that replacement leaks into every test file
+loaded afterwards: those files fail to link with a misleading
+`SyntaxError: Export named '<something>' not found in module .../lib/db.ts`, and
+their tests are silently skipped rather than reported as failures. Adding any new
+export to `src/lib/db.ts` is enough to trigger it. `bunfig.toml` does not support
+`[test] isolate`, so it has to be the CLI flag.
+
 There are three typescript apps
 **`apps/main-app`** - Main backend (Bun + Elysia)
 

@@ -122,12 +122,36 @@ const maintenance = startPeriodicSingleFlightTask(runMaintenance, 60 * 60 * 1000
 // Keeping a connection open is not an optimisation here so much as removing a
 // fixed cost: a cold primary connection from a remote region costs more than
 // every query in a sign-in put together.
+//
+// Warming is best effort. Missing a cycle only means the next request pays to
+// establish its own connection, which is what happened before this existed, so
+// a single miss is not worth an error line. Sustained failure is, because it
+// means the primary is unreachable.
+const CONNECTION_WARMING_ALARM_AFTER = 5
+let consecutiveWarmingFailures = 0
+
 const connectionWarming = startPeriodicSingleFlightTask(
 	async () => {
-		await Promise.all([warmPrimaryConnections(), warmOAuthLockConnection()])
+		try {
+			await Promise.all([warmPrimaryConnections(), warmOAuthLockConnection()])
+			consecutiveWarmingFailures = 0
+		} catch (err) {
+			consecutiveWarmingFailures += 1
+			// Driver errors can carry a connection URL, so only the class is logged.
+			const detail = {
+				consecutiveFailures: consecutiveWarmingFailures,
+				errorName: err instanceof Error ? err.name : 'unknown',
+			}
+			if (consecutiveWarmingFailures >= CONNECTION_WARMING_ALARM_AFTER) {
+				logger.error('[Database] Connection warming has failed repeatedly', detail)
+			} else {
+				logger.debug('[Database] Connection warming missed a cycle', detail)
+			}
+		}
 	},
 	connectionWarmingIntervalMs,
-	() => logger.error('[Database] Connection warming failed'),
+	// The task above handles its own failures, so this only catches a bug in it.
+	() => logger.error('[Database] Connection warming task crashed'),
 )
 
 const privateSiteReaper = startPrivateSiteReaper()

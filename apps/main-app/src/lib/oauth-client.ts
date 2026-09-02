@@ -1,6 +1,7 @@
 import { JoseKey } from '@atproto/jwk-jose'
 import { NodeOAuthClient, type RuntimeLock } from '@atproto/oauth-client-node'
 import { SQL } from 'bun'
+import { probeConnectionWithRetry } from './connection-warming'
 import { databaseConfiguration, db } from './db'
 import { logger } from './logger'
 import { createClientMetadata } from './oauth-client-metadata'
@@ -45,7 +46,7 @@ const lockDb = new SQL({
  * session before storing the new one — so the cost landed on every sign-in.
  */
 export const warmOAuthLockConnection = async (): Promise<void> => {
-	await lockDb`SELECT 1`
+	await probeConnectionWithRetry(() => lockDb`SELECT 1`)
 }
 
 let oauthLockDatabaseClosePromise: Promise<void> | undefined
