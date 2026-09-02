@@ -299,8 +299,8 @@ class FakeClaimRedis {
 
 	async eval(_script: string, keyCount: number, ...args: string[]): Promise<unknown> {
 		this.calls.push({ command: 'EVAL', args: [keyCount, ...args] })
-		if (keyCount === 2) {
-			this.quarantineAttempts.push(Number(args[2 + 7]))
+		if (keyCount === 4) {
+			this.quarantineAttempts.push(Number(args[4 + 7]))
 			this.pending = false
 			return [1, 'dlq-1', 1]
 		}
@@ -633,6 +633,45 @@ describe('settings failure revalidation', () => {
 })
 
 describe('ordinary revalidation', () => {
+	test('uses no aggregate deadline or transfer cap for filesystem repair', async () => {
+		const { redis, acks } = createRedis()
+		let observedResources: Parameters<RevalidateWorkerDependencies['handleSiteCreateOrUpdate']>[4] extends infer Options
+			? Options
+			: never
+		const dependencies = createDependencies({
+			fetchSiteRecord: async () => ({ record: reappearedRecord, cid: 'cid' }),
+			handleSiteCreateOrUpdate: async (_did, _rkey, _record, _cid, options) => {
+				observedResources = options
+			},
+		})
+
+		await processRevalidationMessage(MESSAGE_ID, messageFields('storage-miss:index.html'), redis, dependencies)
+
+		expect(observedResources?.resources?.deadlineAt).toBeNull()
+		expect(observedResources?.resources?.transferBudget.maxBytes).toBe(Number.POSITIVE_INFINITY)
+		observedResources?.resources?.transferBudget.consume(1_000_000_000)
+		expect(observedResources?.resources?.signal.aborted).toBe(false)
+		expect(acks).toEqual([MESSAGE_ID])
+	})
+
+	test('acknowledges queued duplicates without repair while a DLQ fence exists', async () => {
+		const { redis, acks, streamDeletes } = createRedis()
+		;(redis as RevalidateRedisClient).get = async () => 'dlq-9'
+		let lookups = 0
+		const dependencies = createDependencies({
+			fetchSiteRecord: async () => {
+				lookups++
+				return { record: reappearedRecord, cid: 'cid' }
+			},
+		})
+
+		await processRevalidationMessage(MESSAGE_ID, messageFields('storage-miss:index.html'), redis, dependencies)
+
+		expect(lookups).toBe(0)
+		expect(acks).toEqual([MESSAGE_ID])
+		expect(streamDeletes).toEqual([MESSAGE_ID])
+	})
+
 	test('leaves transient or invalid typed PDS outcomes pending', async () => {
 		const { redis, acks, streamDeletes } = createRedis()
 		const dependencies = createDependencies({

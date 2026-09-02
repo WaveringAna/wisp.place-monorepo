@@ -695,12 +695,12 @@ describe('ingest resource and logical quota guards', () => {
 				BLOB_500_BACKOFF_MS: 'not-a-number',
 				FIREHOSE_DOWNLOAD_CONCURRENCY: '20',
 			}),
-		).toEqual({ blob500BackoffMs: 10 * 60 * 1000, downloadConcurrency: 1 })
+		).toEqual({ blob500BackoffMs: 10 * 60 * 1000, downloadConcurrency: 3 })
 		expect(resolveCacheWriterResourceConfig({ BLOB_500_BACKOFF_MS: '1000' }).blob500BackoffMs).toBe(1000)
 	})
 
-	test('serializes twenty simulated huge HTML fetch/process operations', async () => {
-		const gate = new AsyncWorkGate(1)
+	test('bounds concurrent blob work at three operations', async () => {
+		const gate = new AsyncWorkGate(3)
 		let active = 0
 		let maxActive = 0
 
@@ -715,7 +715,7 @@ describe('ingest resource and logical quota guards', () => {
 			),
 		)
 
-		expect(maxActive).toBe(1)
+		expect(maxActive).toBe(3)
 	})
 
 	test('releases a heavy-work permit after an aborted operation', async () => {

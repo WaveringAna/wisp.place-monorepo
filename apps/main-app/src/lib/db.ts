@@ -35,6 +35,43 @@ const createPoolOptions = (pool: typeof databaseConfiguration.primaryPool) => ({
 
 export const db = new SQL(databaseConfiguration.primaryUrl, createPoolOptions(databaseConfiguration.primaryPool))
 
+/**
+ * How many primary connections are held open between requests.
+ *
+ * A node in another region pays the full Postgres handshake on a cold
+ * connection: TCP, the SSLRequest round trip, the TLS handshake, then three
+ * more round trips for SCRAM-SHA-256 and one for startup. Measured from a
+ * Singapore node to a primary in Ashburn that is about 1.9 seconds, and with a
+ * 30 second idle timeout the pool was empty for almost every sign-in.
+ *
+ * Two, because the widest fan-out on the primary in one request is the pair of
+ * lookups at the end of the OAuth callback. A third concurrent query still
+ * connects on demand; it just is not on the common path.
+ */
+const WARM_PRIMARY_CONNECTIONS = 2
+
+/**
+ * Hold connections open so a request never pays for establishing one.
+ *
+ * The queries run concurrently on purpose: one at a time would keep re-using a
+ * single pooled connection and leave the rest to lapse.
+ */
+export const warmPrimaryConnections = async (): Promise<void> => {
+	await Promise.all(Array.from({ length: WARM_PRIMARY_CONNECTIONS }, () => db`SELECT 1`))
+}
+
+/**
+ * How often to touch an idle pool, in milliseconds.
+ *
+ * Comfortably inside the idle timeout, and frequent enough that a connection
+ * retired at `maxLifetime` is replaced by this task rather than by a user's
+ * request.
+ */
+export const connectionWarmingIntervalMs = Math.max(
+	10_000,
+	Math.floor(databaseConfiguration.primaryPool.idleTimeoutSeconds * 1_000 * 0.5),
+)
+
 // Do not create another pool unless the operator explicitly configured a
 // different endpoint. The raw replica client stays private so call sites must
 // opt into the named eventualRead repository below.

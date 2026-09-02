@@ -1,7 +1,7 @@
 import type { NodeOAuthClient } from '@atproto/oauth-client-node'
 import { createLogger } from '@wispplace/observability'
 import { Elysia } from 'elysia'
-import { getDomainByDid, getSitesByDid } from '../lib/db'
+import { eventualRead } from '../lib/db'
 import {
 	authorizeWisp,
 	authorizeWispLegacy,
@@ -129,8 +129,11 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 					return c.redirect(redeem.url ?? '/private/denied')
 				}
 
-				// Check if user has any cached sites or a claimed domain
-				const [sites, domain] = await Promise.all([getSitesByDid(session.did), getDomainByDid(session.did)])
+				// Which page to land on is presentation, not authorization, so it reads
+				// the local replica. Both lookups used to go to the primary, which from
+				// a distant region cost two more round trips on the sign-in path than
+				// the choice of redirect is worth.
+				const { sites, domain } = await eventualRead.getUserStatus(session.did)
 
 				// If no sites and no domain, redirect to onboarding
 				if (sites.length === 0 && !domain) {

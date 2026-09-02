@@ -77,7 +77,19 @@ describe('enqueueSiteRevalidationWithRedis', () => {
 		expect(redis.calls[0]?.script).toContain('XRANGE')
 		expect(redis.calls[0]?.script).toContain('XLEN')
 		expect(redis.calls[0]?.script).not.toContain('MAXLEN')
-		expect(redis.calls[0]?.keys).toEqual([`revalidate:site:delete-tombstone:${DID}:${RKEY}`, config.revalidateStream])
+		expect(redis.calls[0]?.args.slice(-2)[0]).toBe('1')
+		expect(redis.calls[0]?.keys).toEqual([
+			`revalidate:site:delete-tombstone:${DID}:${RKEY}`,
+			config.revalidateStream,
+			`wisp:revalidate:quarantine:${encodeURIComponent(DID)}/${encodeURIComponent(RKEY)}`,
+		])
+	})
+
+	test('does not recreate repair work while a DLQ fence exists', async () => {
+		const redis = new FakeQueue()
+		redis.response = [-2, 'dlq-9']
+		expect(await enqueueSiteRevalidationWithRedis(redis, DID, RKEY, 'storage-miss:index.html')).toBe('quarantined')
+		expect(redis.calls[0]?.args.slice(-2)[0]).toBe('1')
 	})
 
 	test('does not report deduplicated when the atomic XADD transaction fails or has no proven job', async () => {

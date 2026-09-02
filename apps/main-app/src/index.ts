@@ -13,11 +13,13 @@ import { promptAdminSetup } from './lib/admin-auth'
 import { csrfProtection } from './lib/csrf'
 import {
 	closeDatabase,
+	connectionWarmingIntervalMs,
 	getCookieSecret,
 	getDatabaseReadHealth,
 	getWebhookSecretEncryptionHealth,
 	hasSeparateDatabaseReadPool,
 	pruneAnalyticsData,
+	warmPrimaryConnections,
 } from './lib/db'
 import { type DNSVerificationLogLevel, DNSVerificationWorker } from './lib/dns-verification-worker'
 import { startPeriodicSingleFlightTask, stopServerWithGracePeriod } from './lib/lifecycle'
@@ -28,6 +30,7 @@ import {
 	getCurrentKeys,
 	getOAuthClient,
 	rotateKeysIfNeeded,
+	warmOAuthLockConnection,
 } from './lib/oauth-client'
 import { startPrivateSiteReaper } from './lib/private-site-reaper'
 import { pruneHandoffs, pruneSessions } from './lib/private-sites-db'
@@ -114,6 +117,17 @@ const runMaintenance = async (): Promise<void> => {
 
 const maintenance = startPeriodicSingleFlightTask(runMaintenance, 60 * 60 * 1000, () =>
 	logger.error('[Maintenance] Periodic maintenance failed'),
+)
+
+// Keeping a connection open is not an optimisation here so much as removing a
+// fixed cost: a cold primary connection from a remote region costs more than
+// every query in a sign-in put together.
+const connectionWarming = startPeriodicSingleFlightTask(
+	async () => {
+		await Promise.all([warmPrimaryConnections(), warmOAuthLockConnection()])
+	},
+	connectionWarmingIntervalMs,
+	() => logger.error('[Database] Connection warming failed'),
 )
 
 const privateSiteReaper = startPrivateSiteReaper()
@@ -541,6 +555,7 @@ const shutdown = (): void => {
 		// Stop periodic scheduling now. The returned promises wait for only the
 		// already-active maintenance and reaper passes.
 		const backgroundTasks = [
+			{ name: 'connection warming', promise: connectionWarming.stop() },
 			{ name: 'maintenance', promise: maintenance.stop() },
 			{ name: 'private-site reaper', promise: privateSiteReaper.stop() },
 			{ name: 'public uploads', promise: stopAndDrainPublicUploads(GRACEFUL_SHUTDOWN_TIMEOUT_MS) },

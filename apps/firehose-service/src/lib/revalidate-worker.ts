@@ -1,5 +1,6 @@
 import os from 'node:os'
 import { SubfsExpansionError } from '@wispplace/atproto-utils'
+import { revalidationQuarantineKey, revalidationSiteVersionKey } from '@wispplace/constants'
 import { createLogger } from '@wispplace/observability'
 import { SafeFetchHttpError } from '@wispplace/safe-fetch'
 import { DecompressionLimitError } from '@wispplace/tiered-storage'
@@ -384,6 +385,8 @@ export interface RevalidateRedisPipeline {
 
 export interface RevalidateRedisClient {
 	ttl(key: string): PromiseLike<number>
+	/** Durable DLQ fence lookup; production ioredis always exposes GET. */
+	get?(key: string): PromiseLike<string | null>
 	/** Queue commands and execute them in one Redis round trip. */
 	pipeline?(): RevalidateRedisPipeline
 	/** Atomically XACK then XDEL for the sole documented consumer group. */
@@ -434,6 +437,9 @@ local dlqId = redis.call('XADD', KEYS[2], 'MAXLEN', '~', ARGV[11], '*',
   'classification', ARGV[9],
   'attempts', ARGV[8],
   'quarantinedAt', ARGV[10])
+local fenceVersion = ARGV[12]
+if fenceVersion == '' then fenceVersion = redis.call('GET', KEYS[4]) or '' end
+redis.call('SET', KEYS[3], fenceVersion)
 local acknowledged = redis.call('XACK', KEYS[1], ARGV[1], ARGV[2])
 if acknowledged ~= 1 then return {acknowledged, dlqId, 0} end
 local deleted = redis.call('XDEL', KEYS[1], ARGV[2])
@@ -523,6 +529,7 @@ export interface ParsedRevalidationMessage {
 	did?: string
 	rkey?: string
 	reason: string
+	sourceVersion: string
 }
 
 function hasPermanentPdsCode(code: string): boolean {
@@ -624,9 +631,11 @@ export async function quarantineRevalidationMessage(
 	const resolvedCode = code ?? classifyRevalidationError(error).code
 	const result = await redisClient.eval(
 		QUARANTINE_REVALIDATION_SCRIPT,
-		2,
+		4,
 		config.revalidateStream,
 		config.revalidateDlqStream,
+		revalidationQuarantineKey(message.did ?? '', message.rkey ?? ''),
+		revalidationSiteVersionKey(message.did ?? '', message.rkey ?? ''),
 		config.revalidateGroup,
 		id,
 		boundedField(message.did),
@@ -638,6 +647,7 @@ export async function quarantineRevalidationMessage(
 		classification,
 		Date.now().toString(),
 		String(config.revalidateDlqStreamMaxLen),
+		boundedField(message.sourceVersion),
 	)
 	if (
 		!Array.isArray(result) ||
@@ -678,7 +688,19 @@ function parseRevalidationMessage(rawFields: string[]): ParsedRevalidationMessag
 		did: fields.did,
 		rkey: fields.rkey,
 		reason: fields.reason || 'storage-miss',
+		sourceVersion: fields.sourceVersion || '',
 	}
+}
+
+async function isSiteRepairQuarantined(
+	redisClient: RevalidateRedisClient,
+	message: ParsedRevalidationMessage,
+): Promise<boolean> {
+	if (!message.did || !message.rkey || !redisClient.get) return false
+	if (isSettingsFailureRevalidationReason(message.reason)) return false
+	const fenceVersion = await redisClient.get(revalidationQuarantineKey(message.did, message.rkey))
+	if (fenceVersion === null) return false
+	return message.sourceVersion === '' || message.sourceVersion <= fenceVersion
 }
 
 async function setRetrySuppressionTtl(
@@ -935,11 +957,15 @@ export async function processRevalidationMessage(
 	const ownedResources = options.resourceContext === undefined
 	const resources =
 		options.resourceContext ??
-		createRevalidationResourceContext(
-			runtime.revalidationDeadlineMs,
-			runtime.transferBudgetBytes,
-			options.upstreamSignal,
-		)
+		(isSettingsFailureRevalidationReason(message.reason)
+			? createRevalidationResourceContext(
+					runtime.revalidationDeadlineMs,
+					runtime.transferBudgetBytes,
+					options.upstreamSignal,
+				)
+			: // Filesystem repair is bounded by per-request limits, manifest file/size
+				// admission, and lifecycle. Retries must not consume a second transfer quota.
+				createRevalidationResourceContext(null, null, options.upstreamSignal))
 	const lifecycleCancelled = () => options.upstreamSignal?.aborted === true
 
 	if (lifecycleCancelled()) {
@@ -1001,6 +1027,16 @@ export async function processRevalidationMessage(
 			} else {
 				await acknowledgeCompletedMessage(redisClient, id)
 			}
+			return
+		}
+
+		if (await isSiteRepairQuarantined(redisClient, message)) {
+			logger.info(`[Revalidate] Dropping ${id}: site remains quarantined until a newer firehose event`, {
+				did: message.did,
+				rkey: message.rkey,
+				reason: message.reason,
+			})
+			await acknowledgeCompletedMessage(redisClient, id)
 			return
 		}
 

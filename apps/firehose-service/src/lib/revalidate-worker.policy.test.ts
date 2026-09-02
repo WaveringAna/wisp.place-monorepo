@@ -128,21 +128,24 @@ describe('strict revalidation poison handling', () => {
 		expect(evals).toHaveLength(1)
 		const [call] = evals
 		if (!call) throw new Error('Expected quarantine script call')
-		expect(call.keyCount).toBe(2)
-		expect(call.args.slice(0, 4)).toEqual([
+		expect(call.keyCount).toBe(4)
+		expect(call.args.slice(0, 6)).toEqual([
 			config.revalidateStream,
 			config.revalidateDlqStream,
+			'wisp:revalidate:quarantine:/site',
+			'wisp:revalidate:version:/site',
 			config.revalidateGroup,
 			id,
 		])
-		expect(call.args.slice(4, 9)).toEqual([
+		expect(call.args.slice(6, 11)).toEqual([
 			'',
 			'site',
 			'malformed',
 			'MALFORMED_MESSAGE',
 			'Revalidation failed: MALFORMED_MESSAGE',
 		])
-		expect(call.script.indexOf("redis.call('XADD'")).toBeLessThan(call.script.indexOf("redis.call('XACK'"))
+		expect(call.script.indexOf("redis.call('XADD'")).toBeLessThan(call.script.indexOf("redis.call('SET'"))
+		expect(call.script.indexOf("redis.call('SET'")).toBeLessThan(call.script.indexOf("redis.call('XACK'"))
 		expect(call.script.indexOf("redis.call('XACK'")).toBeLessThan(call.script.indexOf("redis.call('XDEL'"))
 	})
 
@@ -152,7 +155,13 @@ describe('strict revalidation poison handling', () => {
 
 		await quarantineRevalidationMessage(
 			redis,
-			{ fields: {}, did: 'did:plc:contract', rkey: 'docs/index.html', reason: 'storage-miss:docs/index.html' },
+			{
+				fields: {},
+				did: 'did:plc:contract',
+				rkey: 'docs/index.html',
+				reason: 'storage-miss:docs/index.html',
+				sourceVersion: '3mzzzzzzzzzzz',
+			},
 			id,
 			new Error('upstream timeout'),
 			7,
@@ -166,8 +175,13 @@ describe('strict revalidation poison handling', () => {
 		const quarantinedAt = call.args[call.keyCount + 9]
 		if (!quarantinedAt) throw new Error('Expected a quarantine timestamp argument')
 		expect(quarantinedAt).toMatch(/^\d+$/)
-		expect(call.keyCount).toBe(2)
-		expect(call.args.slice(0, 2)).toEqual([config.revalidateStream, config.revalidateDlqStream])
+		expect(call.keyCount).toBe(4)
+		expect(call.args.slice(0, 4)).toEqual([
+			config.revalidateStream,
+			config.revalidateDlqStream,
+			'wisp:revalidate:quarantine:did%3Aplc%3Acontract/docs%2Findex.html',
+			'wisp:revalidate:version:did%3Aplc%3Acontract/docs%2Findex.html',
+		])
 		expect(call.args.slice(call.keyCount)).toEqual([
 			config.revalidateGroup,
 			id,
@@ -180,6 +194,7 @@ describe('strict revalidation poison handling', () => {
 			'transient',
 			expect.any(String),
 			String(config.revalidateDlqStreamMaxLen),
+			'3mzzzzzzzzzzz',
 		])
 
 		expect(parseDlqXaddContract(call.script)).toEqual({
@@ -210,7 +225,8 @@ describe('strict revalidation poison handling', () => {
 				quarantinedAt,
 			},
 		})
-		expect(call.script.indexOf("redis.call('XADD'")).toBeLessThan(call.script.indexOf("redis.call('XACK'"))
+		expect(call.script.indexOf("redis.call('XADD'")).toBeLessThan(call.script.indexOf("redis.call('SET'"))
+		expect(call.script.indexOf("redis.call('SET'")).toBeLessThan(call.script.indexOf("redis.call('XACK'"))
 		expect(call.script.indexOf("redis.call('XACK'")).toBeLessThan(call.script.indexOf("redis.call('XDEL'"))
 	})
 

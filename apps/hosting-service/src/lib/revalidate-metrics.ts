@@ -1,9 +1,10 @@
-type EnqueueResult = 'enqueued' | 'deduped' | 'disabled' | 'error'
+type EnqueueResult = 'enqueued' | 'deduped' | 'quarantined' | 'disabled' | 'error'
 
 interface RevalidateMetrics {
 	storageMissExpected: number
 	revalidateEnqueued: number
 	revalidateDeduped: number
+	revalidateQuarantined: number
 	revalidateDisabled: number
 	revalidateErrors: number
 	lastStorageMissAt: number | null
@@ -14,6 +15,7 @@ const metrics: RevalidateMetrics = {
 	storageMissExpected: 0,
 	revalidateEnqueued: 0,
 	revalidateDeduped: 0,
+	revalidateQuarantined: 0,
 	revalidateDisabled: 0,
 	revalidateErrors: 0,
 	lastStorageMissAt: null,
@@ -33,6 +35,10 @@ export function recordRevalidateResult(result: EnqueueResult): void {
 	}
 	if (result === 'deduped') {
 		metrics.revalidateDeduped += 1
+		return
+	}
+	if (result === 'quarantined') {
+		metrics.revalidateQuarantined += 1
 		return
 	}
 	if (result === 'disabled') {

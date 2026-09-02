@@ -29,10 +29,12 @@ describe('enqueueRevalidateWithRedis', () => {
 		expect(dedupePresent).toBe(false)
 		expect(calls).toEqual([
 			{
-				keyCount: 2,
+				keyCount: 4,
 				keysAndArgs: [
 					'revalidate:site:storage-miss:did:plc:test:site',
 					'wisp:revalidate',
+					'wisp:revalidate:quarantine:did%3Aplc%3Atest/site',
+					'wisp:revalidate:version:did%3Aplc%3Atest/site',
 					'600',
 					'10000',
 					'did:plc:test',
@@ -55,6 +57,16 @@ describe('enqueueRevalidateWithRedis', () => {
 			{
 				enqueued: false,
 				result: 'deduped',
+			},
+		)
+	})
+
+	test('suppresses repairs while the site is durably quarantined', async () => {
+		const redis: RevalidateQueueClient = { eval: async () => [-2, 'dlq-9'] }
+		await expect(enqueueRevalidateWithRedis(redis, 'did:plc:test', 'site', 'storage-miss:index.html')).resolves.toEqual(
+			{
+				enqueued: false,
+				result: 'quarantined',
 			},
 		)
 	})

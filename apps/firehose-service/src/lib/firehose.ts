@@ -14,7 +14,11 @@ import type { Record as WispSettings } from '@wispplace/lexicons/types/place/wis
 import { validateRecord as validateSettingsRecord } from '@wispplace/lexicons/types/place/wisp/settings'
 import { createLogger } from '@wispplace/observability'
 import { config } from '../config'
-import { enqueueSiteRevalidation, type SiteRevalidationEnqueueResult } from './cache-invalidation'
+import {
+	enqueueSiteRevalidation,
+	recordSiteReconciliation,
+	type SiteRevalidationEnqueueResult,
+} from './cache-invalidation'
 import { handleSettingsDelete, handleSettingsUpdate, handleSiteCreateOrUpdate, handleSiteDelete } from './cache-writer'
 import { readDurableCursor, relayFingerprint, saveDurableCursor } from './leader'
 import {
@@ -22,7 +26,11 @@ import {
 	SETTINGS_UPDATE_FAILURE_REASON,
 	SITE_DELETE_TOMBSTONE_REASON,
 } from './revalidate-queue'
-import { createRevalidationResourceContext, type RevalidationResourceContext } from './revalidate-resources'
+import {
+	assertRevalidationActive,
+	createRevalidationResourceContext,
+	type RevalidationResourceContext,
+} from './revalidate-resources'
 import {
 	DEFAULT_REVALIDATE_DEADLINE_MS,
 	DEFAULT_REVALIDATE_TRANSFER_BUDGET_BYTES,
@@ -52,7 +60,10 @@ const firehoseTransferBudgetBytes =
 	firehoseResourceConfig.transferBudgetBytes ?? DEFAULT_REVALIDATE_TRANSFER_BUDGET_BYTES
 
 function createFilesystemEventResources(upstreamSignal?: AbortSignal): RevalidationResourceContext {
-	return createRevalidationResourceContext(firehoseOperationDeadlineMs, firehoseTransferBudgetBytes, upstreamSignal)
+	// Site updates keep per-request fetch timeouts and manifest/file limits, but
+	// have no aggregate wall or transfer deadline. A large valid publication must
+	// not fail because serial/parallel retries counted its bytes twice.
+	return createRevalidationResourceContext(null, null, upstreamSignal)
 }
 
 function createSettingsEventResources(upstreamSignal?: AbortSignal): RevalidationResourceContext {
@@ -278,14 +289,18 @@ async function requireDurableRevalidation(
 	rkey: string,
 	reason: string,
 	lifecycleSignal: AbortSignal,
+	sourceVersion = '',
 ): Promise<void> {
 	// Do not route a full stream through requestReplay: that path invokes the
 	// leader failure callback and stops this process's only consumer. Capacity
 	// waits here, while the independently started worker remains alive to drain.
-	const result = await retryDurableRevalidationUntilAvailable(() => enqueueSiteRevalidation(did, rkey, reason), {
-		shouldContinue: () => acceptingEvents,
-		signal: lifecycleSignal,
-	})
+	const result = await retryDurableRevalidationUntilAvailable(
+		() => enqueueSiteRevalidation(did, rkey, reason, sourceVersion),
+		{
+			shouldContinue: () => acceptingEvents,
+			signal: lifecycleSignal,
+		},
+	)
 	if (isDurableRevalidation(result)) {
 		durableReplayController.recordDurableSuccess()
 		return
@@ -414,7 +429,14 @@ async function processFilesystemEvent(
 	let recoveryReason: string | undefined
 	try {
 		logger.debug('[place.wisp.fs] Processing event', { did, rkey, event: event.event })
+		assertRevalidationActive(resources)
 		recoveryReason = await reconcileFilesystemEvent(event, resources)
+		assertRevalidationActive(resources)
+		// Record only a completed reconciliation. The monotonic repo revision keeps
+		// a replay of this same event from clearing a later DLQ fence.
+		if (!(await recordSiteReconciliation(did, rkey, event.rev))) {
+			throw new Error('Successful site reconciliation could not be recorded')
+		}
 	} catch (error) {
 		logger.error('[place.wisp.fs] Error handling event', undefined, {
 			did,
@@ -428,7 +450,7 @@ async function processFilesystemEvent(
 		resources.close()
 	}
 
-	if (recoveryReason) await requireDurableRevalidation(did, rkey, recoveryReason, lifecycleSignal)
+	if (recoveryReason) await requireDurableRevalidation(did, rkey, recoveryReason, lifecycleSignal, event.rev)
 	logger.debug('[place.wisp.fs] Completed event', { did, rkey, event: event.event })
 }
 

@@ -6,7 +6,12 @@
  * is updated or deleted via the firehose.
  */
 
-import { DEFAULT_CACHE_INVALIDATION_CHANNEL, publishCacheInvalidationEvent } from '@wispplace/constants'
+import {
+	DEFAULT_CACHE_INVALIDATION_CHANNEL,
+	publishCacheInvalidationEvent,
+	revalidationQuarantineKey,
+	revalidationSiteVersionKey,
+} from '@wispplace/constants'
 import { createLogger } from '@wispplace/observability'
 import Redis from 'ioredis'
 import { config } from '../config'
@@ -116,7 +121,7 @@ type RevalidationDedupeCategory = 'delete-tombstone' | 'settings' | 'rewrite-mis
  * Only `enqueued` and `deduplicated` permit a caller to advance its own cursor.
  * `capacity` is explicit backpressure and must be retried without dropping work.
  */
-export type SiteRevalidationEnqueueResult = 'enqueued' | 'deduplicated' | 'capacity' | 'unavailable'
+export type SiteRevalidationEnqueueResult = 'enqueued' | 'deduplicated' | 'quarantined' | 'capacity' | 'unavailable'
 
 export interface RevalidationQueueClient {
 	/** Runs the revalidation enqueue script atomically. */
@@ -127,6 +132,11 @@ export interface RevalidationQueueClient {
 // pending consumer-group entry. Capacity is a hard backpressure boundary; ACK
 // plus XDEL is the only normal removal path.
 const ENQUEUE_REVALIDATION_SCRIPT = `
+if ARGV[7] == '1' then
+  local quarantine = redis.call('GET', KEYS[3])
+  if quarantine and (ARGV[8] == '' or ARGV[8] <= quarantine) then return {-2, quarantine} end
+end
+
 local existing = redis.call('GET', KEYS[1])
 if existing then
   local found = redis.call('XRANGE', KEYS[2], existing, existing, 'COUNT', 1)
@@ -134,7 +144,7 @@ if existing then
   redis.call('DEL', KEYS[1])
 end
 if redis.call('XLEN', KEYS[2]) >= tonumber(ARGV[1]) then return {-1, ''} end
-local id = redis.call('XADD', KEYS[2], '*', 'did', ARGV[2], 'rkey', ARGV[3], 'reason', ARGV[4], 'ts', ARGV[5])
+local id = redis.call('XADD', KEYS[2], '*', 'did', ARGV[2], 'rkey', ARGV[3], 'reason', ARGV[4], 'ts', ARGV[5], 'sourceVersion', ARGV[8])
 redis.call('SET', KEYS[1], id, 'EX', ARGV[6])
 return {1, id}
 `
@@ -162,6 +172,7 @@ export async function enqueueSiteRevalidationWithRedis(
 	did: string,
 	rkey: string,
 	reason: string,
+	sourceVersion = '',
 ): Promise<SiteRevalidationEnqueueResult> {
 	const dedupeCategory = getRevalidationDedupeCategory(reason)
 	const dedupeKey = `revalidate:site:${dedupeCategory}:${did}:${rkey}`
@@ -169,15 +180,18 @@ export async function enqueueSiteRevalidationWithRedis(
 		const outcome = parseEnqueueResult(
 			await redis.eval(
 				ENQUEUE_REVALIDATION_SCRIPT,
-				2,
+				3,
 				dedupeKey,
 				config.revalidateStream,
+				revalidationQuarantineKey(did, rkey),
 				config.revalidateStreamMaxLen.toString(),
 				did,
 				rkey,
 				reason,
 				Date.now().toString(),
 				config.revalidateDedupeTtlSeconds.toString(),
+				dedupeCategory === 'settings' ? '0' : '1',
+				sourceVersion,
 			),
 		)
 		if (!outcome) {
@@ -185,6 +199,7 @@ export async function enqueueSiteRevalidationWithRedis(
 			return 'unavailable'
 		}
 		if (outcome.status === 0 && outcome.streamId) return 'deduplicated'
+		if (outcome.status === -2 && outcome.streamId) return 'quarantined'
 		if (outcome.status === 1 && outcome.streamId) {
 			logger.info(`[Revalidate] Enqueued ${did}/${rkey} after firehose failure`, { reason, streamId: outcome.streamId })
 			return 'enqueued'
@@ -209,10 +224,48 @@ export async function enqueueSiteRevalidation(
 	did: string,
 	rkey: string,
 	reason: string,
+	sourceVersion = '',
 ): Promise<SiteRevalidationEnqueueResult> {
 	const redis = getPublisher()
 	if (!redis) return 'unavailable'
-	return enqueueSiteRevalidationWithRedis(redis, did, rkey, reason)
+	return enqueueSiteRevalidationWithRedis(redis, did, rkey, reason, sourceVersion)
+}
+
+/**
+ * Record a successfully reconciled repo revision and clear only an older DLQ
+ * fence. ATProto repo revisions are monotonic TIDs, so relay replays of the
+ * same or an older event cannot reopen hosting repair work.
+ */
+export async function recordSiteReconciliation(did: string, rkey: string, revision: string): Promise<boolean> {
+	if (!config.redisUrl) return true
+	const redis = getPublisher()
+	if (!redis || !/^[a-z2-7]{13}$/.test(revision)) return false
+	try {
+		await waitForCacheInvalidationPublisherReady(redis, publisherReadyTimeoutMs)
+		const result = await redis.eval(
+			`local current = redis.call('GET', KEYS[1])
+if current and current >= ARGV[1] then return {0, current, 0} end
+redis.call('SET', KEYS[1], ARGV[1])
+local quarantine = redis.call('GET', KEYS[2])
+if quarantine and ARGV[1] > quarantine then
+  redis.call('DEL', KEYS[2])
+  return {1, ARGV[1], 1}
+end
+return {1, ARGV[1], 0}`,
+			2,
+			revalidationSiteVersionKey(did, rkey),
+			revalidationQuarantineKey(did, rkey),
+			revision,
+		)
+		return Array.isArray(result) && (result[0] === 0 || result[0] === 1)
+	} catch (error) {
+		logger.error('[Revalidate] Failed to record successful site reconciliation', undefined, {
+			did,
+			rkey,
+			errorKind: revalidationErrorKind(error),
+		})
+		return false
+	}
 }
 
 export async function closeCacheInvalidationPublisher(): Promise<void> {

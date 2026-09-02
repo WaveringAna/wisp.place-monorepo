@@ -27,7 +27,26 @@ const lockKey = (name: string): bigint => {
 // a connection for the full duration of fn() (which makes HTTP calls to the PDS),
 // so it must not share the main query pool — otherwise a slow PDS starves the
 // pool and inner stateStore/sessionStore queries deadlock waiting for slots.
-const lockDb = new SQL({ url: databaseConfiguration.primaryUrl, max: 4 })
+const lockDb = new SQL({
+	url: databaseConfiguration.primaryUrl,
+	max: 4,
+	idleTimeout: databaseConfiguration.primaryPool.idleTimeoutSeconds,
+	connectionTimeout: databaseConfiguration.primaryPool.connectionTimeoutSeconds,
+	maxLifetime: 300,
+})
+
+/**
+ * Hold one lock connection open.
+ *
+ * Nothing else uses this pool, so without warming it was always cold: the very
+ * first thing an OAuth callback does with it is establish a connection to the
+ * primary, which from a distant region costs more than the lock it is about to
+ * take. `client.callback()` always takes this lock — it revokes any prior
+ * session before storing the new one — so the cost landed on every sign-in.
+ */
+export const warmOAuthLockConnection = async (): Promise<void> => {
+	await lockDb`SELECT 1`
+}
 
 let oauthLockDatabaseClosePromise: Promise<void> | undefined
 

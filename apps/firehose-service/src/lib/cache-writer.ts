@@ -87,10 +87,10 @@ export function resolveCacheWriterResourceConfig(
 			1_000,
 			24 * 60 * 60 * 1000,
 		),
-		// Blob reads deliberately remain serial within a site update. A value
-		// other than one is rejected rather than allowing several 200 MiB buffers
-		// to queue before a quota violation can stop the batch.
-		downloadConcurrency: getBoundedEnvironmentInteger(environment, 'FIREHOSE_DOWNLOAD_CONCURRENCY', 1, 1, 1),
+		// Three independent blob reads keep large sites moving without making
+		// concurrency unbounded. Manifest and actual logical-size checks remain the
+		// admission boundary; network retries do not count as additional site data.
+		downloadConcurrency: getBoundedEnvironmentInteger(environment, 'FIREHOSE_DOWNLOAD_CONCURRENCY', 3, 1, 3),
 	}
 }
 
@@ -134,9 +134,9 @@ export class AsyncWorkGate {
 	}
 }
 
-// Do not make this configurable above one: it starts before safeFetchBlob and
-// therefore bounds buffered binary downloads as well as gzip/HTML work.
-const blobProcessingGate = new AsyncWorkGate(1)
+// The permit begins before safeFetchBlob, so this bounds buffered binary
+// downloads as well as gzip/HTML work to the configured three-way ceiling.
+const blobProcessingGate = new AsyncWorkGate(DOWNLOAD_CONCURRENCY)
 
 /**
  * Localhost PDS access requires all three dev-only gates. Production remains
@@ -1622,7 +1622,7 @@ async function downloadPlannedFile(plan: AccountedSiteFilePlan, file: FileInfo):
 	)
 }
 
-/** Download serial bounded batches; terminal limit failures stop the entire update. */
+/** Download bounded parallel batches; terminal limit failures stop the update after the active batch settles. */
 async function downloadSiteFiles(
 	plan: AccountedSiteFilePlan,
 	files: FileInfo[] = plan.filesToDownload,
@@ -1630,16 +1630,28 @@ async function downloadSiteFiles(
 	const failures: DownloadFailure[] = []
 	for (let index = 0; index < files.length; index += DOWNLOAD_CONCURRENCY) {
 		assertRevalidationActive(plan.update.resources)
-		for (const file of files.slice(index, index + DOWNLOAD_CONCURRENCY)) {
-			try {
+		const batch = files.slice(index, index + DOWNLOAD_CONCURRENCY)
+		const results = await Promise.allSettled(
+			batch.map(async (file) => {
 				assertRevalidationActive(plan.update.resources)
 				const result = await downloadPlannedFile(plan, file)
-				plan.uncompressedSizes.set(file.path, result.uncompressedSize)
-			} catch (error) {
-				if (isTerminalIngestError(error)) throw error
-				failures.push({ path: file.path, error })
+				return { file, result }
+			}),
+		)
+
+		let terminalError: unknown
+		for (const [batchIndex, result] of results.entries()) {
+			const file = batch[batchIndex]
+			if (!file) continue
+			if (result.status === 'fulfilled') {
+				plan.uncompressedSizes.set(file.path, result.value.result.uncompressedSize)
+			} else if (isTerminalIngestError(result.reason)) {
+				terminalError ??= result.reason
+			} else {
+				failures.push({ path: file.path, error: result.reason })
 			}
 		}
+		if (terminalError !== undefined) throw terminalError
 	}
 	return failures
 }

@@ -72,9 +72,29 @@ export class TransferByteBudget implements TransferByteBudgetLike {
 
 export interface RevalidationResourceContext {
 	readonly signal: AbortSignal
-	readonly deadlineAt: number
+	/** Null for filesystem work, which is bounded per request and by lifecycle rather than wall time. */
+	readonly deadlineAt: number | null
 	readonly transferBudget: TransferByteBudgetLike
 	close(): void
+}
+
+/** Counts transfer bytes without treating retries as quota consumption. */
+class UnboundedTransferByteBudget implements TransferByteBudgetLike {
+	readonly maxBytes = Number.POSITIVE_INFINITY
+	private consumed = 0
+
+	get consumedBytes(): number {
+		return this.consumed
+	}
+
+	get remainingBytes(): number {
+		return Number.POSITIVE_INFINITY
+	}
+
+	consume(bytes: number): void {
+		if (!Number.isSafeInteger(bytes) || bytes < 0) throw new RangeError('Transfer byte charge must be non-negative')
+		this.consumed = Math.min(Number.MAX_SAFE_INTEGER, this.consumed + bytes)
+	}
 }
 
 function abortReason(signal: AbortSignal): Error {
@@ -88,26 +108,34 @@ function abortReason(signal: AbortSignal): Error {
  * boundary after all work has stopped.
  */
 export function createRevalidationResourceContext(
-	deadlineMs: number,
-	transferBudgetBytes: number,
+	deadlineMs: number | null,
+	transferBudgetBytes: number | null,
 	upstreamSignal?: AbortSignal,
 ): RevalidationResourceContext {
-	if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1) {
-		throw new RangeError('Revalidation deadline must be a positive safe integer')
+	if (deadlineMs !== null && (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1)) {
+		throw new RangeError('Revalidation deadline must be null or a positive safe integer')
 	}
-	const deadlineAt = Date.now() + deadlineMs
+	if (transferBudgetBytes !== null && (!Number.isSafeInteger(transferBudgetBytes) || transferBudgetBytes < 1)) {
+		throw new RangeError('Revalidation transfer budget must be null or a positive safe integer')
+	}
+
+	const deadlineAt = deadlineMs === null ? null : Date.now() + deadlineMs
 	const controller = new AbortController()
-	const budget = new TransferByteBudget(transferBudgetBytes)
+	const boundedBudget = transferBudgetBytes === null ? null : new TransferByteBudget(transferBudgetBytes)
+	const budget: TransferByteBudgetLike = boundedBudget ?? new UnboundedTransferByteBudget()
 	let closed = false
-	const timer = setTimeout(() => controller.abort(new RevalidationDeadlineError(deadlineAt)), deadlineMs)
+	const timer =
+		deadlineAt === null
+			? undefined
+			: setTimeout(() => controller.abort(new RevalidationDeadlineError(deadlineAt)), deadlineMs as number)
 	const abortFromUpstream = () => controller.abort(abortReason(upstreamSignal as AbortSignal))
-	const abortFromBudget = () => controller.abort(abortReason(budget.signal))
+	const abortFromBudget = () => controller.abort(abortReason(boundedBudget!.signal))
 
 	if (upstreamSignal) {
 		if (upstreamSignal.aborted) abortFromUpstream()
 		else upstreamSignal.addEventListener('abort', abortFromUpstream, { once: true })
 	}
-	budget.signal.addEventListener('abort', abortFromBudget, { once: true })
+	boundedBudget?.signal.addEventListener('abort', abortFromBudget, { once: true })
 
 	return {
 		signal: controller.signal,
@@ -116,9 +144,9 @@ export function createRevalidationResourceContext(
 		close: () => {
 			if (closed) return
 			closed = true
-			clearTimeout(timer)
+			if (timer !== undefined) clearTimeout(timer)
 			upstreamSignal?.removeEventListener('abort', abortFromUpstream)
-			budget.signal.removeEventListener('abort', abortFromBudget)
+			boundedBudget?.signal.removeEventListener('abort', abortFromBudget)
 		},
 	}
 }

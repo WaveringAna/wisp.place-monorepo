@@ -1,4 +1,9 @@
-import { DEFAULT_REVALIDATE_STREAM, DEFAULT_REVALIDATE_STREAM_CAPACITY } from '@wispplace/constants'
+import {
+	DEFAULT_REVALIDATE_STREAM,
+	DEFAULT_REVALIDATE_STREAM_CAPACITY,
+	revalidationQuarantineKey,
+	revalidationSiteVersionKey,
+} from '@wispplace/constants'
 import Redis from 'ioredis'
 import { recordRevalidateResult } from './revalidate-metrics'
 
@@ -71,7 +76,7 @@ function getRedisClient(): Redis | null {
 	return client
 }
 
-export type EnqueueResult = 'enqueued' | 'deduped' | 'disabled' | 'error'
+export type EnqueueResult = 'enqueued' | 'deduped' | 'quarantined' | 'disabled' | 'error'
 
 type RevalidateReasonCategory = 'storage-miss' | 'rewrite-miss' | 'other'
 
@@ -83,6 +88,10 @@ export interface RevalidateQueueClient {
 // ID and is trusted only while XRANGE proves that entry still exists. Producers
 // never MAXLEN-trim because that can remove pending consumer-group work.
 export const REVALIDATE_ENQUEUE_SCRIPT = `
+local quarantine = redis.call('GET', KEYS[3])
+if quarantine then return {-2, quarantine} end
+local sourceVersion = redis.call('GET', KEYS[4]) or ''
+
 local existing = redis.call('GET', KEYS[1])
 if existing then
   local found = redis.call('XRANGE', KEYS[2], existing, existing, 'COUNT', 1)
@@ -127,9 +136,11 @@ export async function enqueueRevalidateWithRedis(
 		const outcome = parseEnqueueScriptResult(
 			await redis.eval(
 				REVALIDATE_ENQUEUE_SCRIPT,
-				2,
+				4,
 				dedupeKey,
 				streamName,
+				revalidationQuarantineKey(did, rkey),
+				revalidationSiteVersionKey(did, rkey),
 				dedupeTtl.toString(),
 				streamMaxLen.toString(),
 				did,
@@ -142,6 +153,10 @@ export async function enqueueRevalidateWithRedis(
 		if (outcome.status === 0 && outcome.streamId) {
 			recordRevalidateResult('deduped')
 			return { enqueued: false, result: 'deduped' }
+		}
+		if (outcome.status === -2 && outcome.streamId) {
+			recordRevalidateResult('quarantined')
+			return { enqueued: false, result: 'quarantined' }
 		}
 		if (outcome.status === -1) {
 			console.warn(`[Revalidate] Queue capacity reached for ${did}/${rkey}`)
