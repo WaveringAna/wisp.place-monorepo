@@ -109,12 +109,25 @@ credentials. Comparing the render is what catches a service being wired to
 the wrong one; printing it is what leaks one. Differences outside `image:`
 lines are reported by key only, and abort.
 
-**`RunAction` is asynchronous and its `success` field lies.** It returns in
-well under a second with `success: true, status: InProgress` — that is the
-initial value of a record the release has not started writing, not a
-result. Gating CI on it makes every tag go green regardless of outcome. The
-workflow captures the update id and polls `read/GetUpdate` until
-`status: Complete`, then reads `success` from there.
+**Komodo's execute calls do not wait, and their `success` field lies.** An
+execute returns the Update in its initial state — `success: true,
+status: InProgress` — before the work has begun. Gating on it makes a whole
+release "succeed" in ten seconds having built and deployed nothing. Inside
+an Action use the client's own `execute_and_poll`; from CI, capture the
+update id and poll `read/GetUpdate` until `status: Complete`, which is what
+the workflow does.
+
+**Compose is not guaranteed to pull.** Some services carry
+`pull_policy: never` from before images came from a registry, so
+`compose up` skips the pull and then dies with a bare "No such image" that
+names no cause. The Action pulls explicitly on each host first, so a
+registry or credential problem surfaces as a registry error on the host
+that has it, before anything is torn down.
+
+**Komodo's reported service image is rendered, not observed.** When it
+renders without the stack's env file the tag interpolates to nothing and
+comes back as `:0`, so a healthy service reads as a failed deploy.
+Verification asks the container (`InspectStackContainer`) instead.
 
 **Giving up on waiting is not cancelling.** If the poll loop hits its
 deadline the release continues server-side. Treat it as *unknown* and read
@@ -130,6 +143,29 @@ Not a new tag. Set `WISP_TAG` back on the affected stacks and redeploy —
 the Action is idempotent, so re-running a previous version is safe. Every
 compose file `wisp-prepare-tag` touches is backed up alongside it as
 `<name>.bak-wisptag-<UTC stamp>`.
+
+## Type-checking the Actions
+
+`./deploy/typecheck.sh` checks both Actions against Komodo's real client
+types. An Action is not a module — Komodo pastes its contents inside
+`async function main()` and supplies the globals — so the script wraps each
+file the same way before checking it, and `komodo-globals.d.ts` declares
+what Komodo injects. Subtract 2 from a reported line to map it back.
+
+The types under `komodo/vendor/` are fetched from a running Komodo and
+committed so the check works offline:
+
+```sh
+for f in types lib responses terminal; do
+  curl -sL "$KOMODO_ADDRESS/client/$f.d.ts" -o deploy/komodo/vendor/$f.d.ts
+done
+```
+
+Re-fetch them after a Komodo upgrade. This is worth keeping honest: typing
+these against the real client is what surfaced `execute_and_poll` (which
+replaced a hand-rolled poller), an Update id read as `.id` when it is
+`_id.$oid` (so every failure message printed `undefined`), and several
+optional fields being read as if they were guaranteed.
 
 ## Open
 

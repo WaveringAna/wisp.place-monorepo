@@ -31,6 +31,17 @@ const imageRepo = (ref: string): string => {
 	return colon > slash ? ref.slice(0, colon) : ref
 }
 
+// Komodo types these as optional, and they genuinely can be absent — a
+// resource can exist without a readable config. Failing here names the
+// resource; letting it through produces an "undefined is not an object"
+// halfway into a deploy.
+const required = <T>(value: T | null | undefined, what: string): T => {
+	if (value === null || value === undefined) {
+		throw new Error(`Komodo returned no ${what}`)
+	}
+	return value
+}
+
 const imageTag = (ref: string): string => {
 	const slash = ref.lastIndexOf('/')
 	const colon = ref.lastIndexOf(':')
@@ -84,14 +95,17 @@ const sh = async (server: string, script: string): Promise<string> => {
 
 // ------------------------------------------------ discover what we build
 
-const builds = (await komodo.read('ListBuilds', {})).filter((b: any) => b.info?.repo === repo)
+const builds = (await komodo.read('ListBuilds', {})).filter((b) => b.info?.repo === repo)
 if (!builds.length) {
 	throw new Error(`no Komodo build clones '${repo}'`)
 }
 
 const images: string[] = []
 for (const build of builds) {
-	const config = (await komodo.read('GetBuild', { build: build.name })).config
+	const config = required(
+		(await komodo.read('GetBuild', { build: build.name })).config,
+		`config for build ${build.name}`,
+	)
 	const registry = (config.image_registry ?? [])[0]
 	if (!registry?.domain) continue
 	images.push(
@@ -103,8 +117,8 @@ for (const build of builds) {
 
 const ours = (image: string) => images.includes(imageRepo(image))
 
-const stacks = (await komodo.read('ListStacks', {})).filter((s: any) =>
-	(s.info?.services ?? []).some((svc: any) => svc.image && ours(svc.image)),
+const stacks = (await komodo.read('ListStacks', {})).filter((s) =>
+	(s.info?.services ?? []).some((svc) => svc.image && ours(svc.image)),
 )
 if (!stacks.length) {
 	throw new Error(`no stack runs any of: ${images.join(', ')}`)
@@ -115,8 +129,11 @@ console.log(`${apply ? 'applying to' : 'dry run over'} ${stacks.length} stacks`)
 // -------------------------------------------------------- per stack
 
 for (const stack of stacks) {
-	const server = stack.info?.server_name
-	const config = (await komodo.read('GetStack', { stack: stack.name })).config
+	const server = required(stack.info?.server_name, `server for stack ${stack.name}`)
+	const config = required(
+		(await komodo.read('GetStack', { stack: stack.name })).config,
+		`config for stack ${stack.name}`,
+	)
 	const dir = config.run_directory
 	const files: string[] = config.file_paths ?? []
 
@@ -126,9 +143,7 @@ for (const stack of stacks) {
 	// inferred when every one of our services here is on the same tag; if
 	// they are drifted, picking one silently rolls the others back.
 	const tags = [
-		...new Set(
-			(stack.info?.services ?? []).filter((s: any) => s.image && ours(s.image)).map((s: any) => imageTag(s.image)),
-		),
+		...new Set((stack.info?.services ?? []).filter((s) => s.image && ours(s.image)).map((s) => imageTag(s.image))),
 	]
 	const seed = seedArg || (tags.length === 1 ? (tags[0] as string) : '')
 	if (!seed) {
@@ -141,7 +156,7 @@ for (const stack of stacks) {
 	// Every env file Komodo passes, in its order, so the render matches what
 	// actually deploys. Komodo's own env file may not exist until the first
 	// deploy writes it, so only pass the ones that are actually there.
-	const envFiles = [config.env_file_path, ...(config.additional_env_files ?? []).map((a: any) => a.path)]
+	const envFiles = [config.env_file_path, ...(config.additional_env_files ?? []).map((a) => a.path)]
 		.filter(Boolean)
 		.map((p: string) => (p.startsWith('/') ? p : `${dir}/${p}`))
 
