@@ -38,9 +38,16 @@ steps:
         exit 1
       fi
 
-      printf '%s' "$version"     > /tmp/wisp-version
-      printf '%s' "$TANGLED_SHA" > /tmp/wisp-commit
-      echo "releasing $version from $TANGLED_SHA"
+      # NOT $TANGLED_SHA. On a tag push that is the sha of the *ref*, and for
+      # an annotated tag (`git tag -a`) the ref is a tag object, not a
+      # commit — the mirror check then 422s and a build pinned to it would
+      # find nothing. The clone is of the tag, so HEAD is the commit it
+      # points at, for both annotated and lightweight tags.
+      commit="$(git rev-parse 'HEAD^{commit}')"
+
+      printf '%s' "$version" > /tmp/wisp-version
+      printf '%s' "$commit"  > /tmp/wisp-commit
+      echo "releasing $version from $commit (ref $TANGLED_SHA)"
 
   - name: verify commit reached the mirror
     command: |

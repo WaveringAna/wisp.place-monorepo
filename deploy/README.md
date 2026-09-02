@@ -133,6 +133,12 @@ Verification asks the container (`InspectStackContainer`) instead.
 deadline the release continues server-side. Treat it as *unknown* and read
 the Update before re-running, because a blind retry redeploys.
 
+**`TANGLED_SHA` on a tag push is the ref's sha, not the commit's.** For an
+annotated tag (`git tag -a`) the ref is a tag object, so pinning a build to
+it finds nothing and the mirror check 422s. The workflow resolves
+`HEAD^{commit}` from the clone instead, which is right for annotated and
+lightweight tags alike.
+
 **Tag pushes do not run `test.yml`** — it triggers on `branch: [main]`, and
 a tag push has no branch. Spindle has no cross-workflow `needs:`, so a tag
 is assumed to point at a commit that already went green on main.
