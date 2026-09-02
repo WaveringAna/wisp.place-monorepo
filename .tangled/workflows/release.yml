@@ -1,0 +1,107 @@
+# Release on a v* tag.
+#
+# This workflow does not build and does not know anything about where the
+# fleet runs. It validates the tag and hands off to the `wisp-release`
+# Komodo Action, which discovers the builds and stacks at run time and
+# reports back. See deploy/README.md.
+when:
+  - event: ["push"]
+    tag: ["v*"]
+
+engine: microvm
+image: nixos
+
+clone:
+  depth: 1
+
+dependencies:
+  - curl
+  - jq
+
+environment:
+  # The mirror the release builds actually clone from. Not a secret — it is
+  # this repo's own public remote — but it is the one thing the release has
+  # to be told, so it lives here rather than inline in two commands.
+  SOURCE_REPO: WaveringAna/wisp.place-monorepo
+
+steps:
+  - name: validate tag
+    command: |
+      export PATH="$HOME/.nix-profile/bin:$PATH"
+      set -euo pipefail
+
+      version="${TANGLED_REF_NAME#v}"
+      if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+        echo "refusing to release from tag '$TANGLED_REF_NAME'." >&2
+        echo "build versions are strictly major.minor.patch — a prerelease" >&2
+        echo "suffix like -rc1 has nowhere to go." >&2
+        exit 1
+      fi
+
+      printf '%s' "$version"     > /tmp/wisp-version
+      printf '%s' "$TANGLED_SHA" > /tmp/wisp-commit
+      echo "releasing $version from $TANGLED_SHA"
+
+  - name: verify commit reached the mirror
+    command: |
+      export PATH="$HOME/.nix-profile/bin:$PATH"
+      set -euo pipefail
+
+      # The builds clone $SOURCE_REPO, not the knot. A tag pushed only to
+      # origin would build whatever is on the mirror's default branch
+      # instead — same version number, different tree.
+      sha="$(cat /tmp/wisp-commit)"
+      code="$(curl -s -o /dev/null -w '%{http_code}' \
+        "https://api.github.com/repos/$SOURCE_REPO/commits/$sha")"
+      if [ "$code" != "200" ]; then
+        echo "commit $sha is not on the mirror (HTTP $code)." >&2
+        echo "push it there first, then re-run this pipeline." >&2
+        exit 1
+      fi
+      echo "commit present on mirror"
+
+  - name: run release
+    command: |
+      export PATH="$HOME/.nix-profile/bin:$PATH"
+      set -euo pipefail
+
+      payload="$(jq -n \
+        --arg version "$(cat /tmp/wisp-version)" \
+        --arg commit  "$(cat /tmp/wisp-commit)" \
+        --arg repo    "$SOURCE_REPO" \
+        '{action: "wisp-release",
+          args: {version: $version, commit: $commit, repo: $repo}}')"
+
+      komodo() {
+        curl -fsS -X POST "$KOMODO_ADDRESS/$1" \
+          -H 'Content-Type: application/json' \
+          -H "X-Api-Key: $KOMODO_API_KEY" \
+          -H "X-Api-Secret: $KOMODO_API_SECRET" \
+          -d "$2"
+      }
+
+      # RunAction is ASYNCHRONOUS. It returns in well under a second with
+      # `success: true, status: InProgress` — that field is the initial value
+      # of a record the release has not started writing yet, not a result.
+      # Gating on it would make every tag go green no matter what happened.
+      # The only honest signal is the Update, polled until it completes.
+      started="$(komodo execute/RunAction "$payload")"
+      id="$(echo "$started" | jq -r '.id // ._id."$oid" // empty')"
+      [ -n "$id" ] || { echo "no update id in RunAction response" >&2; exit 1; }
+      echo "release started, update $id"
+
+      deadline=$(( $(date +%s) + 5400 ))
+      while :; do
+        update="$(komodo read/GetUpdate "$(jq -n --arg id "$id" '{id: $id}')")"
+        [ "$(echo "$update" | jq -r '.status')" = "Complete" ] && break
+        if [ "$(date +%s)" -ge "$deadline" ]; then
+          echo "still running after 90m — giving up on waiting, NOT on the release." >&2
+          echo "it continues server-side; read update $id before re-running." >&2
+          exit 1
+        fi
+        sleep 15
+      done
+
+      echo "$update" | jq -r '.logs[]? | "── \(.stage)\n\(.stdout // "")\n\(.stderr // "")"'
+
+      [ "$(echo "$update" | jq -r '.success')" = "true" ]

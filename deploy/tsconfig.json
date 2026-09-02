@@ -1,0 +1,14 @@
+{
+	"compilerOptions": {
+		"target": "ES2022",
+		"lib": ["ES2022", "DOM"],
+		"module": "Preserve",
+		"moduleResolution": "bundler",
+		"allowImportingTsExtensions": true,
+		"strict": true,
+		"noEmit": true,
+		"skipLibCheck": true,
+		"types": []
+	},
+	"include": ["komodo/**/*.ts"]
+}

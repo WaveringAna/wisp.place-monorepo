@@ -111,5 +111,12 @@
 			"@wispplace/*": ["./packages/@wispplace/*/src"]
 		}
 	},
-	"exclude": ["docs", "node_modules", "apps/hosting-service/cache", "**/dist", "**/node_modules"]
+	"exclude": [
+		"docs",
+		"node_modules",
+		"apps/hosting-service/cache",
+		"**/dist",
+		"**/node_modules",
+		"deploy"
+	]
 }
