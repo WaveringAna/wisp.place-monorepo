@@ -46,7 +46,20 @@ const withVar = (env: string, key: string, value: string): string => {
 	return `${kept ? `${kept}\n` : ''}${key}=${value}\n`
 }
 
-const sh = async (server: string, command: string): Promise<string> => {
+// The server terminal is a live bash session, not a script runner. It
+// appends its own exit-code marker to the LAST LINE of whatever it is sent,
+// and echoes the shell prompt between lines. A multi-line script therefore
+// reports only its final line's status, interleaves prompt noise into the
+// output, and — if any line leaves bash waiting for more input — hangs
+// forever with no marker and no timeout.
+//
+// So everything goes over as exactly one line: the script base64-encoded and
+// piped into a fresh non-interactive bash. The marker then reflects that
+// bash's exit status, which is what we actually want to know.
+const sh = async (server: string, script: string): Promise<string> => {
+	const encoded = btoa(String.fromCharCode(...new TextEncoder().encode(script)))
+	const command = `printf %s '${encoded}' | base64 -d | bash`
+
 	const lines: string[] = []
 	let code: string | undefined
 	await komodo.execute_server_terminal(
@@ -147,7 +160,7 @@ for (const stack of stacks) {
 		...files.map(
 			(f) => `
 if grep -qE '^[[:space:]]*image:[[:space:]]*(${pattern}):' '${f}'; then
-  sed -E 's|^([[:space:]]*image:[[:space:]]*(${pattern})):[^[:space:]]*|\\1:\\$\\{${TAG_VAR}\\}|' '${f}' > '${f}.wisptag-preview'
+  sed -E 's#^([[:space:]]*image:[[:space:]]*(${pattern})):[^[:space:]]*#\\1:\\$\\{${TAG_VAR}\\}#' '${f}' > '${f}.wisptag-preview'
   after+=(-f '${f}.wisptag-preview'); touched+=('${f}')
 else
   after+=(-f '${f}')
