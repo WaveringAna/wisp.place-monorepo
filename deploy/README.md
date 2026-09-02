@@ -117,12 +117,12 @@ an Action use the client's own `execute_and_poll`; from CI, capture the
 update id and poll `read/GetUpdate` until `status: Complete`, which is what
 the workflow does.
 
-**Compose is not guaranteed to pull.** Some services carry
-`pull_policy: never` from before images came from a registry, so
-`compose up` skips the pull and then dies with a bare "No such image" that
-names no cause. The Action pulls explicitly on each host first, so a
-registry or credential problem surfaces as a registry error on the host
-that has it, before anything is torn down.
+**The Action pulls before it deploys.** Compose would now do this itself
+— the `pull_policy: never` lines that made it skip the fetch and then die
+on a bare "No such image" were removed on 2026-09-02. The explicit pull
+stays because it is the better failure mode: a registry or credential
+problem surfaces as a registry error, on the host that has it, before
+anything is torn down.
 
 **Komodo's reported service image is rendered, not observed.** When it
 renders without the stack's env file the tag interpolates to nothing and

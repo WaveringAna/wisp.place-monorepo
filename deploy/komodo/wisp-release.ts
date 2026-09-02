@@ -227,12 +227,11 @@ for (const stack of stacks) {
 
 	// Pull explicitly, on the host, before deploying.
 	//
-	// Compose cannot be relied on to fetch these: some services carry
-	// `pull_policy: never` from before images came from a registry, so
-	// `compose up` skips the pull and then dies with a bare
-	// "No such image" that names no cause. Pulling here means a registry or
-	// credential problem surfaces as a registry error, on the host that has
-	// the problem, before anything is torn down.
+	// Compose would now do this itself — the `pull_policy: never` lines that
+	// used to make it skip the fetch and then die on a bare "No such image"
+	// have been removed. This stays because it is still the better failure
+	// mode: a registry or credential problem surfaces as a registry error,
+	// on the host that has the problem, before anything is torn down.
 	const wanted = [
 		...new Set(
 			(stack.info?.services ?? [])
