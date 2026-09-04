@@ -1353,6 +1353,11 @@ export function getFirehoseHealth() {
 		directProgressing,
 		backlinkProgressing,
 		registryProgressing,
+		cursorAgeMs: {
+			direct: directJetstream?.cursorAgeMs,
+			backlink: backlinkJetstream?.cursorAgeMs,
+			registry: registryJetstream?.cursorAgeMs,
+		},
 		started: firehoseStarted,
 		paused: intakePaused,
 		queued: (directJetstream?.queued ?? 0) + (backlinkJetstream?.queued ?? 0) + (registryJetstream?.queued ?? 0),

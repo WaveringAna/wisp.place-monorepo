@@ -535,6 +535,16 @@ export class JetstreamClient {
 		return this.lastAckedCursor
 	}
 
+	/**
+	 * How far the durable cursor trails the present, in milliseconds. A relay
+	 * only retains a few days of replay, so an age approaching that window means
+	 * events are about to be lost silently rather than merely late.
+	 */
+	get cursorAgeMs(): number | undefined {
+		if (this.lastAckedCursor === undefined) return undefined
+		return Math.max(0, Date.now() - Math.floor(this.lastAckedCursor / 1000))
+	}
+
 	get queued(): number {
 		return this.queue.length
 	}

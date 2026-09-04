@@ -50,6 +50,10 @@ let initialBackfillScanned = 0
 let lastInitialBackfillCompletedAt: number | undefined
 let initialBackfillRetryAttempt = 0
 
+function cursorAgeSeconds(value: number | undefined): number | undefined {
+	return value === undefined ? undefined : boundedNumber(Math.floor(value / 1000))
+}
+
 function boundedNumber(value: unknown): number {
 	return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? Math.min(value, 1_000_000) : 0
 }
@@ -126,6 +130,12 @@ async function healthResponse(): Promise<Response> {
 			queued: Math.min(intake.queued, config.intakeQueueMax),
 			directConnected: intake.directConnected,
 			backlinkConnected: intake.backlinkConnected,
+			// Relay replay is finite: a cursor age approaching it loses events.
+			cursorAgeSeconds: {
+				direct: cursorAgeSeconds(intake.cursorAgeMs.direct),
+				backlink: cursorAgeSeconds(intake.cursorAgeMs.backlink),
+				registry: cursorAgeSeconds(intake.cursorAgeMs.registry),
+			},
 			admissionLimits: intake.admissionLimits,
 			streamFailures: intake.streamFailures,
 		},
