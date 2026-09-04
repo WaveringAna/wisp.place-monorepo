@@ -92,6 +92,45 @@ describe('JetstreamClient durable acknowledgement and protocol quarantine', () =
 		client.destroy()
 	})
 
+	test('acknowledges the longest completed prefix with one durable cursor write', async () => {
+		globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
+		const acknowledged: number[] = []
+		let release: (() => void) | undefined
+		const firstWrite = new Promise<void>((resolve) => {
+			release = resolve
+		})
+		let writes = 0
+		const client = new JetstreamClient({
+			url: 'wss://relay.example/subscribe',
+			cursor: 50,
+			concurrency: 4,
+			onEvent: async () => undefined,
+			onAcknowledged: async (value) => {
+				writes++
+				acknowledged.push(value.time_us)
+				if (writes === 1) await firstWrite
+			},
+		})
+		client.start()
+		const socket = FakeWebSocket.instances[0]
+		expect(socket).toBeDefined()
+		socket?.open()
+		socket?.message(event(51))
+		await flush()
+		// The first write is in flight; the next events complete behind it.
+		socket?.message(event(52))
+		socket?.message(event(53))
+		await flush()
+		expect(acknowledged).toEqual([51])
+		release?.()
+		await flush()
+		// 52 and 53 are one contiguous completed prefix: one write, latest cursor.
+		expect(acknowledged).toEqual([51, 53])
+		expect(client.cursor).toBe(53)
+		expect(client.queued).toBe(0)
+		client.destroy()
+	})
+
 	test('quarantines malformed bytes, ignores late frames, then resets only after an acked replay', async () => {
 		globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
 		const acknowledgements: number[] = []

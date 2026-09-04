@@ -380,13 +380,23 @@ export class JetstreamClient {
 		this.flushing = true
 		try {
 			while (!this.destroyed && !this.failed && this.queue[0]?.state === 'complete') {
-				const item = this.queue[0]
+				// One durable write per completed prefix, never per event. The cursor
+				// is a resume point, so intermediate values only add a round trip
+				// each, and a crash mid-prefix replays into deduplicated durable
+				// state. Under a backlog this is the difference between the relay
+				// round-trip rate and the handler rate.
+				let prefix = 0
+				while (this.queue[prefix]?.state === 'complete') prefix++
+				const item = this.queue[prefix - 1]
+				if (!item) break
 				try {
 					await this.opts.onAcknowledged?.(item.event)
 				} catch {
 					this.fail(new Error('Jetstream cursor persistence failed'), 'cursor')
 					return
 				}
+				// Failure or teardown during that write owns the queue instead.
+				if (this.destroyed || this.failed) return
 				this.lastAckedCursor = item.event.time_us
 				// A durable acknowledgement proves the connection carried useful work;
 				// only then reset exponential reconnect backoff.
@@ -394,7 +404,7 @@ export class JetstreamClient {
 				this.protocolFailures = 0
 				this.quarantined = false
 				this.lastProgressAt = Date.now()
-				this.queue.shift()
+				this.queue.splice(0, prefix)
 				this.notifyDrained()
 			}
 		} finally {
