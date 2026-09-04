@@ -131,6 +131,47 @@ describe('JetstreamClient durable acknowledgement and protocol quarantine', () =
 		client.destroy()
 	})
 
+	test('stays healthy while a bounded queue drains, and stops when acknowledgement stalls', async () => {
+		globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
+		let release: (() => void) | undefined
+		const held = new Promise<void>((resolve) => {
+			release = resolve
+		})
+		const client = new JetstreamClient({
+			url: 'wss://relay.example/subscribe',
+			cursor: 60,
+			maxQueue: 2,
+			onEvent: async () => held,
+			onAcknowledged: async () => undefined,
+			progressStaleMs: 60_000,
+		})
+		client.start()
+		const socket = FakeWebSocket.instances[0]
+		if (!socket) throw new Error('missing test socket')
+		socket.closeImmediately = false
+		socket.open()
+		socket.message(event(61))
+		socket.message(event(62))
+		await flush()
+		// Backpressure closed the socket; the retained queue is still real work.
+		expect(client.isConnected).toBe(false)
+		expect(client.failureKind).toBe('queue')
+		release?.()
+		await flush()
+		expect(client.cursor).toBe(62)
+		expect(client.isProgressing).toBe(true)
+
+		const stalled = new JetstreamClient({
+			url: 'wss://relay.example/subscribe',
+			onEvent: async () => undefined,
+			progressStaleMs: 1,
+		})
+		// Never acknowledged anything and not connected: not serving.
+		expect(stalled.isProgressing).toBe(false)
+		client.destroy()
+		stalled.destroy()
+	})
+
 	test('quarantines malformed bytes, ignores late frames, then resets only after an acked replay', async () => {
 		globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
 		const acknowledgements: number[] = []

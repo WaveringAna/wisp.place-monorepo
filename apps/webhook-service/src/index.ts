@@ -120,6 +120,8 @@ async function healthResponse(): Promise<Response> {
 		},
 		intake: {
 			connected: intake.connected,
+			// Socket state and durable progress differ under bounded backpressure.
+			progressing: intake.directProgressing && intake.backlinkProgressing && intake.registryProgressing,
 			started: intake.started,
 			queued: Math.min(intake.queued, config.intakeQueueMax),
 			directConnected: intake.directConnected,

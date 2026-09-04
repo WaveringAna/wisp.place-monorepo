@@ -1339,11 +1339,20 @@ export function getFirehoseHealth() {
 	const backlinkConnected = !backlinkRequired || backlinkJetstream?.isConnected === true
 	const registryConnected = registryJetstream?.isConnected === true
 	const connected = registryConnected && directConnected && backlinkConnected
+	// Readiness follows durable progress, not socket state. A stream draining its
+	// bounded queue after backpressure is serving; one that acknowledges nothing
+	// is not. Both are reported so the socket view stays visible.
+	const directProgressing = !directRequired || directJetstream?.isProgressing === true
+	const backlinkProgressing = !backlinkRequired || backlinkJetstream?.isProgressing === true
+	const registryProgressing = registryJetstream?.isProgressing === true
 	return {
 		connected,
 		directConnected,
 		backlinkConnected,
 		registryConnected,
+		directProgressing,
+		backlinkProgressing,
+		registryProgressing,
 		started: firehoseStarted,
 		paused: intakePaused,
 		queued: (directJetstream?.queued ?? 0) + (backlinkJetstream?.queued ?? 0) + (registryJetstream?.queued ?? 0),
@@ -1380,7 +1389,8 @@ export function getFirehoseHealth() {
 				lastProgressAt: registryJetstream?.lastProgressTime,
 			},
 		},
-		healthy: firehoseStarted && registryConnected && directConnected && backlinkConnected && !registrySnapshotOverflow,
+		healthy:
+			firehoseStarted && registryProgressing && directProgressing && backlinkProgressing && !registrySnapshotOverflow,
 	}
 }
 

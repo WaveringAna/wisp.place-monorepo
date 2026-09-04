@@ -44,6 +44,8 @@ export interface JetstreamOptions {
 	reconnectMinMs?: number
 	reconnectMaxMs?: number
 	reconnectMaxExponent?: number
+	/** How long a recovering stream may go without durable progress before it is stalled. */
+	progressStaleMs?: number
 }
 
 interface QueuedEvent {
@@ -54,6 +56,9 @@ interface QueuedEvent {
 function isStableDid(value: string): boolean {
 	return isCanonicalWebhookDid(value)
 }
+
+/** A recovering stream stays healthy only while it keeps acknowledging work. */
+const DEFAULT_PROGRESS_STALE_MS = 60_000
 
 const COLLECTION_RE = /^[A-Za-z0-9.-]{1,253}$/
 const RKEY_RE = /^[A-Za-z0-9._~:%@+-]{1,512}$/
@@ -211,6 +216,7 @@ export class JetstreamClient {
 	private readonly reconnectMinMs: number
 	private readonly reconnectMaxMs: number
 	private readonly reconnectMaxExponent: number
+	private readonly progressStaleMs: number
 
 	constructor(private readonly opts: JetstreamOptions) {
 		let relay: URL
@@ -237,6 +243,7 @@ export class JetstreamClient {
 		this.reconnectMinMs = opts.reconnectMinMs ?? config.jetstreamReconnectMinMs
 		this.reconnectMaxMs = opts.reconnectMaxMs ?? config.jetstreamReconnectMaxMs
 		this.reconnectMaxExponent = opts.reconnectMaxExponent ?? config.jetstreamReconnectMaxExponent
+		this.progressStaleMs = opts.progressStaleMs ?? DEFAULT_PROGRESS_STALE_MS
 		if (
 			!Number.isSafeInteger(this.maxQueue) ||
 			this.maxQueue < 1 ||
@@ -534,6 +541,18 @@ export class JetstreamClient {
 
 	get isConnected(): boolean {
 		return this.connected && !this.failed && !this.quarantined && !this.backpressured
+	}
+
+	/**
+	 * Intake health is durable progress, not socket state. A bounded queue that
+	 * closes the socket, drains, and replays from its last acknowledgement is
+	 * working exactly as designed; only a quarantined stream, or one that has
+	 * acknowledged nothing inside the window, has actually stopped serving.
+	 */
+	get isProgressing(): boolean {
+		if (this.destroyed || this.quarantined) return false
+		if (this.isConnected) return true
+		return this.lastProgressAt !== 0 && Date.now() - this.lastProgressAt < this.progressStaleMs
 	}
 
 	get isQuarantined(): boolean {
