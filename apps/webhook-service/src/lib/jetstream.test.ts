@@ -172,6 +172,42 @@ describe('JetstreamClient durable acknowledgement and protocol quarantine', () =
 		stalled.destroy()
 	})
 
+	test('retries a failed event in place instead of discarding accepted work', async () => {
+		globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
+		let failures = 0
+		const acknowledged: number[] = []
+		const client = new JetstreamClient({
+			url: 'wss://relay.example/subscribe',
+			cursor: 70,
+			eventRetryDelayMs: 1,
+			onEvent: async (value) => {
+				if (value.time_us === 71 && failures === 0) {
+					failures++
+					throw new Error('transient')
+				}
+			},
+			onAcknowledged: async (value) => {
+				acknowledged.push(value.time_us)
+			},
+		})
+		client.start()
+		const socket = FakeWebSocket.instances[0]
+		expect(socket).toBeDefined()
+		socket?.open()
+		socket?.message(event(71))
+		socket?.message(event(72))
+		await flush()
+		await Bun.sleep(10)
+		await flush()
+		expect(failures).toBe(1)
+		// The failure never reached the stream: no replay connection, no lost sibling.
+		expect(FakeWebSocket.instances.length).toBe(1)
+		expect(client.cursor).toBe(72)
+		expect(acknowledged).toEqual([72])
+		expect(client.queued).toBe(0)
+		client.destroy()
+	})
+
 	test('quarantines malformed bytes, ignores late frames, then resets only after an acked replay', async () => {
 		globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
 		const acknowledgements: number[] = []
@@ -337,6 +373,8 @@ describe('JetstreamClient durable acknowledgement and protocol quarantine', () =
 			reconnectMinMs: 1,
 			reconnectMaxMs: 1,
 			reconnectMaxExponent: 0,
+			// This exercises stream-level failure, so give the event no retries.
+			eventMaxAttempts: 1,
 			onEvent: async (value) => {
 				if (value.time_us === 21) await first
 				if (value.time_us === 22) await second

@@ -46,11 +46,16 @@ export interface JetstreamOptions {
 	reconnectMaxExponent?: number
 	/** How long a recovering stream may go without durable progress before it is stalled. */
 	progressStaleMs?: number
+	/** Handler attempts for one event before the whole stream replays. */
+	eventMaxAttempts?: number
+	eventRetryDelayMs?: number
 }
 
 interface QueuedEvent {
 	event: JetstreamEvent
 	state: 'queued' | 'running' | 'complete'
+	/** Failed handler attempts. One bad event must not discard its siblings. */
+	attempts: number
 }
 
 function isStableDid(value: string): boolean {
@@ -59,6 +64,10 @@ function isStableDid(value: string): boolean {
 
 /** A recovering stream stays healthy only while it keeps acknowledging work. */
 const DEFAULT_PROGRESS_STALE_MS = 60_000
+
+/** A transient handler failure is the event's problem, not the queue's. */
+const DEFAULT_EVENT_MAX_ATTEMPTS = 3
+const DEFAULT_EVENT_RETRY_DELAY_MS = 250
 
 const COLLECTION_RE = /^[A-Za-z0-9.-]{1,253}$/
 const RKEY_RE = /^[A-Za-z0-9._~:%@+-]{1,512}$/
@@ -217,6 +226,9 @@ export class JetstreamClient {
 	private readonly reconnectMaxMs: number
 	private readonly reconnectMaxExponent: number
 	private readonly progressStaleMs: number
+	private readonly eventMaxAttempts: number
+	private readonly eventRetryDelayMs: number
+	private readonly retryTimers = new Set<ReturnType<typeof setTimeout>>()
 
 	constructor(private readonly opts: JetstreamOptions) {
 		let relay: URL
@@ -244,6 +256,8 @@ export class JetstreamClient {
 		this.reconnectMaxMs = opts.reconnectMaxMs ?? config.jetstreamReconnectMaxMs
 		this.reconnectMaxExponent = opts.reconnectMaxExponent ?? config.jetstreamReconnectMaxExponent
 		this.progressStaleMs = opts.progressStaleMs ?? DEFAULT_PROGRESS_STALE_MS
+		this.eventMaxAttempts = opts.eventMaxAttempts ?? DEFAULT_EVENT_MAX_ATTEMPTS
+		this.eventRetryDelayMs = opts.eventRetryDelayMs ?? DEFAULT_EVENT_RETRY_DELAY_MS
 		if (
 			!Number.isSafeInteger(this.maxQueue) ||
 			this.maxQueue < 1 ||
@@ -323,7 +337,7 @@ export class JetstreamClient {
 				this.applyBackpressure(new Error('Jetstream intake queue is full'))
 				return
 			}
-			this.queue.push({ event, state: 'queued' })
+			this.queue.push({ event, state: 'queued', attempts: 0 })
 			this.pump()
 			if (this.queue.length >= this.maxQueue) this.applyBackpressure(new Error('Jetstream intake queue is full'))
 		}
@@ -374,12 +388,35 @@ export class JetstreamClient {
 			item.state = 'complete'
 			void this.flushAcknowledgements()
 		} catch {
-			this.fail(new Error('Jetstream event handler failed'), 'handler')
+			this.retryOrFail(item)
 		} finally {
 			this.running--
 			this.pump()
 			this.notifyDrained()
 		}
+	}
+
+	/**
+	 * A transient failure belongs to its event. Retrying it in place keeps every
+	 * sibling event this connection already accepted; only an event that keeps
+	 * failing costs the stream a replay from its last durable acknowledgement.
+	 * The item stays `running` meanwhile, so no acknowledgement can pass it.
+	 */
+	private retryOrFail(item: QueuedEvent): void {
+		if (this.destroyed || this.failed || !this.queue.includes(item)) return
+		item.attempts++
+		if (item.attempts >= this.eventMaxAttempts) {
+			this.fail(new Error('Jetstream event handler failed'), 'handler')
+			return
+		}
+		this.report(new Error('Jetstream event handler failed'))
+		const timer = setTimeout(() => {
+			this.retryTimers.delete(timer)
+			if (this.destroyed || this.failed || !this.queue.includes(item)) return
+			item.state = 'queued'
+			this.pump()
+		}, this.eventRetryDelayMs * item.attempts)
+		this.retryTimers.add(timer)
 	}
 
 	private async flushAcknowledgements(): Promise<void> {
@@ -634,6 +671,8 @@ export class JetstreamClient {
 		this.reconnectWhenDrained = false
 		if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
 		this.reconnectTimer = null
+		for (const timer of this.retryTimers) clearTimeout(timer)
+		this.retryTimers.clear()
 		this.queue = []
 		try {
 			this.ws?.close()
