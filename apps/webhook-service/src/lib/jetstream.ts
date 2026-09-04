@@ -245,7 +245,8 @@ export class JetstreamClient {
 		}
 		this.lastAckedCursor = opts.cursor
 		this.maxQueue = opts.maxQueue ?? config.intakeQueueMax
-		this.batchMax = opts.batchMax ?? config.intakeBatchMax
+		// A batch is drawn from the queue, so it can never usefully exceed it.
+		this.batchMax = Math.min(opts.batchMax ?? config.intakeBatchMax, this.maxQueue)
 		this.maxEventBytes = opts.maxEventBytes ?? config.intakeEventMaxBytes
 		this.reconnectMinMs = opts.reconnectMinMs ?? config.jetstreamReconnectMinMs
 		this.reconnectMaxMs = opts.reconnectMaxMs ?? config.jetstreamReconnectMaxMs
