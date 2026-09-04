@@ -1601,7 +1601,7 @@ export async function saveCursorForStream(streamId: string, cursor: number, rela
 	await saveJetstreamCursor(streamId, relay, cursor)
 }
 
-const MAX_BACKLINK_REFERENCE_ROWS = 100_000
+export const MAX_BACKLINK_REFERENCE_ROWS = 100_000
 export const MAX_BACKLINK_REFERENCES_PER_EVENT = 100
 const MAX_BACKLINK_REFERENCE_BYTES = 32 * 1024
 const BACKLINK_REFERENCE_TTL_MS = 7 * 24 * 60 * 60_000
@@ -1636,6 +1636,24 @@ export interface PriorReferenceIndexEntry {
 	rev: string
 }
 
+/**
+ * Decode a stored reference list. Rows written before the jsonb binding fix
+ * hold the encoded array as a jsonb *string*, so both shapes are accepted;
+ * anything else is absent state rather than trusted state.
+ */
+function decodeReferences(value: unknown): string[] | undefined {
+	let decoded = value
+	if (typeof decoded === 'string') {
+		try {
+			decoded = JSON.parse(decoded)
+		} catch {
+			return undefined
+		}
+	}
+	if (!Array.isArray(decoded) || !decoded.every((reference) => typeof reference === 'string')) return undefined
+	return decoded
+}
+
 /** Load bounded prior relevant backlink references after restart. */
 export async function loadPriorReferenceIndex(eventAtUri: string): Promise<PriorReferenceIndexEntry | undefined> {
 	const key = normalizeAtUri(eventAtUri)
@@ -1646,58 +1664,92 @@ export async function loadPriorReferenceIndex(eventAtUri: string): Promise<Prior
     LIMIT 1
   `
 	const row = rows[0]
-	if (!row || !Array.isArray(row.refs) || !row.refs.every((reference) => typeof reference === 'string'))
-		return undefined
+	const references = row ? decodeReferences(row.refs) : undefined
+	if (!row || !references) return undefined
 	return {
 		eventAtUri: key,
-		references: row.refs.map((reference) => normalizeAtUri(reference)),
+		references: references.map((reference) => normalizeAtUri(reference)),
 		timeUs: parseSafeSequence(row.last_seq, 'Invalid backlink reference'),
 		rev: row.last_rev,
 	}
 }
 
 /**
+ * The durable outcome of one prior-reference write. Intake keeps an in-memory
+ * index of the keys that own durable state, so a write reports what the row
+ * now holds rather than only that a statement ran.
+ */
+export type PriorReferenceWrite =
+	/** References are durable for this key at this event version. */
+	| 'stored'
+	/** The row survives as an empty tombstone; no reference remains. */
+	| 'cleared'
+	/** A newer event already owns this key, or no row exists to clear. */
+	| 'stale'
+	/** Global capacity refused a new key. Existing keys are never refused. */
+	| 'rejected'
+
+const CAPACITY_WARN_INTERVAL_MS = 60_000
+let lastCapacityWarnAt = 0
+
+/**
  * Persist refs only after filtering them to active backlink scopes. Event order
  * is monotonic: a replayed older create/update cannot replace newer references.
+ *
+ * One statement, no advisory lock. The backlink consumer sees every record in
+ * the network, so a per-event transaction round trip is the intake throughput
+ * ceiling. An empty set is a tombstone over known state and never creates a
+ * row, which keeps this bounded table holding references rather than the relay.
+ * Capacity is admitted per statement and converged by prunePriorReferenceIndex,
+ * so concurrent writers may overshoot the bound by their own concurrency.
  */
 export async function savePriorReferenceIndex(
 	eventAtUri: string,
 	references: readonly string[],
 	timeUs: number,
 	rev: string,
-): Promise<void> {
+): Promise<PriorReferenceWrite> {
 	const key = normalizeAtUri(eventAtUri)
 	if (!Number.isSafeInteger(timeUs) || timeUs < 0) throw new Error('Invalid backlink reference')
 	assertAtprotoRevision(rev)
 	if (references.length > MAX_BACKLINK_REFERENCES_PER_EVENT) throw new Error('Too many backlink references')
 	const normalized = [...new Set(references.map(normalizeAtUri))]
 	if (normalized.length > MAX_BACKLINK_REFERENCES_PER_EVENT) throw new Error('Too many backlink references')
-	const encoded = JSON.stringify(normalized)
-	if (new TextEncoder().encode(encoded).byteLength > MAX_BACKLINK_REFERENCE_BYTES)
+	if (new TextEncoder().encode(JSON.stringify(normalized)).byteLength > MAX_BACKLINK_REFERENCE_BYTES)
 		throw new Error('Backlink references are too large')
 
-	await db.begin(async (tx) => {
-		// Serialize only the capacity decision. This prevents a burst of distinct
-		// records from exceeding the global bounded-reference admission cap.
-		await tx`SET LOCAL lock_timeout = '1000ms'`
-		await tx`SELECT pg_advisory_xact_lock(814732193)`
-		const existing = await tx<Array<{ event_at_uri: string }>>`
-      SELECT event_at_uri FROM webhook_backlink_references WHERE event_at_uri = ${key} FOR UPDATE
+	if (normalized.length === 0) {
+		const cleared = await db<Array<{ event_at_uri: string }>>`
+      UPDATE webhook_backlink_references SET
+        refs = '[]'::jsonb,
+        last_seq = ${timeUs}::bigint,
+        last_rev = ${rev}::text,
+        expires_at = NOW() + (${BACKLINK_REFERENCE_TTL_MS} * INTERVAL '1 millisecond'),
+        updated_at = NOW()
+      WHERE event_at_uri = ${key}
+        AND (last_seq < ${timeUs}::bigint OR (last_seq = ${timeUs}::bigint AND last_rev <= ${rev}::text))
+      RETURNING event_at_uri
     `
-		if (existing.length === 0) {
-			const capacity = await tx<Array<{ count: number | string | bigint }>>`
-        SELECT count(*) AS count FROM webhook_backlink_references
-      `
-			if (parseSafeSequence(capacity[0]?.count, 'Invalid backlink reference state') >= MAX_BACKLINK_REFERENCE_ROWS) {
-				// The current event can still complete direct matching/delivery. It
-				// simply has no durable backlink prior-state entry until capacity frees.
-				logger.warn('[DB] backlink reference capacity reached')
-				return
-			}
-		}
-		await tx`
+		return cleared.length > 0 ? 'cleared' : 'stale'
+	}
+
+	const rows = await db<Array<{ admitted: boolean; written: boolean }>>`
+    WITH admission AS (
+      SELECT
+        EXISTS (SELECT 1 FROM webhook_backlink_references WHERE event_at_uri = ${key})
+          OR (SELECT count(*) FROM webhook_backlink_references) < ${MAX_BACKLINK_REFERENCE_ROWS} AS admitted
+    ), written AS (
       INSERT INTO webhook_backlink_references (event_at_uri, refs, last_seq, last_rev, expires_at, updated_at)
-      VALUES (${key}, ${encoded}::jsonb, ${timeUs}, ${rev}, NOW() + (${BACKLINK_REFERENCE_TTL_MS} * INTERVAL '1 millisecond'), NOW())
+      SELECT
+        ${key}::text,
+        -- The array binds as jsonb. A pre-encoded string would bind as a jsonb
+        -- *string*, which no reader can distinguish from a one-element list.
+        ${normalized}::jsonb,
+        ${timeUs}::bigint,
+        ${rev}::text,
+        NOW() + (${BACKLINK_REFERENCE_TTL_MS} * INTERVAL '1 millisecond'),
+        NOW()
+      FROM admission WHERE admission.admitted
       ON CONFLICT (event_at_uri) DO UPDATE SET
         refs = EXCLUDED.refs,
         last_seq = EXCLUDED.last_seq,
@@ -1706,12 +1758,47 @@ export async function savePriorReferenceIndex(
         updated_at = NOW()
       WHERE webhook_backlink_references.last_seq < EXCLUDED.last_seq
          OR (webhook_backlink_references.last_seq = EXCLUDED.last_seq AND webhook_backlink_references.last_rev <= EXCLUDED.last_rev)
-    `
-	})
+      RETURNING event_at_uri
+    )
+    SELECT admission.admitted, EXISTS (SELECT 1 FROM written) AS written FROM admission
+  `
+	const outcome = rows[0]
+	if (outcome?.written === true) return 'stored'
+	if (outcome?.admitted === false) {
+		// The event still completes direct matching and delivery; it simply has no
+		// durable backlink prior state until maintenance frees capacity. One
+		// warning per interval: this path is reached once per relay event.
+		const now = Date.now()
+		if (now - lastCapacityWarnAt >= CAPACITY_WARN_INTERVAL_MS) {
+			lastCapacityWarnAt = now
+			logger.warn('[DB] backlink reference capacity reached')
+		}
+		return 'rejected'
+	}
+	return 'stale'
+}
+
+/** Bounded hydration of the keys that own durable references after a restart. */
+export async function loadPriorReferenceKeys(
+	limit = MAX_BACKLINK_REFERENCE_ROWS,
+): Promise<{ keys: string[]; complete: boolean }> {
+	if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_BACKLINK_REFERENCE_ROWS) {
+		throw new Error('Invalid backlink reference key limit')
+	}
+	const rows = await db<Array<{ event_at_uri: string }>>`
+    SELECT event_at_uri FROM webhook_backlink_references
+    -- '"[]"' is the legacy double-encoded empty list. Both spellings mean the
+    -- key owns no reference and therefore needs no in-memory entry.
+    WHERE expires_at > NOW() AND refs::text NOT IN ('[]', '"[]"')
+    ORDER BY expires_at DESC
+    LIMIT ${limit + 1}
+  `
+	// An incomplete index makes intake load every key instead of trusting it.
+	return { keys: rows.slice(0, limit).map((row) => row.event_at_uri), complete: rows.length <= limit }
 }
 
 /** Delete only if a later event has not already repopulated the same record. */
-export async function deletePriorReferenceIndex(eventAtUri: string, timeUs: number, rev: string): Promise<void> {
+export async function deletePriorReferenceIndex(eventAtUri: string, timeUs: number, rev: string): Promise<boolean> {
 	const key = normalizeAtUri(eventAtUri)
 	if (!Number.isSafeInteger(timeUs) || timeUs < 0) throw new Error('Invalid backlink reference')
 	assertAtprotoRevision(rev)
@@ -1721,7 +1808,7 @@ export async function deletePriorReferenceIndex(eventAtUri: string, timeUs: numb
       AND (last_seq < ${timeUs} OR (last_seq = ${timeUs} AND last_rev <= ${rev}))
     RETURNING event_at_uri
   `
-	void rows
+	return rows.length > 0
 }
 
 /** Periodic bounded maintenance for TTL and global capacity. */
@@ -1735,7 +1822,9 @@ export async function prunePriorReferenceIndex(batchSize = 1_000): Promise<numbe
     ), victims AS (
       SELECT refs.event_at_uri
       FROM webhook_backlink_references refs CROSS JOIN stats
-      WHERE refs.expires_at <= NOW() OR stats.total > ${MAX_BACKLINK_REFERENCE_ROWS}
+      -- Admission refuses a new key at the bound, so eviction must start there
+      -- too. A strictly greater test deadlocks the table at exactly capacity.
+      WHERE refs.expires_at <= NOW() OR stats.total >= ${MAX_BACKLINK_REFERENCE_ROWS}
       ORDER BY refs.expires_at ASC, refs.updated_at ASC
       LIMIT ${batchSize}
       FOR UPDATE OF refs SKIP LOCKED

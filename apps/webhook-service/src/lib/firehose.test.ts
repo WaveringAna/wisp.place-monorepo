@@ -7,13 +7,15 @@ import type { JetstreamClient, JetstreamEvent, JetstreamOptions } from './jetstr
 // in-memory; the real DB behavior is covered by db/backfill tests.
 mock.module('./db', () => ({
 	MAX_BACKLINK_REFERENCES_PER_EVENT: 100,
+	MAX_BACKLINK_REFERENCE_ROWS: 100_000,
 	loadCursor: async () => undefined,
 	saveCursor: async () => undefined,
 	loadCursorForStream: async () => undefined,
 	saveCursorForStream: async () => undefined,
 	loadPriorReferenceIndex: async () => undefined,
-	savePriorReferenceIndex: async () => undefined,
-	deletePriorReferenceIndex: async () => undefined,
+	savePriorReferenceIndex: async () => 'stored',
+	deletePriorReferenceIndex: async () => false,
+	loadPriorReferenceKeys: async () => ({ keys: [], complete: true }),
 	enqueueWebhookDeliveries: async () => ({ enqueued: 0, deduplicated: 0 }),
 	recordWebhookIntakeQuarantine: async () => undefined,
 	getWebhookRecord: async () => undefined,
@@ -86,13 +88,52 @@ function commit(timeUs: number): JetstreamEvent {
 	}
 }
 
-function testDependencies(created: FakeJetstream[]) {
-	const cursor: CursorRepository = { load: async () => undefined, save: async () => undefined }
-	const references: PriorReferenceRepository = {
-		load: async () => undefined,
-		save: async () => undefined,
-		delete: async () => undefined,
+/** In-memory stand-in for the durable reference table that records its traffic. */
+interface ReferenceProbe extends PriorReferenceRepository {
+	readonly rows: Map<string, readonly string[]>
+	readonly loads: string[]
+	readonly writes: string[]
+	complete: boolean
+}
+
+function referenceProbe(seed: Iterable<[string, readonly string[]]> = []): ReferenceProbe {
+	const rows = new Map<string, readonly string[]>(seed)
+	const probe: ReferenceProbe = {
+		rows,
+		loads: [],
+		writes: [],
+		complete: true,
+		async load(key) {
+			probe.loads.push(key)
+			const references = rows.get(key)
+			return references ? { references, timeUs: 0, rev: REV } : undefined
+		},
+		async save(key, references) {
+			probe.writes.push(key)
+			if (references.length === 0) {
+				if (!rows.has(key)) return 'stale'
+				rows.set(key, [])
+				return 'cleared'
+			}
+			rows.set(key, [...references])
+			return 'stored'
+		},
+		async delete(key) {
+			probe.writes.push(key)
+			return rows.delete(key)
+		},
+		async keys() {
+			return {
+				keys: [...rows].filter(([, references]) => references.length > 0).map(([key]) => key),
+				complete: probe.complete,
+			}
+		},
 	}
+	return probe
+}
+
+function testDependencies(created: FakeJetstream[], references: PriorReferenceRepository = referenceProbe()) {
+	const cursor: CursorRepository = { load: async () => undefined, save: async () => undefined }
 	return {
 		cursorRepository: cursor,
 		referenceRepository: references,
@@ -207,5 +248,95 @@ describe('firehose admitted in-memory candidate index', () => {
 		const direct = created.find((client) => client.options.wantedDids?.includes(SCOPE))
 		await direct?.options.onEvent(commit(40))
 		expect(candidateCount).toBe(1)
+	})
+})
+
+const VISITOR = 'did:plc:cccccccccccccccccccccccc'
+const VISITOR_KEY = `at://${VISITOR}/app.bsky.feed.like/like`
+const SUBJECT = `at://${SCOPE}/app.bsky.feed.post/abc`
+
+function backlinkRecord(): WhRecord {
+	return {
+		$type: 'place.wisp.v2.wh',
+		scope: { aturi: `at://${SCOPE}`, backlinks: true },
+		url: 'https://receiver.example/hook',
+		createdAt: '2025-01-01T00:00:00.000Z',
+	}
+}
+
+function likeCommit(timeUs: number, references: readonly string[], operation: 'create' | 'update' = 'create') {
+	return {
+		did: VISITOR,
+		time_us: timeUs,
+		kind: 'commit' as const,
+		commit: {
+			rev: REV,
+			operation,
+			collection: 'app.bsky.feed.like',
+			rkey: 'like',
+			record: references.length > 0 ? { subject: { uri: references[0] } } : { text: 'unrelated' },
+		},
+	}
+}
+
+async function startBacklinkIntake(created: FakeJetstream[], probe: ReferenceProbe) {
+	initScopeDids([{ did: OWNER, rkey: 'hook', record: backlinkRecord() }])
+	await startFirehose({
+		...testDependencies(created, probe),
+		enqueueWebhookDeliveries: async (entries) => ({ enqueued: entries.length, deduplicated: 0 }),
+		recordWebhookIntakeQuarantine: async () => undefined,
+	})
+	const backlink = created.find((client) => !client.options.wantedDids && !client.options.wantedCollections)
+	expect(backlink).toBeDefined()
+	return backlink as FakeJetstream
+}
+
+describe('backlink prior-reference index', () => {
+	test('a relay record that references nothing in scope costs no durable read or write', async () => {
+		const created: FakeJetstream[] = []
+		const probe = referenceProbe()
+		const backlink = await startBacklinkIntake(created, probe)
+		await backlink.options.onEvent(likeCommit(10, []))
+		expect(probe.loads).toEqual([])
+		expect(probe.writes).toEqual([])
+	})
+
+	test('remembers a referencing record and forgets it once its references are gone', async () => {
+		const created: FakeJetstream[] = []
+		const probe = referenceProbe()
+		const backlink = await startBacklinkIntake(created, probe)
+
+		await backlink.options.onEvent(likeCommit(10, [SUBJECT]))
+		expect(probe.loads).toEqual([])
+		expect(probe.writes).toEqual([VISITOR_KEY])
+		expect(probe.rows.get(VISITOR_KEY)).toEqual([SUBJECT])
+
+		// The same key may now own durable state, so its next version is read.
+		await backlink.options.onEvent(likeCommit(11, [], 'update'))
+		expect(probe.loads).toEqual([VISITOR_KEY])
+		expect(probe.rows.get(VISITOR_KEY)).toEqual([])
+
+		// Cleared state is forgotten again: no further round trip for this key.
+		await backlink.options.onEvent(likeCommit(12, [], 'update'))
+		expect(probe.loads).toEqual([VISITOR_KEY])
+		expect(probe.writes).toEqual([VISITOR_KEY, VISITOR_KEY])
+	})
+
+	test('reads durable state for every key when hydration is truncated', async () => {
+		const created: FakeJetstream[] = []
+		const probe = referenceProbe()
+		probe.complete = false
+		const backlink = await startBacklinkIntake(created, probe)
+		await backlink.options.onEvent(likeCommit(10, []))
+		expect(probe.loads).toEqual([VISITOR_KEY])
+	})
+
+	test('hydrates keys that already own references so their next event is matched', async () => {
+		const created: FakeJetstream[] = []
+		const probe = referenceProbe([[VISITOR_KEY, [SUBJECT]]])
+		const backlink = await startBacklinkIntake(created, probe)
+		await backlink.options.onEvent(likeCommit(10, [], 'update'))
+		expect(probe.loads).toEqual([VISITOR_KEY])
+		expect(probe.rows.get(VISITOR_KEY)).toEqual([])
 	})
 })

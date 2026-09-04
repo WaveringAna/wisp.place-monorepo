@@ -1,7 +1,7 @@
 import type { Main as WhRecord } from '@wispplace/lexicons/types/place/wisp/v2/wh'
 import { createLogger } from '@wispplace/observability'
 import { config } from '../config'
-import type { WebhookEntry } from './db'
+import type { PriorReferenceWrite, WebhookEntry } from './db'
 import * as database from './db'
 import * as delivery from './delivery'
 import {
@@ -58,8 +58,11 @@ interface PriorReferenceSnapshot {
 /** Durable, bounded backlink state. It deliberately stores references, never whole records. */
 export interface PriorReferenceRepository {
 	load(eventAtUri: string): Promise<PriorReferenceSnapshot | undefined>
-	save(eventAtUri: string, references: readonly string[], timeUs: number, rev: string): Promise<void>
-	delete(eventAtUri: string, timeUs: number, rev: string): Promise<void>
+	save(eventAtUri: string, references: readonly string[], timeUs: number, rev: string): Promise<PriorReferenceWrite>
+	/** True only when this event removed the durable row. */
+	delete(eventAtUri: string, timeUs: number, rev: string): Promise<boolean>
+	/** Bounded hydration of the keys that own durable references, when available. */
+	keys?(): Promise<{ keys: readonly string[]; complete: boolean }>
 }
 
 interface DurableDeliveryEvent {
@@ -269,8 +272,9 @@ function defaultReferenceRepository(): PriorReferenceRepository {
 			references: readonly string[],
 			timeUs: number,
 			rev: string,
-		) => Promise<void>
-		deletePriorReferenceIndex?: (eventAtUri: string, timeUs: number, rev: string) => Promise<void>
+		) => Promise<PriorReferenceWrite>
+		deletePriorReferenceIndex?: (eventAtUri: string, timeUs: number, rev: string) => Promise<boolean>
+		loadPriorReferenceKeys?: () => Promise<{ keys: readonly string[]; complete: boolean }>
 	}
 	return {
 		async load(key) {
@@ -284,6 +288,10 @@ function defaultReferenceRepository(): PriorReferenceRepository {
 		async delete(key, timeUs, rev) {
 			if (!api.deletePriorReferenceIndex) throw new Error('Durable prior-reference storage is unavailable')
 			return api.deletePriorReferenceIndex(key, timeUs, rev)
+		},
+		async keys() {
+			if (!api.loadPriorReferenceKeys) throw new Error('Durable prior-reference storage is unavailable')
+			return api.loadPriorReferenceKeys()
 		},
 	}
 }
@@ -822,6 +830,78 @@ interface ReferenceLifecycle {
 	readonly tooComplex: boolean
 }
 
+/**
+ * The keys that own durable prior references. The backlink consumer reads every
+ * record in the network, so without this index each irrelevant event costs a
+ * database round trip and intake can never keep pace with the relay.
+ *
+ * `null` means the index is not trustworthy - never hydrated, hydration was
+ * truncated, or it outgrew the durable bound - and every key is then loaded
+ * from the database, which is slow but always correct.
+ *
+ * It mirrors a table this process is the only writer of. A second intake
+ * replica would need its own hydration, which startup already performs.
+ */
+let priorReferenceKeys: Set<string> | null = null
+
+/** Does this key possibly own durable prior state? Unknown answers "yes". */
+function mayOwnPriorReferences(key: string): boolean {
+	return priorReferenceKeys === null || priorReferenceKeys.has(key)
+}
+
+/** What a durable write leaves behind; `undefined` means it changed nothing. */
+const PRIOR_STATE_AFTER_WRITE: Record<PriorReferenceWrite, boolean | undefined> = {
+	stored: true,
+	cleared: false,
+	rejected: false,
+	stale: undefined,
+}
+
+function trackPriorReferences(key: string, owned: boolean): void {
+	if (!priorReferenceKeys) return
+	if (!owned) {
+		priorReferenceKeys.delete(key)
+		return
+	}
+	if (priorReferenceKeys.size >= database.MAX_BACKLINK_REFERENCE_ROWS && !priorReferenceKeys.has(key)) {
+		// Past the durable bound the set can no longer mirror the table. Loading
+		// every key stays correct, so degrade instead of matching on a lie.
+		priorReferenceKeys = null
+		logger.warn('[backlink] prior-reference index exceeded its bound; reading durable state for every event')
+		return
+	}
+	priorReferenceKeys.add(key)
+}
+
+async function hydratePriorReferenceKeys(): Promise<void> {
+	const repository = currentDependencies().referenceRepository
+	if (!repository.keys) {
+		priorReferenceKeys = null
+		return
+	}
+	try {
+		const { keys, complete } = await repository.keys()
+		priorReferenceKeys = complete ? new Set(keys) : null
+	} catch {
+		// Never fail startup over an optimization; fall back to durable reads.
+		priorReferenceKeys = null
+		logger.warn('[backlink] prior-reference index hydration failed; reading durable state for every event')
+	}
+}
+
+/** Persist references, skipping the round trip when nothing is or becomes durable. */
+async function writePriorReferences(
+	key: string,
+	references: readonly string[],
+	timeUs: number,
+	rev: string,
+): Promise<void> {
+	if (references.length === 0 && !mayOwnPriorReferences(key)) return
+	const owned =
+		PRIOR_STATE_AFTER_WRITE[await currentDependencies().referenceRepository.save(key, references, timeUs, rev)]
+	if (owned !== undefined) trackPriorReferences(key, owned)
+}
+
 async function loadReferenceLifecycle(
 	event: JetstreamEvent,
 	deliveryRecord: unknown,
@@ -829,14 +909,14 @@ async function loadReferenceLifecycle(
 	if (event.kind !== 'commit' || !event.commit || backlinkScopeDids.size === 0) return undefined
 	const { did, commit } = event
 	const key = eventAtUri(did, commit.collection, commit.rkey)
-	const repository = currentDependencies().referenceRepository
-	const snapshot = await repository.load(key)
-	const oldReferences = normalizeReferences(snapshot?.references ?? [])
 	if (commit.operation !== 'delete' && deliveryRecord === undefined) {
 		throw new Error('Non-delete commit has no validated record')
 	}
 	const current =
 		commit.operation === 'delete' ? { references: [], tooComplex: false } : currentReferences(deliveryRecord)
+	// Only a key that may own durable state is worth reading it.
+	const snapshot = mayOwnPriorReferences(key) ? await currentDependencies().referenceRepository.load(key) : undefined
+	const oldReferences = normalizeReferences(snapshot?.references ?? [])
 	const combined = [...new Set([...oldReferences, ...current.references])]
 	return {
 		key,
@@ -853,24 +933,26 @@ async function commitReferenceLifecycle(
 ): Promise<void> {
 	if (!lifecycle || event.kind !== 'commit' || !event.commit) return
 	const { time_us: timeUs, commit } = event
-	const repository = currentDependencies().referenceRepository
 	if (lifecycle.tooComplex) {
 		// Preserve a monotonic empty tombstone at this event version. A later delete
 		// therefore cannot resurrect stale references from an earlier known state.
-		await repository.save(lifecycle.key, [], timeUs, commit.rev)
+		await writePriorReferences(lifecycle.key, [], timeUs, commit.rev)
 		return
 	}
 	if (commit.operation === 'delete') {
 		// Delete only after all deliveries using the old durable snapshot are enqueued.
-		await repository.delete(lifecycle.key, timeUs, commit.rev)
+		if (!mayOwnPriorReferences(lifecycle.key)) return
+		if (await currentDependencies().referenceRepository.delete(lifecycle.key, timeUs, commit.rev)) {
+			trackPriorReferences(lifecycle.key, false)
+		}
 	} else {
-		await repository.save(lifecycle.key, lifecycle.newReferences, timeUs, commit.rev)
+		await writePriorReferences(lifecycle.key, lifecycle.newReferences, timeUs, commit.rev)
 	}
 }
 
 async function clearPriorReferenceState(event: JetstreamEvent): Promise<void> {
 	if (event.kind !== 'commit' || !event.commit) return
-	await currentDependencies().referenceRepository.save(
+	await writePriorReferences(
 		eventAtUri(event.did, event.commit.collection, event.commit.rkey),
 		[],
 		event.time_us,
@@ -1193,6 +1275,7 @@ export async function startFirehose(options: FirehoseStartOptions = {}): Promise
 	}
 	firehoseStarted = true
 	try {
+		await hydratePriorReferenceKeys()
 		await startRegistry(options.cursors?.[REGISTRY_STREAM])
 		await startDirect(options.cursors?.[DIRECT_STREAM])
 		await startBacklink(options.cursors?.[BACKLINK_STREAM])
@@ -1321,6 +1404,7 @@ export function resetFirehoseForTests(): void {
 	backlinkJetstream = null
 	registryJetstream = null
 	dependencies = null
+	priorReferenceKeys = null
 	stopping = false
 	intakePaused = false
 	lastEventTime = 0
