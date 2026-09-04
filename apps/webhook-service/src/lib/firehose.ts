@@ -44,9 +44,15 @@ const BACKLINK_STREAM = 'backlink'
 const REGISTRY_STREAM = 'registry'
 type StreamName = typeof DIRECT_STREAM | typeof BACKLINK_STREAM | typeof REGISTRY_STREAM
 
+/** The executor of the current intake batch; every durable effect joins it. */
+type BatchSql = database.SqlExecutor | undefined
+
+/** Runs one batch so its effects and its cursor commit together. */
+type IntakeBatchRunner = <T>(work: (sql: BatchSql) => Promise<T>) => Promise<T>
+
 export interface CursorRepository {
 	load(stream: StreamName, relay: string): Promise<number | undefined>
-	save(stream: StreamName, cursor: number, relay: string): Promise<void>
+	save(stream: StreamName, cursor: number, relay: string, sql?: BatchSql): Promise<void>
 }
 
 interface PriorReferenceSnapshot {
@@ -57,10 +63,16 @@ interface PriorReferenceSnapshot {
 
 /** Durable, bounded backlink state. It deliberately stores references, never whole records. */
 export interface PriorReferenceRepository {
-	load(eventAtUri: string): Promise<PriorReferenceSnapshot | undefined>
-	save(eventAtUri: string, references: readonly string[], timeUs: number, rev: string): Promise<PriorReferenceWrite>
+	load(eventAtUri: string, sql?: BatchSql): Promise<PriorReferenceSnapshot | undefined>
+	save(
+		eventAtUri: string,
+		references: readonly string[],
+		timeUs: number,
+		rev: string,
+		sql?: BatchSql,
+	): Promise<PriorReferenceWrite>
 	/** True only when this event removed the durable row. */
-	delete(eventAtUri: string, timeUs: number, rev: string): Promise<boolean>
+	delete(eventAtUri: string, timeUs: number, rev: string, sql?: BatchSql): Promise<boolean>
 	/** Bounded hydration of the keys that own durable references, when available. */
 	keys?(): Promise<{ keys: readonly string[]; complete: boolean }>
 }
@@ -80,6 +92,7 @@ interface DurableDeliveryEvent {
 type EnqueueWebhookDeliveries = (
 	entries: readonly WebhookEntry[],
 	event: DurableDeliveryEvent,
+	sql?: BatchSql,
 ) => Promise<{ enqueued: number; deduplicated: number }>
 
 interface FirehoseStartOptions {
@@ -90,6 +103,8 @@ interface FirehoseStartOptions {
 	enqueueWebhookDeliveries?: EnqueueWebhookDeliveries
 	/** Test seam. Production writes an idempotent redacted intake quarantine row. */
 	recordWebhookIntakeQuarantine?: typeof database.recordWebhookIntakeQuarantine
+	/** Test seam. Production wraps each batch in one database transaction. */
+	runIntakeBatch?: IntakeBatchRunner
 	createJetstreamClient?: (options: JetstreamOptions) => JetstreamClient
 	/** Compatibility seam for tests; each stream remains independent in production. */
 	cursors?: Partial<Record<StreamName, number>>
@@ -102,6 +117,7 @@ interface RuntimeDependencies {
 	referenceRepository: PriorReferenceRepository
 	enqueueWebhookDeliveries: EnqueueWebhookDeliveries
 	recordWebhookIntakeQuarantine: typeof database.recordWebhookIntakeQuarantine
+	runIntakeBatch: IntakeBatchRunner
 	createJetstreamClient: (options: JetstreamOptions) => JetstreamClient
 }
 
@@ -143,8 +159,6 @@ let backlinkJetstream: JetstreamClient | null = null
 // for webhook registrations, including an owner's first-ever record.
 let registryJetstream: JetstreamClient | null = null
 const allClients = new Set<JetstreamClient>()
-
-const cursorWriteTails = new Map<StreamName, Promise<void>>()
 
 function safeError(stream: StreamName): void {
 	logger.warn(`[${stream}] intake event failed; cursor was not advanced`)
@@ -237,7 +251,7 @@ async function getWebhooksForEvent(eventDid: string, referenceRecord: unknown): 
 function defaultCursorRepository(): CursorRepository {
 	const api = database as typeof database & {
 		loadCursorForStream?: (stream: string, relay: string) => Promise<number | undefined>
-		saveCursorForStream?: (stream: string, cursor: number, relay: string) => Promise<void>
+		saveCursorForStream?: (stream: string, cursor: number, relay: string, sql?: BatchSql) => Promise<void>
 		saveCursor?:
 			| ((cursor: number, relay: string) => Promise<void>)
 			| ((stream: string, cursor: number, relay: string) => Promise<void>)
@@ -249,8 +263,8 @@ function defaultCursorRepository(): CursorRepository {
 			if (stream === DIRECT_STREAM) return database.loadCursor(relay)
 			throw new Error('Independent durable cursor storage is unavailable')
 		},
-		async save(stream, cursor, relay) {
-			if (api.saveCursorForStream) return api.saveCursorForStream(stream, cursor, relay)
+		async save(stream, cursor, relay, sql) {
+			if (api.saveCursorForStream) return api.saveCursorForStream(stream, cursor, relay, sql)
 			if (api.saveCursor && api.saveCursor.length >= 3) {
 				return (api.saveCursor as (stream: string, cursor: number, relay: string) => Promise<void>)(
 					stream,
@@ -266,28 +280,29 @@ function defaultCursorRepository(): CursorRepository {
 
 function defaultReferenceRepository(): PriorReferenceRepository {
 	const api = database as typeof database & {
-		loadPriorReferenceIndex?: (eventAtUri: string) => Promise<PriorReferenceSnapshot | undefined>
+		loadPriorReferenceIndex?: (eventAtUri: string, sql?: BatchSql) => Promise<PriorReferenceSnapshot | undefined>
 		savePriorReferenceIndex?: (
 			eventAtUri: string,
 			references: readonly string[],
 			timeUs: number,
 			rev: string,
+			sql?: BatchSql,
 		) => Promise<PriorReferenceWrite>
-		deletePriorReferenceIndex?: (eventAtUri: string, timeUs: number, rev: string) => Promise<boolean>
+		deletePriorReferenceIndex?: (eventAtUri: string, timeUs: number, rev: string, sql?: BatchSql) => Promise<boolean>
 		loadPriorReferenceKeys?: () => Promise<{ keys: readonly string[]; complete: boolean }>
 	}
 	return {
-		async load(key) {
+		async load(key, sql) {
 			if (!api.loadPriorReferenceIndex) throw new Error('Durable prior-reference storage is unavailable')
-			return api.loadPriorReferenceIndex(key)
+			return api.loadPriorReferenceIndex(key, sql)
 		},
-		async save(key, references, timeUs, rev) {
+		async save(key, references, timeUs, rev, sql) {
 			if (!api.savePriorReferenceIndex) throw new Error('Durable prior-reference storage is unavailable')
-			return api.savePriorReferenceIndex(key, references, timeUs, rev)
+			return api.savePriorReferenceIndex(key, references, timeUs, rev, sql)
 		},
-		async delete(key, timeUs, rev) {
+		async delete(key, timeUs, rev, sql) {
 			if (!api.deletePriorReferenceIndex) throw new Error('Durable prior-reference storage is unavailable')
-			return api.deletePriorReferenceIndex(key, timeUs, rev)
+			return api.deletePriorReferenceIndex(key, timeUs, rev, sql)
 		},
 		async keys() {
 			if (!api.loadPriorReferenceKeys) throw new Error('Durable prior-reference storage is unavailable')
@@ -297,10 +312,27 @@ function defaultReferenceRepository(): PriorReferenceRepository {
 }
 
 function defaultEnqueueWebhookDeliveries(): EnqueueWebhookDeliveries {
-	const api = delivery as typeof delivery & { enqueueWebhookDeliveries?: EnqueueWebhookDeliveries }
-	return async (entries, event) => {
+	const api = delivery as typeof delivery & {
+		enqueueWebhookDeliveries?: (
+			entries: readonly WebhookEntry[],
+			event: DurableDeliveryEvent,
+			options?: delivery.EnqueueWebhookDeliveriesOptions,
+		) => Promise<{ enqueued: number; deduplicated: number }>
+	}
+	return async (entries, event, sql) => {
 		if (!api.enqueueWebhookDeliveries) throw new Error('Durable webhook delivery queue is unavailable')
-		return api.enqueueWebhookDeliveries(entries, event)
+		// Outbox rows join the intake batch, so the cursor can never advance past
+		// a delivery that was rolled back.
+		const options = sql
+			? {
+					enqueueOutbox: (
+						outboxEvent: Parameters<typeof database.enqueueWebhookDeliveryOutbox>[0],
+						rows: Parameters<typeof database.enqueueWebhookDeliveryOutbox>[1],
+						ensureEvent?: boolean,
+					) => database.enqueueWebhookDeliveryOutbox(outboxEvent, rows, ensureEvent, sql),
+				}
+			: undefined
+		return api.enqueueWebhookDeliveries(entries, event, options)
 	}
 }
 
@@ -766,6 +798,7 @@ async function enqueueMatched(
 	backlinkRecord: unknown,
 	deliveryRecord: unknown,
 	excludedWebhookKey?: string,
+	sql?: BatchSql,
 ): Promise<void> {
 	if (event.kind !== 'commit' || !event.commit) return
 	const { did, time_us: timeUs, commit } = event
@@ -798,22 +831,25 @@ async function enqueueMatched(
 		...(deliveryRecord === undefined ? {} : { record: deliveryRecord }),
 	}
 	try {
-		const result = await currentDependencies().enqueueWebhookDeliveries(matched, durableEvent)
+		const result = await currentDependencies().enqueueWebhookDeliveries(matched, durableEvent, sql)
 		totalMatched += result.enqueued + result.deduplicated
 	} catch (error) {
 		if (error instanceof delivery.WebhookDeliveryInputError) {
 			// Deterministic untrusted payload/subscription input is ackable. Store a
 			// bounded redacted identity first; a failure to persist that row remains
 			// retryable and deliberately keeps the cursor behind.
-			await currentDependencies().recordWebhookIntakeQuarantine({
-				relay: normalizeRelayIdentity(config.jetstreamUrl),
-				timeUs,
-				rev: commit.rev,
-				did,
-				collection: commit.collection,
-				rkey: commit.rkey,
-				reason: error.kind,
-			})
+			await currentDependencies().recordWebhookIntakeQuarantine(
+				{
+					relay: normalizeRelayIdentity(config.jetstreamUrl),
+					timeUs,
+					rev: commit.rev,
+					did,
+					collection: commit.collection,
+					rkey: commit.rkey,
+					reason: error.kind,
+				},
+				sql,
+			)
 			invalidDeliveryInputEvents++
 			logger.warn('[delivery] invalid durable input; event quarantined')
 			return
@@ -895,16 +931,18 @@ async function writePriorReferences(
 	references: readonly string[],
 	timeUs: number,
 	rev: string,
+	sql?: BatchSql,
 ): Promise<void> {
 	if (references.length === 0 && !mayOwnPriorReferences(key)) return
 	const owned =
-		PRIOR_STATE_AFTER_WRITE[await currentDependencies().referenceRepository.save(key, references, timeUs, rev)]
+		PRIOR_STATE_AFTER_WRITE[await currentDependencies().referenceRepository.save(key, references, timeUs, rev, sql)]
 	if (owned !== undefined) trackPriorReferences(key, owned)
 }
 
 async function loadReferenceLifecycle(
 	event: JetstreamEvent,
 	deliveryRecord: unknown,
+	sql?: BatchSql,
 ): Promise<ReferenceLifecycle | undefined> {
 	if (event.kind !== 'commit' || !event.commit || backlinkScopeDids.size === 0) return undefined
 	const { did, commit } = event
@@ -915,7 +953,9 @@ async function loadReferenceLifecycle(
 	const current =
 		commit.operation === 'delete' ? { references: [], tooComplex: false } : currentReferences(deliveryRecord)
 	// Only a key that may own durable state is worth reading it.
-	const snapshot = mayOwnPriorReferences(key) ? await currentDependencies().referenceRepository.load(key) : undefined
+	const snapshot = mayOwnPriorReferences(key)
+		? await currentDependencies().referenceRepository.load(key, sql)
+		: undefined
 	const oldReferences = normalizeReferences(snapshot?.references ?? [])
 	const combined = [...new Set([...oldReferences, ...current.references])]
 	return {
@@ -930,37 +970,39 @@ async function loadReferenceLifecycle(
 async function commitReferenceLifecycle(
 	event: JetstreamEvent,
 	lifecycle: ReferenceLifecycle | undefined,
+	sql?: BatchSql,
 ): Promise<void> {
 	if (!lifecycle || event.kind !== 'commit' || !event.commit) return
 	const { time_us: timeUs, commit } = event
 	if (lifecycle.tooComplex) {
 		// Preserve a monotonic empty tombstone at this event version. A later delete
 		// therefore cannot resurrect stale references from an earlier known state.
-		await writePriorReferences(lifecycle.key, [], timeUs, commit.rev)
+		await writePriorReferences(lifecycle.key, [], timeUs, commit.rev, sql)
 		return
 	}
 	if (commit.operation === 'delete') {
 		// Delete only after all deliveries using the old durable snapshot are enqueued.
 		if (!mayOwnPriorReferences(lifecycle.key)) return
-		if (await currentDependencies().referenceRepository.delete(lifecycle.key, timeUs, commit.rev)) {
+		if (await currentDependencies().referenceRepository.delete(lifecycle.key, timeUs, commit.rev, sql)) {
 			trackPriorReferences(lifecycle.key, false)
 		}
 	} else {
-		await writePriorReferences(lifecycle.key, lifecycle.newReferences, timeUs, commit.rev)
+		await writePriorReferences(lifecycle.key, lifecycle.newReferences, timeUs, commit.rev, sql)
 	}
 }
 
-async function clearPriorReferenceState(event: JetstreamEvent): Promise<void> {
+async function clearPriorReferenceState(event: JetstreamEvent, sql?: BatchSql): Promise<void> {
 	if (event.kind !== 'commit' || !event.commit) return
 	await writePriorReferences(
 		eventAtUri(event.did, event.commit.collection, event.commit.rkey),
 		[],
 		event.time_us,
 		event.commit.rev,
+		sql,
 	)
 }
 
-async function processCommit(stream: StreamName, event: JetstreamEvent): Promise<void> {
+async function processCommit(stream: StreamName, event: JetstreamEvent, sql?: BatchSql): Promise<void> {
 	if (event.kind !== 'commit' || !event.commit) return
 	const { did, commit } = event
 	if (commit.operation !== 'create' && commit.operation !== 'update' && commit.operation !== 'delete') return
@@ -993,19 +1035,19 @@ async function processCommit(stream: StreamName, event: JetstreamEvent): Promise
 		ackableInvalid = mutation.ackableInvalid === true
 	}
 	if (ackableInvalid) {
-		await clearPriorReferenceState(event)
+		await clearPriorReferenceState(event, sql)
 		totalEvents++
 		return
 	}
 
-	const lifecycle = await loadReferenceLifecycle(event, deliveryRecord)
+	const lifecycle = await loadReferenceLifecycle(event, deliveryRecord, sql)
 	if (lifecycle?.tooComplex) {
 		tooComplexBacklinkEvents++
 		logger.warn('[backlink] record references too complex; backlink matching skipped')
 		// Passing an empty backlink snapshot preserves direct matching while ensuring
 		// no truncated backlink result is ever partially delivered or indexed.
-		await enqueueMatched(event, [], deliveryRecord, selfKey)
-		await commitReferenceLifecycle(event, lifecycle)
+		await enqueueMatched(event, [], deliveryRecord, selfKey, sql)
+		await commitReferenceLifecycle(event, lifecycle, sql)
 		totalEvents++
 		return
 	}
@@ -1018,38 +1060,42 @@ async function processCommit(stream: StreamName, event: JetstreamEvent): Promise
 		lifecycle.oldReferences.length === 0 &&
 		lifecycle.newReferences.length === 0
 	) {
-		await commitReferenceLifecycle(event, lifecycle)
+		await commitReferenceLifecycle(event, lifecycle, sql)
 		return
 	}
 
-	await enqueueMatched(event, lifecycle?.matchRecord ?? deliveryRecord, deliveryRecord, selfKey)
-	await commitReferenceLifecycle(event, lifecycle)
+	await enqueueMatched(event, lifecycle?.matchRecord ?? deliveryRecord, deliveryRecord, selfKey, sql)
+	await commitReferenceLifecycle(event, lifecycle, sql)
 	totalEvents++
 }
 
-async function handleStreamEvent(stream: StreamName, event: JetstreamEvent): Promise<void> {
+/**
+ * One relay batch is one durable transaction: deliveries, backlink state, and
+ * the stream cursor commit together. A crash therefore replays the batch rather
+ * than resuming past effects the outbox never received.
+ *
+ * Registry record mutations keep their own short transactions. They are rare
+ * and monotonic by source revision, and they take table-wide advisory locks
+ * that do not belong inside a relay-paced batch.
+ */
+async function handleStreamEvents(stream: StreamName, events: readonly JetstreamEvent[]): Promise<void> {
+	const last = events[events.length - 1]
+	if (!last) return
 	lastEventTime = Date.now()
-	if (event.kind !== 'commit' || !event.commit) return
-	const key = `${event.did}/${event.commit.collection}/${event.commit.rkey}`
+	const relay = normalizeRelayIdentity(config.jetstreamUrl)
+	const dependencies = currentDependencies()
 	try {
-		await recordExecutor.run(key, () => processCommit(stream, event))
+		await dependencies.runIntakeBatch(async (sql) => {
+			for (const event of events) {
+				if (event.kind !== 'commit' || !event.commit) continue
+				const key = `${event.did}/${event.commit.collection}/${event.commit.rkey}`
+				await recordExecutor.run(key, () => processCommit(stream, event, sql))
+			}
+			await dependencies.cursorRepository.save(stream, last.time_us, relay, sql)
+		})
 	} catch {
 		safeError(stream)
 		throw new Error('Intake event processing failed')
-	}
-}
-
-async function persistCursor(stream: StreamName, event: JetstreamEvent): Promise<void> {
-	const relay = normalizeRelayIdentity(config.jetstreamUrl)
-	const previous = cursorWriteTails.get(stream) ?? Promise.resolve()
-	const current = previous
-		.catch(() => undefined)
-		.then(() => currentDependencies().cursorRepository.save(stream, event.time_us, relay))
-	cursorWriteTails.set(stream, current)
-	try {
-		await current
-	} finally {
-		if (cursorWriteTails.get(stream) === current) cursorWriteTails.delete(stream)
 	}
 }
 
@@ -1065,13 +1111,12 @@ function createClient(
 		...(wantedCollections ? { wantedCollections } : {}),
 		cursor,
 		maxQueue: config.intakeQueueMax,
-		concurrency: config.intakeConcurrency,
+		batchMax: config.intakeBatchMax,
 		maxEventBytes: config.intakeEventMaxBytes,
 		reconnectMinMs: config.jetstreamReconnectMinMs,
 		reconnectMaxMs: config.jetstreamReconnectMaxMs,
 		reconnectMaxExponent: config.jetstreamReconnectMaxExponent,
-		onEvent: (event) => handleStreamEvent(stream, event),
-		onAcknowledged: (event) => persistCursor(stream, event),
+		onEvents: (events) => handleStreamEvents(stream, events),
 		onConnect: () => logger.info(`[${stream}] Jetstream connected`),
 		onDisconnect: () => logger.warn(`[${stream}] Jetstream disconnected`),
 		onError: () => safeError(stream),
@@ -1271,6 +1316,7 @@ export async function startFirehose(options: FirehoseStartOptions = {}): Promise
 		referenceRepository: options.referenceRepository ?? defaultReferenceRepository(),
 		enqueueWebhookDeliveries: options.enqueueWebhookDeliveries ?? defaultEnqueueWebhookDeliveries(),
 		recordWebhookIntakeQuarantine: options.recordWebhookIntakeQuarantine ?? database.recordWebhookIntakeQuarantine,
+		runIntakeBatch: options.runIntakeBatch ?? database.runIntakeBatch,
 		createJetstreamClient: options.createJetstreamClient ?? ((clientOptions) => new JetstreamClient(clientOptions)),
 	}
 	firehoseStarted = true
@@ -1442,5 +1488,4 @@ export function resetFirehoseForTests(): void {
 	directWantedDids = new Set<string>()
 	directSubscriptionUrlBytes = Buffer.byteLength(new URL(config.jetstreamUrl).toString())
 	clearRegistryCache()
-	cursorWriteTails.clear()
 }

@@ -16,6 +16,7 @@ mock.module('./db', () => ({
 	savePriorReferenceIndex: async () => 'stored',
 	deletePriorReferenceIndex: async () => false,
 	loadPriorReferenceKeys: async () => ({ keys: [], complete: true }),
+	runIntakeBatch: async (work: (sql: unknown) => Promise<unknown>) => work(undefined),
 	enqueueWebhookDeliveries: async () => ({ enqueued: 0, deduplicated: 0 }),
 	recordWebhookIntakeQuarantine: async () => undefined,
 	getWebhookRecord: async () => undefined,
@@ -164,7 +165,7 @@ describe('firehose admitted in-memory candidate index', () => {
 		})
 		const direct = created.find((client) => client.options.wantedDids?.includes(SCOPE))
 		expect(direct?.options.wantedDids).toEqual(expect.arrayContaining([OWNER, SCOPE]))
-		await direct?.options.onEvent(commit(10))
+		await direct?.options.onEvents([commit(10)])
 		expect(enqueued).toEqual([1])
 	})
 
@@ -195,14 +196,54 @@ describe('firehose admitted in-memory candidate index', () => {
 		})
 		const direct = created.find((client) => client.options.wantedDids?.includes(SCOPE))
 		expect(direct).toBeDefined()
-		const poisonEvent = commit(20)
-		await direct?.options.onEvent(poisonEvent)
-		await direct?.options.onAcknowledged?.(poisonEvent)
-		const validEvent = commit(21)
-		await direct?.options.onEvent(validEvent)
-		await direct?.options.onAcknowledged?.(validEvent)
+		await direct?.options.onEvents([commit(20)])
+		await direct?.options.onEvents([commit(21)])
 		expect(quarantines).toEqual(['payload_too_large'])
+		// Each batch commits its own cursor, quarantined poison included.
 		expect(saved).toEqual([20, 21])
+	})
+
+	test('commits deliveries and the stream cursor in one batch, and neither when it fails', async () => {
+		initScopeDids([{ did: OWNER, rkey: 'hook', record: record() }])
+		const created: FakeJetstream[] = []
+		const effects: string[] = []
+		let failing = false
+		await startFirehose({
+			...testDependencies(created),
+			runIntakeBatch: async (work) => {
+				try {
+					const result = await work(undefined)
+					effects.push('commit')
+					return result
+				} catch (error) {
+					effects.push('rollback')
+					throw error
+				}
+			},
+			cursorRepository: {
+				load: async () => undefined,
+				save: async (_stream, cursor) => {
+					effects.push(`cursor:${cursor}`)
+				},
+			},
+			enqueueWebhookDeliveries: async (entries) => {
+				effects.push('enqueue')
+				if (failing) throw new Error('outbox unavailable')
+				return { enqueued: entries.length, deduplicated: 0 }
+			},
+			recordWebhookIntakeQuarantine: async () => undefined,
+		})
+		const direct = created.find((client) => client.options.wantedDids?.includes(SCOPE))
+		expect(direct).toBeDefined()
+		await direct?.options.onEvents([commit(10)])
+		// The cursor is the last statement of the same transaction as the delivery.
+		expect(effects).toEqual(['enqueue', 'cursor:10', 'commit'])
+
+		failing = true
+		effects.length = 0
+		await expect(direct?.options.onEvents([commit(11)])).rejects.toThrow('Intake event processing failed')
+		// A rolled back batch never advances the cursor past work it lost.
+		expect(effects).toEqual(['enqueue', 'rollback'])
 	})
 
 	test('bounds a direct-PDS owner flood deterministically at the per-owner admission cap', async () => {
@@ -223,7 +264,7 @@ describe('firehose admitted in-memory candidate index', () => {
 			recordWebhookIntakeQuarantine: async () => undefined,
 		})
 		const direct = created.find((client) => client.options.wantedDids?.includes(SCOPE))
-		await direct?.options.onEvent(commit(30))
+		await direct?.options.onEvents([commit(30)])
 		expect(candidateCount).toBe(100)
 		expect(getEventStats().rejectedSubscriptionAdmissions).toBeGreaterThanOrEqual(1)
 	})
@@ -246,7 +287,7 @@ describe('firehose admitted in-memory candidate index', () => {
 			recordWebhookIntakeQuarantine: async () => undefined,
 		})
 		const direct = created.find((client) => client.options.wantedDids?.includes(SCOPE))
-		await direct?.options.onEvent(commit(40))
+		await direct?.options.onEvents([commit(40)])
 		expect(candidateCount).toBe(1)
 	})
 })
@@ -296,7 +337,7 @@ describe('backlink prior-reference index', () => {
 		const created: FakeJetstream[] = []
 		const probe = referenceProbe()
 		const backlink = await startBacklinkIntake(created, probe)
-		await backlink.options.onEvent(likeCommit(10, []))
+		await backlink.options.onEvents([likeCommit(10, [])])
 		expect(probe.loads).toEqual([])
 		expect(probe.writes).toEqual([])
 	})
@@ -306,18 +347,18 @@ describe('backlink prior-reference index', () => {
 		const probe = referenceProbe()
 		const backlink = await startBacklinkIntake(created, probe)
 
-		await backlink.options.onEvent(likeCommit(10, [SUBJECT]))
+		await backlink.options.onEvents([likeCommit(10, [SUBJECT])])
 		expect(probe.loads).toEqual([])
 		expect(probe.writes).toEqual([VISITOR_KEY])
 		expect(probe.rows.get(VISITOR_KEY)).toEqual([SUBJECT])
 
 		// The same key may now own durable state, so its next version is read.
-		await backlink.options.onEvent(likeCommit(11, [], 'update'))
+		await backlink.options.onEvents([likeCommit(11, [], 'update')])
 		expect(probe.loads).toEqual([VISITOR_KEY])
 		expect(probe.rows.get(VISITOR_KEY)).toEqual([])
 
 		// Cleared state is forgotten again: no further round trip for this key.
-		await backlink.options.onEvent(likeCommit(12, [], 'update'))
+		await backlink.options.onEvents([likeCommit(12, [], 'update')])
 		expect(probe.loads).toEqual([VISITOR_KEY])
 		expect(probe.writes).toEqual([VISITOR_KEY, VISITOR_KEY])
 	})
@@ -327,7 +368,7 @@ describe('backlink prior-reference index', () => {
 		const probe = referenceProbe()
 		probe.complete = false
 		const backlink = await startBacklinkIntake(created, probe)
-		await backlink.options.onEvent(likeCommit(10, []))
+		await backlink.options.onEvents([likeCommit(10, [])])
 		expect(probe.loads).toEqual([VISITOR_KEY])
 	})
 
@@ -335,7 +376,7 @@ describe('backlink prior-reference index', () => {
 		const created: FakeJetstream[] = []
 		const probe = referenceProbe([[VISITOR_KEY, [SUBJECT]]])
 		const backlink = await startBacklinkIntake(created, probe)
-		await backlink.options.onEvent(likeCommit(10, [], 'update'))
+		await backlink.options.onEvents([likeCommit(10, [], 'update')])
 		expect(probe.loads).toEqual([VISITOR_KEY])
 		expect(probe.rows.get(VISITOR_KEY)).toEqual([])
 	})

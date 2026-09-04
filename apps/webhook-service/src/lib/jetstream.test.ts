@@ -61,20 +61,20 @@ afterEach(() => {
 	FakeWebSocket.instances = []
 })
 
-describe('JetstreamClient durable acknowledgement and protocol quarantine', () => {
-	test('does not advance cursor until handler and durable acknowledgement resolve', async () => {
+describe('JetstreamClient durable batch acknowledgement and protocol quarantine', () => {
+	test('does not advance the cursor until the batch commits', async () => {
 		globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
 		let release: (() => void) | undefined
-		const processed = new Promise<void>((resolve) => {
+		const committed = new Promise<void>((resolve) => {
 			release = resolve
 		})
-		const acknowledged: number[] = []
+		const batches: number[][] = []
 		const client = new JetstreamClient({
 			url: 'wss://relay.example/subscribe',
 			cursor: 10,
-			onEvent: () => processed,
-			onAcknowledged: async (value) => {
-				acknowledged.push(value.time_us)
+			onEvents: (events) => {
+				batches.push(events.map((value) => value.time_us))
+				return committed
 			},
 		})
 		client.start()
@@ -84,31 +84,26 @@ describe('JetstreamClient durable acknowledgement and protocol quarantine', () =
 		socket?.message(event(11))
 		await flush()
 		expect(client.cursor).toBe(10)
-		expect(acknowledged).toEqual([])
 		release?.()
 		await flush()
+		expect(batches).toEqual([[11]])
 		expect(client.cursor).toBe(11)
-		expect(acknowledged).toEqual([11])
 		client.destroy()
 	})
 
-	test('acknowledges the longest completed prefix with one durable cursor write', async () => {
+	test('hands the queued events to one batch and advances to its last event', async () => {
 		globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
-		const acknowledged: number[] = []
+		const batches: number[][] = []
 		let release: (() => void) | undefined
-		const firstWrite = new Promise<void>((resolve) => {
+		const firstBatch = new Promise<void>((resolve) => {
 			release = resolve
 		})
-		let writes = 0
 		const client = new JetstreamClient({
 			url: 'wss://relay.example/subscribe',
 			cursor: 50,
-			concurrency: 4,
-			onEvent: async () => undefined,
-			onAcknowledged: async (value) => {
-				writes++
-				acknowledged.push(value.time_us)
-				if (writes === 1) await firstWrite
+			onEvents: (events) => {
+				batches.push(events.map((value) => value.time_us))
+				return batches.length === 1 ? firstBatch : Promise.resolve()
 			},
 		})
 		client.start()
@@ -117,21 +112,44 @@ describe('JetstreamClient durable acknowledgement and protocol quarantine', () =
 		socket?.open()
 		socket?.message(event(51))
 		await flush()
-		// The first write is in flight; the next events complete behind it.
+		// These arrive while the first batch is still committing.
 		socket?.message(event(52))
 		socket?.message(event(53))
 		await flush()
-		expect(acknowledged).toEqual([51])
+		expect(batches).toEqual([[51]])
 		release?.()
 		await flush()
-		// 52 and 53 are one contiguous completed prefix: one write, latest cursor.
-		expect(acknowledged).toEqual([51, 53])
+		// One transaction, one cursor write, both remaining events.
+		expect(batches).toEqual([[51], [52, 53]])
 		expect(client.cursor).toBe(53)
 		expect(client.queued).toBe(0)
 		client.destroy()
 	})
 
-	test('stays healthy while a bounded queue drains, and stops when acknowledgement stalls', async () => {
+	test('never hands over more than the batch bound at once', async () => {
+		globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
+		const sizes: number[] = []
+		const client = new JetstreamClient({
+			url: 'wss://relay.example/subscribe',
+			cursor: 80,
+			batchMax: 2,
+			maxQueue: 8,
+			onEvents: async (events) => {
+				sizes.push(events.length)
+			},
+		})
+		client.start()
+		const socket = FakeWebSocket.instances[0]
+		expect(socket).toBeDefined()
+		socket?.open()
+		for (const time of [81, 82, 83, 84, 85]) socket?.message(event(time))
+		await flush()
+		expect(Math.max(...sizes)).toBeLessThanOrEqual(2)
+		expect(client.cursor).toBe(85)
+		client.destroy()
+	})
+
+	test('stays healthy while a bounded queue drains, and stops when progress stalls', async () => {
 		globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
 		let release: (() => void) | undefined
 		const held = new Promise<void>((resolve) => {
@@ -141,8 +159,8 @@ describe('JetstreamClient durable acknowledgement and protocol quarantine', () =
 			url: 'wss://relay.example/subscribe',
 			cursor: 60,
 			maxQueue: 2,
-			onEvent: async () => held,
-			onAcknowledged: async () => undefined,
+			batchMax: 1,
+			onEvents: () => held,
 			progressStaleMs: 60_000,
 		})
 		client.start()
@@ -163,7 +181,7 @@ describe('JetstreamClient durable acknowledgement and protocol quarantine', () =
 
 		const stalled = new JetstreamClient({
 			url: 'wss://relay.example/subscribe',
-			onEvent: async () => undefined,
+			onEvents: async () => undefined,
 			progressStaleMs: 1,
 		})
 		// Never acknowledged anything and not connected: not serving.
@@ -172,22 +190,18 @@ describe('JetstreamClient durable acknowledgement and protocol quarantine', () =
 		stalled.destroy()
 	})
 
-	test('retries a failed event in place instead of discarding accepted work', async () => {
+	test('retries a failed batch in place instead of replaying the stream', async () => {
 		globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
 		let failures = 0
-		const acknowledged: number[] = []
 		const client = new JetstreamClient({
 			url: 'wss://relay.example/subscribe',
 			cursor: 70,
-			eventRetryDelayMs: 1,
-			onEvent: async (value) => {
-				if (value.time_us === 71 && failures === 0) {
+			batchRetryDelayMs: 1,
+			onEvents: async () => {
+				if (failures === 0) {
 					failures++
 					throw new Error('transient')
 				}
-			},
-			onAcknowledged: async (value) => {
-				acknowledged.push(value.time_us)
 			},
 		})
 		client.start()
@@ -200,24 +214,19 @@ describe('JetstreamClient durable acknowledgement and protocol quarantine', () =
 		await Bun.sleep(10)
 		await flush()
 		expect(failures).toBe(1)
-		// The failure never reached the stream: no replay connection, no lost sibling.
+		// The failure never reached the stream: no replay connection, nothing dropped.
 		expect(FakeWebSocket.instances.length).toBe(1)
 		expect(client.cursor).toBe(72)
-		expect(acknowledged).toEqual([72])
 		expect(client.queued).toBe(0)
 		client.destroy()
 	})
 
 	test('quarantines malformed bytes, ignores late frames, then resets only after an acked replay', async () => {
 		globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
-		const acknowledgements: number[] = []
 		const client = new JetstreamClient({
 			url: 'wss://relay.example/subscribe',
 			cursor: 40,
-			onEvent: async () => undefined,
-			onAcknowledged: async (value) => {
-				acknowledgements.push(value.time_us)
-			},
+			onEvents: async () => undefined,
 			reconnectMinMs: 1,
 			reconnectMaxMs: 1,
 			reconnectMaxExponent: 0,
@@ -253,30 +262,21 @@ describe('JetstreamClient durable acknowledgement and protocol quarantine', () =
 	test('retains a full bounded queue, drains it in order, then reconnects from the latest ack', async () => {
 		globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
 		let releaseFirst: (() => void) | undefined
-		let releaseSecond: (() => void) | undefined
 		const first = new Promise<void>((resolve) => {
 			releaseFirst = resolve
 		})
-		const second = new Promise<void>((resolve) => {
-			releaseSecond = resolve
-		})
 		const processed: number[] = []
-		const acknowledged: number[] = []
 		const client = new JetstreamClient({
 			url: 'wss://relay.example/subscribe',
 			cursor: 10,
 			maxQueue: 2,
+			batchMax: 1,
 			reconnectMinMs: 1,
 			reconnectMaxMs: 1,
 			reconnectMaxExponent: 0,
-			onEvent: async (value) => {
-				const time = value.time_us
-				processed.push(time)
-				if (time === 11) await first
-				if (time === 12) await second
-			},
-			onAcknowledged: async (value) => {
-				acknowledged.push(value.time_us)
+			onEvents: async (events) => {
+				for (const value of events) processed.push(value.time_us)
+				if (events[0]?.time_us === 11) await first
 			},
 		})
 		client.start()
@@ -294,10 +294,7 @@ describe('JetstreamClient durable acknowledgement and protocol quarantine', () =
 		socket?.message(event(13))
 		releaseFirst?.()
 		await flush()
-		releaseSecond?.()
-		await flush()
 		expect(processed).toEqual([11, 12])
-		expect(acknowledged).toEqual([11, 12])
 		expect(client.cursor).toBe(12)
 		await Bun.sleep(5)
 		expect(FakeWebSocket.instances.length).toBeGreaterThanOrEqual(2)
@@ -310,24 +307,18 @@ describe('JetstreamClient durable acknowledgement and protocol quarantine', () =
 		client.destroy()
 	})
 
-	test('ignores late frames after retained work fails, then reconnects after asynchronous close', async () => {
+	test('replays from the last durable batch when a batch keeps failing', async () => {
 		globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
-		let release: (() => void) | undefined
-		const pending = new Promise<void>((resolve) => {
-			release = resolve
-		})
 		const client = new JetstreamClient({
 			url: 'wss://relay.example/subscribe',
 			cursor: 20,
-			maxQueue: 2,
 			reconnectMinMs: 1,
 			reconnectMaxMs: 1,
 			reconnectMaxExponent: 0,
-			onEvent: async (value) => {
-				if (value.time_us === 21) await pending
-			},
-			onAcknowledged: async () => {
-				throw new Error('cursor store unavailable')
+			// This exercises stream-level failure, so give the batch no retries.
+			batchMaxAttempts: 1,
+			onEvents: async () => {
+				throw new Error('durable batch failed')
 			},
 		})
 		client.start()
@@ -337,67 +328,11 @@ describe('JetstreamClient durable acknowledgement and protocol quarantine', () =
 		socket.closeImmediately = false
 		socket.open()
 		socket.message(event(21))
-		socket.message(event(22))
-		await flush()
-		release?.()
-		await flush()
-		expect(client.failureKind).toBe('cursor')
-		expect(client.isConnected).toBe(false)
-		expect(client.queued).toBe(0)
-		expect(socket.closeRequested).toBe(true)
-		// The peer can still deliver buffered frames before its close callback.
-		// A failed client must ignore them or it wedges on an undrainable queue.
-		socket.message(event(23))
-		await flush()
-		expect(client.queued).toBe(0)
-		socket.finishClose()
-		await Bun.sleep(5)
-		expect(FakeWebSocket.instances.length).toBeGreaterThanOrEqual(2)
-		expect(FakeWebSocket.instances[FakeWebSocket.instances.length - 1]?.url).toContain('cursor=20')
-		client.destroy()
-	})
-
-	test('waits for sibling handlers before replaying a failure after disconnect', async () => {
-		globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
-		let rejectFirst: ((error: Error) => void) | undefined
-		let releaseSecond: (() => void) | undefined
-		const first = new Promise<void>((_resolve, reject) => {
-			rejectFirst = reject
-		})
-		const second = new Promise<void>((resolve) => {
-			releaseSecond = resolve
-		})
-		const client = new JetstreamClient({
-			url: 'wss://relay.example/subscribe',
-			cursor: 20,
-			reconnectMinMs: 1,
-			reconnectMaxMs: 1,
-			reconnectMaxExponent: 0,
-			// This exercises stream-level failure, so give the event no retries.
-			eventMaxAttempts: 1,
-			onEvent: async (value) => {
-				if (value.time_us === 21) await first
-				if (value.time_us === 22) await second
-			},
-			onAcknowledged: async () => undefined,
-		})
-		client.start()
-		const socket = FakeWebSocket.instances[0]
-		expect(socket).toBeDefined()
-		if (!socket) throw new Error('missing test socket')
-		socket.open()
-		socket.message(event(21))
-		socket.message(event(22))
-		await flush()
-		// The relay disconnects while both handlers are still active.
-		socket.finishClose()
-		rejectFirst?.(new Error('handler failed'))
 		await flush()
 		expect(client.failureKind).toBe('handler')
 		expect(client.queued).toBe(0)
-		expect(FakeWebSocket.instances).toHaveLength(1)
-		releaseSecond?.()
-		await flush()
+		expect(client.cursor).toBe(20)
+		socket.finishClose()
 		await Bun.sleep(5)
 		expect(FakeWebSocket.instances.length).toBeGreaterThanOrEqual(2)
 		expect(FakeWebSocket.instances[FakeWebSocket.instances.length - 1]?.url).toContain('cursor=20')
@@ -411,7 +346,7 @@ describe('JetstreamClient durable acknowledgement and protocol quarantine', () =
 			() =>
 				new JetstreamClient({
 					url: 'wss://relay.example/subscribe?wantedDids=did:plc:evil',
-					onEvent: async () => undefined,
+					onEvents: async () => undefined,
 				}),
 		).toThrow('Unsafe Jetstream relay URL')
 	})

@@ -28,6 +28,20 @@ if (!validatedDatabaseUrl) throw new Error('DATABASE_URL is required')
 export const db = new SQL(validatedDatabaseUrl)
 
 /**
+ * A statement runner: the shared pool, or one open transaction on it.
+ *
+ * Intake commits a whole batch through one executor - deliveries, backlink
+ * state, registry mutations, and the stream cursor - so a crash replays that
+ * batch instead of leaving the cursor ahead of the effects it claims.
+ */
+export type SqlExecutor = typeof db
+
+/** Run one intake batch so its cursor and its effects commit together. */
+export async function runIntakeBatch<T>(work: (sql: SqlExecutor) => Promise<T>): Promise<T> {
+	return db.begin(async (tx) => work(tx as unknown as SqlExecutor)) as Promise<T>
+}
+
+/**
  * Serialize all schema bootstrap work across replicas. The transaction-scoped
  * advisory lock is released automatically on commit/rollback. lock_timeout
  * makes a wedged migration fail startup rather than wait forever.
@@ -1428,7 +1442,10 @@ export interface WebhookIntakeQuarantineInput {
  * Record only a hashed event identity and a finite reason. Rejected record
  * bytes, URLs, credentials, and payload text are deliberately never stored.
  */
-export async function recordWebhookIntakeQuarantine(input: WebhookIntakeQuarantineInput): Promise<void> {
+export async function recordWebhookIntakeQuarantine(
+	input: WebhookIntakeQuarantineInput,
+	sql: SqlExecutor = db,
+): Promise<void> {
 	if (
 		!Number.isSafeInteger(input.timeUs) ||
 		input.timeUs < 0 ||
@@ -1448,7 +1465,7 @@ export async function recordWebhookIntakeQuarantine(input: WebhookIntakeQuaranti
 	const quarantineId = createHash('sha256')
 		.update(`wisp-webhook-quarantine/v1\0${relay}\0${input.timeUs}\0${input.rev}\0${eventAtUri}`)
 		.digest('hex')
-	await db`
+	await sql`
     INSERT INTO webhook_intake_quarantines
       (quarantine_id, relay_id, source_time_us, source_revision, event_at_uri_hash, reason, created_at, last_seen_at)
     VALUES (${quarantineId}, ${relay}, ${input.timeUs}, ${input.rev}, ${eventAtUriHash}, ${input.reason}, NOW(), NOW())
@@ -1555,9 +1572,14 @@ export async function loadJetstreamCursor(consumer: JetstreamConsumer, relay: st
 }
 
 /** Persist a nondecreasing cursor for one consumer and one normalized relay. */
-export async function saveJetstreamCursor(consumer: JetstreamConsumer, relay: string, sequence: number): Promise<void> {
+export async function saveJetstreamCursor(
+	consumer: JetstreamConsumer,
+	relay: string,
+	sequence: number,
+	sql: SqlExecutor = db,
+): Promise<void> {
 	const id = assertCursorInput(consumer, relay, sequence)
-	await db`
+	await sql`
     INSERT INTO jetstream_cursors (consumer_id, relay_id, seq, saved_at)
     VALUES (${consumer}, ${id}, ${sequence}, NOW())
     ON CONFLICT (consumer_id, relay_id) DO UPDATE SET
@@ -1594,11 +1616,16 @@ export async function loadCursorForStream(streamId: string, relay: string): Prom
 	return loadJetstreamCursor(streamId, relay)
 }
 
-/** Alias used by newer intake code. */
-export async function saveCursorForStream(streamId: string, cursor: number, relay: string): Promise<void> {
+/** Alias used by newer intake code. Pass the batch executor to commit it with the batch. */
+export async function saveCursorForStream(
+	streamId: string,
+	cursor: number,
+	relay: string,
+	sql: SqlExecutor = db,
+): Promise<void> {
 	if (streamId !== 'direct' && streamId !== 'backlink' && streamId !== 'registry')
 		throw new Error('Invalid Jetstream consumer')
-	await saveJetstreamCursor(streamId, relay, cursor)
+	await saveJetstreamCursor(streamId, relay, cursor, sql)
 }
 
 export const MAX_BACKLINK_REFERENCE_ROWS = 100_000
@@ -1655,9 +1682,12 @@ function decodeReferences(value: unknown): string[] | undefined {
 }
 
 /** Load bounded prior relevant backlink references after restart. */
-export async function loadPriorReferenceIndex(eventAtUri: string): Promise<PriorReferenceIndexEntry | undefined> {
+export async function loadPriorReferenceIndex(
+	eventAtUri: string,
+	sql: SqlExecutor = db,
+): Promise<PriorReferenceIndexEntry | undefined> {
 	const key = normalizeAtUri(eventAtUri)
-	const rows = await db<Array<{ refs: unknown; last_seq: number | string | bigint; last_rev: string }>>`
+	const rows = await sql<Array<{ refs: unknown; last_seq: number | string | bigint; last_rev: string }>>`
     SELECT refs, last_seq, last_rev
     FROM webhook_backlink_references
     WHERE event_at_uri = ${key} AND expires_at > NOW()
@@ -1708,6 +1738,7 @@ export async function savePriorReferenceIndex(
 	references: readonly string[],
 	timeUs: number,
 	rev: string,
+	sql: SqlExecutor = db,
 ): Promise<PriorReferenceWrite> {
 	const key = normalizeAtUri(eventAtUri)
 	if (!Number.isSafeInteger(timeUs) || timeUs < 0) throw new Error('Invalid backlink reference')
@@ -1719,7 +1750,7 @@ export async function savePriorReferenceIndex(
 		throw new Error('Backlink references are too large')
 
 	if (normalized.length === 0) {
-		const cleared = await db<Array<{ event_at_uri: string }>>`
+		const cleared = await sql<Array<{ event_at_uri: string }>>`
       UPDATE webhook_backlink_references SET
         refs = '[]'::jsonb,
         last_seq = ${timeUs}::bigint,
@@ -1733,7 +1764,7 @@ export async function savePriorReferenceIndex(
 		return cleared.length > 0 ? 'cleared' : 'stale'
 	}
 
-	const rows = await db<Array<{ admitted: boolean; written: boolean }>>`
+	const rows = await sql<Array<{ admitted: boolean; written: boolean }>>`
     WITH admission AS (
       SELECT
         EXISTS (SELECT 1 FROM webhook_backlink_references WHERE event_at_uri = ${key})
@@ -1798,11 +1829,16 @@ export async function loadPriorReferenceKeys(
 }
 
 /** Delete only if a later event has not already repopulated the same record. */
-export async function deletePriorReferenceIndex(eventAtUri: string, timeUs: number, rev: string): Promise<boolean> {
+export async function deletePriorReferenceIndex(
+	eventAtUri: string,
+	timeUs: number,
+	rev: string,
+	sql: SqlExecutor = db,
+): Promise<boolean> {
 	const key = normalizeAtUri(eventAtUri)
 	if (!Number.isSafeInteger(timeUs) || timeUs < 0) throw new Error('Invalid backlink reference')
 	assertAtprotoRevision(rev)
-	const rows = await db<Array<{ event_at_uri: string }>>`
+	const rows = await sql<Array<{ event_at_uri: string }>>`
     DELETE FROM webhook_backlink_references
     WHERE event_at_uri = ${key}
       AND (last_seq < ${timeUs} OR (last_seq = ${timeUs} AND last_rev <= ${rev}))
@@ -1923,13 +1959,17 @@ export async function enqueueWebhookDeliveryOutbox(
 	event: NewWebhookDeliveryEventRow,
 	rows: readonly NewWebhookDeliveryOutboxRow[],
 	ensureEvent = true,
+	/** When intake supplies its batch executor, these rows commit with the cursor. */
+	sql?: SqlExecutor,
 ): Promise<{ enqueued: number; deduplicated: number }> {
 	if (rows.length > 1_000 || typeof ensureEvent !== 'boolean') throw new Error('Webhook delivery batch is too large')
 	assertOutboxEventRow(event)
 	for (const row of rows) assertOutboxRow(row, event.eventId)
 	if (rows.length === 0) return { enqueued: 0, deduplicated: 0 }
 
-	return db.begin(async (tx) => {
+	// An intake batch already owns a transaction; joining it keeps these rows and
+	// the stream cursor in one commit. Standalone callers still get their own.
+	const write = async (tx: SqlExecutor): Promise<{ enqueued: number; deduplicated: number }> => {
 		// A collision or mismatched replay must not silently attach rows to a
 		// different immutable body. The deterministic event ID normally makes this
 		// impossible, but the check also detects corruption.
@@ -2011,7 +2051,9 @@ export async function enqueueWebhookDeliveryOutbox(
       RETURNING delivery_id
     `
 		return { enqueued: inserted.length, deduplicated: rows.length - inserted.length }
-	})
+	}
+
+	return sql ? write(sql) : db.begin(async (tx) => write(tx as unknown as SqlExecutor))
 }
 
 export interface ClaimedWebhookDelivery {

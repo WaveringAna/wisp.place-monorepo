@@ -31,31 +31,26 @@ export interface JetstreamOptions {
 	wantedDids?: readonly string[]
 	wantedCollections?: readonly string[]
 	cursor?: number
-	/** Resolves only after all durable work for this event is complete. */
-	onEvent: (event: JetstreamEvent) => void | Promise<void>
-	/** Runs in source order after onEvent, usually to persist the stream cursor. */
-	onAcknowledged?: (event: JetstreamEvent) => void | Promise<void>
+	/**
+	 * Resolves only after every durable effect for this batch is committed,
+	 * including the stream cursor. Rejecting replays the whole batch.
+	 */
+	onEvents: (events: readonly JetstreamEvent[]) => void | Promise<void>
 	onConnect?: () => void
 	onDisconnect?: () => void
 	onError?: (err: Error) => void
 	maxQueue?: number
-	concurrency?: number
+	/** Events handed to onEvents at once. One batch is one durable transaction. */
+	batchMax?: number
 	maxEventBytes?: number
 	reconnectMinMs?: number
 	reconnectMaxMs?: number
 	reconnectMaxExponent?: number
 	/** How long a recovering stream may go without durable progress before it is stalled. */
 	progressStaleMs?: number
-	/** Handler attempts for one event before the whole stream replays. */
-	eventMaxAttempts?: number
-	eventRetryDelayMs?: number
-}
-
-interface QueuedEvent {
-	event: JetstreamEvent
-	state: 'queued' | 'running' | 'complete'
-	/** Failed handler attempts. One bad event must not discard its siblings. */
-	attempts: number
+	/** Handler attempts for one batch before the whole stream replays. */
+	batchMaxAttempts?: number
+	batchRetryDelayMs?: number
 }
 
 function isStableDid(value: string): boolean {
@@ -65,9 +60,9 @@ function isStableDid(value: string): boolean {
 /** A recovering stream stays healthy only while it keeps acknowledging work. */
 const DEFAULT_PROGRESS_STALE_MS = 60_000
 
-/** A transient handler failure is the event's problem, not the queue's. */
-const DEFAULT_EVENT_MAX_ATTEMPTS = 3
-const DEFAULT_EVENT_RETRY_DELAY_MS = 250
+/** A transient handler failure is the batch's problem, not the queue's. */
+const DEFAULT_BATCH_MAX_ATTEMPTS = 3
+const DEFAULT_BATCH_RETRY_DELAY_MS = 250
 
 const COLLECTION_RE = /^[A-Za-z0-9.-]{1,253}$/
 const RKEY_RE = /^[A-Za-z0-9._~:%@+-]{1,512}$/
@@ -203,9 +198,9 @@ export class JetstreamClient {
 	private reconnectTimer: ReturnType<typeof setTimeout> | null = null
 	private reconnectAttempts = 0
 	private lastAckedCursor: number | undefined
-	private queue: QueuedEvent[] = []
-	private running = 0
-	private flushing = false
+	private queue: JetstreamEvent[] = []
+	private running = false
+	private attempts = 0
 	private failed = false
 	// Queue pressure is recoverable. Keep accepted events and reconnect only
 	// after they have drained and advanced the durable cursor.
@@ -215,19 +210,19 @@ export class JetstreamClient {
 	private protocolFailures = 0
 	private lastProgressAt = 0
 	private lastFailureAt = 0
-	private lastFailureKind: 'protocol' | 'queue' | 'handler' | 'cursor' | 'connect' | undefined
+	private lastFailureKind: 'protocol' | 'queue' | 'handler' | 'connect' | undefined
 	private lastReportedErrorAt = 0
 	private generation = 0
 	private readonly drainWaiters = new Set<() => void>()
 	private readonly maxQueue: number
-	private readonly concurrency: number
+	private readonly batchMax: number
 	private readonly maxEventBytes: number
 	private readonly reconnectMinMs: number
 	private readonly reconnectMaxMs: number
 	private readonly reconnectMaxExponent: number
 	private readonly progressStaleMs: number
-	private readonly eventMaxAttempts: number
-	private readonly eventRetryDelayMs: number
+	private readonly batchMaxAttempts: number
+	private readonly batchRetryDelayMs: number
 	private readonly retryTimers = new Set<ReturnType<typeof setTimeout>>()
 
 	constructor(private readonly opts: JetstreamOptions) {
@@ -250,19 +245,19 @@ export class JetstreamClient {
 		}
 		this.lastAckedCursor = opts.cursor
 		this.maxQueue = opts.maxQueue ?? config.intakeQueueMax
-		this.concurrency = opts.concurrency ?? config.intakeConcurrency
+		this.batchMax = opts.batchMax ?? config.intakeBatchMax
 		this.maxEventBytes = opts.maxEventBytes ?? config.intakeEventMaxBytes
 		this.reconnectMinMs = opts.reconnectMinMs ?? config.jetstreamReconnectMinMs
 		this.reconnectMaxMs = opts.reconnectMaxMs ?? config.jetstreamReconnectMaxMs
 		this.reconnectMaxExponent = opts.reconnectMaxExponent ?? config.jetstreamReconnectMaxExponent
 		this.progressStaleMs = opts.progressStaleMs ?? DEFAULT_PROGRESS_STALE_MS
-		this.eventMaxAttempts = opts.eventMaxAttempts ?? DEFAULT_EVENT_MAX_ATTEMPTS
-		this.eventRetryDelayMs = opts.eventRetryDelayMs ?? DEFAULT_EVENT_RETRY_DELAY_MS
+		this.batchMaxAttempts = opts.batchMaxAttempts ?? DEFAULT_BATCH_MAX_ATTEMPTS
+		this.batchRetryDelayMs = opts.batchRetryDelayMs ?? DEFAULT_BATCH_RETRY_DELAY_MS
 		if (
 			!Number.isSafeInteger(this.maxQueue) ||
 			this.maxQueue < 1 ||
-			!Number.isSafeInteger(this.concurrency) ||
-			this.concurrency < 1 ||
+			!Number.isSafeInteger(this.batchMax) ||
+			this.batchMax < 1 ||
 			!Number.isSafeInteger(this.maxEventBytes) ||
 			this.maxEventBytes < 1
 		) {
@@ -337,7 +332,7 @@ export class JetstreamClient {
 				this.applyBackpressure(new Error('Jetstream intake queue is full'))
 				return
 			}
-			this.queue.push({ event, state: 'queued', attempts: 0 })
+			this.queue.push(event)
 			this.pump()
 			if (this.queue.length >= this.maxQueue) this.applyBackpressure(new Error('Jetstream intake queue is full'))
 		}
@@ -356,13 +351,7 @@ export class JetstreamClient {
 				// Never replay from a stale cursor while accepted work is still
 				// draining, even when the relay (rather than queue pressure) closed
 				// the socket.
-				if (
-					this.backpressured ||
-					this.reconnectWhenDrained ||
-					this.queue.length !== 0 ||
-					this.running !== 0 ||
-					this.flushing
-				) {
+				if (this.backpressured || this.reconnectWhenDrained || this.queue.length !== 0 || this.running) {
 					this.reconnectWhenDrained = true
 					this.reconnectAfterDrain()
 				} else this.scheduleReconnect()
@@ -371,90 +360,60 @@ export class JetstreamClient {
 	}
 
 	private pump(): void {
-		if (this.destroyed || this.failed || this.paused) return
-		while (this.running < this.concurrency) {
-			const item = this.queue.find((candidate) => candidate.state === 'queued')
-			if (!item) break
-			item.state = 'running'
-			this.running++
-			void this.run(item)
-		}
+		if (this.destroyed || this.failed || this.paused || this.running || this.queue.length === 0) return
+		this.running = true
+		void this.run(this.queue.slice(0, this.batchMax))
 	}
 
-	private async run(item: QueuedEvent): Promise<void> {
+	/**
+	 * One batch is one durable unit: the handler resolves only after every effect
+	 * for these events, including the stream cursor, is committed. Acknowledging
+	 * is therefore just dropping the batch from the queue - there is no window in
+	 * which the cursor is ahead of the work it claims.
+	 */
+	private async run(batch: readonly JetstreamEvent[]): Promise<void> {
+		const last = batch[batch.length - 1]
 		try {
-			await this.opts.onEvent(item.event)
-			if (this.destroyed || this.failed || !this.queue.includes(item)) return
-			item.state = 'complete'
-			void this.flushAcknowledgements()
+			if (!last) return
+			await this.opts.onEvents(batch)
+			if (this.destroyed || this.failed) return
+			this.queue.splice(0, batch.length)
+			this.lastAckedCursor = last.time_us
+			// A durable acknowledgement proves the connection carried useful work;
+			// only then reset exponential reconnect backoff.
+			this.attempts = 0
+			this.reconnectAttempts = 0
+			this.protocolFailures = 0
+			this.quarantined = false
+			this.lastProgressAt = Date.now()
 		} catch {
-			this.retryOrFail(item)
+			this.retryOrFail()
 		} finally {
-			this.running--
+			this.running = false
 			this.pump()
 			this.notifyDrained()
 		}
 	}
 
 	/**
-	 * A transient failure belongs to its event. Retrying it in place keeps every
-	 * sibling event this connection already accepted; only an event that keeps
-	 * failing costs the stream a replay from its last durable acknowledgement.
-	 * The item stays `running` meanwhile, so no acknowledgement can pass it.
+	 * A transient failure belongs to its batch. Retrying it in place keeps every
+	 * event this connection already accepted; only a batch that keeps failing
+	 * costs the stream a replay from its last durable acknowledgement.
 	 */
-	private retryOrFail(item: QueuedEvent): void {
-		if (this.destroyed || this.failed || !this.queue.includes(item)) return
-		item.attempts++
-		if (item.attempts >= this.eventMaxAttempts) {
+	private retryOrFail(): void {
+		if (this.destroyed || this.failed) return
+		this.attempts++
+		if (this.attempts >= this.batchMaxAttempts) {
 			this.fail(new Error('Jetstream event handler failed'), 'handler')
 			return
 		}
 		this.report(new Error('Jetstream event handler failed'))
 		const timer = setTimeout(() => {
 			this.retryTimers.delete(timer)
-			if (this.destroyed || this.failed || !this.queue.includes(item)) return
-			item.state = 'queued'
+			if (this.destroyed || this.failed) return
 			this.pump()
-		}, this.eventRetryDelayMs * item.attempts)
+		}, this.batchRetryDelayMs * this.attempts)
 		this.retryTimers.add(timer)
-	}
-
-	private async flushAcknowledgements(): Promise<void> {
-		if (this.flushing || this.destroyed || this.failed) return
-		this.flushing = true
-		try {
-			while (!this.destroyed && !this.failed && this.queue[0]?.state === 'complete') {
-				// One durable write per completed prefix, never per event. The cursor
-				// is a resume point, so intermediate values only add a round trip
-				// each, and a crash mid-prefix replays into deduplicated durable
-				// state. Under a backlog this is the difference between the relay
-				// round-trip rate and the handler rate.
-				let prefix = 0
-				while (this.queue[prefix]?.state === 'complete') prefix++
-				const item = this.queue[prefix - 1]
-				if (!item) break
-				try {
-					await this.opts.onAcknowledged?.(item.event)
-				} catch {
-					this.fail(new Error('Jetstream cursor persistence failed'), 'cursor')
-					return
-				}
-				// Failure or teardown during that write owns the queue instead.
-				if (this.destroyed || this.failed) return
-				this.lastAckedCursor = item.event.time_us
-				// A durable acknowledgement proves the connection carried useful work;
-				// only then reset exponential reconnect backoff.
-				this.reconnectAttempts = 0
-				this.protocolFailures = 0
-				this.quarantined = false
-				this.lastProgressAt = Date.now()
-				this.queue.splice(0, prefix)
-				this.notifyDrained()
-			}
-		} finally {
-			this.flushing = false
-			this.notifyDrained()
-		}
 	}
 
 	private report(error: Error): void {
@@ -487,8 +446,7 @@ export class JetstreamClient {
 			!this.accepting ||
 			this.ws ||
 			this.queue.length !== 0 ||
-			this.running !== 0 ||
-			this.flushing
+			this.running
 		)
 			return
 		this.backpressured = false
@@ -519,13 +477,13 @@ export class JetstreamClient {
 		if (!this.ws && this.accepting) this.scheduleReconnect()
 	}
 
-	private fail(error: Error, kind: 'queue' | 'handler' | 'cursor' = 'handler'): void {
+	private fail(error: Error, kind: 'queue' | 'handler' = 'handler'): void {
 		if (this.destroyed || this.failed) return
 		this.backpressured = false
 		// A disconnected socket can fail while sibling handlers still own work.
 		// Drop their unacknowledged queue entries, but do not replay over those
 		// side effects until every in-flight handler and cursor flush has settled.
-		this.reconnectWhenDrained = this.running !== 0 || this.flushing
+		this.reconnectWhenDrained = this.running
 		this.lastFailureKind = kind
 		this.lastFailureAt = Date.now()
 		this.failed = true
@@ -618,7 +576,7 @@ export class JetstreamClient {
 		return this.lastFailureAt || undefined
 	}
 
-	get failureKind(): 'protocol' | 'queue' | 'handler' | 'cursor' | 'connect' | undefined {
+	get failureKind(): 'protocol' | 'queue' | 'handler' | 'connect' | undefined {
 		return this.lastFailureKind
 	}
 
@@ -650,12 +608,12 @@ export class JetstreamClient {
 	}
 
 	async drain(): Promise<void> {
-		if (this.queue.length === 0 && this.running === 0 && !this.flushing) return
+		if (this.queue.length === 0 && !this.running) return
 		await new Promise<void>((resolve) => this.drainWaiters.add(resolve))
 	}
 
 	private notifyDrained(): void {
-		if (this.queue.length !== 0 || this.running !== 0 || this.flushing) return
+		if (this.queue.length !== 0 || this.running) return
 		this.reconnectAfterDrain()
 		for (const resolve of this.drainWaiters) resolve()
 		this.drainWaiters.clear()

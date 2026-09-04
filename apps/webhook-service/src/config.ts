@@ -21,7 +21,7 @@ export interface WebhookServiceConfig {
 	readonly webhookCacheMax: number
 	readonly webhookCacheTtlMs: number
 	readonly intakeQueueMax: number
-	readonly intakeConcurrency: number
+	readonly intakeBatchMax: number
 	readonly intakeEventMaxBytes: number
 	readonly intakeRecordKeyMax: number
 	readonly registryActiveSubscriptionsMax: number
@@ -206,7 +206,7 @@ export function parseConfig(env: Environment = process.env): WebhookServiceConfi
 		webhookCacheMax: integer('WEBHOOK_CACHE_MAX', env.WEBHOOK_CACHE_MAX, 1_000, 1, 10_000),
 		webhookCacheTtlMs: integer('WEBHOOK_CACHE_TTL_MS', env.WEBHOOK_CACHE_TTL_MS, 60_000, 1_000, 3_600_000),
 		intakeQueueMax: integer('WEBHOOK_INTAKE_QUEUE_MAX', env.WEBHOOK_INTAKE_QUEUE_MAX, 512, 1, 10_000),
-		intakeConcurrency: integer('WEBHOOK_INTAKE_CONCURRENCY', env.WEBHOOK_INTAKE_CONCURRENCY, 1, 1, 32),
+		intakeBatchMax: integer('WEBHOOK_INTAKE_BATCH_MAX', env.WEBHOOK_INTAKE_BATCH_MAX, 128, 1, 1_000),
 		intakeEventMaxBytes: integer(
 			'WEBHOOK_INTAKE_EVENT_MAX_BYTES',
 			env.WEBHOOK_INTAKE_EVENT_MAX_BYTES,
