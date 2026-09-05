@@ -286,6 +286,7 @@ program
 	.requiredOption('-s, --site <name>', 'Site name to serve')
 	.option('-p, --path <path>', 'Local directory to cache site', '.wisp-serve')
 	.option('-P, --port <port>', 'Port to serve on', '8080')
+	.option('--host <host>', 'Bind address (defaults to loopback; use 0.0.0.0 for public access)', '127.0.0.1')
 	.option('--spa [file]', 'Enable SPA mode (serve file for all unmatched routes, defaults to index.html)')
 	.option('--directory-listing', 'Enable directory listing')
 	.action(
@@ -294,6 +295,7 @@ program
 				site: options.site,
 				path: options.path,
 				port: parseInt(options.port, 10),
+				host: options.host,
 				spa: options.spa,
 				directoryListing: options.directoryListing,
 			})

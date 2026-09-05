@@ -3,7 +3,6 @@ import { signCookie } from 'elysia/utils'
 
 const COOKIE_SECRET = 'test-cookie-secret'
 const DID = 'did:example:alice'
-const ADMIN_SESSION = 'admin-session'
 const SENTINEL = 'SENTINEL_ACCESS_TOKEN_SHOULD_NOT_ESCAPE'
 const PRIVATE_HOST = 'priv.wisp.test:3001'
 const PRIVATE_HOSTNAME = 'priv.wisp.test'
@@ -105,28 +104,6 @@ mock.module('./private-redeem', () => ({
 	resolvePrivateShareState: async () => null,
 }))
 
-mock.module('../lib/admin-auth', () => ({
-	adminAuth: {
-		createSession: () => ADMIN_SESSION,
-		deleteSession: () => undefined,
-		verify: async () => true,
-		verifySession: (sessionId: string) => (sessionId === ADMIN_SESSION ? { username: 'admin' } : null),
-	},
-	requireAdmin: ({
-		cookie,
-		set,
-	}: {
-		cookie: { admin_session?: { value?: unknown } }
-		set: { status?: number | string }
-	}) => {
-		if (cookie.admin_session?.value !== ADMIN_SESSION) {
-			set.status = 401
-			return { error: 'Unauthorized' }
-		}
-		return undefined
-	},
-}))
-
 mock.module('../lib/slingshot-handle-resolver', () => ({
 	SlingshotHandleResolver: class {
 		async resolve(_handle: string): Promise<null> {
@@ -135,15 +112,13 @@ mock.module('../lib/slingshot-handle-resolver', () => ({
 	},
 }))
 
-const [{ adminRoutes }, { authRoutes }, { domainRoutes }, { secretRoutes }, { siteRoutes }, { webhookRoutes }] =
-	await Promise.all([
-		import('./admin'),
-		import('./auth'),
-		import('./domain'),
-		import('./secret'),
-		import('./site'),
-		import('./webhook'),
-	])
+const [{ authRoutes }, { domainRoutes }, { secretRoutes }, { siteRoutes }, { webhookRoutes }] = await Promise.all([
+	import('./auth'),
+	import('./domain'),
+	import('./secret'),
+	import('./site'),
+	import('./webhook'),
+])
 const domainApp = domainRoutes({} as never, COOKIE_SECRET)
 
 const ask = (domain: string): Promise<Response> =>
@@ -331,76 +306,6 @@ describe('public error responses', () => {
 		expect(boundaryResponse.status).toBe(200)
 		expect(await boundaryResponse.json()).toMatchObject({ success: true, name: exactBoundary })
 		expect(secretDatabaseCalls).toBe(1)
-	})
-
-	test('keeps unexpected admin failures generic while preserving invalid-handle feedback', async () => {
-		const app = adminRoutes(COOKIE_SECRET)
-		const cookie = await signedCookie('admin_session', ADMIN_SESSION)
-		const originalFetch = globalThis.fetch
-		globalThis.fetch = fail as unknown as typeof fetch
-
-		try {
-			const cases: Array<{ request: Request; body: { error: string; message: string } }> = [
-				{
-					request: new Request('http://localhost/api/admin/database', { headers: { cookie } }),
-					body: {
-						error: 'Failed to fetch database stats',
-						message: 'Unable to retrieve database stats',
-					},
-				},
-				{
-					request: new Request('http://localhost/api/admin/sites', { headers: { cookie } }),
-					body: { error: 'Failed to fetch sites', message: 'Unable to retrieve sites' },
-				},
-				{
-					request: new Request('http://localhost/api/admin/firehose', { headers: { cookie } }),
-					body: {
-						error: 'Failed to fetch firehose status',
-						message: 'Firehose service unavailable',
-					},
-				},
-				{
-					request: new Request('http://localhost/api/admin/supporters', { headers: { cookie } }),
-					body: { error: 'Failed to fetch supporters', message: 'Unable to retrieve supporters' },
-				},
-				{
-					request: new Request('http://localhost/api/admin/supporters', {
-						body: JSON.stringify({ identifier: DID }),
-						headers: { 'Content-Type': 'application/json', cookie },
-						method: 'POST',
-					}),
-					body: { error: 'Failed to add supporter', message: 'Unable to add supporter' },
-				},
-				{
-					request: new Request(`http://localhost/api/admin/supporters/${encodeURIComponent(DID)}`, {
-						headers: { cookie },
-						method: 'DELETE',
-					}),
-					body: { error: 'Failed to remove supporter', message: 'Unable to remove supporter' },
-				},
-			]
-
-			for (const { request, body } of cases) {
-				const response = await app.handle(request)
-				expect(response.status).toBe(500)
-				expect(await safeJson(response)).toEqual(body)
-			}
-
-			const validationResponse = await app.handle(
-				new Request('http://localhost/api/admin/supporters', {
-					body: JSON.stringify({ identifier: 'unresolved.example' }),
-					headers: { 'Content-Type': 'application/json', cookie },
-					method: 'POST',
-				}),
-			)
-			expect(validationResponse.status).toBe(400)
-			expect(await safeJson(validationResponse)).toEqual({
-				error: 'Invalid handle',
-				message: 'Could not resolve handle: unresolved.example',
-			})
-		} finally {
-			globalThis.fetch = originalFetch
-		}
 	})
 })
 

@@ -217,9 +217,18 @@ wispctl serve your-handle.bsky.social \
 wispctl serve your-handle.bsky.social \
   --site my-site \
   --directory
+
+# Explicitly expose the server to other machines (use a firewall or reverse proxy)
+wispctl serve your-handle.bsky.social \
+  --site my-site \
+  --host 0.0.0.0
 ```
 
 Downloads site, serves it, and watches firehose for live updates!
+
+the server binds to loopback (`127.0.0.1`) by default. use `--host` only when you
+intend to make it reachable from a network; public exposure should be protected by
+an appropriate firewall or reverse proxy.
 
 ## Authentication
 
@@ -359,6 +368,7 @@ Options:
   -s, --site <SITE>           Site name to serve
   -p, --path <PATH>           Site files directory [default: .]
   -P, --port <PORT>           Port to serve on [default: 8080]
+      --host <HOST>           Bind address [default: 127.0.0.1]
       --spa                   Enable SPA mode (serve index.html for all routes)
       --directory             Enable directory listing mode for paths without index files
   -h, --help                  Print help

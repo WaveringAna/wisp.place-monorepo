@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
+import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -35,7 +35,7 @@ class FakeRedis {
 	pingError: Error | null = null
 	disconnected = false
 	private readonly listeners = new Map<string, Array<(...args: unknown[]) => void>>()
-	private rejectPendingRead: ((reason?: unknown) => void) | null = null
+	private readonly pendingReads: Array<(reason?: unknown) => void> = []
 
 	constructor(...args: unknown[]) {
 		this.options = args[1] as Record<string, unknown> | undefined
@@ -96,15 +96,18 @@ class FakeRedis {
 		}
 		notifyReplayRead?.()
 		notifyReplayRead = null
-		return new Promise((_, reject) => {
-			this.rejectPendingRead = reject
-		})
+		const { promise, reject } = Promise.withResolvers<null>()
+		this.pendingReads.push(reject)
+		return promise
 	}
 
 	disconnect(): void {
 		this.disconnected = true
-		this.rejectPendingRead?.(new Error('Redis disconnected'))
-		this.rejectPendingRead = null
+		const error = new Error('Redis disconnected')
+		for (const reject of this.pendingReads) {
+			reject(error)
+		}
+		this.pendingReads.length = 0
 	}
 }
 
@@ -236,7 +239,20 @@ beforeEach(async () => {
 	notifyReplayRead = null
 })
 
+afterEach(async () => {
+	await stopCacheInvalidationSubscriber()
+	for (const client of redisClients) {
+		client.disconnect()
+	}
+	redisClients.length = 0
+})
+
 afterAll(async () => {
+	await stopCacheInvalidationSubscriber()
+	for (const client of redisClients) {
+		client.disconnect()
+	}
+	redisClients.length = 0
 	await resetCacheInvalidationReplayForTests()
 	await rm(cursorFile, { force: true })
 	if (originalCursorFile === undefined) {

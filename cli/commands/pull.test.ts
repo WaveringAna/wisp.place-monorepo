@@ -3,7 +3,13 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
-import { decompressPulledGzip, readPulledBlob, resolvePullFilePath } from './pull'
+import {
+	createLogicalSiteBudget,
+	decompressPulledGzip,
+	readPulledBlob,
+	resolvePullFilePath,
+	validatePulledGzipHeader,
+} from './pull'
 
 const temporaryPaths: string[] = []
 
@@ -67,6 +73,20 @@ describe('decompressPulledGzip', () => {
 	it('keeps a valid expansion at its inclusive output limit', async () => {
 		const original = Buffer.alloc(1024, 'x')
 		expect(await decompressPulledGzip(gzipSync(original), original.byteLength)).toEqual(original)
+	})
+})
+
+describe('pull safety budgets', () => {
+	it('rejects gzip metadata without a gzip header', () => {
+		expect(() => validatePulledGzipHeader(Buffer.from('plain text'))).toThrow('not a gzip stream')
+	})
+
+	it('enforces the inclusive aggregate logical site limit', () => {
+		const budget = createLogicalSiteBudget(10)
+		budget.reserve(6)
+		budget.reserve(4)
+		expect(budget.totalSize).toBe(10)
+		expect(() => budget.reserve(1)).toThrow('logical size limit')
 	})
 })
 

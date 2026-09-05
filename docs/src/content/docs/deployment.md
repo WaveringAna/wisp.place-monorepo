@@ -170,14 +170,6 @@ bun run dev         # dev with hot reload
 bun run build       # compile to a binary
 ```
 
-On first run you'll be prompted to create an admin account. You can also run it manually:
-
-```bash
-bun run scripts/create-admin.ts
-```
-
-Admin panel is at `https://yourdomain.com/admin`.
-
 ## Firehose Service
 
 The firehose service watches the AT Protocol Jetstream for site changes. When a record is created or updated, it downloads blobs from the PDS, processes them, writes to shared S3 storage, and publishes a cache invalidation event so the hosting service picks up the changes.
@@ -370,11 +362,7 @@ Users add custom domains by creating a DNS TXT record:
 _wisp.example.com   TXT    did:plc:abc123xyz...
 ```
 
-The verification worker checks every 10 minutes. Trigger it manually:
-
-```bash
-curl -X POST https://yourdomain.com/api/admin/verify-dns
-```
+The verification worker checks every 10 minutes.
 
 ## Reverse-proxy request limits
 

@@ -9,7 +9,6 @@ import { createLogger, initializeGrafanaExporters, logCollector, redactSecretPat
 import { observabilityMiddleware } from '@wispplace/observability/middleware/elysia'
 import type { Context } from 'elysia'
 import { Elysia } from 'elysia'
-import { promptAdminSetup } from './lib/admin-auth'
 import { csrfProtection } from './lib/csrf'
 import {
 	closeDatabase,
@@ -42,7 +41,6 @@ import { ensureServiceIdentityKeypair } from './lib/service-identity'
 import { closeSiteUploadLockDatabase } from './lib/site-upload-lock'
 import type { Config } from './lib/types'
 import { SESSION_COOKIE_NAME } from './lib/wisp-auth'
-import { adminRoutes } from './routes/admin'
 import { authRoutes } from './routes/auth'
 import { domainRoutes } from './routes/domain'
 import { privateRedeemRoutes } from './routes/private-redeem'
@@ -85,9 +83,6 @@ const config: Config = {
 	domain: (Bun.env.DOMAIN ?? `https://${BASE_HOST}`) as Config['domain'],
 	clientName: Bun.env.CLIENT_NAME ?? 'PDS-View',
 }
-
-// Initialize admin setup (prompt if no admin exists)
-await promptAdminSetup()
 
 // Establish Redis early for durable domain-cache invalidation, without blocking startup.
 void getConnectedRedisClient().catch(() => {
@@ -323,7 +318,6 @@ export const app = new Elysia({
 	.use(privateSiteApiRoutes(client, cookieSecret))
 	.use(webhookRoutes(client, cookieSecret))
 	.use(secretRoutes(client, cookieSecret))
-	.use(adminRoutes(cookieSecret))
 	.use(
 		await staticPlugin({
 			assets: './apps/main-app/public',
@@ -356,29 +350,6 @@ export const app = new Elysia({
 	)
 	// Keep XRPC after static in dev, since staticPlugin(prefix='/') installs GET /* fallback.
 	.use(xrpcRoutes())
-	// Production only: serve built admin assets
-	.use(
-		Bun.env.NODE_ENV === 'production'
-			? await staticPlugin({
-					assets: './apps/main-app/dist/admin',
-					prefix: '/admin',
-				})
-			: (app) => app,
-	)
-	// Production only: serve built HTML for /admin
-	.use(
-		Bun.env.NODE_ENV === 'production'
-			? new Elysia()
-					.get('/admin', async ({ set }) => {
-						set.headers['Content-Type'] = 'text/html; charset=utf-8'
-						return await Bun.file('./apps/main-app/dist/admin/index.html').text()
-					})
-					.get('/admin/*', async ({ set }) => {
-						set.headers['Content-Type'] = 'text/html; charset=utf-8'
-						return await Bun.file('./apps/main-app/dist/admin/index.html').text()
-					})
-			: (app) => app,
-	)
 	.get('/acceptable-use', async ({ set }) => {
 		set.headers['Content-Type'] = 'text/html; charset=utf-8'
 		return await Bun.file('./apps/main-app/public/editor/acceptable-use.html').text()
@@ -505,24 +476,6 @@ export const app = new Elysia({
 
 		const [light, dark] = await Promise.all([readScheme('light'), readScheme('dark')])
 		return { light, dark }
-	})
-	.get('/api/admin/test', () => {
-		return { message: 'Admin routes test works!' }
-	})
-	.post('/api/admin/verify-dns', async () => {
-		try {
-			await dnsVerifier.trigger()
-			return {
-				success: true,
-				message: 'DNS verification triggered',
-			}
-		} catch (error) {
-			logger.error('[DNS Verifier] Manual verification trigger failed', error)
-			return {
-				success: false,
-				error: 'Failed to trigger DNS verification',
-			}
-		}
 	})
 	.get('/.well-known/atproto-did', ({ set }) => {
 		// Return plain text DID for AT Protocol domain verification

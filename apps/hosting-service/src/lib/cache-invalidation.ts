@@ -881,7 +881,7 @@ export async function resetCacheInvalidationReplayForTests(): Promise<void> {
 	// A previous test's in-flight stop must finish before the lifecycle reset,
 	// otherwise its teardown tail can race the next test's start.
 	if (stopPromise) await stopPromise
-	// Subscriber lifecycle reset so each test starts from 'idle' again.
+	else if (lifecycleState !== 'idle') await stopCacheInvalidationSubscriber()
 	stopSubscriberHeartbeat()
 	stopSubscriberSupervisor()
 	subscriberContext = null

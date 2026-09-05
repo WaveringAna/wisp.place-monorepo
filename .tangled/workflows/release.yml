@@ -19,9 +19,6 @@ dependencies:
   - jq
 
 environment:
-  # The mirror the release builds actually clone from. Not a secret — it is
-  # this repo's own public remote — but it is the one thing the release has
-  # to be told, so it lives here rather than inline in two commands.
   SOURCE_REPO: WaveringAna/wisp.place-monorepo
 
 steps:
@@ -38,11 +35,6 @@ steps:
         exit 1
       fi
 
-      # NOT $TANGLED_SHA. On a tag push that is the sha of the *ref*, and for
-      # an annotated tag (`git tag -a`) the ref is a tag object, not a
-      # commit — the mirror check then 422s and a build pinned to it would
-      # find nothing. The clone is of the tag, so HEAD is the commit it
-      # points at, for both annotated and lightweight tags.
       commit="$(git rev-parse 'HEAD^{commit}')"
 
       printf '%s' "$version" > /tmp/wisp-version
@@ -54,9 +46,6 @@ steps:
       export PATH="$HOME/.nix-profile/bin:$PATH"
       set -euo pipefail
 
-      # The builds clone $SOURCE_REPO, not the knot. A tag pushed only to
-      # origin would build whatever is on the mirror's default branch
-      # instead — same version number, different tree.
       sha="$(cat /tmp/wisp-commit)"
       code="$(curl -s -o /dev/null -w '%{http_code}' \
         "https://api.github.com/repos/$SOURCE_REPO/commits/$sha")"
@@ -87,11 +76,8 @@ steps:
           -d "$2"
       }
 
-      # RunAction is ASYNCHRONOUS. It returns in well under a second with
-      # `success: true, status: InProgress` — that field is the initial value
-      # of a record the release has not started writing yet, not a result.
-      # Gating on it would make every tag go green no matter what happened.
-      # The only honest signal is the Update, polled until it completes.
+      # RunAction is ASYNCHRONOUS.
+      # The only signal is the Update, polled until it completes.
       started="$(komodo execute/RunAction "$payload")"
       id="$(echo "$started" | jq -r '.id // ._id."$oid" // empty')"
       [ -n "$id" ] || { echo "no update id in RunAction response" >&2; exit 1; }

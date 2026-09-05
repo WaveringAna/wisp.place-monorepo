@@ -9,12 +9,6 @@
 		"ignoreUnknown": true,
 		"includes": ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "!packages/@wispplace/lexicons"]
 	},
-	"overrides": [
-		{
-			"includes": ["**/public/admin/admin.tsx"],
-			"linter": { "enabled": false }
-		}
-	],
 	"formatter": {
 		"enabled": true,
 		"indentStyle": "tab",

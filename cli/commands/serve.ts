@@ -1,18 +1,21 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { closeSync, createReadStream, existsSync, fstatSync, openSync, readdirSync, readSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { Readable } from 'node:stream'
 import { IdResolver } from '@atproto/identity'
 import { Firehose } from '@atproto/sync'
 import { serve as honoNodeServe } from '@hono/node-server'
-import { getPdsForDid, resolveDid, unsafeRawIdentityGet } from '@wispplace/atproto-utils'
+import { getPdsForDid, readBoundedIdentityJson, resolveDid, unsafeRawIdentityGet } from '@wispplace/atproto-utils'
 import { BunFirehose, type BunFirehoseOptions, isBun } from '@wispplace/bun-firehose'
 import {
+	MAX_REDIRECT_FILE_BYTES,
 	matchRedirectRule,
 	normalizeSitePath,
 	parseQueryString,
-	parseRedirectsFile,
+	parseRedirectsFileBytes,
 	type RedirectRule,
 } from '@wispplace/fs-utils'
 import type { Record as SettingsRecord } from '@wispplace/lexicons/types/place/wisp/settings'
+import { validateRecord as validateSettingsRecord } from '@wispplace/lexicons/types/place/wisp/settings'
 import { generate404Page, generateDirectoryListing } from '@wispplace/page-generators'
 import { Hono } from 'hono'
 import { lookup } from 'mime-types'
@@ -23,6 +26,7 @@ export interface ServeOptions {
 	site: string
 	path: string
 	port: number
+	host?: string
 	spa?: string | boolean
 	directoryListing?: boolean
 }
@@ -39,26 +43,44 @@ interface SiteState {
 	directoryListingOverride?: boolean
 }
 
+export const MAX_ACTIVE_FILE_STREAMS = 64
+let activeFileStreams = 0
+
 async function fetchSettings(pdsEndpoint: string, did: string, rkey: string): Promise<SettingsRecord | null> {
+	const controller = new AbortController()
+	const deadline = setTimeout(() => controller.abort(), 10_000)
 	try {
 		const url = `${pdsEndpoint}/xrpc/com.atproto.repo.getRecord?repo=${encodeURIComponent(did)}&collection=place.wisp.settings&rkey=${encodeURIComponent(rkey)}`
-		const res = await fetch(url)
-		if (!res.ok) return null
-		const data = (await res.json()) as { value: SettingsRecord }
-		return data.value
+		const res = await fetch(url, { signal: controller.signal })
+		if (!res.ok) {
+			await res.body?.cancel()
+			return null
+		}
+		const data = await readBoundedIdentityJson<{ value?: unknown }>(res, 1_000_000, controller.signal)
+		const value = validateSettingsRecord(data.value)
+		return value.success ? value.value : null
 	} catch {
 		return null
+	} finally {
+		clearTimeout(deadline)
 	}
 }
 
-function loadRedirectRules(siteDir: string): RedirectRule[] {
+export function loadRedirectRules(siteDir: string): RedirectRule[] {
 	const redirectsPath = join(siteDir, '_redirects')
 	if (!existsSync(redirectsPath)) {
 		return []
 	}
 	try {
-		const content = readFileSync(redirectsPath, 'utf-8')
-		return parseRedirectsFile(content)
+		if (statSync(redirectsPath).size > MAX_REDIRECT_FILE_BYTES) return []
+		const fd = openSync(redirectsPath, 'r')
+		try {
+			const data = Buffer.allocUnsafe(MAX_REDIRECT_FILE_BYTES + 1)
+			const size = readSync(fd, data, 0, data.byteLength, 0)
+			return parseRedirectsFileBytes(data.subarray(0, size)) ?? []
+		} finally {
+			closeSync(fd)
+		}
 	} catch {
 		return []
 	}
@@ -77,16 +99,86 @@ function buildDirectoryListing(dirPath: string, urlPath: string): string {
 	)
 }
 
-function serveFile(filePath: string): Response {
-	const content = readFileSync(filePath)
-	const mimeType = lookup(filePath) || 'application/octet-stream'
+function serveFile(filePath: string, status = 200, head = false): Response {
+	let fd: number | undefined
+	let released = false
+	let admitted = false
+	const release = () => {
+		if (released) return
+		released = true
+		if (fd !== undefined) {
+			try {
+				closeSync(fd)
+			} catch {}
+		}
+		if (admitted) activeFileStreams--
+	}
+	try {
+		fd = openSync(filePath, 'r')
+		const info = fstatSync(fd)
+		if (!info.isFile()) {
+			closeSync(fd)
+			fd = undefined
+			return new Response('Not Found', { status: 404 })
+		}
+		const size = info.size
+		const mimeType = lookup(filePath) || 'application/octet-stream'
 
-	return new Response(content, {
-		headers: {
-			'Content-Type': mimeType,
-			'Cache-Control': 'no-cache',
-		},
+		if (head) {
+			release()
+			return new Response(null, {
+				status,
+				headers: { 'Content-Type': mimeType, 'Content-Length': String(size), 'Cache-Control': 'no-cache' },
+			})
+		}
+		if (activeFileStreams >= MAX_ACTIVE_FILE_STREAMS) {
+			release()
+			return new Response('Too many active file streams', { status: 503, headers: { 'Retry-After': '1' } })
+		}
+		activeFileStreams++
+		admitted = true
+		const stream = createReadStream(filePath, { fd, autoClose: false })
+		stream.once('close', release)
+		stream.once('end', release)
+		stream.once('error', release)
+		const body = Readable.toWeb(stream)
+		return new Response(body as unknown as ReadableStream<Uint8Array>, {
+			status,
+			headers: { 'Content-Type': mimeType, 'Content-Length': String(size), 'Cache-Control': 'no-cache' },
+		})
+	} catch (error) {
+		if (admitted) release()
+		else if (fd !== undefined) {
+			try {
+				closeSync(fd)
+			} catch {}
+		}
+		throw error
+	}
+}
+
+function serveText(body: string, status: number, mimeType: string, head: boolean): Response {
+	const bytes = new TextEncoder().encode(body)
+	return new Response(head ? null : bytes, {
+		status,
+		headers: { 'Content-Type': mimeType, 'Content-Length': String(bytes.byteLength) },
 	})
+}
+
+function isRegularFile(path: string): boolean {
+	try {
+		return statSync(path).isFile()
+	} catch {
+		return false
+	}
+}
+
+function isDirectory(path: string): boolean {
+	try {
+		return statSync(path).isDirectory()
+	} catch {
+		return false
+	}
 }
 
 function isSafeLocalFilePath(path: string): boolean {
@@ -116,7 +208,11 @@ function normalizeRewritePath(path: string): string | null {
 	return relativePath ? `/${relativePath}` : null
 }
 
-function handleRequest(req: Request, state: SiteState): Response {
+export function handleRequest(req: Request, state: SiteState): Response {
+	if (req.method !== 'GET' && req.method !== 'HEAD') {
+		return new Response('Method Not Allowed', { status: 405, headers: { Allow: 'GET, HEAD' } })
+	}
+	const head = req.method === 'HEAD'
 	const url = new URL(req.url)
 	let decodedPathname: string
 	try {
@@ -148,12 +244,8 @@ function handleRequest(req: Request, state: SiteState): Response {
 			const custom404File = normalizeConfiguredSitePath(redirectMatch.targetPath)
 			if (custom404File) {
 				const custom404Path = join(state.siteDir, custom404File)
-				if (existsSync(custom404Path)) {
-					const content = readFileSync(custom404Path)
-					return new Response(content, {
-						status: 404,
-						headers: { 'Content-Type': 'text/html' },
-					})
+				if (isRegularFile(custom404Path)) {
+					return serveFile(custom404Path, 404, head)
 				}
 			}
 		}
@@ -172,43 +264,41 @@ function handleRequest(req: Request, state: SiteState): Response {
 			: state.settings?.spaMode
 
 	// Check if it's a directory
-	if (existsSync(filePath) && statSync(filePath).isDirectory()) {
+	if (isDirectory(filePath)) {
 		// Try index files
 		const indexFiles = getIndexFiles(state.settings)
 		for (const indexFile of indexFiles) {
 			const normalizedIndexFile = normalizeConfiguredSitePath(indexFile)
 			if (!normalizedIndexFile) continue
 			const indexPath = join(filePath, normalizedIndexFile)
-			if (existsSync(indexPath)) {
-				return serveFile(indexPath)
+			if (isRegularFile(indexPath)) {
+				return serveFile(indexPath, 200, head)
 			}
 		}
 
 		// Directory listing if enabled
 		if (directoryListingEnabled) {
 			const html = buildDirectoryListing(filePath, urlPath)
-			return new Response(html, {
-				headers: { 'Content-Type': 'text/html' },
-			})
+			return serveText(html, 200, 'text/html', head)
 		}
 	}
 
 	// Try exact file
-	if (existsSync(filePath) && statSync(filePath).isFile()) {
-		return serveFile(filePath)
+	if (isRegularFile(filePath)) {
+		return serveFile(filePath, 200, head)
 	}
 
 	// Clean URLs - try adding .html
 	if (state.settings?.cleanUrls !== false) {
 		const htmlPath = `${filePath}.html`
-		if (existsSync(htmlPath) && statSync(htmlPath).isFile()) {
-			return serveFile(htmlPath)
+		if (isRegularFile(htmlPath)) {
+			return serveFile(htmlPath, 200, head)
 		}
 
 		// Try /path/index.html
 		const indexPath = join(filePath, 'index.html')
-		if (existsSync(indexPath) && statSync(indexPath).isFile()) {
-			return serveFile(indexPath)
+		if (isRegularFile(indexPath)) {
+			return serveFile(indexPath, 200, head)
 		}
 	}
 
@@ -217,8 +307,8 @@ function handleRequest(req: Request, state: SiteState): Response {
 		const normalizedSpaFile = normalizeConfiguredSitePath(spaFile)
 		if (normalizedSpaFile) {
 			const spaPath = join(state.siteDir, normalizedSpaFile)
-			if (existsSync(spaPath)) {
-				return serveFile(spaPath)
+			if (isRegularFile(spaPath)) {
+				return serveFile(spaPath, 200, head)
 			}
 		}
 	}
@@ -228,12 +318,8 @@ function handleRequest(req: Request, state: SiteState): Response {
 		const custom404File = normalizeConfiguredSitePath(state.settings.custom404)
 		if (custom404File) {
 			const custom404Path = join(state.siteDir, custom404File)
-			if (existsSync(custom404Path)) {
-				const content = readFileSync(custom404Path)
-				return new Response(content, {
-					status: 404,
-					headers: { 'Content-Type': 'text/html' },
-				})
+			if (isRegularFile(custom404Path)) {
+				return serveFile(custom404Path, 404, head)
 			}
 		}
 	}
@@ -242,20 +328,13 @@ function handleRequest(req: Request, state: SiteState): Response {
 	const auto404Paths = ['404.html', 'not_found.html']
 	for (const notFoundFile of auto404Paths) {
 		const notFoundPath = join(state.siteDir, notFoundFile)
-		if (existsSync(notFoundPath)) {
-			const content = readFileSync(notFoundPath)
-			return new Response(content, {
-				status: 404,
-				headers: { 'Content-Type': 'text/html' },
-			})
+		if (isRegularFile(notFoundPath)) {
+			return serveFile(notFoundPath, 404, head)
 		}
 	}
 
 	// Default 404
-	return new Response(generate404Page(), {
-		status: 404,
-		headers: { 'Content-Type': 'text/html' },
-	})
+	return serveText(generate404Page(), 404, 'text/html', head)
 }
 
 export async function serve(identifier: string, options: ServeOptions): Promise<void> {
@@ -316,6 +395,9 @@ export async function serve(identifier: string, options: ServeOptions): Promise<
 	if (isBun) {
 		const bunServer = Bun.serve({
 			port,
+			hostname: options.host ?? '127.0.0.1',
+			idleTimeout: 30,
+			maxRequestBodySize: 1_048_576,
 			fetch: app.fetch,
 		})
 		serverHandle = { close: () => bunServer.stop() }
@@ -323,11 +405,24 @@ export async function serve(identifier: string, options: ServeOptions): Promise<
 		const nodeServer = honoNodeServe({
 			fetch: app.fetch,
 			port,
+			hostname: options.host ?? '127.0.0.1',
 		})
+		const protectedServer = nodeServer as typeof nodeServer & {
+			headersTimeout?: number
+			requestTimeout?: number
+			timeout?: number
+			keepAliveTimeout?: number
+			maxRequestsPerSocket?: number
+		}
+		protectedServer.headersTimeout = 10_000
+		protectedServer.requestTimeout = 30_000
+		protectedServer.timeout = 30_000
+		protectedServer.keepAliveTimeout = 5_000
+		protectedServer.maxRequestsPerSocket = 100
 		serverHandle = { close: () => nodeServer.close() }
 	}
 
-	console.log(pc.green(`\n✓ Server running at http://localhost:${port}\n`))
+	console.log(pc.green(`\n✓ Server running at http://${options.host ?? '127.0.0.1'}:${port}\n`))
 	console.log(pc.dim('Watching for updates via firehose...\n'))
 
 	// 6. Connect to firehose for live updates (runtime-aware)

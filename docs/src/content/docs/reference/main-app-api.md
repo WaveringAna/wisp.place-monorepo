@@ -3,7 +3,7 @@ title: Main App API
 description: REST endpoints served by the main app
 ---
 
-Internal REST API for the main app (Bun + Elysia). Authenticated routes require a signed `did` cookie. Admin routes require a signed `admin_session` cookie and return `401 { error: 'Unauthorized' }` otherwise.
+Internal REST API for the main app (Bun + Elysia). Authenticated routes require a signed `did` cookie.
 
 For the AT Protocol XRPC endpoints, see [XRPC API](/reference/xrpc-api).
 
@@ -182,43 +182,3 @@ Server-sent events stream:
 - `progress` → `{ status, progress, result, error }`
 - `done` → `result`
 - `error` → `{ error }`
-
----
-
-## Admin `/api/admin/*`
-
-### `POST /api/admin/login`
-```json
-{ "success": true }
-```
-On failure (401): `{ "error": "Invalid credentials" }`
-
-### `POST /api/admin/logout`
-```json
-{ "success": true }
-```
-
-### `GET /api/admin/status`
-```json
-{ "authenticated": true, "username": "admin" }
-{ "authenticated": false }
-```
-
-### `GET /api/admin/database`
-```json
-{ "stats": {}, "recentSites": [], "recentDomains": [] }
-```
-
-### `GET /api/admin/sites`
-```json
-{ "sites": [ /* sites */ ], "customDomains": [ /* domains */ ] }
-```
-
-### `GET /api/admin/health`
-```json
-{
-  "uptime": 12345,
-  "memory": { "heapUsed": 123, "heapTotal": 456, "rss": 789 },
-  "timestamp": "2026-01-22T00:00:00.000Z"
-}
-```

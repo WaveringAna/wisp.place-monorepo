@@ -108,18 +108,6 @@ const bootstrapSchema = async (runMigration: LocalMigrationRun, getDb: () => SQL
 		`
 	})
 
-	await runMigration('create admin_users', async () => {
-		await getDb()`
-			CREATE TABLE IF NOT EXISTS admin_users (
-				id SERIAL PRIMARY KEY,
-				username TEXT UNIQUE NOT NULL,
-				password_hash TEXT NOT NULL,
-				salt TEXT NOT NULL,
-				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-			)
-		`
-	})
-
 	await runMigration('create service_identity_keys', async () => {
 		await getDb()`
 			CREATE TABLE IF NOT EXISTS service_identity_keys (

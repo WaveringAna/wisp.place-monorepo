@@ -120,7 +120,6 @@ There are three typescript apps
 - OAuth authentication and session management
 - Site CRUD operations via PDS
 - Custom domain management
-- Admin database view in /admin
 - React frontend in public/
 
 **`apps/hosting-service`** - CDN static file server (Bun + Hono)

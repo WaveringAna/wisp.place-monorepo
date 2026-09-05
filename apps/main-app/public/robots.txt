@@ -7,7 +7,6 @@ Allow: /$
 
 # Disallow application pages
 Disallow: /editor
-Disallow: /admin
 Disallow: /onboarding
 
 # Disallow API routes
