@@ -69,6 +69,19 @@ describe('webhook matcher bounds and canonical scopes', () => {
 				uri: `at://${DID_B}/app.bsky.feed.post/one.`,
 			}),
 		).toHaveLength(1)
+		const didBacklink = webhook(`at://${DID_B}`, {
+			scope: { aturi: `at://${DID_B}`, backlinks: true },
+		})
+		expect(
+			matchWebhooks([didBacklink], DID_A, 'app.bsky.feed.post', 'mention', 'create', {
+				text: '@target.example',
+				facets: [{ features: [{ $type: 'app.bsky.richtext.facet#mention', did: DID_B }] }],
+			}),
+		).toHaveLength(1)
+		// A random DID-shaped field is not a backlink; only the explicit facet shape is.
+		expect(
+			matchWebhooks([didBacklink], DID_A, 'app.bsky.feed.post', 'not-a-mention', 'create', { did: DID_B }),
+		).toHaveLength(0)
 	})
 
 	test('handles cyclic, deep, and prototype-hostile records without recursive overflow', () => {

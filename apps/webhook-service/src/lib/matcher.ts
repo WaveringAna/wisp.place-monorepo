@@ -122,7 +122,12 @@ function safeEnumerableDataValues(value: object, maxProperties: number): { value
 	return { values, truncated: keys.length > maxProperties }
 }
 
-function boundedStringWalk(value: unknown, visit: (text: string) => boolean, limits: TraversalLimits): boolean {
+function boundedStringWalk(
+	value: unknown,
+	visit: (text: string) => boolean,
+	limits: TraversalLimits,
+	visitObject?: (object: Record<string, unknown>) => boolean,
+): boolean {
 	const seen = new WeakSet<object>()
 	const pending: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }]
 	let nodes = 0
@@ -146,6 +151,7 @@ function boundedStringWalk(value: unknown, visit: (text: string) => boolean, lim
 		if (current.value === null || typeof current.value !== 'object') continue
 		if (current.depth >= limits.maxDepth) return false
 		if (!Array.isArray(current.value) && !isPlainObject(current.value)) continue
+		if (isPlainObject(current.value) && visitObject?.(current.value)) return true
 		if (seen.has(current.value)) continue
 		seen.add(current.value)
 
@@ -183,19 +189,27 @@ export function collectRelevantAtUriReferences(
 	const limits: TraversalLimits = { ...DEFAULT_TRAVERSAL_LIMITS, ...partial, maxReferences: maximum }
 	const references = new Set<string>()
 	let overflow = false
+	const collect = (aturi: string): boolean => {
+		if (!isRelevant(aturi) || references.has(aturi)) return false
+		if (references.size >= maximum) {
+			overflow = true
+			return true
+		}
+		references.add(aturi)
+		return false
+	}
 	const complete = boundedStringWalk(
 		value,
-		(text) =>
-			referencesInString(text, (aturi) => {
-				if (!isRelevant(aturi) || references.has(aturi)) return false
-				if (references.size >= maximum) {
-					overflow = true
-					return true
-				}
-				references.add(aturi)
-				return false
-			}),
+		(text) => referencesInString(text, collect),
 		limits,
+		(object) => {
+			// A Bluesky @mention is encoded as a rich-text facet, not an AT-URI
+			// string. Treat its canonical DID as a DID-level reference so a
+			// backlink subscription to that DID receives the post. Do not treat
+			// arbitrary `did` fields as references.
+			if (object.$type !== 'app.bsky.richtext.facet#mention' || typeof object.did !== 'string') return false
+			return isDid(object.did) ? collect(`at://${object.did}`) : false
+		},
 	)
 	return { references: [...references], tooComplex: overflow || !complete }
 }
