@@ -2,7 +2,11 @@ import { createHash } from 'node:crypto'
 import { CompositeDidDocumentResolver, PlcDidDocumentResolver, WebDidDocumentResolver } from '@atcute/identity-resolver'
 import { json, XRPCError, XRPCRouter } from '@atcute/xrpc-server'
 import { ServiceJwtVerifier } from '@atcute/xrpc-server/auth'
-import { isValidWebhookSecretId, WEBHOOK_SECRET_ENCRYPTION_ERROR } from '@wispplace/atproto-utils'
+import {
+	isValidWebhookSecretId,
+	isValidWebhookSecretToken,
+	WEBHOOK_SECRET_ENCRYPTION_ERROR,
+} from '@wispplace/atproto-utils'
 import { BASE_HOST } from '@wispplace/constants'
 import {
 	PlaceWispV2DomainAddSite,
@@ -893,8 +897,9 @@ export const xrpcRoutes = () => {
 			const auth = requireAuthenticated(authByRequest.get(request))
 			const name = input.name
 			if (!isValidWebhookSecretId(name)) invalidRequest('invalid secret name')
+			if (input.token !== undefined && !isValidWebhookSecretToken(input.token)) invalidRequest('invalid secret token')
 			try {
-				const { token, createdAt } = await createWebhookSecret(auth.did, name)
+				const { token, createdAt } = await createWebhookSecret(auth.did, name, input.token)
 				return json({ name, token, createdAt })
 			} catch (error) {
 				if (isWebhookSecretEncryptionUnavailable(error)) webhookSecretEncryptionUnavailable()
@@ -935,9 +940,10 @@ export const xrpcRoutes = () => {
 			const auth = requireAuthenticated(authByRequest.get(request))
 			const name = input.name
 			if (!isValidWebhookSecretId(name)) invalidRequest('invalid secret name')
+			if (input.token !== undefined && !isValidWebhookSecretToken(input.token)) invalidRequest('invalid secret token')
 			let result: Awaited<ReturnType<typeof rotateWebhookSecret>>
 			try {
-				result = await rotateWebhookSecret(auth.did, name)
+				result = await rotateWebhookSecret(auth.did, name, input.token)
 			} catch (error) {
 				if (isWebhookSecretEncryptionUnavailable(error)) webhookSecretEncryptionUnavailable()
 				throw new XRPCError({

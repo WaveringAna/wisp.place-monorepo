@@ -87,3 +87,9 @@ export {
 	MAX_WEBHOOK_SECRET_ID_LENGTH,
 	WEBHOOK_SECRET_ID_PATTERN,
 } from './webhook-secret-id'
+// Caller-supplied webhook signing tokens
+export {
+	isValidWebhookSecretToken,
+	MAX_WEBHOOK_SECRET_TOKEN_LENGTH,
+	MIN_WEBHOOK_SECRET_TOKEN_LENGTH,
+} from './webhook-secret-token'

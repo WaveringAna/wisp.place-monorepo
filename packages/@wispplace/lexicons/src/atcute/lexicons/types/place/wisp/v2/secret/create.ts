@@ -14,6 +14,16 @@ const _mainSchema = /*#__PURE__*/ v.procedure("place.wisp.v2.secret.create", {
       name: /*#__PURE__*/ v.constrain(/*#__PURE__*/ v.recordKeyString(), [
         /*#__PURE__*/ v.stringLength(0, 64),
       ]),
+      /**
+       * Optional caller-supplied signing token: 32–256 printable ASCII characters, no whitespace. Omit it to have the server generate one. Use this to register a secret the receiving system already generated.
+       * @minLength 32
+       * @maxLength 256
+       */
+      token: /*#__PURE__*/ v.optional(
+        /*#__PURE__*/ v.constrain(/*#__PURE__*/ v.string(), [
+          /*#__PURE__*/ v.stringLength(32, 256),
+        ]),
+      ),
     }),
   },
   output: {

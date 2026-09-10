@@ -601,7 +601,7 @@ these manage server-side webhook signing secrets. tokens are returned only on cr
 
 `place.wisp.v2.secret.create` procedure, auth required:
 
-- input: `{ name: string }`
+- input: `{ name: string, token?: string }`; omit `token` to have the server generate one, or pass your own (32-256 printable ASCII chars, no whitespace), e.g. a secret your receiver already generated
 - output: `{ name, token, createdAt }`
 - errors: `AuthenticationRequired`, `InvalidRequest`, `AlreadyExists`
 
@@ -612,7 +612,7 @@ these manage server-side webhook signing secrets. tokens are returned only on cr
 
 `place.wisp.v2.secret.rotate` procedure, auth required:
 
-- input: `{ name: string }`
+- input: `{ name: string, token?: string }`; same `token` rules as create
 - output: `{ name, token, rotatedAt }`
 - errors: `AuthenticationRequired`, `NotFound`
 

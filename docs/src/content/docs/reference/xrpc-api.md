@@ -417,7 +417,7 @@ Permanently revokes a share link.
 
 ## Signing Secrets
 
-Server-managed HMAC signing secrets for webhooks. The token is returned **once** at creation time and is stored only as an AES-256-GCM encrypted server-side envelope. It cannot be retrieved again, only rotated. Operators must configure the webhook secret encryption key on both the main and delivery services; see [Self-Hosting](/deployment#server-managed-webhook-secret-encryption) for deployment, rotation, and backup caveats.
+Server-managed HMAC signing secrets for webhooks. The server generates the token unless you supply your own on create or rotate, for example a secret your receiving system already generated. The token is returned **once** at creation time and is stored only as an AES-256-GCM encrypted server-side envelope. It cannot be retrieved again, only rotated. Operators must configure the webhook secret encryption key on both the main and delivery services; see [Self-Hosting](/deployment#server-managed-webhook-secret-encryption) for deployment, rotation, and backup caveats.
 
 All four endpoints require authentication (`AuthenticationRequired` on failure).
 
@@ -430,13 +430,14 @@ Creates a new signing secret scoped to the authenticated DID.
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `name` | `string` | ✅ | Unique per DID; 1–64 ASCII letters, digits, `.`, `_`, or `-` |
+| `token` | `string` | | Your own signing token: 32–256 printable ASCII characters, no whitespace. Omit it to have the server generate a `wsk_` token |
 
 **Response:**
 
 | Field | Type | Notes |
 |---|---|---|
 | `name` | `string` | |
-| `token` | `string` | `wsk_` prefixed — store this now, never shown again |
+| `token` | `string` | The generated `wsk_` token, or the one you supplied — store this now, never shown again |
 | `createdAt` | `string` (datetime) | |
 
 **Errors:** `AuthenticationRequired`, `InvalidRequest`, `AlreadyExists`, `WebhookSecretEncryptionUnavailable`
@@ -469,13 +470,14 @@ Lists all secrets for the authenticated DID. Token values are never returned.
 
 ### `place.wisp.v2.secret.rotate` — procedure 🔒
 
-Generates a new token for an existing secret. The old token is invalidated immediately.
+Replaces the token of an existing secret with a newly generated one, or with the token you supply. The old token is invalidated immediately.
 
 **Input:**
 
-| Field | Type | Required |
-|---|---|---|
+| Field | Type | Required | Notes |
+|---|---|---|---|
 | `name` | `string` | ✅ | 1–64 ASCII letters, digits, `.`, `_`, or `-` |
+| `token` | `string` | | Your own signing token: 32–256 printable ASCII characters, no whitespace. Omit it to have the server generate one |
 
 **Response:**
 

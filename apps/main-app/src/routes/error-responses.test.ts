@@ -16,6 +16,7 @@ const privateLookups: string[] = []
 const publicLookups: string[] = []
 const publicRegistrations = new Map<string, unknown>()
 let secretDatabaseCalls = 0
+const suppliedSecretTokens: Array<string | undefined> = []
 
 const logger = {
 	debug: () => undefined,
@@ -37,9 +38,10 @@ mock.module('../lib/db', () => ({
 	claimCustomDomain: async () => undefined,
 	claimDomain: async () => 'claimed.wisp.test',
 	consumeWebhookMutationRateLimit: async () => true,
-	createWebhookSecret: async () => {
+	createWebhookSecret: async (_did: string, _name: string, token?: string) => {
 		secretDatabaseCalls++
-		return { token: 'wsk_test-token', createdAt: '2026-01-01T00:00:00.000Z' }
+		suppliedSecretTokens.push(token)
+		return { token: token ?? 'wsk_test-token', createdAt: '2026-01-01T00:00:00.000Z' }
 	},
 	deleteCustomDomain: async () => undefined,
 	deleteWebhookSecret: async () => {
@@ -54,9 +56,10 @@ mock.module('../lib/db', () => ({
 	getAdminDatabaseReport: fail,
 	getWebhookEventHistory: fail,
 	listWebhookSecrets: async () => [],
-	rotateWebhookSecret: async () => {
+	rotateWebhookSecret: async (_did: string, _name: string, token?: string) => {
 		secretDatabaseCalls++
-		return { token: 'wsk_test-token', rotatedAt: '2026-01-01T00:00:00.000Z' }
+		suppliedSecretTokens.push(token)
+		return { token: token ?? 'wsk_test-token', rotatedAt: '2026-01-01T00:00:00.000Z' }
 	},
 	getCustomDomainById: async () => null,
 	getCustomDomainInfo: async () => null,
@@ -151,6 +154,7 @@ beforeEach(() => {
 	publicLookups.length = 0
 	publicRegistrations.clear()
 	secretDatabaseCalls = 0
+	suppliedSecretTokens.length = 0
 })
 
 afterAll(() => {
@@ -306,6 +310,40 @@ describe('public error responses', () => {
 		expect(boundaryResponse.status).toBe(200)
 		expect(await boundaryResponse.json()).toMatchObject({ success: true, name: exactBoundary })
 		expect(secretDatabaseCalls).toBe(1)
+	})
+
+	test('accepts a caller-supplied token and rejects an invalid one before database access', async () => {
+		const app = secretRoutes(pdsFailureClient as never, COOKIE_SECRET)
+		const cookie = await signedCookie('did', DID)
+		const supplied = 'A'.repeat(43)
+		const post = (path: string, body: unknown) =>
+			app.handle(
+				new Request(`http://localhost/api/secret${path}`, {
+					body: JSON.stringify(body),
+					headers: { 'Content-Type': 'application/json', cookie },
+					method: 'POST',
+				}),
+			)
+
+		for (const token of ['short', 'a'.repeat(257), `${'a'.repeat(40)} b`, `${'a'.repeat(40)}☃`]) {
+			for (const [path, body] of [
+				['', { name: 'hook', token }],
+				['/hook/rotate', { token }],
+			] as const) {
+				const response = await post(path, body)
+				expect(response.status).toBe(400)
+				expect(await response.json()).toEqual({ success: false, error: 'Invalid secret token' })
+			}
+		}
+		expect(secretDatabaseCalls).toBe(0)
+
+		const created = await post('', { name: 'hook', token: supplied })
+		expect(created.status).toBe(200)
+		expect(await created.json()).toMatchObject({ success: true, name: 'hook', token: supplied })
+		const rotated = await post('/hook/rotate', { token: supplied })
+		expect(rotated.status).toBe(200)
+		expect(await rotated.json()).toMatchObject({ success: true, name: 'hook', token: supplied })
+		expect(suppliedSecretTokens).toEqual([supplied, supplied])
 	})
 })
 

@@ -2,6 +2,7 @@ import {
 	decryptWebhookSecret,
 	encryptWebhookSecret,
 	isValidWebhookSecretId,
+	isValidWebhookSecretToken,
 	parseWebhookSecretEncryptionKeyring,
 	type WebhookSecretEncryptionKeyring,
 } from '@wispplace/atproto-utils'
@@ -542,6 +543,14 @@ function generateSecretToken(): string {
 	return `wsk_${Buffer.from(bytes).toString('base64url')}`
 }
 
+const WEBHOOK_SECRET_TOKEN_ERROR = 'invalid_webhook_secret_token'
+/** Use a caller-supplied token (e.g. one the receiver generated), otherwise generate one. */
+const webhookSecretToken = (supplied: string | undefined): string => {
+	if (supplied === undefined) return generateSecretToken()
+	if (!isValidWebhookSecretToken(supplied)) throw new Error(WEBHOOK_SECRET_TOKEN_ERROR)
+	return supplied
+}
+
 /**
  * Parse on every secret operation so a controlled process restart/env reload
  * never leaves a stale active key in memory. This throws only the stable,
@@ -557,10 +566,14 @@ const assertValidWebhookSecretId = (name: string): void => {
 const isUniqueConstraintViolation = (error: unknown): boolean =>
 	typeof error === 'object' && error !== null && 'code' in error && (error as { code?: unknown }).code === '23505'
 
-export const createWebhookSecret = async (did: string, name: string): Promise<{ token: string; createdAt: string }> => {
+export const createWebhookSecret = async (
+	did: string,
+	name: string,
+	suppliedToken?: string,
+): Promise<{ token: string; createdAt: string }> => {
 	assertValidWebhookSecretId(name)
+	const token = webhookSecretToken(suppliedToken)
 	const keyring = requireWebhookSecretKeyring()
-	const token = generateSecretToken()
 	const envelope = encryptWebhookSecret(token, keyring)
 
 	try {
@@ -604,10 +617,11 @@ export const deleteWebhookSecret = async (did: string, name: string): Promise<bo
 export const rotateWebhookSecret = async (
 	did: string,
 	name: string,
+	suppliedToken?: string,
 ): Promise<{ token: string; rotatedAt: string } | null> => {
 	assertValidWebhookSecretId(name)
+	const token = webhookSecretToken(suppliedToken)
 	const keyring = requireWebhookSecretKeyring()
-	const token = generateSecretToken()
 	const envelope = encryptWebhookSecret(token, keyring)
 	const rows = await db`
         UPDATE webhook_secrets

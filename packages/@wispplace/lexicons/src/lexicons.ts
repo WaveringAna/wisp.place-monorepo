@@ -1190,7 +1190,7 @@ export const schemaDict = {
       main: {
         type: 'procedure',
         description:
-          'Create a named webhook signing secret. The server generates a short random token returned once in the response. Reference the secret by name via secretId in place.wisp.v2.wh.',
+          'Create a named webhook signing secret. The server generates a random token unless the caller supplies one; the token is returned once in the response. Reference the secret by name via secretId in place.wisp.v2.wh.',
         input: {
           encoding: 'application/json',
           schema: {
@@ -1203,6 +1203,13 @@ export const schemaDict = {
                 maxLength: 64,
                 description:
                   'Unique 1–64 character secret ID scoped to the caller DID. Use ASCII letters, digits, dots, underscores, and hyphens only.',
+              },
+              token: {
+                type: 'string',
+                minLength: 32,
+                maxLength: 256,
+                description:
+                  'Optional caller-supplied signing token: 32–256 printable ASCII characters, no whitespace. Omit it to have the server generate one. Use this to register a secret the receiving system already generated.',
               },
             },
           },
@@ -1335,7 +1342,7 @@ export const schemaDict = {
       main: {
         type: 'procedure',
         description:
-          'Rotate a webhook signing secret, generating a new token. The old token stops working immediately. The new token is only returned in this response.',
+          'Rotate a webhook signing secret to a newly generated token, or to a caller-supplied one. The old token stops working immediately. The new token is only returned in this response.',
         input: {
           encoding: 'application/json',
           schema: {
@@ -1348,6 +1355,13 @@ export const schemaDict = {
                 maxLength: 64,
                 description:
                   '1–64 character server-managed secret ID. Use ASCII letters, digits, dots, underscores, and hyphens only.',
+              },
+              token: {
+                type: 'string',
+                minLength: 32,
+                maxLength: 256,
+                description:
+                  'Optional caller-supplied signing token: 32–256 printable ASCII characters, no whitespace. Omit it to have the server generate one.',
               },
             },
           },

@@ -1,5 +1,9 @@
 import type { NodeOAuthClient } from '@atproto/oauth-client-node'
-import { isValidWebhookSecretId, WEBHOOK_SECRET_ENCRYPTION_ERROR } from '@wispplace/atproto-utils'
+import {
+	isValidWebhookSecretId,
+	isValidWebhookSecretToken,
+	WEBHOOK_SECRET_ENCRYPTION_ERROR,
+} from '@wispplace/atproto-utils'
 import { createLogger } from '@wispplace/observability'
 import { Elysia, t } from 'elysia'
 import { createWebhookSecret, deleteWebhookSecret, listWebhookSecrets, rotateWebhookSecret } from '../lib/db'
@@ -10,6 +14,7 @@ const isWebhookSecretEncryptionUnavailable = (error: unknown): boolean =>
 	error instanceof Error && error.message === WEBHOOK_SECRET_ENCRYPTION_ERROR
 
 const invalidSecretNameResponse = { success: false, error: 'Invalid secret name' }
+const invalidSecretTokenResponse = { success: false, error: 'Invalid secret token' }
 
 export const secretRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 	new Elysia({
@@ -45,8 +50,12 @@ export const secretRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 					set.status = 400
 					return invalidSecretNameResponse
 				}
+				if (body.token !== undefined && !isValidWebhookSecretToken(body.token)) {
+					set.status = 400
+					return invalidSecretTokenResponse
+				}
 				try {
-					const { token, createdAt } = await createWebhookSecret(auth.did, body.name)
+					const { token, createdAt } = await createWebhookSecret(auth.did, body.name, body.token)
 					logger.info(`[Secret] Created secret "${body.name}" for ${auth.did}`)
 					return { success: true, name: body.name, token, createdAt }
 				} catch (error) {
@@ -69,6 +78,8 @@ export const secretRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 					// Canonical size/character validation is performed in the handler so
 					// every invalid name receives the same generic 400 response.
 					name: t.String(),
+					// Optional caller-supplied token, validated in the handler like the name.
+					token: t.Optional(t.String()),
 				}),
 			},
 		)
@@ -97,28 +108,40 @@ export const secretRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		})
 		/**
 		 * POST /api/secret/:name/rotate
-		 * Rotates a signing secret, returning the new token once.
+		 * Rotates a signing secret to a generated token, or to an optional caller-supplied
+		 * `{ token }`, returning the new token once.
 		 */
-		.post('/:name/rotate', async ({ params, auth, set }) => {
-			if (!isValidWebhookSecretId(params.name)) {
-				set.status = 400
-				return invalidSecretNameResponse
-			}
-			try {
-				const result = await rotateWebhookSecret(auth.did, params.name)
-				if (!result) {
-					set.status = 404
-					return { success: false, error: 'Secret not found' }
+		.post(
+			'/:name/rotate',
+			async ({ params, body, auth, set }) => {
+				if (!isValidWebhookSecretId(params.name)) {
+					set.status = 400
+					return invalidSecretNameResponse
 				}
-				logger.info(`[Secret] Rotated secret "${params.name}" for ${auth.did}`)
-				return { success: true, name: params.name, token: result.token, rotatedAt: result.rotatedAt }
-			} catch (error) {
-				if (isWebhookSecretEncryptionUnavailable(error)) {
-					set.status = 503
-					return { success: false, error: WEBHOOK_SECRET_ENCRYPTION_ERROR }
+				const suppliedToken = body?.token
+				if (suppliedToken !== undefined && !isValidWebhookSecretToken(suppliedToken)) {
+					set.status = 400
+					return invalidSecretTokenResponse
 				}
-				logger.error('[Secret] Rotate failed')
-				set.status = 500
-				return { success: false, error: 'Failed to rotate secret' }
-			}
-		})
+				try {
+					const result = await rotateWebhookSecret(auth.did, params.name, suppliedToken)
+					if (!result) {
+						set.status = 404
+						return { success: false, error: 'Secret not found' }
+					}
+					logger.info(`[Secret] Rotated secret "${params.name}" for ${auth.did}`)
+					return { success: true, name: params.name, token: result.token, rotatedAt: result.rotatedAt }
+				} catch (error) {
+					if (isWebhookSecretEncryptionUnavailable(error)) {
+						set.status = 503
+						return { success: false, error: WEBHOOK_SECRET_ENCRYPTION_ERROR }
+					}
+					logger.error('[Secret] Rotate failed')
+					set.status = 500
+					return { success: false, error: 'Failed to rotate secret' }
+				}
+			},
+			{
+				body: t.Optional(t.Object({ token: t.Optional(t.String()) })),
+			},
+		)
