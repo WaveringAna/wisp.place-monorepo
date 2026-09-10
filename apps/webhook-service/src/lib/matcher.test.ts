@@ -82,6 +82,18 @@ describe('webhook matcher bounds and canonical scopes', () => {
 		expect(
 			matchWebhooks([didBacklink], DID_A, 'app.bsky.feed.post', 'not-a-mention', 'create', { did: DID_B }),
 		).toHaveLength(0)
+		const hostileMention: Record<string, unknown> = { did: DID_B }
+		Object.defineProperty(hostileMention, '$type', {
+		enumerable: true,
+		get: () => {
+			throw new Error('accessor must not run')
+		},
+		})
+		expect(
+			matchWebhooks([didBacklink], DID_A, 'app.bsky.feed.post', 'hostile-mention', 'create', {
+				facets: [{ features: [hostileMention] }],
+			}),
+		).toHaveLength(0)
 	})
 
 	test('handles cyclic, deep, and prototype-hostile records without recursive overflow', () => {

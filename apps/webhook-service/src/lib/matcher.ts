@@ -101,6 +101,15 @@ function matchesGlob(pattern: string, value: string): boolean {
 	return compileGlob(pattern).test(value)
 }
 
+function ownDataString(object: object, key: string): string | undefined {
+	try {
+		const descriptor = Object.getOwnPropertyDescriptor(object, key)
+		return descriptor && 'value' in descriptor && typeof descriptor.value === 'string' ? descriptor.value : undefined
+	} catch {
+		return undefined
+	}
+}
+
 function safeEnumerableDataValues(value: object, maxProperties: number): { values: unknown[]; truncated: boolean } {
 	let keys: string[]
 	try {
@@ -207,8 +216,9 @@ export function collectRelevantAtUriReferences(
 			// string. Treat its canonical DID as a DID-level reference so a
 			// backlink subscription to that DID receives the post. Do not treat
 			// arbitrary `did` fields as references.
-			if (object.$type !== 'app.bsky.richtext.facet#mention' || typeof object.did !== 'string') return false
-			return isDid(object.did) ? collect(`at://${object.did}`) : false
+			if (ownDataString(object, '$type') !== 'app.bsky.richtext.facet#mention') return false
+			const did = ownDataString(object, 'did')
+			return did && isDid(did) ? collect(`at://${did}`) : false
 		},
 	)
 	return { references: [...references], tooComplex: overflow || !complete }
