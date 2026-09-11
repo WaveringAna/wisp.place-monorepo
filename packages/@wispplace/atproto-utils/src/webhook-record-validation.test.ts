@@ -18,3 +18,27 @@ describe('webhook inline secret validation', () => {
 		expect(validateWebhookRecord({ ...baseRecord, secret: 'non-empty' }).ok).toBe(true)
 	})
 })
+
+describe('webhook backlinksOnly scope flag', () => {
+	test('accepts and copies backlinksOnly on its own or with backlinks: true', () => {
+		for (const scope of [
+			{ ...baseRecord.scope, backlinksOnly: true },
+			{ ...baseRecord.scope, backlinks: true, backlinksOnly: true },
+			{ ...baseRecord.scope, backlinksOnly: false },
+		]) {
+			const result = validateWebhookRecord({ ...baseRecord, scope })
+			expect(result.ok).toBe(true)
+			if (result.ok) expect(result.record.scope.backlinksOnly).toBe(scope.backlinksOnly)
+		}
+	})
+
+	test('rejects a non-boolean backlinksOnly and one that contradicts backlinks: false', () => {
+		expect(validateWebhookRecord({ ...baseRecord, scope: { ...baseRecord.scope, backlinksOnly: 'yes' } })).toEqual({
+			ok: false,
+			kind: 'scope',
+		})
+		expect(
+			validateWebhookRecord({ ...baseRecord, scope: { ...baseRecord.scope, backlinks: false, backlinksOnly: true } }),
+		).toEqual({ ok: false, kind: 'scope' })
+	})
+})

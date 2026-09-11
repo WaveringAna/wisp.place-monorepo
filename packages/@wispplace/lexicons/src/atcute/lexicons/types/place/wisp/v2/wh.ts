@@ -11,6 +11,10 @@ const _atUriSchema = /*#__PURE__*/ v.object({
    * If true, also watch for records in any repo that reference this DID and collection.
    */
   backlinks: /*#__PURE__*/ v.optional(/*#__PURE__*/ v.boolean()),
+  /**
+   * If true, fire only for records in other repos that reference this scope. Events from the scope DID's own repo never fire, including records that reference itself. Implies backlinks.
+   */
+  backlinksOnly: /*#__PURE__*/ v.optional(/*#__PURE__*/ v.boolean()),
 });
 const _mainSchema = /*#__PURE__*/ v.record(
   /*#__PURE__*/ v.string(),

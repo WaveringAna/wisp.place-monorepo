@@ -138,11 +138,15 @@ export function validateWebhookRecord(
 	const rawAturi = ownDataValue(rawScope.value, 'aturi')
 	const rawScopeType = ownDataValue(rawScope.value, '$type')
 	const rawBacklinks = ownDataValue(rawScope.value, 'backlinks')
+	const rawBacklinksOnly = ownDataValue(rawScope.value, 'backlinksOnly')
 	if (
 		!rawAturi.present ||
 		typeof rawAturi.value !== 'string' ||
 		(rawScopeType.present && rawScopeType.value !== 'place.wisp.v2.wh#atUri') ||
-		(rawBacklinks.present && typeof rawBacklinks.value !== 'boolean')
+		(rawBacklinks.present && typeof rawBacklinks.value !== 'boolean') ||
+		(rawBacklinksOnly.present && typeof rawBacklinksOnly.value !== 'boolean') ||
+		// backlinksOnly implies backlinks; an explicit `backlinks: false` alongside it is ambiguous.
+		(rawBacklinksOnly.value === true && rawBacklinks.present && rawBacklinks.value === false)
 	) {
 		return { ok: false, kind: 'scope' }
 	}
@@ -196,6 +200,7 @@ export function validateWebhookRecord(
 			aturi: scope.aturi,
 			...(rawScopeType.present ? { $type: 'place.wisp.v2.wh#atUri' as const } : {}),
 			...(rawBacklinks.present ? { backlinks: rawBacklinks.value as boolean } : {}),
+			...(rawBacklinksOnly.present ? { backlinksOnly: rawBacklinksOnly.value as boolean } : {}),
 		},
 		url: url.url,
 		...(events === undefined ? {} : { events }),

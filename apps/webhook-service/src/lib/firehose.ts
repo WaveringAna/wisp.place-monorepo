@@ -524,7 +524,9 @@ function trackedWebhook(ownerDid: string, rkey: string, record: unknown): Tracke
 	if (validated.enabled === false) return undefined
 	const scope = parseAtUri(validated.scope.aturi)
 	if (!scope) return undefined
-	return { ownerDid, rkey, scopeDid: scope.did, backlinks: validated.scope.backlinks === true, record: validated }
+	// backlinksOnly implies backlinks, so it must enter the backlink index too.
+	const backlinks = validated.scope.backlinks === true || validated.scope.backlinksOnly === true
+	return { ownerDid, rkey, scopeDid: scope.did, backlinks, record: validated }
 }
 
 function addTrackedWebhook(key: string, entry: TrackedWebhook): void {

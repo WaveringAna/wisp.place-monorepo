@@ -84,16 +84,35 @@ describe('webhook matcher bounds and canonical scopes', () => {
 		).toHaveLength(0)
 		const hostileMention: Record<string, unknown> = { did: DID_B }
 		Object.defineProperty(hostileMention, '$type', {
-		enumerable: true,
-		get: () => {
-			throw new Error('accessor must not run')
-		},
+			enumerable: true,
+			get: () => {
+				throw new Error('accessor must not run')
+			},
 		})
 		expect(
 			matchWebhooks([didBacklink], DID_A, 'app.bsky.feed.post', 'hostile-mention', 'create', {
 				facets: [{ features: [hostileMention] }],
 			}),
 		).toHaveLength(0)
+	})
+
+	test('backlinksOnly fires only for other repos that reference the scope', () => {
+		const onlyBacklinks = webhook(`at://${DID_B}`, {
+			scope: { aturi: `at://${DID_B}`, backlinksOnly: true },
+		})
+		const mentionOfB = {
+			text: '@target.example',
+			facets: [{ features: [{ $type: 'app.bsky.richtext.facet#mention', did: DID_B }] }],
+		}
+		// Another repo mentioning the scope DID fires.
+		expect(matchWebhooks([onlyBacklinks], DID_A, 'app.bsky.feed.post', 'other', 'create', mentionOfB)).toHaveLength(1)
+		// The scope DID's own events never fire: neither a direct match...
+		expect(matchWebhooks([onlyBacklinks], DID_B, 'app.bsky.feed.post', 'own', 'create', { text: 'hi' })).toHaveLength(0)
+		// ...nor its own record that references itself.
+		expect(matchWebhooks([onlyBacklinks], DID_B, 'app.bsky.feed.post', 'self', 'create', mentionOfB)).toHaveLength(0)
+		// A plain backlinks subscription still receives the scope's own events.
+		const withDirect = webhook(`at://${DID_B}`, { scope: { aturi: `at://${DID_B}`, backlinks: true } })
+		expect(matchWebhooks([withDirect], DID_B, 'app.bsky.feed.post', 'own', 'create', { text: 'hi' })).toHaveLength(1)
 	})
 
 	test('handles cyclic, deep, and prototype-hostile records without recursive overflow', () => {

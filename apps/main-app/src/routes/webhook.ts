@@ -103,6 +103,7 @@ export const webhookRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 					scopeAturi: t.String({ minLength: 1, maxLength: 2_048 }),
 					url: t.String({ minLength: 1, maxLength: 2_048 }),
 					backlinks: t.Optional(t.Boolean()),
+					backlinksOnly: t.Optional(t.Boolean()),
 					events: t.Optional(
 						t.Array(t.Union([t.Literal('create'), t.Literal('update'), t.Literal('delete')]), {
 							maxItems: 3,

@@ -59,6 +59,15 @@ describe('main webhook API policy', () => {
 		).toBe(false)
 	})
 
+	test('passes backlinksOnly through and rejects it alongside backlinks: false', () => {
+		const result = validateWebhookCreateInput({ ...valid, backlinksOnly: true }, { allowLoopbackDev: false })
+		expect(result.ok).toBe(true)
+		if (result.ok) expect(result.record.scope.backlinksOnly).toBe(true)
+		expect(
+			validateWebhookCreateInput({ ...valid, backlinks: false, backlinksOnly: true }, { allowLoopbackDev: false }).ok,
+		).toBe(false)
+	})
+
 	test('enforces the owner quota at exactly 50 records', () => {
 		expect(isWebhookOwnerAtCapacity(49)).toBe(false)
 		expect(isWebhookOwnerAtCapacity(50)).toBe(true)

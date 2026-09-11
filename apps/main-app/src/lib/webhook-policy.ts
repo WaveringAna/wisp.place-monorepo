@@ -17,6 +17,7 @@ export interface WebhookCreateInput {
 	readonly scopeAturi: string
 	readonly url: string
 	readonly backlinks?: boolean
+	readonly backlinksOnly?: boolean
 	readonly events?: readonly WebhookEventKind[]
 	readonly secret?: string
 	readonly secretId?: string
@@ -44,6 +45,7 @@ export const validateWebhookCreateInput = (
 			scope: {
 				aturi: input.scopeAturi,
 				...(input.backlinks === undefined ? {} : { backlinks: input.backlinks }),
+				...(input.backlinksOnly === undefined ? {} : { backlinksOnly: input.backlinksOnly }),
 			},
 			url: input.url,
 			...(input.events === undefined ? {} : { events: input.events }),

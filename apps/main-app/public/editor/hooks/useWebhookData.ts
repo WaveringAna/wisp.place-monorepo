@@ -5,6 +5,7 @@ export interface WebhookRecord {
 	scopeAturi: string
 	url: string
 	backlinks: boolean
+	backlinksOnly: boolean
 	events: string[]
 	enabled: boolean
 	createdAt: string
@@ -46,6 +47,7 @@ export function useWebhookData() {
 							scopeAturi: (scope?.aturi as string) ?? '',
 							url: (r.value?.url as string) ?? '',
 							backlinks: (scope?.backlinks as boolean) ?? false,
+							backlinksOnly: (scope?.backlinksOnly as boolean) ?? false,
 							events: (r.value?.events as string[]) ?? [],
 							enabled: (r.value?.enabled as boolean) ?? true,
 							createdAt: (r.value?.createdAt as string) ?? '',
@@ -80,6 +82,7 @@ export function useWebhookData() {
 			scopeAturi: string
 			url: string
 			backlinks: boolean
+			backlinksOnly?: boolean
 			events: string[]
 			secret?: string
 			secretId?: string

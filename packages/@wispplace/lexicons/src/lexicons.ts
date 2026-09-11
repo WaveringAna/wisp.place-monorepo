@@ -1900,6 +1900,11 @@ export const schemaDict = {
             description:
               'If true, also watch for records in any repo that reference this DID and collection.',
           },
+          backlinksOnly: {
+            type: 'boolean',
+            description:
+              "If true, fire only for records in other repos that reference this scope. Events from the scope DID's own repo never fire, including records that reference itself. Implies backlinks.",
+          },
         },
       },
     },

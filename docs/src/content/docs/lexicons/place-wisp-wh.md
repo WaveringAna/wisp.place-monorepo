@@ -21,6 +21,8 @@ Create a webhook by writing a `place.wisp.v2.wh` record to your PDS, or by using
 
 Enable **backlinks** to also fire when records in *any* repo reference your DID or collection — useful for watching Bluesky likes, Tangled pull requests, etc directed at you.
 
+Set **backlinksOnly** to fire *only* for other repos' references — for example, Bluesky mentions of you without your own posts. Nothing the scope DID's own repo writes fires the webhook, not even a record that references itself. It implies `backlinks`; `backlinksOnly: true` with an explicit `backlinks: false` is rejected.
+
 **Events** can be filtered to `create`, `update`, `delete`, or any combination. Omit the filter to receive all three.
 
 **Endpoint safety** — webhook URLs must be HTTPS, must not contain credentials or fragments, and use a canonical DID (`did:plc` or `did:web`) in the scope AT-URI rather than a handle. HTTP is accepted only for an explicitly enabled local-development loopback endpoint (`localhost`, `.localhost`, or loopback IP); it is never enabled in production. A webhook can contain at most three unique event kinds. Use either `secret` or `secretId`, not both.
@@ -102,6 +104,7 @@ Webhooks are stored as `place.wisp.v2.wh` records in your PDS:
 |---|---|---|
 | `scope.aturi` | string | AT-URI to watch |
 | `scope.backlinks` | boolean | Also fire when other repos reference this scope |
+| `scope.backlinksOnly` | boolean | Fire only when other repos reference this scope; the scope DID's own events never fire. Implies `backlinks` |
 | `url` | string | HTTPS endpoint to deliver to |
 | `events` | string[] | `create`, `update`, `delete` — omit for all three |
 | `secretId` | string | Name of a server-managed signing secret (preferred) |

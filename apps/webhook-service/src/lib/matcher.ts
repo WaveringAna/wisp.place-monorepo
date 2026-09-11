@@ -284,6 +284,10 @@ export function matchWebhooks(
 
 		const scope = parseAtUri(record.scope.aturi)
 		if (!scope) continue
+		// A backlinks-only subscription ignores everything the scope's own repo
+		// writes: no direct matches, and no records that reference the scope itself.
+		const backlinksOnly = record.scope.backlinksOnly === true
+		if (backlinksOnly && eventDid === scope.did) continue
 		const directMatch =
 			scope.did === eventDid &&
 			(!scope.collection ||
@@ -294,7 +298,7 @@ export function matchWebhooks(
 		}
 
 		if (
-			record.scope.backlinks === true &&
+			(record.scope.backlinks === true || backlinksOnly) &&
 			backlinkRecord != null &&
 			containsReference(backlinkRecord, scope.did, scope.collection, scope.rkey)
 		) {

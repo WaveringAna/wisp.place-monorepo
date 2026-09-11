@@ -396,6 +396,8 @@ function sanitizeWebhookRecord(value: WhRecord): WhRecord {
 	if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') throw new Error('Invalid webhook record')
 	if (rawScope.backlinks !== undefined && typeof rawScope.backlinks !== 'boolean')
 		throw new Error('Invalid webhook record')
+	if (rawScope.backlinksOnly !== undefined && typeof rawScope.backlinksOnly !== 'boolean')
+		throw new Error('Invalid webhook record')
 	if (
 		raw.secret !== undefined &&
 		(!isNonEmptyBoundedString(raw.secret as string, 256) || typeof raw.secret !== 'string')
@@ -422,6 +424,7 @@ function sanitizeWebhookRecord(value: WhRecord): WhRecord {
 			...(rawScope.$type === 'place.wisp.v2.wh#atUri' ? { $type: rawScope.$type } : {}),
 			aturi: rawScope.aturi as string,
 			...(typeof rawScope.backlinks === 'boolean' ? { backlinks: rawScope.backlinks } : {}),
+			...(typeof rawScope.backlinksOnly === 'boolean' ? { backlinksOnly: rawScope.backlinksOnly } : {}),
 		},
 		url: raw.url as string,
 		...(events ? { events } : {}),
@@ -499,7 +502,7 @@ export async function findWebhooksForDid(scopeDid: string): Promise<WebhookEntry
 export async function findBacklinkWebhooks(): Promise<WebhookEntry[]> {
 	const rows = await db<Array<{ k: string; v: WhRecord }>>`
     SELECT k, v FROM webhook_records
-    WHERE v->'scope'->>'backlinks' = 'true'
+    WHERE (v->'scope'->>'backlinks' = 'true' OR v->'scope'->>'backlinksOnly' = 'true')
       AND NOT EXISTS (
         SELECT 1 FROM webhook_owner_reconciliations reconciliation
         WHERE reconciliation.owner_did = split_part(webhook_records.k, '/', 1)
@@ -702,7 +705,12 @@ export function webhookSubscriptionFingerprint(record: WhRecord): string {
 	const clean = sanitizeWebhookRecord(record)
 	const value = JSON.stringify({
 		url: clean.url,
-		scope: { aturi: clean.scope.aturi, backlinks: clean.scope.backlinks === true },
+		scope: {
+			aturi: clean.scope.aturi,
+			backlinks: clean.scope.backlinks === true,
+			// Only present when set, so existing subscriptions keep their fingerprint.
+			...(clean.scope.backlinksOnly === true ? { backlinksOnly: true } : {}),
+		},
 		events: clean.events ?? [],
 		enabled: clean.enabled !== false,
 		secretId: clean.secretId ?? null,

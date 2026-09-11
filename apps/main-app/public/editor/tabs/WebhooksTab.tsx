@@ -55,6 +55,7 @@ interface WebhooksTabProps {
 		secret?: string
 		secretId?: string
 		enabled: boolean
+		backlinksOnly?: boolean
 	}) => Promise<any>
 	onDeleteWebhook: (rkey: string) => Promise<void>
 	onRefreshEvents: () => Promise<void>
@@ -119,6 +120,7 @@ export const WebhooksTab = memo(function WebhooksTab({
 	const [useCustomDid, setUseCustomDid] = useState(false)
 	const [selectedSecretId, setSelectedSecretId] = useState('')
 	const [backlinks, setBacklinks] = useState(false)
+	const [backlinksOnly, setBacklinksOnly] = useState(false)
 	const [eventCreate, setEventCreate] = useState(true)
 	const [eventUpdate, setEventUpdate] = useState(true)
 	const [eventDelete, setEventDelete] = useState(true)
@@ -254,6 +256,7 @@ export const WebhooksTab = memo(function WebhooksTab({
 				url,
 				scopeAturi,
 				backlinks,
+				...(backlinksOnly ? { backlinks: true, backlinksOnly: true } : {}),
 				events: events.length === 3 ? [] : events,
 				...(selectedSecretId ? { secretId: selectedSecretId } : {}),
 				enabled: true,
@@ -269,6 +272,7 @@ export const WebhooksTab = memo(function WebhooksTab({
 			setUseCustomDid(false)
 			setSelectedSecretId('')
 			setBacklinks(false)
+			setBacklinksOnly(false)
 			setEventCreate(true)
 			setEventUpdate(true)
 			setEventDelete(true)
@@ -593,11 +597,24 @@ export const WebhooksTab = memo(function WebhooksTab({
 										<div className="flex items-center gap-2">
 											<Checkbox
 												id="wh-backlinks"
-												checked={backlinks}
+												checked={backlinks || backlinksOnly}
+												disabled={backlinksOnly}
 												onCheckedChange={(v: boolean | 'indeterminate') => setBacklinks(!!v)}
 											/>
 											<Label htmlFor="wh-backlinks" className="cursor-pointer text-xs">
 												Backlinks
+											</Label>
+										</div>
+
+										{/* Backlinks only: other repos' references, never the scope's own events */}
+										<div className="flex items-center gap-2">
+											<Checkbox
+												id="wh-backlinks-only"
+												checked={backlinksOnly}
+												onCheckedChange={(v: boolean | 'indeterminate') => setBacklinksOnly(!!v)}
+											/>
+											<Label htmlFor="wh-backlinks-only" className="cursor-pointer text-xs">
+												Backlinks only
 											</Label>
 										</div>
 
@@ -740,9 +757,9 @@ export const WebhooksTab = memo(function WebhooksTab({
 														disabled
 													</Badge>
 												)}
-												{wh.backlinks && (
+												{(wh.backlinks || wh.backlinksOnly) && (
 													<Badge variant="outline" className="text-[10px]">
-														backlinks
+														{wh.backlinksOnly ? 'backlinks only' : 'backlinks'}
 													</Badge>
 												)}
 												{wh.secretId && (

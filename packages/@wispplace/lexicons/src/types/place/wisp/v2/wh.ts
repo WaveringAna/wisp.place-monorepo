@@ -3,12 +3,12 @@
  */
 import { type ValidationResult, BlobRef } from '@atproto/lexicon'
 import { CID } from 'multiformats/cid'
-import { validate as _validate } from '../../../../lexicons'
+import { validate as _validate } from '../../../../lexicons.js'
 import {
   type $Typed,
   is$typed as _is$typed,
   type OmitKey,
-} from '../../../../util'
+} from '../../../../util.js'
 
 const is$typed = _is$typed,
   validate = _validate
@@ -54,6 +54,8 @@ export interface AtUri {
   aturi: string
   /** If true, also watch for records in any repo that reference this DID and collection. */
   backlinks?: boolean
+  /** If true, fire only for records in other repos that reference this scope. Events from the scope DID's own repo never fire, including records that reference itself. Implies backlinks. */
+  backlinksOnly?: boolean
 }
 
 const hashAtUri = 'atUri'
