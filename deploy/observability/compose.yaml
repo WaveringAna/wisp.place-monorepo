@@ -1,0 +1,71 @@
+name: wisp-observability
+
+services:
+  victoria-metrics:
+    image: victoriametrics/victoria-metrics@sha256:407013e902f9a0ba1d4b2d4c077c47bbaf917c893c52ff39b19efe83a654afda
+    container_name: wisp-victoria-metrics
+    command:
+      - -storageDataPath=/storage
+      - -retentionPeriod=90d
+      - -httpListenAddr=:8428
+    ports:
+      - 100.64.0.20:8428:8428
+    volumes:
+      - victoria_metrics_data:/storage
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, wget, -qO-, http://127.0.0.1:8428/health]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  victoria-logs:
+    image: victoriametrics/victoria-logs@sha256:47b820890d64c4575a2a0a46415dcd8a4fd59a0f1fcd6a377693d7aea639442e
+    container_name: wisp-victoria-logs
+    command:
+      - -storageDataPath=/storage
+      - -retentionPeriod=30d
+      - -retention.maxDiskUsagePercent=80
+      - -httpListenAddr=:9428
+    ports:
+      - 100.64.0.20:9428:9428
+    volumes:
+      - victoria_logs_data:/storage
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana@sha256:1c1bd67c54c5fcf6e759897852b5a584191bd6796e8d328a5ace457799801261
+    container_name: wisp-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SERVER_ROOT_URL: http://100.64.0.20:3030
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_PLUGINS_PREINSTALL: victoriametrics-logs-datasource
+    ports:
+      - 100.64.0.20:3030:3000
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      victoria-metrics:
+        condition: service_healthy
+      victoria-logs:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, wget, -qO-, http://127.0.0.1:3000/api/health]
+      interval: 10s
+      timeout: 3s
+      retries: 18
+      start_period: 30s
+
+volumes:
+  victoria_metrics_data:
+  victoria_logs_data:
+  grafana_data:

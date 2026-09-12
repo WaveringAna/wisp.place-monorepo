@@ -1,0 +1,4 @@
+# Merge this explicit route into baal's existing Caddyfile; do not replace it.
+logs.nekomimi.pet {
+    reverse_proxy 100.64.0.20:9428
+}

@@ -1,0 +1,10 @@
+[Unit]
+Description=Check Wisp operational signals every minute
+
+[Timer]
+OnBootSec=90s
+OnUnitInactiveSec=60s
+RandomizedDelaySec=5s
+
+[Install]
+WantedBy=timers.target

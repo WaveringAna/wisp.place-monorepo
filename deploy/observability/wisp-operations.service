@@ -1,0 +1,16 @@
+[Unit]
+Description=Wisp focused operational checks
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/wisp-operations/probe.py /etc/wisp-operations/config.json
+StateDirectory=wisp-operations
+StateDirectoryMode=0700
+UMask=0077
+TimeoutStartSec=180
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true

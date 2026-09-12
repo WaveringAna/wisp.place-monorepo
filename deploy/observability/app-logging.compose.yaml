@@ -1,0 +1,7 @@
+# Recovery template for the main-app log settings restored on us-west/singapore.
+# Preserve the existing hosting/firehose settings, including public HTTPS URLs.
+services:
+  wisp-place:
+    environment:
+      GRAFANA_LOKI_URL: http://100.64.0.20:9428
+      GRAFANA_LOKI_PATH: /insert/loki/api/v1/push

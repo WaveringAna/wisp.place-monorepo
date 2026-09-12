@@ -25,7 +25,14 @@ there means a cold build of everything on every tag, plus emulation for any
 architecture the runner does not share. The build host already has the warm
 cache and the emulation set up; CI just drives it.
 
-## No topology in this repo, on purpose
+## Observability configuration
+
+`observability/` records the restored monitoring stack, an application logging
+recovery overlay, and focused operational alerts. See its [runbook](observability/README.md).
+Application topology remains in Komodo. Existing host Compose log settings persist
+through releases; `verify-logging.py` checks a private rendered config for drift.
+
+## No application topology in this repo, on purpose
 
 Neither Action names a host, a directory, an env file or a service. They
 ask Komodo:
