@@ -42,12 +42,12 @@ function createRedis(
 	acks: string[]
 	streamDeletes: string[]
 	calls: string[]
-	sets: Array<[string, string, 'EX', number]>
+	sets: Array<[string, string, 'EX' | undefined, number | undefined]>
 } {
 	const acks: string[] = []
 	const streamDeletes: string[] = []
 	const calls: string[] = []
-	const sets: Array<[string, string, 'EX', number]> = []
+	const sets: Array<[string, string, 'EX' | undefined, number | undefined]> = []
 
 	return {
 		redis: {
@@ -126,6 +126,7 @@ function deferred<T = void>() {
 }
 
 class FakeLifecycleRedis {
+	readonly capabilityWrites: unknown[][] = []
 	readonly xreadArguments: unknown[][] = []
 	claimCalls = 0
 	evalCalls = 0
@@ -140,6 +141,11 @@ class FakeLifecycleRedis {
 
 	on(_event: string, _listener: (..._args: unknown[]) => void): this {
 		return this
+	}
+
+	async set(...args: unknown[]): Promise<'OK'> {
+		this.capabilityWrites.push(args)
+		return 'OK'
 	}
 
 	async xgroup(..._args: unknown[]): Promise<unknown> {
@@ -299,8 +305,8 @@ class FakeClaimRedis {
 
 	async eval(_script: string, keyCount: number, ...args: string[]): Promise<unknown> {
 		this.calls.push({ command: 'EVAL', args: [keyCount, ...args] })
-		if (keyCount === 4) {
-			this.quarantineAttempts.push(Number(args[4 + 7]))
+		if (keyCount === 5) {
+			this.quarantineAttempts.push(Number(args[keyCount + 7]))
 			this.pending = false
 			return [1, 'dlq-1', 1]
 		}
@@ -995,6 +1001,9 @@ describe('worker lifecycle', () => {
 		const client = clients[0]
 		expect(client?.xreadArguments).toHaveLength(1)
 		expect(client?.options).toEqual(createRevalidateWorkerRedisOptions(runtimeConfig))
+		expect(client?.capabilityWrites).toEqual([
+			[expect.stringContaining('revalidate:verified-repair:capability:'), expect.stringMatching(/^1:/), 'EX', 30],
+		])
 
 		await stopRevalidateWorker()
 

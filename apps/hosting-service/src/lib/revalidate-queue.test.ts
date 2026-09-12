@@ -61,8 +61,8 @@ describe('enqueueRevalidateWithRedis', () => {
 		)
 	})
 
-	test('suppresses repairs while the site is durably quarantined', async () => {
-		const redis: RevalidateQueueClient = { eval: async () => [-2, 'dlq-9'] }
+	test.each(['', '3mabc234567ab'])('suppresses repairs behind quarantine fence %j', async (fence) => {
+		const redis: RevalidateQueueClient = { eval: async () => [-2, fence] }
 		await expect(enqueueRevalidateWithRedis(redis, 'did:plc:test', 'site', 'storage-miss:index.html')).resolves.toEqual(
 			{
 				enqueued: false,

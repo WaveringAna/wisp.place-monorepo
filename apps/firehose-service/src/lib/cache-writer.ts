@@ -25,7 +25,7 @@ import { validateRecord as validateFsRecord } from '@wispplace/lexicons/types/pl
 import type { Record as WispSettings } from '@wispplace/lexicons/types/place/wisp/settings'
 import { validateRecord as validateSettingsRecord } from '@wispplace/lexicons/types/place/wisp/settings'
 import { createLogger } from '@wispplace/observability'
-import { SafeFetchHttpError, safeFetch, safeFetchBlob, safeFetchJson } from '@wispplace/safe-fetch'
+import { SafeFetchHttpError, safeFetch, safeFetchJson } from '@wispplace/safe-fetch'
 import {
 	DecompressionLimitError,
 	decompress,
@@ -33,7 +33,8 @@ import {
 	measureDecompressedSize,
 	type StorageMetadata,
 } from '@wispplace/tiered-storage'
-import { publishCacheInvalidation } from './cache-invalidation'
+import { BlobIntegrityError, type BlobSource, fetchVerifiedBlob } from './blob-integrity'
+import { publishCacheInvalidation, publishCacheInvalidationStrict } from './cache-invalidation'
 import {
 	deleteSiteSettingsCache,
 	getSiteCache,
@@ -44,6 +45,12 @@ import {
 	withSiteWriteLock,
 } from './db'
 import { assertRevalidationActive, type RevalidationResourceContext } from './revalidate-resources'
+import {
+	fingerprintSiteManifest,
+	type VerifiedRepairProof,
+	type VerifiedRepairRequest,
+	type VerifiedSitePreflight,
+} from './site-repair-protocol'
 import { deleteFile, getFileMetadata, listFiles, writeFile } from './storage'
 
 const logger = createLogger('firehose-service')
@@ -134,7 +141,7 @@ export class AsyncWorkGate {
 	}
 }
 
-// The permit begins before safeFetchBlob, so this bounds buffered binary
+// The permit begins before fetchVerifiedBlob, so this bounds buffered binary
 // downloads as well as gzip/HTML work to the configured three-way ceiling.
 const blobProcessingGate = new AsyncWorkGate(DOWNLOAD_CONCURRENCY)
 
@@ -1090,6 +1097,52 @@ function collectFileInfo(
 	return entries.flatMap((entry) => collectFileInfoForEntry(entry, ownerDidByFilePath, pathPrefix))
 }
 
+function assertVerifiedRepairOutputPaths(files: FileInfo[]): void {
+	const originals = new Set(files.map((file) => file.path))
+	for (const file of files) {
+		if (originals.has(`.rewritten/${file.path}`))
+			throw new Error('Verified repair has overlapping original and derived paths')
+	}
+}
+
+function blobSource(file: FileInfo, pds: string, recordCid: string): BlobSource {
+	return { pds, recordCid, path: file.path, blobCid: file.cid, ownerDid: file.ownerDid, expectedSize: file.blob.size }
+}
+
+/** Verify every current manifest blob, including SubFS owners, without touching cache state. */
+export async function verifySiteBlobs(
+	did: string,
+	rkey: string,
+	record: WispFsRecord,
+	recordCid: string,
+	resources?: RevalidationResources,
+): Promise<VerifiedSitePreflight> {
+	const request = createSiteUpdateRequest(did, rkey, record, recordCid, { resources })
+	const update = await validateSiteUpdate(request, resources)
+	if (!update) throw new Error('Site failed repair admission')
+	const files = collectFileInfo(update.expandedRoot.entries, update.ownerDidByFilePath)
+	assertVerifiedRepairOutputPaths(files)
+	for (const file of files) {
+		assertRevalidationActive(resources)
+		const endpoint = await update.resolveSourcePdsEndpoint(file.ownerDid, resources)
+		await blobProcessingGate.run(async () => {
+			assertRevalidationActive(resources)
+			await fetchVerifiedBlob(blobSource(file, endpoint, recordCid), {
+				allowLocalhost: allowDevLocalPdsFetch,
+				signal: resources?.signal,
+				byteBudget: resources?.transferBudget,
+			})
+		})
+	}
+	assertRevalidationActive(resources)
+	return {
+		recordCid,
+		manifestFingerprint: fingerprintSiteManifest(recordCid, update.expandedRoot, update.ownerDidByFilePath),
+		fileCount: files.length,
+		totalBytes: files.reduce((total, file) => total + file.blob.size, 0),
+	}
+}
+
 /**
  * Download a blob and write to S3
  */
@@ -1103,10 +1156,11 @@ async function downloadAndWriteBlob(
 	file: FileInfo,
 	pdsEndpoint: string,
 	logicalSizeBudget: SiteLogicalSizeBudget,
+	recordCid: string,
 	resources?: RevalidationResources,
+	strictRewrites = false,
 ): Promise<DownloadedBlob> {
 	assertRevalidationActive(resources)
-	const blobUrl = `${pdsEndpoint}/xrpc/com.atproto.sync.getBlob?did=${encodeURIComponent(file.ownerDid)}&cid=${encodeURIComponent(file.cid)}`
 	const blobKey = `${file.ownerDid}:${file.cid}`
 
 	const backoffUntil = getBackoffUntil(blobKey)
@@ -1114,7 +1168,7 @@ async function downloadAndWriteBlob(
 		throw new Blob500BackoffError(blobKey, backoffUntil)
 	}
 
-	// The permit begins before safeFetchBlob. It covers the whole lifetime of a
+	// The permit begins before fetchVerifiedBlob. It covers the whole lifetime of a
 	// possibly 200 MiB body, base64/gzip expansion, HTML rewrite, and storage
 	// write, rather than only the gzip portion after bytes are already buffered.
 	return await blobProcessingGate.run(async () => {
@@ -1122,9 +1176,8 @@ async function downloadAndWriteBlob(
 
 		let content: Uint8Array
 		try {
-			content = await safeFetchBlob(blobUrl, {
-				maxSize: MAX_BLOB_SIZE,
-				timeout: 300000,
+			assertRevalidationActive(resources)
+			content = await fetchVerifiedBlob(blobSource(file, pdsEndpoint, recordCid), {
 				allowLocalhost: allowDevLocalPdsFetch,
 				signal: resources?.signal,
 				byteBudget: resources?.transferBudget,
@@ -1160,7 +1213,7 @@ async function downloadAndWriteBlob(
 			}
 		}
 
-		return await writePreparedBlob(did, rkey, file, content, encoding, logicalSizeBudget, resources)
+		return await writePreparedBlob(did, rkey, file, content, encoding, logicalSizeBudget, resources, strictRewrites)
 	})
 }
 
@@ -1243,8 +1296,17 @@ async function writeRewrittenHtml(
 	file: FileInfo,
 	prepared: MeasuredBlobContent,
 	resources?: RevalidationResources,
+	strict = false,
 ): Promise<void> {
-	if (!isHtmlContent(file.path)) return
+	if (!isHtmlContent(file.path)) {
+		if (strict) {
+			// Hosting also recognizes MIME-derived HTML paths (for example .shtml).
+			// Remove variants we cannot regenerate so they fall back to verified raw bytes.
+			assertRevalidationActive(resources)
+			await deleteFile(`${did}/${rkey}/.rewritten/${file.path}`)
+		}
+		return
+	}
 	try {
 		assertRevalidationActive(resources)
 		const htmlString = new TextDecoder().decode(prepared.decodedHtml ?? prepared.content)
@@ -1257,7 +1319,8 @@ async function writeRewrittenHtml(
 		const rewrittenKey = `${did}/${rkey}/.rewritten/${file.path}`
 		await writeFile(rewrittenKey, rewrittenContent, createRewrittenHtmlMetadata(file))
 		logger.debug(`Wrote rewritten HTML: ${rewrittenKey}`)
-	} catch {
+	} catch (error) {
+		if (strict) throw error
 		logger.error(`Failed to cache rewritten HTML for ${file.path}; continuing with original`, undefined, {
 			did,
 			rkey,
@@ -1274,6 +1337,7 @@ async function writePreparedBlob(
 	initialEncoding: FileInfo['encoding'],
 	logicalSizeBudget: SiteLogicalSizeBudget,
 	resources?: RevalidationResources,
+	strictRewrites = false,
 ): Promise<DownloadedBlob> {
 	assertRevalidationActive(resources)
 	const prepared = await measureBlobContent(file, normalizeBlobContent(file, inputContent, initialEncoding))
@@ -1284,7 +1348,7 @@ async function writePreparedBlob(
 	await reserveAndWriteWithinLogicalBudget(logicalSizeBudget, file.path, prepared.uncompressedSize, () =>
 		writeFile(key, prepared.content, metadata),
 	)
-	await writeRewrittenHtml(did, rkey, file, prepared, resources)
+	await writeRewrittenHtml(did, rkey, file, prepared, resources, strictRewrites)
 	logger.debug(
 		`Stored ${file.path} (${prepared.content.length} stored bytes, ${prepared.uncompressedSize} logical bytes)`,
 	)
@@ -1292,6 +1356,9 @@ async function writePreparedBlob(
 }
 
 export interface SiteUpdateOptions {
+	verifiedRepair?: VerifiedRepairRequest
+	/** Called under the site lock only after materialization and strict publication succeed. */
+	onVerifiedRepairComplete?: (proof: VerifiedRepairProof) => Promise<void>
 	forceRewriteHtml?: boolean
 	skipInvalidation?: boolean
 	forceDownload?: boolean
@@ -1300,6 +1367,8 @@ export interface SiteUpdateOptions {
 }
 
 interface SiteUpdateRequest {
+	verifiedRepair?: VerifiedRepairRequest
+	onVerifiedRepairComplete?: (proof: VerifiedRepairProof) => Promise<void>
 	did: string
 	rkey: string
 	record: WispFsRecord
@@ -1362,8 +1431,10 @@ function createSiteUpdateRequest(
 		record,
 		recordCid,
 		forceRewriteHtml: options?.forceRewriteHtml === true,
-		forceDownload: options?.forceDownload === true,
-		skipInvalidation: options?.skipInvalidation === true,
+		forceDownload: options?.verifiedRepair !== undefined || options?.forceDownload === true,
+		skipInvalidation: options?.verifiedRepair === undefined && options?.skipInvalidation === true,
+		verifiedRepair: options?.verifiedRepair,
+		onVerifiedRepairComplete: options?.onVerifiedRepairComplete,
 		resources: options?.resources,
 	}
 }
@@ -1430,8 +1501,18 @@ async function validateSiteUpdate(
 	if (!pdsEndpoint) return null
 	const resolveSourcePdsEndpoint = createPdsEndpointResolver(request.did, pdsEndpoint)
 	const expanded = await expandSiteUpdateRoot(request, root, resolveSourcePdsEndpoint, resources)
-	const sizeLimit = (await isSupporter(request.did)) ? MAX_SITE_SIZE_SUPPORTER : MAX_SITE_SIZE
+	const sizeLimit = (await isSupporter(request.did, resources?.signal)) ? MAX_SITE_SIZE_SUPPORTER : MAX_SITE_SIZE
+	assertRevalidationActive(resources)
 	if (!validateExpandedSiteLimits(expanded.expandedRoot, sizeLimit)) return null
+	if (
+		request.verifiedRepair &&
+		(request.recordCid !== request.verifiedRepair.recordCid ||
+			fingerprintSiteManifest(request.recordCid, expanded.expandedRoot, expanded.ownerDidByFilePath) !==
+				request.verifiedRepair.manifestFingerprint)
+	)
+		throw new Error('Verified repair source changed')
+	if (request.verifiedRepair)
+		assertVerifiedRepairOutputPaths(collectFileInfo(expanded.expandedRoot.entries, expanded.ownerDidByFilePath))
 	return { request, pdsEndpoint, resolveSourcePdsEndpoint, sizeLimit, resources, ...expanded }
 }
 
@@ -1618,7 +1699,9 @@ async function downloadPlannedFile(plan: AccountedSiteFilePlan, file: FileInfo):
 		file,
 		endpoint,
 		plan.logicalSizeBudget,
+		plan.update.request.recordCid,
 		plan.update.resources,
+		plan.update.request.verifiedRepair !== undefined,
 	)
 }
 
@@ -1657,12 +1740,11 @@ async function downloadSiteFiles(
 }
 
 function getDeleteKeys(plan: SiteFilePlan): string[] {
-	return plan.pathsToDelete.flatMap((path) => {
-		const key = `${plan.update.request.did}/${plan.update.request.rkey}/${path}`
-		return isHtmlContent(path)
-			? [key, `${plan.update.request.did}/${plan.update.request.rkey}/.rewritten/${path}`]
-			: [key]
-	})
+	const prefix = `${plan.update.request.did}/${plan.update.request.rkey}/`
+	const outputKeys = (path: string) =>
+		isHtmlContent(path) ? [`${prefix}${path}`, `${prefix}.rewritten/${path}`] : [`${prefix}${path}`]
+	const currentOutputs = new Set(plan.newFiles.flatMap((file) => outputKeys(file.path)))
+	return plan.pathsToDelete.flatMap(outputKeys).filter((key) => !currentOutputs.has(key))
 }
 
 function collectDeleteFailures(keys: string[], results: PromiseSettledResult<void>[]): DeleteFailure[] {
@@ -1747,6 +1829,8 @@ async function retryDownloadFailures(plan: AccountedSiteFilePlan, failures: Down
 			retryFailures.length,
 		)
 	}
+	const brokenBlob = retryFailures.find((failure) => failure.error instanceof BlobIntegrityError)
+	if (brokenBlob) throw brokenBlob.error
 	throw new Error(`Failed to download files for ${plan.update.request.did}/${plan.update.request.rkey}`)
 }
 
@@ -1851,6 +1935,23 @@ async function commitSiteUpdate(plan: AccountedSiteFilePlan): Promise<void> {
 }
 
 async function notifySiteUpdateComplete(plan: SiteFilePlan): Promise<void> {
+	const { request } = plan.update
+	if (request.verifiedRepair) {
+		assertRevalidationActive(request.resources)
+		const invalidationStreamId = await publishCacheInvalidationStrict(
+			request.did,
+			request.rkey,
+			'update',
+			plan.invalidationToken,
+		)
+		assertRevalidationActive(request.resources)
+		await request.onVerifiedRepairComplete?.({
+			recordCid: request.recordCid,
+			manifestFingerprint: request.verifiedRepair.manifestFingerprint,
+			invalidationStreamId,
+		})
+		return
+	}
 	if (!plan.update.request.skipInvalidation) {
 		await publishCacheInvalidation(plan.update.request.did, plan.update.request.rkey, 'update', plan.invalidationToken)
 	}
@@ -1916,6 +2017,7 @@ async function reconcileSiteUpdateUnderLock(
 ): Promise<void> {
 	const currentRecord = await dependencies.fetchAuthoritativeSiteRecord(did, rkey, options?.resources)
 	if (!currentRecord) {
+		if (options?.verifiedRepair) throw new Error('Verified repair site is absent')
 		logger.info('[CacheWriter] Site is absent during update reconciliation; leaving existing cache unchanged', {
 			did,
 			rkey,
@@ -1991,14 +2093,19 @@ async function handleSiteCreateOrUpdateLocked(
 		forceDownload: request.forceDownload,
 	})
 	const update = await validateSiteUpdate(request, request.resources)
-	if (!update) return
+	if (!update) {
+		if (request.verifiedRepair) throw new Error('Site failed repair admission')
+		return
+	}
 	const ledger = await loadSiteUpdateLedger(update)
 	const invalidationToken = await markSiteUpdateInProgress(update)
 	const plan = planSiteFiles(update, ledger, invalidationToken)
 	const accountedPlan = await accountSiteFiles(plan)
 	const downloadFailures = await downloadSiteFilesOrFailClosed(accountedPlan)
+	await recoverSiteFileFailures(accountedPlan, downloadFailures, [])
+	// Keep removed-but-recoverable cache objects until every replacement is verified.
 	const deleteFailures = await deleteSiteFiles(accountedPlan)
-	await recoverSiteFileFailures(accountedPlan, downloadFailures, deleteFailures)
+	await retryDeleteFailures(accountedPlan, deleteFailures)
 	await commitSiteUpdate(accountedPlan)
 	await notifySiteUpdateComplete(accountedPlan)
 	logger.info(`Successfully cached site ${did}/${rkey}`)

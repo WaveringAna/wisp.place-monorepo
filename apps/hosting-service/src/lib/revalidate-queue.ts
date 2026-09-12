@@ -154,7 +154,7 @@ export async function enqueueRevalidateWithRedis(
 			recordRevalidateResult('deduped')
 			return { enqueued: false, result: 'deduped' }
 		}
-		if (outcome.status === -2 && outcome.streamId) {
+		if (outcome.status === -2) {
 			recordRevalidateResult('quarantined')
 			return { enqueued: false, result: 'quarantined' }
 		}

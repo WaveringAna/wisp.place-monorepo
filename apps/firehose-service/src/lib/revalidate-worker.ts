@@ -6,6 +6,7 @@ import { SafeFetchHttpError } from '@wispplace/safe-fetch'
 import { DecompressionLimitError } from '@wispplace/tiered-storage'
 import Redis from 'ioredis'
 import { config } from '../config'
+import { BlobIntegrityError } from './blob-integrity'
 import {
 	AuthoritativeSettingsRecordError,
 	AuthoritativeSiteRecordError,
@@ -33,6 +34,17 @@ import {
 	type RevalidationResourceContext,
 	TransferBudgetExceededError,
 } from './revalidate-resources'
+import {
+	parseVerifiedRepairReceipt,
+	parseVerifiedRepairRequest,
+	VERIFIED_REPAIR_CAPABILITY_TTL_SECONDS,
+	VERIFIED_REPAIR_PROTOCOL,
+	VERIFIED_REPAIR_RECEIPT_TTL_SECONDS,
+	type VerifiedRepairRequest,
+	verifiedRepairCapabilityKey,
+	verifiedRepairQuarantineGenerationKey,
+	verifiedRepairReceiptKey,
+} from './site-repair-protocol'
 
 export type { RevalidationResourceContext, TransferByteBudgetLike } from './revalidate-resources'
 export {
@@ -391,7 +403,7 @@ export interface RevalidateRedisClient {
 	pipeline?(): RevalidateRedisPipeline
 	/** Atomically XACK then XDEL for the sole documented consumer group. */
 	eval(script: string, keyCount: number, ...args: string[]): PromiseLike<unknown>
-	set(key: string, value: string, expirationMode: 'EX', ttlSeconds: number): PromiseLike<'OK' | null>
+	set(key: string, value: string, expirationMode?: 'EX', ttlSeconds?: number): PromiseLike<'OK' | null>
 	/** Redis XPENDING exact-id lookup; unavailable only in minimal test seams. */
 	xpending?(...args: (string | number)[]): PromiseLike<unknown>
 }
@@ -418,6 +430,7 @@ const COMPLETE_REVALIDATION_SCRIPT = `
 local acknowledged = redis.call('XACK', KEYS[1], ARGV[1], ARGV[2])
 if acknowledged ~= 1 then return {acknowledged, 0} end
 local deleted = redis.call('XDEL', KEYS[1], ARGV[2])
+if deleted == 1 and KEYS[2] then redis.call('EXPIRE', KEYS[2], ARGV[3]) end
 return {acknowledged, deleted}
 `
 
@@ -436,10 +449,12 @@ local dlqId = redis.call('XADD', KEYS[2], 'MAXLEN', '~', ARGV[11], '*',
   'error', ARGV[7],
   'classification', ARGV[9],
   'attempts', ARGV[8],
-  'quarantinedAt', ARGV[10])
+  'quarantinedAt', ARGV[10],
+  'blobDetails', ARGV[13])
 local fenceVersion = ARGV[12]
 if fenceVersion == '' then fenceVersion = redis.call('GET', KEYS[4]) or '' end
 redis.call('SET', KEYS[3], fenceVersion)
+redis.call('SET', KEYS[5], dlqId)
 local acknowledged = redis.call('XACK', KEYS[1], ARGV[1], ARGV[2])
 if acknowledged ~= 1 then return {acknowledged, dlqId, 0} end
 local deleted = redis.call('XDEL', KEYS[1], ARGV[2])
@@ -486,13 +501,19 @@ const defaultRevalidateWorkerDependencies: RevalidateWorkerDependencies = {
  * either not run it (the entry is pending) or run both XACK and XDEL; an
  * acknowledged orphan cannot consume the producer capacity limit.
  */
-async function acknowledgeCompletedMessage(redisClient: RevalidateRedisClient, id: string): Promise<void> {
+async function acknowledgeCompletedMessage(
+	redisClient: RevalidateRedisClient,
+	id: string,
+	receiptKey?: string,
+): Promise<void> {
 	const result = await redisClient.eval(
 		COMPLETE_REVALIDATION_SCRIPT,
-		1,
+		receiptKey ? 2 : 1,
 		config.revalidateStream,
+		...(receiptKey ? [receiptKey] : []),
 		config.revalidateGroup,
 		id,
+		String(VERIFIED_REPAIR_RECEIPT_TTL_SECONDS),
 	)
 	if (!Array.isArray(result) || typeof result[0] !== 'number' || typeof result[1] !== 'number') {
 		throw new Error(`Revalidate completion script returned malformed result for ${id}`)
@@ -538,6 +559,8 @@ function hasPermanentPdsCode(code: string): boolean {
 
 /** Classify without echoing hostile response bodies or URLs. */
 export function classifyRevalidationError(error: unknown): RevalidationFailureInfo {
+	// The writer has already retried the failed blob once before exposing this error.
+	if (error instanceof BlobIntegrityError) return { classification: 'permanent', code: error.code }
 	if (error instanceof RevalidationProcessingError) {
 		return { classification: error.classification, code: error.code }
 	}
@@ -631,11 +654,12 @@ export async function quarantineRevalidationMessage(
 	const resolvedCode = code ?? classifyRevalidationError(error).code
 	const result = await redisClient.eval(
 		QUARANTINE_REVALIDATION_SCRIPT,
-		4,
+		5,
 		config.revalidateStream,
 		config.revalidateDlqStream,
 		revalidationQuarantineKey(message.did ?? '', message.rkey ?? ''),
 		revalidationSiteVersionKey(message.did ?? '', message.rkey ?? ''),
+		verifiedRepairQuarantineGenerationKey(message.did ?? '', message.rkey ?? ''),
 		config.revalidateGroup,
 		id,
 		boundedField(message.did),
@@ -648,6 +672,7 @@ export async function quarantineRevalidationMessage(
 		Date.now().toString(),
 		String(config.revalidateDlqStreamMaxLen),
 		boundedField(message.sourceVersion),
+		error instanceof BlobIntegrityError ? JSON.stringify(error.details) : '',
 	)
 	if (
 		!Array.isArray(result) ||
@@ -800,6 +825,7 @@ async function prepareSiteRevalidation(
 	dependencies: RevalidateWorkerDependencies,
 	resources: RevalidationResourceContext | undefined,
 	strict: boolean,
+	verifiedRepair?: VerifiedRepairRequest,
 ): Promise<PreparedSiteRevalidation | null> {
 	const isDeleteTombstone = isSiteDeleteTombstoneReason(reason)
 	const failureBackoffKey = getFailureBackoffKey(did, rkey)
@@ -841,6 +867,7 @@ async function prepareSiteRevalidation(
 		return null
 	}
 	if (outcome.kind === 'absent') {
+		if (verifiedRepair) throw new RevalidationProcessingError('REPAIR_SOURCE_ABSENT', 'permanent')
 		await handleMissingSiteRecord(id, did, rkey, isDeleteTombstone, redisClient, dependencies, resources)
 		return null
 	}
@@ -910,6 +937,7 @@ async function materializeSiteRevalidation(
 	dependencies: RevalidateWorkerDependencies,
 	resources: RevalidationResourceContext | undefined,
 	strict: boolean,
+	verifiedRepair?: VerifiedRepairRequest,
 ): Promise<void> {
 	// For storage-miss events, force re-download all files since storage is empty.
 	// A failed delete can have removed some blobs before its DB cleanup failed, so
@@ -918,6 +946,7 @@ async function materializeSiteRevalidation(
 	const forceDownload = state.isDeleteTombstone || state.reason.startsWith('storage-miss')
 	const forceRewriteHtml = state.reason.startsWith('rewrite-miss')
 	const skipInvalidation = shouldSkipInvalidationForReason(state.reason)
+	let repairCompleted = false
 
 	try {
 		assertRevalidationActive(resources)
@@ -926,16 +955,80 @@ async function materializeSiteRevalidation(
 			forceDownload,
 			forceRewriteHtml,
 			resources,
+			...(verifiedRepair
+				? {
+						verifiedRepair,
+						onVerifiedRepairComplete: async (proof) => {
+							assertRevalidationActive(resources)
+							if (
+								proof.recordCid !== verifiedRepair.recordCid ||
+								proof.manifestFingerprint !== verifiedRepair.manifestFingerprint ||
+								!/^\d+-\d+$/.test(proof.invalidationStreamId)
+							) {
+								throw new Error('Invalid verified repair completion proof')
+							}
+							repairCompleted = true
+							const saved = await redisClient.set(
+								verifiedRepairReceiptKey(config.revalidateStream, verifiedRepair.token),
+								JSON.stringify({ ...verifiedRepair, ...proof, did: state.did, rkey: state.rkey }),
+							)
+							if (saved !== 'OK') throw new Error('Could not persist verified repair completion')
+						},
+					}
+				: {}),
 		})
+		if (verifiedRepair && !repairCompleted) throw new Error('Verified repair did not materialize')
 	} catch (error) {
+		if (repairCompleted) throw new VerifiedRepairCompletionError(error)
 		assertRevalidationActive(resources)
 		await handleSiteMaterializationFailure(id, state, error, redisClient, strict, resources)
 		return
 	}
 
+	try {
+		assertRevalidationActive(resources)
+		logger.info(`[Revalidate] Completed ${id}: ${state.did}/${state.rkey}`)
+		await acknowledgeCompletedMessage(
+			redisClient,
+			id,
+			verifiedRepair ? verifiedRepairReceiptKey(config.revalidateStream, verifiedRepair.token) : undefined,
+		)
+	} catch (error) {
+		if (repairCompleted) throw new VerifiedRepairCompletionError(error)
+		throw error
+	}
+}
+
+/** A durable repair proof must never be replaced by poison-message quarantine. */
+class VerifiedRepairCompletionError extends Error {
+	constructor(cause: unknown) {
+		super('Verified repair completed; acknowledgement remains pending', { cause })
+		this.name = 'VerifiedRepairCompletionError'
+	}
+}
+
+async function completeReceiptedRepair(
+	id: string,
+	message: ParsedRevalidationMessage,
+	redisClient: RevalidateRedisClient,
+	resources: RevalidationResourceContext,
+): Promise<boolean> {
+	if (!message.did || !message.rkey || !redisClient.get) return false
+	let request: VerifiedRepairRequest | undefined
+	try {
+		request = parseVerifiedRepairRequest(message.fields)
+	} catch {
+		return false
+	}
+	if (!request) return false
 	assertRevalidationActive(resources)
-	logger.info(`[Revalidate] Completed ${id}: ${state.did}/${state.rkey}`)
-	await acknowledgeCompletedMessage(redisClient, id)
+	const receiptKey = verifiedRepairReceiptKey(config.revalidateStream, request.token)
+	const receipt = await redisClient.get(receiptKey)
+	assertRevalidationActive(resources)
+	if (receipt === null) return false
+	parseVerifiedRepairReceipt(receipt, request, { did: message.did, rkey: message.rkey })
+	await acknowledgeCompletedMessage(redisClient, id, receiptKey)
+	return true
 }
 
 /** Process one stream entry under the optional strict resource/attempt policy. */
@@ -971,6 +1064,19 @@ export async function processRevalidationMessage(
 	if (lifecycleCancelled()) {
 		if (ownedResources) resources.close()
 		return
+	}
+
+	// Replay durable completion before delivery accounting, source reads, or quarantine.
+	// Redis uncertainty here leaves the entry pending, never creates a new fence.
+	try {
+		if (await completeReceiptedRepair(id, message, redisClient, resources)) {
+			if (ownedResources) resources.close()
+			return
+		}
+	} catch (error) {
+		if (ownedResources) resources.close()
+		if (lifecycleCancelled()) return
+		throw error
 	}
 
 	let attempt: number
@@ -1030,7 +1136,9 @@ export async function processRevalidationMessage(
 			return
 		}
 
+		const verifiedRepair = parseVerifiedRepairRequest(message.fields)
 		if (await isSiteRepairQuarantined(redisClient, message)) {
+			if (verifiedRepair) throw new RevalidationProcessingError('REPAIR_QUARANTINED', 'permanent')
 			logger.info(`[Revalidate] Dropping ${id}: site remains quarantined until a newer firehose event`, {
 				did: message.did,
 				rkey: message.rkey,
@@ -1067,9 +1175,10 @@ export async function processRevalidationMessage(
 			dependencies,
 			resources,
 			strict,
+			verifiedRepair,
 		)
 		if (!state) return
-		await materializeSiteRevalidation(id, state, redisClient, dependencies, resources, strict)
+		await materializeSiteRevalidation(id, state, redisClient, dependencies, resources, strict, verifiedRepair)
 	} catch (error) {
 		// A lifecycle stop is not a delivery attempt. Do not ACK, quarantine, or
 		// install a retry key after the worker has been fenced; the PEL entry must
@@ -1078,7 +1187,7 @@ export async function processRevalidationMessage(
 			if (strict && suppliedAttempt === undefined) clearLocalDeliveryAttempt(id, attempt)
 			return
 		}
-		if (!strict) throw error
+		if (!strict || error instanceof VerifiedRepairCompletionError) throw error
 		const failure = classifyRevalidationError(error)
 		if (failure.classification === 'permanent' || attempt >= runtime.maxAttempts) {
 			await quarantineRevalidationMessage(
@@ -1502,6 +1611,12 @@ async function runLoop(
 
 	while (isActiveWorkerClient(client)) {
 		try {
+			await client.set(
+				verifiedRepairCapabilityKey(config.revalidateStream, config.revalidateGroup),
+				`${VERIFIED_REPAIR_PROTOCOL}:${consumerName}`,
+				'EX',
+				VERIFIED_REPAIR_CAPABILITY_TTL_SECONDS,
+			)
 			await claimStaleMessages(client, runtimeConfig, dependencies, undefined, upstreamSignal)
 			const received = await readNewMessages(client, runtimeConfig, dependencies, upstreamSignal)
 			if (!isActiveWorkerClient(client)) return

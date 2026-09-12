@@ -88,6 +88,33 @@ function getPublisher(): Redis | null {
 	return publisher
 }
 
+type CacheInvalidationPublisher = CacheInvalidationPublisherReadiness &
+	Parameters<typeof publishCacheInvalidationEvent>[0]
+
+/** Require durable insertion and publication before reporting a repair complete. */
+export async function publishCacheInvalidationStrict(
+	did: string,
+	rkey: string,
+	action: 'updating' | 'update' | 'delete' | 'settings',
+	token?: string,
+	redis: CacheInvalidationPublisher | null = getPublisher(),
+): Promise<string> {
+	if (!redis) throw new Error('Cache invalidation requires Redis')
+	await waitForCacheInvalidationPublisherReady(redis, publisherReadyTimeoutMs)
+	const streamId = await publishCacheInvalidationEvent(
+		redis,
+		{ did, rkey, action, token },
+		DEFAULT_CACHE_INVALIDATION_CHANNEL,
+		config.cacheInvalidationStream,
+		config.cacheInvalidationStreamMaxLen,
+	)
+	if (!/^\d+-\d+$/.test(streamId)) throw new Error('Cache invalidation did not return a stream ID')
+	logger.debug(
+		`[CacheInvalidation] Publishing ${action} for ${did}/${rkey} to ${DEFAULT_CACHE_INVALIDATION_CHANNEL} (stream ${streamId})`,
+	)
+	return streamId
+}
+
 export async function publishCacheInvalidation(
 	did: string,
 	rkey: string,
@@ -96,19 +123,8 @@ export async function publishCacheInvalidation(
 ): Promise<void> {
 	const redis = getPublisher()
 	if (!redis) return
-
 	try {
-		await waitForCacheInvalidationPublisherReady(redis, publisherReadyTimeoutMs)
-		const streamId = await publishCacheInvalidationEvent(
-			redis,
-			{ did, rkey, action, token },
-			DEFAULT_CACHE_INVALIDATION_CHANNEL,
-			config.cacheInvalidationStream,
-			config.cacheInvalidationStreamMaxLen,
-		)
-		logger.debug(
-			`[CacheInvalidation] Publishing ${action} for ${did}/${rkey} to ${DEFAULT_CACHE_INVALIDATION_CHANNEL} (stream ${streamId})`,
-		)
+		await publishCacheInvalidationStrict(did, rkey, action, token, redis)
 	} catch (err) {
 		logger.error('[CacheInvalidation] Failed to publish', err)
 	}
@@ -199,7 +215,7 @@ export async function enqueueSiteRevalidationWithRedis(
 			return 'unavailable'
 		}
 		if (outcome.status === 0 && outcome.streamId) return 'deduplicated'
-		if (outcome.status === -2 && outcome.streamId) return 'quarantined'
+		if (outcome.status === -2) return 'quarantined'
 		if (outcome.status === 1 && outcome.streamId) {
 			logger.info(`[Revalidate] Enqueued ${did}/${rkey} after firehose failure`, { reason, streamId: outcome.streamId })
 			return 'enqueued'

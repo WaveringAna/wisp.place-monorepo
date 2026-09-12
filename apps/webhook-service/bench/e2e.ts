@@ -224,9 +224,9 @@ async function handleEvent(event: {
 
 	if (candidates.length === 0) return
 
-	const matched = matchWebhooks(candidates, did, collection, rkey, op as any, record ?? null)
+	const matched = matchWebhooks(candidates, did, collection, rkey, op, record ?? null)
 	for (const entry of matched) {
-		await deliverWebhook(entry, did, collection, rkey, op as any, cid, record)
+		await deliverWebhook(entry, did, collection, rkey, op, cid, record)
 	}
 	// Legacy deliverWebhook enqueues. Drain it deterministically so this bench
 	// proves local registration and actual delivery, not only outbox insertion.
@@ -284,7 +284,9 @@ async function run() {
 	const js = new JetstreamClient({
 		url: JETSTREAM_URL,
 		wantedDids: [session.did],
-		onEvent: handleEvent as any,
+		onEvents: async (events) => {
+			for (const event of events) await handleEvent(event)
+		},
 		onConnect: () => console.log('[jetstream] connected'),
 		onDisconnect: () => console.log('[jetstream] disconnected'),
 		onError: (err) => console.error('[jetstream] error:', err.message),

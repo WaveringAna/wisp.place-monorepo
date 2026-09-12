@@ -3,6 +3,7 @@ import { config } from '../config'
 import {
 	type CacheInvalidationPublisherReadiness,
 	enqueueSiteRevalidationWithRedis,
+	publishCacheInvalidationStrict,
 	type RevalidationQueueClient,
 	waitForCacheInvalidationPublisherReady,
 } from './cache-invalidation'
@@ -67,6 +68,48 @@ describe('cache invalidation publisher readiness', () => {
 	})
 })
 
+describe('strict cache invalidation', () => {
+	test('requires a configured publisher', async () => {
+		await expect(publishCacheInvalidationStrict(DID, RKEY, 'update', 'repair', null)).rejects.toThrow(
+			'Cache invalidation requires Redis',
+		)
+	})
+
+	test('returns an event ID only after both insertion and publication', async () => {
+		const calls: string[] = []
+		const redis = Object.assign(new FakePublisherReadiness(), {
+			status: 'ready',
+			xadd: async () => {
+				calls.push('insert')
+				return '123-0'
+			},
+			publish: async (_channel: string, message: string) => {
+				calls.push('publish')
+				expect(JSON.parse(message)).toMatchObject({ did: DID, rkey: RKEY, token: 'repair', streamId: '123-0' })
+				return 1
+			},
+		})
+		await expect(publishCacheInvalidationStrict(DID, RKEY, 'update', 'repair', redis)).resolves.toBe('123-0')
+		expect(calls).toEqual(['insert', 'publish'])
+	})
+
+	test.each(['insert', 'publish'])('propagates %s failure instead of claiming success', async (failure) => {
+		const redis = Object.assign(new FakePublisherReadiness(), {
+			status: 'ready',
+			xadd: async () => {
+				if (failure === 'insert') throw new Error('insert failed')
+				return '123-0'
+			},
+			publish: async () => {
+				throw new Error('publish failed')
+			},
+		})
+		await expect(publishCacheInvalidationStrict(DID, RKEY, 'update', 'repair', redis)).rejects.toThrow(
+			`${failure} failed`,
+		)
+	})
+})
+
 describe('enqueueSiteRevalidationWithRedis', () => {
 	test('uses one atomic script that proves dedupe against an existing stream ID', async () => {
 		const redis = new FakeQueue()
@@ -85,9 +128,9 @@ describe('enqueueSiteRevalidationWithRedis', () => {
 		])
 	})
 
-	test('does not recreate repair work while a DLQ fence exists', async () => {
+	test.each(['', '3mabc234567ab'])('does not recreate repair work behind quarantine fence %j', async (fence) => {
 		const redis = new FakeQueue()
-		redis.response = [-2, 'dlq-9']
+		redis.response = [-2, fence]
 		expect(await enqueueSiteRevalidationWithRedis(redis, DID, RKEY, 'storage-miss:index.html')).toBe('quarantined')
 		expect(redis.calls[0]?.args.slice(-2)[0]).toBe('1')
 	})

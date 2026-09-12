@@ -544,10 +544,9 @@ function abortReason(signal: AbortSignal): Error {
 }
 
 /**
- * Execute one lock-acquisition query with postgres.js cancellation. The query
- * starts only after the preflight check, and an abort rejects immediately even
- * when a minimal test seam does not expose `.cancel()`; the caller then closes
- * the reserved session instead of returning a possibly lock-owning connection.
+ * Execute a query with postgres.js cancellation. The query starts only after
+ * the preflight check, and abort rejects without waiting for cancellation.
+ * Lock-acquisition callers also retire the potentially lock-owning session.
  */
 function runCancellableLockQuery<T>(start: () => SiteWriteLockQuery<T>, signal?: AbortSignal): Promise<T> {
 	if (signal?.aborted) return Promise.reject(abortReason(signal))
@@ -1054,8 +1053,8 @@ export async function deleteSiteSettingsCache(did: string, rkey: string): Promis
 	await sql`DELETE FROM site_settings_cache WHERE did = ${did} AND rkey = ${rkey}`
 }
 
-export async function isSupporter(did: string): Promise<boolean> {
-	const rows = await sql`SELECT 1 FROM supporter WHERE did = ${did} LIMIT 1`
+export async function isSupporter(did: string, signal?: AbortSignal): Promise<boolean> {
+	const rows = await runCancellableLockQuery(() => sql`SELECT 1 FROM supporter WHERE did = ${did} LIMIT 1`, signal)
 	return rows.length > 0
 }
 
