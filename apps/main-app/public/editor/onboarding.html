@@ -89,10 +89,12 @@
             <label>Upload Files (Optional)</label>
             <div class="upload-zone mb-1" id="uploadZone">
                 <p>📤</p>
-                <p class="mb-2">Choose Folder</p>
+                <p class="mb-2">Choose Files</p>
                 <p class="text-muted" id="fileCount"></p>
             </div>
-            <input type="file" id="fileInput" multiple webkitdirectory directory class="hidden">
+            <input type="file" id="fileInput" multiple class="hidden">
+            <input type="file" id="folderInput" multiple webkitdirectory directory class="hidden">
+            <button type="button" id="folderBtn" class="outline mb-2">Choose a Folder</button>
             <p class="text-muted mb-2">Supported: HTML, CSS, JS, images, fonts, and more</p>
             <p class="text-muted mb-4">Limits: 200MB per file, 300MB total</p>
 
@@ -138,6 +140,8 @@
         const siteNameInput = document.getElementById('siteName');
         const uploadZone = document.getElementById('uploadZone');
         const fileInput = document.getElementById('fileInput');
+        const folderInput = document.getElementById('folderInput');
+        const folderBtn = document.getElementById('folderBtn');
         const fileCount = document.getElementById('fileCount');
         const uploadProgress = document.getElementById('uploadProgress');
         const progressText = document.getElementById('progressText');
@@ -228,14 +232,19 @@
         });
 
         // Upload zone
-        uploadZone.addEventListener('click', () => fileInput.click());
-        fileInput.addEventListener('change', (e) => {
-            state.files = e.target.files;
-            if (state.files && state.files.length > 0) {
+        function selectFiles(input) {
+            state.files = Array.from(input.files);
+            input.value = '';
+            if (state.files.length > 0) {
                 fileCount.textContent = `${state.files.length} files selected`;
                 uploadBtn.textContent = 'Upload & Deploy';
             }
-        });
+        }
+
+        uploadZone.addEventListener('click', () => fileInput.click());
+        folderBtn.addEventListener('click', () => folderInput.click());
+        fileInput.addEventListener('change', (e) => selectFiles(e.target));
+        folderInput.addEventListener('change', (e) => selectFiles(e.target));
 
         // Site name
         siteNameInput.addEventListener('input', (e) => {
@@ -276,6 +285,17 @@
             });
         }
 
+        function rootedUploadPaths(files) {
+            const paths = Array.from(files, (file) => file.webkitRelativePath || file.name);
+            const firstSeparator = paths[0]?.indexOf('/') ?? -1;
+            if (firstSeparator < 1) return paths;
+
+            const root = paths[0].slice(0, firstSeparator + 1);
+            return paths.every((path) => path.startsWith(root))
+                ? paths.map((path) => path.slice(root.length))
+                : paths;
+        }
+
         // Upload
         uploadBtn.addEventListener('click', async () => {
             if (!state.siteName) return;
@@ -290,8 +310,9 @@
                 formData.append('siteName', state.siteName);
 
                 if (state.files) {
+                    const paths = rootedUploadPaths(state.files);
                     for (let i = 0; i < state.files.length; i++) {
-                        formData.append('files', state.files[i]);
+                        formData.append('files', state.files[i], paths[i]);
                     }
                 }
 

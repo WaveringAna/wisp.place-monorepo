@@ -4,6 +4,7 @@ import { Label } from '@public/components/ui/label'
 import { AlertCircle, CheckCircle2, ChevronDown, ChevronUp, Loader2, RefreshCw, Upload, XCircle } from 'lucide-react'
 import { type ChangeEvent, memo, useEffect, useRef, useState } from 'react'
 import type { SiteWithDomains } from '../hooks/useSiteData'
+import { rootedUploadPaths } from '../upload-paths'
 
 type FileStatus = 'pending' | 'checking' | 'uploading' | 'uploaded' | 'reused' | 'failed'
 
@@ -26,7 +27,7 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 	const [newSiteName, setNewSiteName] = useState('')
 	const [privateExpiryMode, setPrivateExpiryMode] = useState<'default' | 'never' | 'custom'>('default')
 	const [privateExpiryMinutes, setPrivateExpiryMinutes] = useState('')
-	const [selectedFiles, setSelectedFiles] = useState<FileList | null>(null)
+	const [selectedFiles, setSelectedFiles] = useState<File[]>([])
 	const [isUploading, setIsUploading] = useState(false)
 	const [uploadProgress, setUploadProgress] = useState('')
 	const [skippedFiles, setSkippedFiles] = useState<Array<{ name: string; reason: string }>>([])
@@ -63,7 +64,8 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 
 	const handleFileSelect = (e: ChangeEvent<HTMLInputElement>) => {
 		if (e.target.files && e.target.files.length > 0) {
-			setSelectedFiles(e.target.files)
+			setSelectedFiles(Array.from(e.target.files))
+			e.target.value = ''
 		}
 	}
 
@@ -139,12 +141,7 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 			}
 		}
 
-		if (allFiles.length > 0) {
-			// Create a DataTransfer to build a FileList
-			const dataTransfer = new DataTransfer()
-			for (const file of allFiles) dataTransfer.items.add(file)
-			setSelectedFiles(dataTransfer.files)
-		}
+		if (allFiles.length > 0) setSelectedFiles(allFiles)
 	}
 
 	const handleDragOver = (e: React.DragEvent<HTMLButtonElement>) => {
@@ -303,7 +300,7 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 
 			setSelectedSiteRkey('')
 			setNewSiteName('')
-			setSelectedFiles(null)
+			setSelectedFiles([])
 
 			// Refresh sites list
 			onUploadComplete()
@@ -351,7 +348,7 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 			alert(siteMode === 'existing' ? 'Please select a site' : 'Please enter a site name')
 			return
 		}
-		if (siteMode === 'private' && (!selectedFiles || selectedFiles.length === 0)) {
+		if (siteMode === 'private' && selectedFiles.length === 0) {
 			alert('Please choose at least one file for the private site')
 			return
 		}
@@ -374,12 +371,9 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 				}
 			}
 
-			if (selectedFiles) {
-				for (let i = 0; i < selectedFiles.length; i++) {
-					const file = selectedFiles[i]
-					const path = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
-					formData.append('files', file, path)
-				}
+			const paths = rootedUploadPaths(selectedFiles)
+			for (let index = 0; index < selectedFiles.length; index++) {
+				formData.append('files', selectedFiles[index]!, paths[index]!)
 			}
 
 			if (siteMode === 'private') {
@@ -395,7 +389,7 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 
 				setUploadProgress('Private site created!')
 				setNewSiteName('')
-				setSelectedFiles(null)
+				setSelectedFiles([])
 				setPrivateExpiryMode('default')
 				setPrivateExpiryMinutes('')
 				await onUploadComplete()
@@ -407,7 +401,7 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 			}
 
 			// If no files, handle synchronously (old behavior)
-			if (!selectedFiles || selectedFiles.length === 0) {
+			if (selectedFiles.length === 0) {
 				setUploadProgress('Creating empty site...')
 				const response = await fetch('/wisp/upload-files', {
 					method: 'POST',
@@ -419,7 +413,7 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 					setUploadProgress('Site created!')
 					setSelectedSiteRkey('')
 					setNewSiteName('')
-					setSelectedFiles(null)
+					setSelectedFiles([])
 
 					await onUploadComplete()
 
@@ -614,22 +608,40 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 					<span className="text-sm text-muted-foreground flex-1">
 						{isDragging ? (
 							'Drop here...'
-						) : selectedFiles && selectedFiles.length > 0 ? (
+						) : selectedFiles.length > 0 ? (
 							<span className="text-accent font-medium">{selectedFiles.length} files selected</span>
 						) : (
-							'Drop a folder or click to choose'
+							'Drop files or a folder, or click to choose files'
 						)}
 					</span>
-					<input
-						type="file"
-						id="file-upload"
-						multiple
-						onChange={handleFileSelect}
-						className="hidden"
-						{...({ webkitdirectory: '', directory: '' } as any)}
-						disabled={isUploading}
-					/>
 				</button>
+				<input
+					type="file"
+					id="file-upload"
+					multiple
+					onChange={handleFileSelect}
+					className="hidden"
+					disabled={isUploading}
+				/>
+				<input
+					type="file"
+					id="folder-upload"
+					multiple
+					onChange={handleFileSelect}
+					className="hidden"
+					{...({ webkitdirectory: '', directory: '' } as any)}
+					disabled={isUploading}
+				/>
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					className="w-full"
+					onClick={() => document.getElementById('folder-upload')?.click()}
+					disabled={isUploading}
+				>
+					Choose a folder
+				</Button>
 
 				{/* Progress */}
 				{uploadProgress && (
@@ -735,7 +747,7 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 					disabled={
 						(siteMode === 'existing' ? !selectedSiteRkey : !newSiteName) ||
 						isUploading ||
-						((siteMode === 'existing' || siteMode === 'private') && (!selectedFiles || selectedFiles.length === 0)) ||
+						((siteMode === 'existing' || siteMode === 'private') && selectedFiles.length === 0) ||
 						(siteMode === 'private' && privateExpiryMode === 'custom' && !privateExpiryMinutes)
 					}
 				>
@@ -748,7 +760,7 @@ export const UploadTab = memo(function UploadTab({ sites, sitesLoading, onUpload
 						'Update Site'
 					) : siteMode === 'private' ? (
 						'Upload privately'
-					) : selectedFiles && selectedFiles.length > 0 ? (
+					) : selectedFiles.length > 0 ? (
 						'Upload & Deploy'
 					) : (
 						'Create Empty Site'
