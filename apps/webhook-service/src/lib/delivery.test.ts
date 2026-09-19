@@ -200,6 +200,34 @@ describe('durable normalized webhook fanout', () => {
 		}
 	}
 
+	test('contains a connection refusal as a retryable delivery failure', async () => {
+		let claims = 0
+		const failures: Array<{ errorKind: string; deadLetter: boolean }> = []
+		const persistence = workerPersistence(async () => (claims++ === 0 ? [claimedRow()] : []), {
+			rescheduleWebhookDelivery: async (_deliveryId, _leaseToken, failure) => {
+				failures.push({ errorKind: failure.errorKind, deadLetter: failure.deadLetter })
+				return true
+			},
+		})
+		const refusal = new Error('connect ECONNREFUSED') as Error & { code: string }
+		refusal.code = 'ECONNREFUSED'
+		const worker = new WebhookDeliveryWorker({
+			concurrency: 1,
+			batchSize: 1,
+			maxAttempts: 2,
+			resolver: async () => [{ address: '8.8.8.8', family: 4 }],
+			transport: async () => {
+				throw refusal
+			},
+			persistence,
+		})
+
+		expect(await worker.runOnce()).toBe(1)
+		expect(failures).toEqual([{ errorKind: 'network', deadLetter: false }])
+		// The rejected transport was contained; the same worker can run another pass.
+		expect(await worker.runOnce()).toBe(0)
+	})
+
 	test('aborts a hung pinned attempt before shutdown returns and leaves its lease for reclaim', async () => {
 		const transportStarted = deferred<void>()
 		let aborted = false

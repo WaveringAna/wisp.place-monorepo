@@ -91,6 +91,25 @@ describe('identity fetch injection and document validation', () => {
 })
 
 describe('pinned identity transport', () => {
+	test('contains an immediate connection refusal as a request failure', async () => {
+		const previousNodeEnv = process.env.NODE_ENV
+		const previousLocalhostGate = process.env.WISP_ALLOW_LOCALHOST_FETCH
+		const listener = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response('unused') })
+		const port = listener.port
+		listener.stop(true)
+		process.env.NODE_ENV = 'development'
+		process.env.WISP_ALLOW_LOCALHOST_FETCH = '1'
+		try {
+			const fetcher = createPinnedIdentityFetcher({ allowLoopback: true, timeoutMs: 1_000 })
+			await expect(fetcher(`http://localhost:${port}/did.json`)).rejects.toThrow('Identity request failed')
+		} finally {
+			if (previousNodeEnv === undefined) delete process.env.NODE_ENV
+			else process.env.NODE_ENV = previousNodeEnv
+			if (previousLocalhostGate === undefined) delete process.env.WISP_ALLOW_LOCALHOST_FETCH
+			else process.env.WISP_ALLOW_LOCALHOST_FETCH = previousLocalhostGate
+		}
+	})
+
 	test('rejects mixed DNS answers before any socket transport is called', async () => {
 		let calls = 0
 		const fetcher = createPinnedIdentityFetcher({

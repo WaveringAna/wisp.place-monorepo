@@ -329,10 +329,14 @@ const pinnedTransport: PinnedIdentityTransport = async ({ url, address, signal, 
 				servername:
 					url.protocol === 'https:' && isIP(hostname(url.hostname)) === 0 ? hostname(url.hostname) : undefined,
 				// This lookup is the connection path, not merely a preflight check.
-				lookup: (_name, options, callback) =>
-					options.all
-						? callback(null, [{ address: address.address, family: address.family }])
-						: callback(null, address.address, address.family),
+				// Bun may connect inline when a custom lookup resolves synchronously.
+				// Defer it until the request error listener below is attached.
+				lookup: (_name, options, callback) => {
+					queueMicrotask(() => {
+						if (options.all) callback(null, [{ address: address.address, family: address.family }])
+						else callback(null, address.address, address.family)
+					})
+				},
 			},
 			(response) => {
 				incoming = response
@@ -358,7 +362,9 @@ const pinnedTransport: PinnedIdentityTransport = async ({ url, address, signal, 
 		}
 		if (signal.aborted) abort()
 		else signal.addEventListener('abort', abort, { once: true })
-		request.once('error', () => {
+		// Keep the listener for the request lifetime. Refusal and teardown can
+		// produce more than one error, and none may escape the owning promise.
+		request.on('error', () => {
 			signal.removeEventListener('abort', abort)
 			reject(new Error('Identity request failed'))
 		})
