@@ -33,6 +33,8 @@ const BINARIES = [
 	},
 ] as const
 
+const LINUX_X86_64_SHA256 = BINARIES.find(({ filename }) => filename === 'wisp-cli-x86_64-linux')?.sha256
+
 const LINKS = [
 	{ label: 'Docs', href: 'https://docs.wisp.place/cli' },
 	{
@@ -117,6 +119,9 @@ export const CLITab = memo(function CLITab() {
 							</a>
 						))}
 					</div>
+					<p className="text-[10px] text-muted-foreground mt-2">
+						Verify the displayed SHA-256 checksum before running a downloaded binary.
+					</p>
 				</div>
 
 				{/* Commands */}
@@ -204,7 +209,8 @@ export const CLITab = memo(function CLITab() {
 									code={`steps:
   - name: deploy to wisp
     command: |
-      curl ${BASE_URL}/wisp-cli-x86_64-linux -o wisp-cli
+      curl -fL ${BASE_URL}/wisp-cli-x86_64-linux -o wisp-cli
+      printf '%s  %s\n' '${LINUX_X86_64_SHA256}' wisp-cli | sha256sum -c -
       chmod +x wisp-cli
       ./wisp-cli deploy "$WISP_HANDLE" \\
         --path "$SITE_PATH" \\
@@ -238,7 +244,8 @@ steps:
       bun node_modules/.bin/vite build
   - name: deploy
     command: |
-      curl ${BASE_URL}/wisp-cli-x86_64-linux -o wisp-cli
+      curl -fL ${BASE_URL}/wisp-cli-x86_64-linux -o wisp-cli
+      printf '%s  %s\n' '${LINUX_X86_64_SHA256}' wisp-cli | sha256sum -c -
       chmod +x wisp-cli
       ./wisp-cli deploy "$WISP_HANDLE" \\
         --path "$SITE_PATH" \\
