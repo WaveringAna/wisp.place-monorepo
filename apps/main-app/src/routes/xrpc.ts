@@ -582,6 +582,16 @@ const deleteSiteForDid = async (did: DidString, input: { siteRkey: string }) => 
 export const xrpcRoutes = () => {
 	const authByRequest = new WeakMap<Request, XrpcAuthContext>()
 	const router = new XRPCRouter()
+	// Every method actually registered, aliases included, so request logging can
+	// tell our own 404s from probes for methods we never serve.
+	const servedNsids = new Set<string>()
+	for (const method of ['addQuery', 'addProcedure'] as const) {
+		const register = router[method].bind(router) as (schema: { nsid: string }, config: unknown) => void
+		;(router as any)[method] = (schema: { nsid: string }, config: unknown) => {
+			servedNsids.add(schema.nsid)
+			register(schema, config)
+		}
+	}
 	const registeredNsids = [
 		XRPC_NSIDS.addSite,
 		XRPC_NSIDS.getStatus,
@@ -997,14 +1007,16 @@ export const xrpcRoutes = () => {
 			const authorization = xrpcRequest.headers.get('authorization')
 			const origin = xrpcRequest.headers.get('origin') ?? '-'
 			const authScheme = authorization ? authorization.split(' ')[0] : '-'
-			logger.info('[XRPC] Incoming', {
-				method: xrpcRequest.method,
-				rawNsid,
-				nsid,
-				origin,
-				hasAuth: Boolean(authorization),
-				scheme: authScheme,
-			})
+			if (servedNsids.has(nsid)) {
+				logger.info('[XRPC] Incoming', {
+					method: xrpcRequest.method,
+					rawNsid,
+					nsid,
+					origin,
+					hasAuth: Boolean(authorization),
+					scheme: authScheme,
+				})
+			}
 			if (isLocalDev) {
 				console.log('[XRPC] Incoming', {
 					method: xrpcRequest.method,
@@ -1023,7 +1035,14 @@ export const xrpcRoutes = () => {
 
 			const response = await router.fetch(xrpcRequest)
 
-			if (!response.ok) {
+			// Relays and crawlers probe wisp.place as if it were a PDS (for example
+			// com.atproto.sync.subscribeRepos). A 404 for a method we never serve is
+			// expected traffic, not a failure worth a warning.
+			const unservedMethod = response.status === 404 && !servedNsids.has(nsid)
+
+			if (unservedMethod) {
+				// Intentionally quiet; the metrics middleware still counts the 404.
+			} else if (!response.ok) {
 				let responseData: unknown
 				try {
 					responseData = await response.clone().json()

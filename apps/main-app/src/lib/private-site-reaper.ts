@@ -15,6 +15,17 @@ const errorKind = (error: unknown): string => {
 }
 
 /**
+ * Bun's SQL client raises PostgresError both for server errors (SQLSTATE, e.g.
+ * `40P01`) and for client-side failures (e.g. `ERR_POSTGRES_CONNECTION_CLOSED`),
+ * so the class alone cannot tell a dropped connection from a bad query. Only a
+ * short code-shaped value is logged; messages can echo query text.
+ */
+export const errorCode = (error: unknown): string | undefined => {
+	const code = (error as { code?: unknown } | null)?.code
+	return typeof code === 'string' && /^[A-Z0-9_]{1,64}$/.test(code) ? code : undefined
+}
+
+/**
  * Claims work in the primary database before deleting objects. A failed pass
  * deliberately leaves a `deleting` row, which is invisible to every serving
  * query and becomes eligible again after the claim lease expires.
@@ -35,6 +46,7 @@ export const reapExpiredPrivateSites = async (): Promise<{ sites: number; files:
 				logger.error('[PrivateSite] Failed to reap private site', undefined, {
 					siteId,
 					errorKind: errorKind(error),
+					errorCode: errorCode(error),
 				}),
 		)
 		sites = result.sites
@@ -44,7 +56,10 @@ export const reapExpiredPrivateSites = async (): Promise<{ sites: number; files:
 			logger.info('[PrivateSite] Reaped private sites', { sites, files })
 		}
 	} catch (error) {
-		logger.error('[PrivateSite] Reaper pass failed', undefined, { errorKind: errorKind(error) })
+		logger.error('[PrivateSite] Reaper pass failed', undefined, {
+			errorKind: errorKind(error),
+			errorCode: errorCode(error),
+		})
 	}
 
 	return { sites, files }

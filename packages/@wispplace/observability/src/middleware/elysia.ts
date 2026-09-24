@@ -40,7 +40,11 @@ export function observabilityMiddleware(service: string) {
 			const startTime = (request as any).__startTime || Date.now()
 			const duration = Date.now() - startTime
 			const url = new URL(request.url)
-			const statusCode = normalizeStatus(set.status, 500)
+			// Elysia has not applied the error's status to `set` yet (an unmatched
+			// route still reads 200 here), so prefer the status the error carries.
+			const errorStatus = normalizeStatus((error as { status?: unknown } | undefined)?.status, 0)
+			const setStatus = normalizeStatus(set.status, 0)
+			const statusCode = errorStatus >= 400 ? errorStatus : setStatus >= 400 ? setStatus : 500
 
 			metricsCollector.recordRequest(
 				route || redactSecretPath(url.pathname),
