@@ -262,8 +262,8 @@ REDIS_URL="rediss://redis.example:6379"
 # HOSTING_ALLOW_DISK_SOURCE=true
 
 # Optional
-# Disable hosting analytics database writes. Site serving is read-only either way.
-CACHE_ONLY=true
+# Hosting only reads the database; DATABASE_READ_URL is preferred over DATABASE_URL.
+# Per-site traffic is exported as the site_requests_total metric (set GRAFANA_PROMETHEUS_URL).
 # Missing manifests/files enqueue firehose revalidation; they never trigger PDS reads here.
 TRACE_REQUESTS=false
 ```

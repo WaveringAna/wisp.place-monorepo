@@ -12,7 +12,7 @@ import type { CompressionAlgorithm } from '@opentelemetry/otlp-exporter-base'
 import { resourceFromAttributes } from '@opentelemetry/resources'
 import { PeriodicExportingMetricReader, MeterProvider as SdkMeterProvider } from '@opentelemetry/sdk-metrics'
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions'
-import type { ErrorEntry, LogEntry, MetricEntry } from './core'
+import type { ErrorEntry, LogEntry, MetricEntry, SiteRequestEntry } from './core'
 import { sanitizeContext, sanitizeForLog, sanitizeLogString } from './redact'
 
 // ============================================================================
@@ -370,6 +370,7 @@ class MetricsExporter {
 	private requestCounter?: Counter
 	private requestDuration?: Histogram
 	private errorCounter?: Counter
+	private siteRequestCounter?: Counter
 	private serviceInfo?: ObservableGauge
 	private shutdownPromise?: Promise<void>
 	private config: GrafanaConfig = {}
@@ -433,6 +434,12 @@ class MetricsExporter {
 			description: 'Total number of errors',
 		})
 
+		// Per-site traffic. Labels are bounded by the number of hosted sites, so
+		// keep them to identity plus coarse status; never add path or host here.
+		this.siteRequestCounter = meter.createCounter('site_requests_total', {
+			description: 'Requests served for a hosted site',
+		})
+
 		this.serviceInfo = meter.createObservableGauge('service_instance_info', {
 			description: 'Service instance presence',
 		})
@@ -476,6 +483,17 @@ class MetricsExporter {
 		if (entry.statusCode >= 400) {
 			this.errorCounter?.add(1, attributes)
 		}
+	}
+
+	recordSiteRequest(entry: SiteRequestEntry) {
+		if (!this.config.enabled) return
+
+		this.siteRequestCounter?.add(1, {
+			did: entry.ownerDid,
+			site: entry.siteRkey,
+			status_class: entry.statusClass,
+			html: entry.html ? 'true' : 'false',
+		})
 	}
 
 	async shutdown(): Promise<void> {

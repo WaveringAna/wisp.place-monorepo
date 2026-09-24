@@ -222,7 +222,6 @@ mock.module('./db', () => ({
 				}
 			: null,
 	getSiteSettingsCache: async () => null,
-	CACHE_ONLY: true,
 }))
 mock.module('./utils', () => ({
 	getCachedSettings: async () => null,

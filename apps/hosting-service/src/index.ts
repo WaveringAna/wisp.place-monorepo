@@ -5,7 +5,6 @@ import { cache } from './lib/cache-manager'
 import { closeDatabase } from './lib/db'
 import { closePrivateSitesDatabase } from './lib/private-sites-db'
 import { closeRevalidateQueue } from './lib/revalidate-queue'
-import { siteAnalytics } from './lib/site-analytics'
 import { getStorageConfig, storage } from './lib/storage'
 import app from './server'
 import { onceAsync, stopHttpServerWithGrace } from './shutdown'
@@ -41,7 +40,6 @@ if (!existsSync(CACHE_DIR)) {
 
 // Start in-memory cache cleanup
 cache.startCleanup()
-siteAnalytics.start()
 
 // Start cache invalidation subscriber (listens for firehose-service updates via Redis pub/sub)
 startCacheInvalidationSubscriber()
@@ -101,7 +99,6 @@ const shutdown = onceAsync(async (signal: 'SIGINT' | 'SIGTERM') => {
 	const tasks = [
 		{ name: 'cache invalidation subscriber', promise: stopCacheInvalidationSubscriber() },
 		{ name: 'revalidation queue', promise: closeRevalidateQueue() },
-		{ name: 'analytics', promise: siteAnalytics.stop() },
 	]
 	const results = await Promise.allSettled(tasks.map(({ promise }) => promise))
 

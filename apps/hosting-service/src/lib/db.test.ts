@@ -2,19 +2,14 @@ import { describe, expect, test } from 'bun:test'
 import { type ClosableDatabasePool, createDatabasePoolCloser } from './db'
 
 describe('database pool closer', () => {
-	test('closes separate read and write pools once across repeated calls', async () => {
-		const calls: string[] = []
-		const readPool: ClosableDatabasePool = {
+	test('ends the pool once across repeated calls', async () => {
+		let endCalls = 0
+		const pool: ClosableDatabasePool = {
 			async end() {
-				calls.push('read')
+				endCalls++
 			},
 		}
-		const writePool: ClosableDatabasePool = {
-			async end() {
-				calls.push('write')
-			},
-		}
-		const close = createDatabasePoolCloser(readPool, writePool)
+		const close = createDatabasePoolCloser(pool)
 
 		const firstClose = close()
 		const secondClose = close()
@@ -22,18 +17,18 @@ describe('database pool closer', () => {
 		await Promise.all([firstClose, secondClose])
 		await close()
 
-		expect(calls.sort()).toEqual(['read', 'write'])
+		expect(endCalls).toBe(1)
 	})
 
-	test('does not end a shared read/write pool twice', async () => {
-		let endCalls = 0
-		const sharedPool: ClosableDatabasePool = {
+	test('reports a failed close instead of throwing', async () => {
+		let reported = 0
+		const pool: ClosableDatabasePool = {
 			async end() {
-				endCalls++
+				throw new Error('boom')
 			},
 		}
 
-		await createDatabasePoolCloser(sharedPool, sharedPool)()
-		expect(endCalls).toBe(1)
+		await createDatabasePoolCloser(pool, () => reported++)()
+		expect(reported).toBe(1)
 	})
 })

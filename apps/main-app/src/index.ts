@@ -17,7 +17,6 @@ import {
 	getDatabaseReadHealth,
 	getWebhookSecretEncryptionHealth,
 	hasSeparateDatabaseReadPool,
-	pruneAnalyticsData,
 	warmPrimaryConnections,
 } from './lib/db'
 import { type DNSVerificationLogLevel, DNSVerificationWorker } from './lib/dns-verification-worker'
@@ -107,7 +106,6 @@ const runMaintenance = async (): Promise<void> => {
 	await rotateKeysIfNeeded()
 	await pruneHandoffs()
 	await pruneSessions()
-	await pruneAnalyticsData()
 }
 
 const maintenance = startPeriodicSingleFlightTask(runMaintenance, 60 * 60 * 1000, () =>

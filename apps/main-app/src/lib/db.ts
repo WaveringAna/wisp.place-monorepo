@@ -297,13 +297,6 @@ export const eventualRead = {
 /** Sanitized read-endpoint health; this never includes a connection URL. */
 export const getDatabaseReadHealth = async () => await databaseReadCircuit.health()
 
-export const pruneAnalyticsData = async (): Promise<void> => {
-	await Promise.all([
-		db`DELETE FROM site_analytics_hourly WHERE bucket_start < NOW() - INTERVAL '90 days'`,
-		db`DELETE FROM analytics_ingest_batches WHERE received_at < NOW() - INTERVAL '7 days'`,
-	])
-}
-
 // These shared helpers intentionally keep their historic strong/primary semantics.
 export const getDomainByDid = primaryPresentationRead.getDomainByDid
 // Includes cache/configuration metadata that the replica role cannot access.

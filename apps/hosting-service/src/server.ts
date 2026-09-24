@@ -15,18 +15,18 @@ import { getCustomDomain, getCustomDomainByHash, getWispDomain } from './lib/db'
 import { serveFromCache, serveFromCacheWithRewrite } from './lib/file-serving'
 import { privateNotFound, servePrivateSite } from './lib/private-serving'
 import { decodeRequestPathname, extractHeaders, isValidRkey } from './lib/request-utils'
-import { siteAnalytics } from './lib/site-analytics'
+import { recordSiteResponse } from './lib/site-metrics'
 import { getStorageReadHealthSnapshot, type StorageReadHealthSnapshot } from './lib/storage'
 import { isValidAtprotoIdentifier, resolveDid } from './lib/utils'
 
 const logger = createLogger('hosting-service')
 
 function recordPublicSiteResponse(ownerDid: string, siteRkey: string, method: string, response: Response): void {
-	siteAnalytics.record(ownerDid, siteRkey, method, response.status, response.headers.get('content-type'))
+	recordSiteResponse(ownerDid, siteRkey, method, response.status, response.headers.get('content-type'))
 }
 
 function recordPublicSiteFailure(ownerDid: string, siteRkey: string, method: string): void {
-	siteAnalytics.record(ownerDid, siteRkey, method, 500, null)
+	recordSiteResponse(ownerDid, siteRkey, method, 500, null)
 }
 
 function trackPublicSiteResponse(

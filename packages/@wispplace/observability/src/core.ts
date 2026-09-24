@@ -41,6 +41,15 @@ export interface MetricEntry {
 	service: string
 }
 
+export type SiteStatusClass = '2xx' | '3xx' | '4xx' | '5xx'
+
+export interface SiteRequestEntry {
+	ownerDid: string
+	siteRkey: string
+	statusClass: SiteStatusClass
+	html: boolean
+}
+
 export interface LogFilter {
 	level?: string
 	service?: string
@@ -315,6 +324,11 @@ export const metricsCollector = {
 		if (metrics.length > MAX_METRICS) {
 			metrics.splice(MAX_METRICS)
 		}
+	},
+
+	/** Per-site traffic counter; exported only, not kept in the in-memory ring. */
+	recordSiteRequest(entry: SiteRequestEntry) {
+		metricsExporter.recordSiteRequest(entry)
 	},
 
 	getMetrics(filter?: MetricFilter) {
