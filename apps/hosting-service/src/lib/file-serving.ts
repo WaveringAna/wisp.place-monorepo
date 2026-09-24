@@ -384,6 +384,9 @@ async function getExpectedFileCidsForSite(
 ): Promise<Record<string, string> | null> {
 	const siteCache = await span(trace, 'db:siteCache', () => getSiteCache(did, rkey))
 	if (!siteCache) return null
+	// The owner's PDS confirmed the record is gone: serve it like a deleted site
+	// (an empty manifest, so every path 404s) while the files await the sweeper.
+	if (siteCache.absent_since !== null && siteCache.absent_since !== undefined) return {}
 	return normalizeFileCids(siteCache.file_cids).value
 }
 

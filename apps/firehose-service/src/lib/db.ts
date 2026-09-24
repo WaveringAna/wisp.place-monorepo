@@ -971,13 +971,60 @@ export async function upsertSiteCache(
         record_cid = EXCLUDED.record_cid,
         file_cids = EXCLUDED.file_cids,
         updated_at = EXTRACT(EPOCH FROM NOW()),
-        cold_synced = EXCLUDED.cold_synced
+        cold_synced = EXCLUDED.cold_synced,
+        absent_since = NULL,
+        absent_checks = 0
     `
 		logger.debug(`[DB] upsertSiteCache completed for ${did}/${rkey}`)
 	} catch (err) {
 		logger.error('[DB] upsertSiteCache error', err, { did, rkey })
 		throw err
 	}
+}
+
+export interface AbsentSiteMark {
+	did: string
+	rkey: string
+	absent_since: number
+	absent_checks: number
+}
+
+/**
+ * Record one confirmed `RecordNotFound` for a cached site. The first mark
+ * stops hosting from serving it; files stay until the sweeper's grace period
+ * passes. Deleted tombstone rows are never marked. Returns null when there is
+ * no live row to mark.
+ */
+export async function markSiteAbsent(did: string, rkey: string): Promise<AbsentSiteMark | null> {
+	const rows = await sql<AbsentSiteMark[]>`
+      UPDATE site_cache
+      SET absent_since = COALESCE(absent_since, EXTRACT(EPOCH FROM NOW())::bigint),
+          absent_checks = absent_checks + 1
+      WHERE did = ${did} AND rkey = ${rkey} AND record_cid <> ${DELETED_SITE_RECORD_CID}
+      RETURNING did, rkey, absent_since, absent_checks
+    `
+	return rows[0] ?? null
+}
+
+/** The record is back: serve the cached site again. */
+export async function clearSiteAbsent(did: string, rkey: string): Promise<boolean> {
+	const rows = await sql`
+      UPDATE site_cache SET absent_since = NULL, absent_checks = 0
+      WHERE did = ${did} AND rkey = ${rkey} AND absent_since IS NOT NULL
+      RETURNING did
+    `
+	return rows.length > 0
+}
+
+/** Marked sites, oldest first, for the absent-site sweeper. */
+export async function listAbsentSites(limit: number): Promise<AbsentSiteMark[]> {
+	return await sql<AbsentSiteMark[]>`
+      SELECT did, rkey, absent_since, absent_checks
+      FROM site_cache
+      WHERE absent_since IS NOT NULL AND record_cid <> ${DELETED_SITE_RECORD_CID}
+      ORDER BY absent_since ASC
+      LIMIT ${limit}
+    `
 }
 
 /** Keep an empty durable manifest so hosting can distinguish a confirmed delete from a projection/storage outage. */

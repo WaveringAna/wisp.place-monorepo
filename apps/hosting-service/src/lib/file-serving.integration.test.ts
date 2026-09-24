@@ -47,6 +47,7 @@ let evictPublicCacheKeyStarted: (() => void) | null = null
 let legacyMetadataHealResult: boolean | Error = true
 const legacyMetadataHealCalls: Array<{ key: string; checksum: string; sourceCid: string }> = []
 let siteFileCids: Record<string, string> | null = null
+let siteAbsentSince: number | null = null
 let gatedStorageReadKey: string | null = null
 let gatedStorageReadStarted: (() => void) | null = null
 let gatedStorageReadGate: Promise<void> | null = null
@@ -219,6 +220,7 @@ mock.module('./db', () => ({
 					file_cids: siteFileCids,
 					cached_at: 0,
 					updated_at: 0,
+					absent_since: siteAbsentSince,
 				}
 			: null,
 	getSiteSettingsCache: async () => null,
@@ -314,6 +316,7 @@ function resetServingState() {
 	legacyMetadataHealResult = true
 	legacyMetadataHealCalls.length = 0
 	siteFileCids = null
+	siteAbsentSince = null
 	gatedStorageReadKey = null
 	gatedStorageReadStarted = null
 	gatedStorageReadGate = null
@@ -390,6 +393,20 @@ describe('serveFileInternal directory-index fallback for extensioned paths', () 
 
 		expect(response.status).toBe(404)
 		expect(await response.text()).toContain('visible.txt')
+	})
+
+	test('serves a site marked absent like a deleted one, without leaking its files', async () => {
+		siteFileCids = { 'visible.txt': 'visible-cid' }
+		siteAbsentSince = 1_790_000_000
+
+		const response = await serveFileInternal(DID, RKEY, 'missing.md', {
+			$type: 'place.wisp.settings',
+			directoryListing: true,
+			cleanUrls: false,
+		})
+
+		expect(response.status).toBe(404)
+		expect(await response.text()).not.toContain('visible.txt')
 	})
 
 	test('does not re-probe failed direct and index candidates after directory fallback', async () => {

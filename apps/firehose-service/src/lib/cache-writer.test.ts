@@ -95,12 +95,22 @@ function storageMetadata(customMetadata: Record<string, string>): StorageMetadat
 }
 
 describe('PDS getRecord absence responses', () => {
-	test('accepts the ATProto RecordNotFound XRPC error as authoritative absence', async () => {
+	test('accepts the PDS HTTP 400 RecordNotFound as confirmed absence', async () => {
 		const response = new Response(JSON.stringify({ error: 'RecordNotFound', message: 'not found' }), {
 			status: 400,
 			headers: { 'content-type': 'application/json' },
 		})
-		expect(await readPdsRecordJsonResponse(response)).toEqual({ kind: 'absent' })
+		expect(await readPdsRecordJsonResponse(response)).toEqual({ kind: 'absent', confirmed: true })
+	})
+
+	test('keeps a deactivated or taken-down repo retryable, not absent', async () => {
+		for (const error of ['RepoDeactivated', 'RepoTakendown', 'RepoNotFound']) {
+			const response = new Response(JSON.stringify({ error }), {
+				status: 400,
+				headers: { 'content-type': 'application/json' },
+			})
+			await expect(readPdsRecordJsonResponse(response)).rejects.toMatchObject({ status: 400 })
+		}
 	})
 
 	test('keeps an unrelated HTTP 400 retryable', async () => {
@@ -111,8 +121,16 @@ describe('PDS getRecord absence responses', () => {
 		await expect(readPdsRecordJsonResponse(response)).rejects.toMatchObject({ status: 400 })
 	})
 
-	test('accepts a gateway HTTP 404 as authoritative absence', async () => {
-		expect(await readPdsRecordJsonResponse(new Response(null, { status: 404 }))).toEqual({ kind: 'absent' })
+	test('treats a bare gateway HTTP 404 as unconfirmed absence', async () => {
+		expect(await readPdsRecordJsonResponse(new Response(null, { status: 404 }))).toEqual({
+			kind: 'absent',
+			confirmed: false,
+		})
+	})
+
+	test('confirms a 404 that carries the RecordNotFound body', async () => {
+		const response = new Response(JSON.stringify({ error: 'RecordNotFound' }), { status: 404 })
+		expect(await readPdsRecordJsonResponse(response)).toEqual({ kind: 'absent', confirmed: true })
 	})
 
 	test('returns a successful bounded JSON response', async () => {

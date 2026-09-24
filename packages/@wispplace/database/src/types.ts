@@ -72,6 +72,9 @@ export interface SiteCache {
 	// source of truth and the firehose must do a full (re)download rather than
 	// trusting record_cid/file_cids as a proxy for "already in S3".
 	cold_synced?: boolean
+	// Epoch seconds when the owner's PDS first confirmed RecordNotFound for this
+	// site. Non-null means hosting must not serve it (see the absent-site sweeper).
+	absent_since?: number | string | null
 }
 
 /**

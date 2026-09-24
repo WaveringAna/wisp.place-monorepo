@@ -176,34 +176,35 @@ const pdsRequestOptions = allowDevLocalPdsFetch ? { allowLocalhost: true } : und
  */
 export const MAX_PDS_RECORD_RESPONSE_BYTES = 1024 * 1024
 
-export type PdsRecordJsonResponse<T> = { kind: 'present'; value: T } | { kind: 'absent' }
+/**
+ * `confirmed` is true only when the PDS itself answered with the typed XRPC
+ * error `RecordNotFound`. That is the bar for marking a cached site absent;
+ * a bare 404 is still absence for non-destructive callers but may come from a
+ * gateway or proxy in front of the PDS rather than the PDS.
+ */
+export type PdsRecordJsonResponse<T> = { kind: 'present'; value: T } | { kind: 'absent'; confirmed: boolean }
+
+const isRecordNotFoundBody = (body: unknown): boolean =>
+	typeof body === 'object' && body !== null && (body as { error?: unknown }).error === 'RecordNotFound'
 
 /**
  * Interpret the ATProto getRecord response without treating every HTTP 400 as
- * absence. Conformant PDS implementations report a missing record as the typed
- * XRPC error `RecordNotFound` with status 400; some gateways use 404 instead.
- * The response body is bounded by safeFetch before this function reads it.
+ * absence. A PDS reports a missing record as HTTP 400 with the typed XRPC error
+ * `RecordNotFound`; other 400s (`RepoDeactivated`, `RepoTakendown`, ...) are
+ * not absence and stay retryable. Some gateways answer 404 instead, which is
+ * treated as unconfirmed absence. The body is bounded by safeFetch first.
  */
 export async function readPdsRecordJsonResponse<T>(response: Response): Promise<PdsRecordJsonResponse<T>> {
 	if (response.ok) return { kind: 'present', value: (await response.json()) as T }
-	if (response.status === 404) {
-		void response.body?.cancel().catch(() => undefined)
-		return { kind: 'absent' }
-	}
-	if (response.status === 400) {
+	if (response.status === 400 || response.status === 404) {
 		let errorBody: unknown
 		try {
 			errorBody = await response.json()
 		} catch {
 			// Preserve the typed HTTP error for malformed or oversized bodies.
 		}
-		if (
-			typeof errorBody === 'object' &&
-			errorBody !== null &&
-			(errorBody as { error?: unknown }).error === 'RecordNotFound'
-		) {
-			return { kind: 'absent' }
-		}
+		if (isRecordNotFoundBody(errorBody)) return { kind: 'absent', confirmed: true }
+		if (response.status === 404) return { kind: 'absent', confirmed: false }
 	}
 	void response.body?.cancel().catch(() => undefined)
 	throw new SafeFetchHttpError(response)
@@ -369,14 +370,23 @@ export class AuthoritativeSiteRecordError extends Error {
 
 /**
  * Read current PDS state without conflating absence with transport or validation
- * failure. Only a typed HTTP 404 is authoritative absence; every other failure
- * is retryable by the caller.
+ * failure. Absence is the PDS's HTTP 400 `RecordNotFound` (or a gateway 404);
+ * every other failure is retryable by the caller.
  */
 export async function fetchAuthoritativeSiteRecord(
 	did: string,
 	rkey: string,
 	resources?: RevalidationResources,
 ): Promise<AuthoritativeSiteRecord | null> {
+	const outcome = await lookupAuthoritativeSiteRecord(did, rkey, resources)
+	return outcome.kind === 'present' ? { record: outcome.record, cid: outcome.cid } : null
+}
+
+async function lookupAuthoritativeSiteRecord(
+	did: string,
+	rkey: string,
+	resources?: RevalidationResources,
+): Promise<{ kind: 'present'; record: WispFsRecord; cid: string } | { kind: 'absent'; confirmed: boolean }> {
 	assertRevalidationActive(resources)
 	const resolvedPdsEndpoint = await resolvePdsEndpoint(did, resources)
 	const pdsEndpoint = resolvedPdsEndpoint ? rewritePdsEndpoint(resolvedPdsEndpoint) : null
@@ -387,7 +397,7 @@ export async function fetchAuthoritativeSiteRecord(
 		`${pdsEndpoint}/xrpc/com.atproto.repo.getRecord?${query.toString()}`,
 		resources,
 	)
-	if (response.kind === 'absent') return null
+	if (response.kind === 'absent') return response
 	const data = response.value
 
 	const record = parseLexiconJson<WispFsRecord>(data.value)
@@ -395,23 +405,26 @@ export async function fetchAuthoritativeSiteRecord(
 	if (typeof data.cid !== 'string' || data.cid.length === 0 || data.cid.length > 256) {
 		throw new AuthoritativeSiteRecordError('MISSING_CID')
 	}
-	return { record, cid: data.cid }
+	return { kind: 'present', record, cid: data.cid }
 }
 
 export type SiteRecordFetchOutcome =
 	| { kind: 'present'; record: WispFsRecord; cid: string }
-	| { kind: 'absent' }
+	/** `confirmed`: the PDS answered `RecordNotFound`, not just a bare 404. */
+	| { kind: 'absent'; confirmed?: boolean }
 	| { kind: 'retryable'; error: 'PDS_UNRESOLVED' | 'INVALID_RECORD' | 'MISSING_CID' | 'FETCH_FAILED' }
 
-/** A revalidation-safe PDS lookup. Only an actual HTTP 404 is `absent`. */
+/**
+ * A revalidation-safe PDS lookup. `absent` means the PDS answered HTTP 400
+ * `RecordNotFound` (confirmed) or a gateway answered 404 (unconfirmed).
+ */
 export async function fetchSiteRecordOutcome(
 	did: string,
 	rkey: string,
 	resources?: RevalidationResources,
 ): Promise<SiteRecordFetchOutcome> {
 	try {
-		const result = await fetchAuthoritativeSiteRecord(did, rkey, resources)
-		return result ? { kind: 'present', ...result } : { kind: 'absent' }
+		return await lookupAuthoritativeSiteRecord(did, rkey, resources)
 	} catch (error) {
 		if (error instanceof AuthoritativeSiteRecordError) return { kind: 'retryable', error: error.code }
 		return { kind: 'retryable', error: 'FETCH_FAILED' }

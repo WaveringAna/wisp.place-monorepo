@@ -405,6 +405,15 @@ export const runDatabaseMigrations = async (primaryDb: SQL): Promise<void> => {
 			await db`ALTER TABLE site_cache ADD COLUMN IF NOT EXISTS cold_synced BOOLEAN NOT NULL DEFAULT true`
 		})
 
+		// Set when the owner's current PDS answers RecordNotFound for a cached site.
+		// Hosting stops serving marked rows; the firehose sweeper purges cached files
+		// only after repeated confirmations over a grace period. Never touches domains.
+		await runMigration('add site_cache.absent_since', async () => {
+			await db`ALTER TABLE site_cache ADD COLUMN IF NOT EXISTS absent_since BIGINT`
+			await db`ALTER TABLE site_cache ADD COLUMN IF NOT EXISTS absent_checks INTEGER NOT NULL DEFAULT 0`
+			await db`CREATE INDEX IF NOT EXISTS idx_site_cache_absent_since ON site_cache(absent_since) WHERE absent_since IS NOT NULL`
+		})
+
 		// Remove the unique constraint on domains.did to allow multiple domains per user
 		await runMigration('drop legacy domains_did_key', async () => {
 			await db`ALTER TABLE domains DROP CONSTRAINT IF EXISTS domains_did_key`

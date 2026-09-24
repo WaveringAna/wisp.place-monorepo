@@ -131,7 +131,7 @@ export async function getSiteCache(did: string, rkey: string): Promise<SiteCache
 		`${did}:${rkey}`,
 		async () => {
 			const result = await sql<SiteCache[]>`
-        SELECT did, rkey, record_cid, file_cids, cached_at, updated_at
+        SELECT did, rkey, record_cid, file_cids, cached_at, updated_at, absent_since
         FROM site_cache
         WHERE did = ${did} AND rkey = ${rkey}
         LIMIT 1

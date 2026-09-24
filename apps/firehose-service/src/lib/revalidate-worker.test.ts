@@ -333,6 +333,60 @@ describe('shouldSkipInvalidationForReason', () => {
 	})
 })
 
+describe('absent site marking', () => {
+	function markingDependencies(
+		outcome: Awaited<ReturnType<NonNullable<RevalidateWorkerDependencies['fetchSiteRecordOutcome']>>>,
+	) {
+		const marks: string[] = []
+		const invalidations: string[] = []
+		const deletes: string[] = []
+		const dependencies = createDependencies({
+			fetchSiteRecordOutcome: async () => outcome,
+			markSiteAbsent: async (did, rkey) => {
+				marks.push(`${did}/${rkey}`)
+				return { did, rkey, absent_since: 1, absent_checks: 1 }
+			},
+			publishCacheInvalidation: async (did, rkey, action) => {
+				invalidations.push(`${did}/${rkey}:${action}`)
+			},
+			handleSiteDelete: async (did, rkey) => {
+				deletes.push(`${did}/${rkey}`)
+			},
+		})
+		return { dependencies, marks, invalidations, deletes }
+	}
+
+	test('marks a site the PDS confirms RecordNotFound, stops serving it, and deletes nothing', async () => {
+		const { redis, acks } = createRedis()
+		const { dependencies, marks, invalidations, deletes } = markingDependencies({ kind: 'absent', confirmed: true })
+
+		await processRevalidationMessage(MESSAGE_ID, messageFields('storage-miss:index.html'), redis, dependencies)
+
+		expect(marks).toEqual([`${DID}/${RKEY}`])
+		expect(invalidations).toEqual([`${DID}/${RKEY}:update`])
+		expect(deletes).toEqual([])
+		expect(acks).toEqual([MESSAGE_ID])
+	})
+
+	test('does not mark on a bare gateway 404', async () => {
+		const { redis } = createRedis()
+		const { dependencies, marks } = markingDependencies({ kind: 'absent', confirmed: false })
+
+		await processRevalidationMessage(MESSAGE_ID, messageFields('storage-miss:index.html'), redis, dependencies)
+
+		expect(marks).toEqual([])
+	})
+
+	test('does not mark when the PDS is unreachable', async () => {
+		const { redis } = createRedis()
+		const { dependencies, marks } = markingDependencies({ kind: 'retryable', error: 'FETCH_FAILED' })
+
+		await processRevalidationMessage(MESSAGE_ID, messageFields('storage-miss:index.html'), redis, dependencies)
+
+		expect(marks).toEqual([])
+	})
+})
+
 describe('delete tombstone revalidation', () => {
 	test('deletes a missing PDS record and ACKs only after delete succeeds', async () => {
 		const { redis, acks, streamDeletes } = createRedis(60)

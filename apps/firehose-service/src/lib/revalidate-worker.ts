@@ -6,7 +6,9 @@ import { SafeFetchHttpError } from '@wispplace/safe-fetch'
 import { DecompressionLimitError } from '@wispplace/tiered-storage'
 import Redis from 'ioredis'
 import { config } from '../config'
+import { startAbsentSiteSweeper, stopAbsentSiteSweeper } from './absent-site-sweeper'
 import { BlobIntegrityError } from './blob-integrity'
+import { publishCacheInvalidation } from './cache-invalidation'
 import {
 	AuthoritativeSettingsRecordError,
 	AuthoritativeSiteRecordError,
@@ -22,6 +24,7 @@ import {
 	SiteBlobBackoffError,
 	SiteLogicalQuotaExceededError,
 } from './cache-writer'
+import { markSiteAbsent } from './db'
 import {
 	isSettingsFailureRevalidationReason,
 	isSiteDeleteTombstoneReason,
@@ -388,6 +391,9 @@ export interface RevalidateWorkerDependencies {
 	handleSettingsUpdate: typeof handleSettingsUpdate
 	handleSiteCreateOrUpdate: typeof handleSiteCreateOrUpdate
 	handleSiteDelete: typeof handleSiteDelete
+	/** Mark a cached site absent after a confirmed RecordNotFound. */
+	markSiteAbsent?: typeof markSiteAbsent
+	publishCacheInvalidation?: typeof publishCacheInvalidation
 }
 
 export interface RevalidateRedisPipeline {
@@ -494,6 +500,8 @@ const defaultRevalidateWorkerDependencies: RevalidateWorkerDependencies = {
 	handleSettingsUpdate,
 	handleSiteCreateOrUpdate,
 	handleSiteDelete,
+	markSiteAbsent,
+	publishCacheInvalidation,
 }
 
 /**
@@ -798,9 +806,20 @@ async function handleMissingSiteRecord(
 	redisClient: RevalidateRedisClient,
 	dependencies: RevalidateWorkerDependencies,
 	resources?: RevalidationResourceContext,
+	confirmed = false,
 ): Promise<void> {
 	if (!isDeleteTombstone) {
-		logger.warn(`[Revalidate] Site record not found on PDS: ${did}/${rkey}`)
+		logger.warn(`[Revalidate] Site record not found on PDS: ${did}/${rkey}`, { confirmed })
+		// Only the owner's current PDS saying RecordNotFound marks a site. A missed
+		// delete event otherwise leaves it served forever; unreachable or ambiguous
+		// PDS answers never get here as `confirmed`, so an away account is safe.
+		if (confirmed && dependencies.markSiteAbsent) {
+			const mark = await dependencies.markSiteAbsent(did, rkey)
+			if (mark) {
+				logger.info(`[Revalidate] Marked site absent: ${did}/${rkey}`, { absentChecks: mark.absent_checks })
+				await dependencies.publishCacheInvalidation?.(did, rkey, 'update')
+			}
+		}
 		assertRevalidationActive(resources)
 		await acknowledgeCompletedMessage(redisClient, id)
 		return
@@ -868,7 +887,16 @@ async function prepareSiteRevalidation(
 	}
 	if (outcome.kind === 'absent') {
 		if (verifiedRepair) throw new RevalidationProcessingError('REPAIR_SOURCE_ABSENT', 'permanent')
-		await handleMissingSiteRecord(id, did, rkey, isDeleteTombstone, redisClient, dependencies, resources)
+		await handleMissingSiteRecord(
+			id,
+			did,
+			rkey,
+			isDeleteTombstone,
+			redisClient,
+			dependencies,
+			resources,
+			'confirmed' in outcome && outcome.confirmed === true,
+		)
 		return null
 	}
 	const record = { record: outcome.record, cid: outcome.cid }
@@ -1704,6 +1732,8 @@ function startRevalidateWorkerWithFactory(
 
 export async function startRevalidateWorker(): Promise<void> {
 	startRevalidateWorkerWithFactory(config.redisUrl, defaultRedisClientFactory, revalidateWorkerRuntimeConfig)
+	// Leader-only like this worker, so two nodes never sweep the same site.
+	startAbsentSiteSweeper()
 }
 
 export function startRevalidateWorkerForTests(
@@ -1767,6 +1797,7 @@ export async function stopRevalidateWorker(
 ): Promise<RevalidateWorkerStopResult> {
 	running = false
 	cancelLoopRetryWait?.()
+	const sweeperStopped = stopAbsentSiteSweeper()
 
 	// Abort active PDS/blob work before disconnecting Redis. The resource context
 	// treats this as lifecycle cancellation, not a delivery failure, so the PEL
@@ -1783,7 +1814,10 @@ export async function stopRevalidateWorker(
 	clientToClose?.disconnect()
 
 	const gracePeriodMs = options.gracePeriodMs ?? config.firehoseDrainGraceMs
-	const stopped = await settlesWithinWorkerGrace(loopToWait, gracePeriodMs)
+	const stopped = await settlesWithinWorkerGrace(
+		Promise.all([loopToWait, sweeperStopped]).then(() => undefined),
+		gracePeriodMs,
+	)
 	if (!stopped) return { stopped: false, forced: true }
 	if (workerGeneration === generation && workerAbortController === abortController) {
 		workerAbortController = null
