@@ -614,10 +614,11 @@ export async function authenticateOAuth(
 		missingScopes = missingScopesFor(tokenInfo.scope)
 	}
 
-	if (missingScopes.length > 0) {
+	const [firstMissing] = missingScopes
+	if (firstMissing) {
 		emitWarning(
 			options,
-			`OAuth token is missing ${missingScopes.length} requested permission(s). First missing: ${describeCapability(missingScopes[0])}`,
+			`OAuth token is missing ${missingScopes.length} requested permission(s). First missing: ${describeCapability(firstMissing)}`,
 		)
 	}
 
