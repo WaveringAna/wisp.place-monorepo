@@ -32,6 +32,20 @@ const createWebhookAgent = (fetchHandler: (pathname: string, init?: RequestInit)
 const createResponseError = (kind: WebhookRequestErrorKind) =>
 	kind === 'rate_limited' ? 'Webhook mutation rate limit exceeded' : 'Webhook limit reached'
 
+/**
+ * Loggable shape of a PDS call failure: class, HTTP status and XRPC error name
+ * (e.g. `ScopeMissingError`). Messages are left out; they can echo user data.
+ */
+const describeUpstreamError = (error: unknown): Record<string, string | number> => {
+	const details: Record<string, string | number> = {
+		errorKind: error instanceof Error ? error.constructor.name || 'Error' : 'UnknownError',
+	}
+	const { status, error: xrpcError } = (error ?? {}) as { status?: unknown; error?: unknown }
+	if (typeof status === 'number') details.status = status
+	if (typeof xrpcError === 'string' && /^[A-Za-z]{1,64}$/.test(xrpcError)) details.xrpcError = xrpcError
+	return details
+}
+
 export const webhookRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 	new Elysia({
 		prefix: '/api/webhook',
@@ -169,8 +183,8 @@ export const webhookRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 						records: result.data.records,
 						...(result.data.cursor === undefined ? {} : { cursor: result.data.cursor }),
 					}
-				} catch {
-					logger.error('[Webhook] List failed')
+				} catch (error) {
+					logger.error('[Webhook] List failed', undefined, describeUpstreamError(error))
 					set.status = 500
 					return { success: false, error: 'Failed to list webhooks' }
 				}

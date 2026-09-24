@@ -146,37 +146,62 @@ function createStateStore(kv: KvAdapter): NodeSavedStateStore {
 	}
 }
 
-function createSessionStore(kv: KvAdapter, useKeychain: boolean): NodeSavedSessionStore {
-	if (useKeychain) {
-		return {
-			async set(sub, session) {
-				await setStoredOAuthSession(sub, JSON.stringify(session))
-			},
-			async get(sub) {
-				const raw = await getStoredOAuthSession(sub)
-				if (!raw) return undefined
-				try {
-					return JSON.parse(raw) as NodeSavedSession
-				} catch {
-					return undefined
-				}
-			},
-			async del(sub) {
-				await deleteStoredOAuthSession(sub)
-			},
-		}
+export interface SessionSecretStore {
+	read(sub: string): Promise<string | null>
+	/** Resolves false when the OS credential store refused the write. */
+	write(sub: string, value: string): Promise<boolean>
+	remove(sub: string): Promise<void>
+}
+
+export const osKeychainSessionStore: SessionSecretStore = {
+	read: getStoredOAuthSession,
+	write: setStoredOAuthSession,
+	remove: deleteStoredOAuthSession,
+}
+
+const SESSION_KV_TTL_SECONDS = 60 * 60 * 24 * 14
+const sessionKvKey = (sub: string) => `oauth_session:${sub}`
+
+const parseSession = (raw: string | null | undefined): NodeSavedSession | undefined => {
+	if (!raw) return undefined
+	try {
+		return JSON.parse(raw) as NodeSavedSession
+	} catch {
+		return undefined
 	}
+}
+
+/**
+ * OAuth sessions prefer the OS credential store and fall back to the local
+ * state database. The fallback also covers a keychain that is readable but
+ * refuses writes (a locked-down work machine, or Windows Credential Manager's
+ * 2560-byte blob cap, which a DPoP session exceeds). Ignoring that refusal used
+ * to lose the session right after sign-in, which @atproto/oauth-client then
+ * reports as "The session was deleted by another process".
+ */
+export function createSessionStore(
+	kv: KvAdapter,
+	keychain: SessionSecretStore | undefined,
+	onKeychainWriteFailed: () => void = () => {},
+): NodeSavedSessionStore {
 	return {
 		async set(sub: string, session: NodeSavedSession) {
-			kvSet(kv, `oauth_session:${sub}`, JSON.stringify(session), 60 * 60 * 24 * 14)
+			const serialized = JSON.stringify(session)
+			if (keychain && (await keychain.write(sub, serialized))) {
+				// Never leave an older plaintext copy behind once the keychain has it.
+				kv.del(sessionKvKey(sub))
+				return
+			}
+			if (keychain) onKeychainWriteFailed()
+			kvSet(kv, sessionKvKey(sub), serialized, SESSION_KV_TTL_SECONDS)
 		},
 		async get(sub: string) {
-			const raw = kvGet(kv, `oauth_session:${sub}`)
-			if (!raw) return undefined
-			return JSON.parse(raw) as NodeSavedSession
+			const fromKeychain = keychain ? parseSession(await keychain.read(sub)) : undefined
+			return fromKeychain ?? parseSession(kvGet(kv, sessionKvKey(sub)))
 		},
 		async del(sub: string) {
-			kv.del(`oauth_session:${sub}`)
+			await keychain?.remove(sub)
+			kv.del(sessionKvKey(sub))
 		},
 	}
 }
@@ -244,7 +269,15 @@ export async function authenticateOAuth(
 	const keychainProbe = await probeKeychain()
 	const useKeychain = keychainProbe.available
 	const stateStore = createStateStore(kv)
-	const sessionStore = createSessionStore(kv, useKeychain)
+	let warnedKeychainWrite = false
+	const sessionStore = createSessionStore(kv, useKeychain ? osKeychainSessionStore : undefined, () => {
+		if (warnedKeychainWrite) return
+		warnedKeychainWrite = true
+		emitWarning(
+			options,
+			'Could not save the session in the system credential store; keeping it in the local wispctl database instead.',
+		)
+	})
 	// A loopback client declares its scopes inside the `client_id`, so declaring
 	// both strategies at once would double the length of every authorization URL
 	// the user sees. Build one client per strategy instead and only reach for the

@@ -57,10 +57,37 @@ export class PublicUploadError extends Error {
 	constructor(
 		public readonly status: 400 | 409 | 413 | 429 | 500 | 503,
 		message: string,
+		/** Short machine-readable cause, safe to log (never contains user paths). */
+		public readonly reason?: InvalidUploadReason,
 	) {
 		super(message)
 		this.name = 'PublicUploadError'
 	}
+}
+
+const INVALID_UPLOAD_REASONS = {
+	not_a_file: 'a form field was not a file',
+	missing_path: 'a file has no path',
+	unsupported_path: 'unsupported characters in a file path (\\, :, control characters, "./" or "//")',
+	reserved_path: 'a file path uses a reserved name',
+	duplicate_path: 'two files share a path, or a file has the same name as a folder',
+	bad_size: 'a file reported an invalid size',
+	size_mismatch: 'a file changed or was truncated while uploading',
+	site_name: 'invalid site name',
+	quota: 'could not determine the upload quota',
+	wispignore_too_large: '.wispignore is too large',
+	wispignore_too_many_patterns: '.wispignore has too many patterns',
+	wispignore_unreadable: '.wispignore could not be parsed',
+} as const
+
+export type InvalidUploadReason = keyof typeof INVALID_UPLOAD_REASONS
+
+/**
+ * A 400 that says which rule failed. It deliberately does not echo the
+ * offending path back: the message names the rule, never user input.
+ */
+export function invalidUploadError(reason: InvalidUploadReason): PublicUploadError {
+	return new PublicUploadError(400, `${INVALID_UPLOAD_MESSAGE}: ${INVALID_UPLOAD_REASONS[reason]}`, reason)
 }
 
 export interface ValidatedPublicUploadFile {
@@ -107,8 +134,8 @@ interface ManifestCommit {
 type IgnoreMatcher = ReturnType<typeof createIgnoreMatcher>
 type PutSubfs = (record: Record<string, unknown>) => Promise<string>
 
-function invalidUpload(): never {
-	throw new PublicUploadError(400, INVALID_UPLOAD_MESSAGE)
+function invalidUpload(reason: InvalidUploadReason): never {
+	throw invalidUploadError(reason)
 }
 
 function uploadTooLarge(): never {
@@ -167,12 +194,12 @@ function asFile(candidate: unknown): File | null {
 
 function validateRawUploadFile(candidate: unknown): RawPublicUploadFile {
 	const file = asFile(candidate)
-	if (!file) invalidUpload()
+	if (!file) invalidUpload('not_a_file')
 	const source = getUploadPathSource(file)
-	if (!source) invalidUpload()
+	if (!source) invalidUpload('missing_path')
 	const normalizedPath = normalizeSitePath(source.path)
-	if (!normalizedPath || normalizedPath !== source.path) invalidUpload()
-	if (!Number.isSafeInteger(file.size) || file.size < 0) invalidUpload()
+	if (!normalizedPath || normalizedPath !== source.path) invalidUpload('unsupported_path')
+	if (!Number.isSafeInteger(file.size) || file.size < 0) invalidUpload('bad_size')
 	return {
 		file,
 		rawPath: normalizedPath,
@@ -203,7 +230,8 @@ function hasReservedInternalPath(path: string): boolean {
 function canonicalPath(rawFile: RawPublicUploadFile, sharedRoot: string | null): string {
 	const path = sharedRoot ? rawFile.rawPath.slice(sharedRoot.length + 1) : rawFile.rawPath
 	const normalizedPath = normalizeSitePath(path)
-	if (!normalizedPath || normalizedPath !== path || hasReservedInternalPath(normalizedPath)) invalidUpload()
+	if (!normalizedPath || normalizedPath !== path) invalidUpload('unsupported_path')
+	if (hasReservedInternalPath(normalizedPath)) invalidUpload('reserved_path')
 	return normalizedPath
 }
 
@@ -214,7 +242,7 @@ function assertNoPathCollisions(paths: readonly string[]): void {
 			sortedPaths[index] === sortedPaths[index - 1] ||
 			sortedPaths[index]!.startsWith(`${sortedPaths[index - 1]!}/`)
 		) {
-			invalidUpload()
+			invalidUpload('duplicate_path')
 		}
 	}
 }
@@ -224,7 +252,7 @@ export function validatePublicUploadFiles(
 	files: readonly unknown[],
 	maxLogicalBytes: number,
 ): ValidatedPublicUploadFile[] {
-	if (!Number.isSafeInteger(maxLogicalBytes) || maxLogicalBytes < 0) invalidUpload()
+	if (!Number.isSafeInteger(maxLogicalBytes) || maxLogicalBytes < 0) invalidUpload('quota')
 	// Reject a hostile multipart count before touching even file metadata. Bun
 	// has already parsed the multipart envelope, but no File body is read here.
 	if (files.length > MAX_FILE_COUNT) uploadTooLarge()
@@ -256,13 +284,14 @@ function rootWispignoreFile(files: readonly ValidatedPublicUploadFile[]): Valida
 async function readCustomIgnorePatterns(files: readonly ValidatedPublicUploadFile[]): Promise<string[]> {
 	const ignoreFile = rootWispignoreFile(files)
 	if (!ignoreFile) return []
-	if (ignoreFile.size > MAX_WISPIGNORE_BYTES) invalidUpload()
+	if (ignoreFile.size > MAX_WISPIGNORE_BYTES) invalidUpload('wispignore_too_large')
 	try {
 		const patterns = parseWispignore(await ignoreFile.file.text())
-		if (patterns.length > MAX_WISPIGNORE_PATTERNS) invalidUpload()
+		if (patterns.length > MAX_WISPIGNORE_PATTERNS) invalidUpload('wispignore_too_many_patterns')
 		return patterns
-	} catch {
-		invalidUpload()
+	} catch (error) {
+		if (error instanceof PublicUploadError) throw error
+		invalidUpload('wispignore_unreadable')
 	}
 }
 
@@ -270,7 +299,7 @@ function createIgnoreMatchers(patterns: string[]): { enforced: IgnoreMatcher; re
 	try {
 		return { enforced: createIgnoreMatcher(), requested: createIgnoreMatcher(patterns) }
 	} catch {
-		invalidUpload()
+		invalidUpload('wispignore_unreadable')
 	}
 }
 
@@ -327,7 +356,7 @@ async function readFileForUpload(file: ValidatedPublicUploadFile, signal?: Abort
 	throwIfAborted(signal)
 	let content = Buffer.from(await file.file.arrayBuffer())
 	throwIfAborted(signal)
-	if (content.length !== file.size) throw new PublicUploadError(400, INVALID_UPLOAD_MESSAGE)
+	if (content.length !== file.size) invalidUpload('size_mismatch')
 	if (!shouldGzip(file)) return createUploadedFile(file, content, false)
 
 	const compressed = await gzipAsync(content)

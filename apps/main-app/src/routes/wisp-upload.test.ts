@@ -88,7 +88,9 @@ describe('public upload metadata validation', () => {
 				validatePublicUploadFiles(files, MAX_SITE_SIZE)
 				expect.unreachable('expected invalid upload')
 			} catch (error) {
-				expect(error).toMatchObject({ status: 400, message: INVALID_UPLOAD_MESSAGE })
+				expect(error).toMatchObject({ status: 400 })
+				expect(String((error as Error).message).startsWith(`${INVALID_UPLOAD_MESSAGE}: `)).toBe(true)
+				expect((error as { reason?: string }).reason).toBeDefined()
 				expect(String((error as Error).message)).not.toContain(SENTINEL)
 			}
 		}

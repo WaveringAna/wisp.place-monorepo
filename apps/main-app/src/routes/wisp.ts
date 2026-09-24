@@ -6,7 +6,7 @@ import { Elysia } from 'elysia'
 import { isSupporter } from '../lib/db'
 import {
 	commitPublicUploadManifest,
-	INVALID_UPLOAD_MESSAGE,
+	invalidUploadError,
 	loadExistingUploadState,
 	PublicUploadError,
 	processUploadInBackground,
@@ -107,7 +107,7 @@ async function startPublicUpload(body: unknown, auth: any, request: Request) {
 	assertUploadAdmissionOpen()
 	const input = (body ?? {}) as { siteName?: unknown; files?: unknown }
 	if (typeof input.siteName !== 'string' || !isValidSiteName(input.siteName)) {
-		throw new PublicUploadError(400, INVALID_UPLOAD_MESSAGE)
+		throw invalidUploadError('site_name')
 	}
 
 	const rawFiles = input.files === undefined ? [] : Array.isArray(input.files) ? input.files : [input.files]
@@ -175,7 +175,11 @@ async function uploadFilesHandler({ body, auth, request, set }: any) {
 		return await startPublicUpload(body, auth, request)
 	} catch (error) {
 		const response = publicUploadError(error)
-		logger.error('Public upload request failed', { errorKind: 'upload_request_failed' })
+		logger.error('Public upload request failed', {
+			errorKind: 'upload_request_failed',
+			status: response.status,
+			...(response.reason ? { reason: response.reason } : {}),
+		})
 		set.status = response.status
 		return { success: false, error: response.message }
 	}
