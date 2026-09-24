@@ -20,9 +20,14 @@
     <meta name="twitter:description" content="Somewhere to put your stuff. A folder becomes a website. That's the whole thing." />
 
     <!-- Theme -->
-    <meta name="theme-color" content="#000000" />
+    <meta name="theme-color" content="#fbf3ec" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#1c1830" media="(prefers-color-scheme: dark)" />
     <script>
         document.documentElement.classList.add('js');
+        try {
+            const t = localStorage.getItem('wisp-theme');
+            if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+        } catch {}
     </script>
 
     <link rel="icon" type="image/x-icon" href="./favicon.ico">
@@ -33,456 +38,796 @@
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Fraunces:ital,opsz,wght,SOFT,WONK@0,9..144,400..800,100,1;1,9..144,400..800,100,1&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/wisp.css">
 
     <style>
-        /* Hero */
-        .hero {
-            padding: 6rem 2rem 5rem;
+        /* ------------------------------------------------------------------
+           Tokens
+           ------------------------------------------------------------------ */
+        /* Light = the dashboard's rose/bone/berry palette. Dark = dusky night. */
+        :root {
+            --paper: oklch(0.986 0.008 345);
+            --paper-2: oklch(0.958 0.021 348);
+            --ink: oklch(0.26 0.031 352);
+            --ink-soft: oklch(0.45 0.031 350);
+            --line: oklch(0.45 0.06 355);
+            --rose: oklch(0.50 0.160 9);
+            --pink: oklch(0.85 0.08 5);
+            --lilac: oklch(0.84 0.075 300);
+            --butter: oklch(0.93 0.095 95);
+            --mint: oklch(0.89 0.075 165);
+            --sky: oklch(0.88 0.06 235);
+            --glow: oklch(0.70 0.16 5);
+            --card: oklch(0.996 0.003 345);
+            --shadow: oklch(0.85 0.07 5);
+            --term-bg: oklch(0.31 0.04 340);
+            --term-text: oklch(0.93 0.02 350);
+            --btn-bg: var(--pink);
+            --btn-fg: oklch(0.30 0.06 355);
+            --band-bg: oklch(0.91 0.045 5);
+            --band-fg: oklch(0.32 0.05 355);
+            --band-star: oklch(0.60 0.15 9);
+            --board-dot: oklch(0.50 0.160 9 / 0.14);
+            --obj-line: oklch(0.42 0.06 355);
+            --bloom: 0.35;
+            --display: "Fraunces", "Iowan Old Style", Georgia, serif;
+            --hand: "Caveat", "Comic Sans MS", cursive;
+            color-scheme: light;
+
+            /* feed wisp.css header/footer */
+            --bg: var(--paper);
+            --bg-alt: var(--paper-2);
+            --text: var(--ink);
+            --text-muted: var(--ink-soft);
+            --border-light: oklch(0.875 0.035 348);
+            --wisp-bg: var(--paper);
+            --wisp-text: var(--ink);
+            --wisp-text-muted: var(--ink-soft);
+            --wisp-border-light: oklch(0.875 0.035 348);
         }
 
-        .hero-inner {
-            max-width: 1100px;
-            margin: 0 auto;
+        @media (prefers-color-scheme: dark) {
+            :root:not([data-theme="light"]) {
+                --paper: oklch(0.21 0.035 290);
+                --paper-2: oklch(0.18 0.035 290);
+                --ink: oklch(0.94 0.012 330);
+                --ink-soft: oklch(0.76 0.03 320);
+                --line: oklch(0.10 0.03 290);
+                --rose: oklch(0.83 0.11 5);
+                --card: oklch(0.27 0.035 290);
+                --shadow: oklch(0.08 0.03 290 / 0.9);
+                --term-bg: oklch(0.14 0.03 290);
+                --glow: oklch(0.90 0.14 85);
+                --btn-bg: var(--pink);
+                --btn-fg: oklch(0.26 0.031 352);
+                --band-bg: var(--butter);
+                --band-fg: oklch(0.26 0.031 352);
+                --band-star: oklch(0.50 0.160 9);
+                --board-dot: oklch(0.94 0.012 330 / 0.10);
+                --obj-line: oklch(0.26 0.031 352);
+                --bloom: 0.5;
+                --bg: var(--paper);
+                --bg-alt: var(--paper-2);
+                --text: var(--ink);
+                --text-muted: var(--ink-soft);
+                --border-light: oklch(0.34 0.04 290);
+                --wisp-bg: var(--paper);
+                --wisp-text: var(--ink);
+                --wisp-text-muted: var(--ink-soft);
+                --wisp-border-light: oklch(0.34 0.04 290);
+                color-scheme: dark;
+            }
         }
 
+        :root[data-theme="dark"] {
+            --paper: oklch(0.21 0.035 290);
+            --paper-2: oklch(0.18 0.035 290);
+            --ink: oklch(0.94 0.012 330);
+            --ink-soft: oklch(0.76 0.03 320);
+            --line: oklch(0.10 0.03 290);
+            --rose: oklch(0.83 0.11 5);
+            --card: oklch(0.27 0.035 290);
+            --shadow: oklch(0.08 0.03 290 / 0.9);
+            --term-bg: oklch(0.14 0.03 290);
+            --glow: oklch(0.90 0.14 85);
+            --btn-bg: var(--pink);
+            --btn-fg: oklch(0.26 0.031 352);
+            --band-bg: var(--butter);
+            --band-fg: oklch(0.26 0.031 352);
+            --band-star: oklch(0.50 0.160 9);
+            --board-dot: oklch(0.94 0.012 330 / 0.10);
+            --obj-line: oklch(0.26 0.031 352);
+            --bloom: 0.5;
+            --bg: var(--paper);
+            --bg-alt: var(--paper-2);
+            --text: var(--ink);
+            --text-muted: var(--ink-soft);
+            --border-light: oklch(0.34 0.04 290);
+            --wisp-bg: var(--paper);
+            --wisp-text: var(--ink);
+            --wisp-text-muted: var(--ink-soft);
+            --wisp-border-light: oklch(0.34 0.04 290);
+            color-scheme: dark;
+        }
+
+        /* ------------------------------------------------------------------
+           Base
+           ------------------------------------------------------------------ */
+        body {
+            background: var(--paper);
+            color: var(--ink);
+            overflow-x: hidden;
+        }
+
+        /* soft paper speckle */
+        body::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            z-index: 0;
+            opacity: var(--bloom);
+            background-image:
+                radial-gradient(circle at 20% 30%, oklch(0.83 0.095 5 / 0.35), transparent 40%),
+                radial-gradient(circle at 85% 15%, oklch(0.84 0.075 300 / 0.35), transparent 35%),
+                radial-gradient(circle at 70% 85%, oklch(0.93 0.095 95 / 0.35), transparent 40%);
+        }
+
+        main, header, footer { position: relative; z-index: 1; }
+
+        header {
+            background: color-mix(in oklch, var(--paper) 82%, transparent);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border-bottom: 2px dashed var(--border-light);
+        }
+
+        .logo { font-family: var(--display); font-size: 1.35rem; font-weight: 700; letter-spacing: -0.01em; }
+        .logo img { width: 1.6rem; height: auto; transition: transform 400ms cubic-bezier(.34,1.56,.64,1); }
+        .logo:hover img { transform: rotate(-14deg) translateY(-3px); }
+
+        .nav-cta, .btn-pop {
+            border: 2px solid var(--line);
+            border-radius: 999px;
+            box-shadow: 3px 3px 0 var(--shadow);
+            transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease;
+        }
+        .nav-cta { background: var(--pink); color: oklch(0.26 0.031 352); text-transform: none; letter-spacing: 0; font-size: 0.9rem; padding: 0.4rem 1rem; }
+        .nav-cta:hover { background: var(--butter); color: oklch(0.26 0.031 352); transform: translate(-1px, -1px); box-shadow: 4px 4px 0 var(--shadow); }
+
+        .theme-toggle {
+            width: 2.3rem;
+            height: 2.3rem;
+            padding: 0;
+            border: 2px solid var(--line);
+            border-radius: 50%;
+            background: var(--card);
+            color: var(--ink);
+            font-size: 1.05rem;
+            box-shadow: 2px 2px 0 var(--shadow);
+            transition: transform 300ms cubic-bezier(.34,1.56,.64,1);
+        }
+        .theme-toggle:hover { transform: rotate(25deg) scale(1.08); opacity: 1; }
+
+        .btn-pop {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.55rem;
+            padding: 0.85rem 1.4rem;
+            font-weight: 700;
+            font-size: 1rem;
+            text-decoration: none;
+            color: var(--btn-fg);
+            background: var(--btn-bg);
+            cursor: pointer;
+            font-family: inherit;
+        }
+        .btn-pop:hover { transform: translate(-2px, -2px) rotate(-1deg); box-shadow: 5px 5px 0 var(--shadow); opacity: 1; }
+        .btn-pop:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--shadow); }
+        .btn-pop.alt { background: var(--card); color: var(--ink); }
+        .btn-pop.butter { background: var(--butter); color: oklch(0.26 0.031 352); }
+        .btn-pop.mint { background: var(--mint); color: oklch(0.26 0.031 352); }
+        .btn-pop.small { padding: 0.5rem 0.95rem; font-size: 0.875rem; }
+
+        .display {
+            font-family: var(--display);
+            font-variation-settings: "SOFT" 100, "WONK" 1;
+            letter-spacing: -0.02em;
+            line-height: 1.02;
+        }
+
+        .hand { font-family: var(--hand); }
+
+        .section { padding: 6rem 1.5rem; }
+        .section-inner { max-width: 1140px; margin: 0 auto; }
+
+        .kicker {
+            font-family: var(--hand);
+            font-size: 1.6rem;
+            color: var(--rose);
+            display: inline-block;
+            transform: rotate(-3deg);
+            margin-bottom: 0.25rem;
+        }
+
+        .section-title {
+            font-family: var(--display);
+            font-variation-settings: "SOFT" 100, "WONK" 1;
+            font-size: clamp(2rem, 4.2vw, 3.2rem);
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            line-height: 1.05;
+            margin-bottom: 1rem;
+        }
+
+        .lede { color: var(--ink-soft); font-size: 1.05rem; max-width: 38rem; }
+
+        /* squiggle underline */
+        .squiggle {
+            position: relative;
+            white-space: nowrap;
+            font-style: italic;
+            color: var(--rose);
+        }
+        .squiggle svg {
+            position: absolute;
+            left: -2%;
+            bottom: -0.18em;
+            width: 104%;
+            height: 0.35em;
+            overflow: visible;
+        }
+        .squiggle path {
+            fill: none;
+            stroke: var(--rose);
+            stroke-width: 5;
+            stroke-linecap: round;
+            stroke-dasharray: 400;
+            stroke-dashoffset: 400;
+            animation: draw 1.1s 0.5s cubic-bezier(.65,0,.35,1) forwards;
+        }
+        @keyframes draw { to { stroke-dashoffset: 0; } }
+
+        /* ------------------------------------------------------------------
+           Hero
+           ------------------------------------------------------------------ */
+        .hero { padding: 4.5rem 1.5rem 5rem; position: relative; }
         .hero-grid {
+            max-width: 1140px;
+            margin: 0 auto;
             display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 4rem;
+            grid-template-columns: 1.05fr 1fr;
+            gap: 3.5rem;
             align-items: center;
         }
 
-        .hero-left {
-            text-align: left;
-        }
-
-        .hero-badge {
-            display: inline-block;
-            color: var(--accent);
-            font-size: 0.875rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.1em;
-            margin-bottom: 1.75rem;
-            padding: 0.4rem 0.9rem;
-            border: 1px solid var(--accent);
-        }
-
-        .hero-left h1 {
-            font-size: clamp(2rem, 3.8vw, 3rem);
-            text-align: left;
-            line-height: 1.1;
-            letter-spacing: -0.02em;
-            margin-bottom: 1.25rem;
-            max-width: 22ch;
+        .hero h1 {
+            font-size: clamp(2.8rem, 6.6vw, 5.4rem);
+            font-weight: 800;
+            margin-bottom: 1.5rem;
         }
 
         .hero-desc {
-            font-size: 1.25rem;
-            color: var(--text-muted);
-            margin: 0 0 2.25rem;
-            line-height: 1.5;
-            max-width: 34rem;
+            font-size: 1.2rem;
+            color: var(--ink-soft);
+            max-width: 32rem;
+            margin-bottom: 2rem;
         }
+        .hero-desc .hand { font-size: 1.6rem; color: var(--ink); }
 
-        .cta-buttons {
-            display: flex;
-            gap: 1rem;
-            flex-wrap: wrap;
-        }
+        .cta-row { display: flex; gap: 1rem; flex-wrap: wrap; align-items: center; }
 
-        .hero-right {
-            min-width: 0;
-        }
-
-        /* Terminal */
-        .terminal {
-            border: 1px solid var(--border);
-            background: #0d1117;
-            border-radius: 8px;
-            overflow: hidden;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
-        }
-
-        .terminal-header {
-            background: #161b22;
-            padding: 0.75rem 1rem;
+        .hero-note {
+            margin-top: 1.75rem;
+            font-family: var(--hand);
+            font-size: 1.35rem;
+            color: var(--ink-soft);
             display: flex;
             align-items: center;
             gap: 0.5rem;
         }
 
-        .terminal-dots {
+        .stage { position: relative; min-height: 440px; }
+
+        /* the fairy */
+        .fairy {
+            position: absolute;
+            top: -3.5rem;
+            right: -0.5rem;
+            width: 128px;
+            z-index: 5;
+            cursor: pointer;
+            border: 0;
+            padding: 0;
+            background: none;
+            box-shadow: none;
+            animation: bob 4.2s ease-in-out infinite;
+            filter: drop-shadow(0 8px 14px oklch(0.50 0.16 9 / 0.25));
+        }
+        .fairy:hover { opacity: 1; }
+        .fairy img { width: 100%; height: auto; display: block; pointer-events: none; }
+        .fairy.twirl { animation: twirl 900ms cubic-bezier(.34,1.56,.64,1); }
+        @keyframes bob {
+            0%, 100% { transform: translate(0, 0) rotate(-4deg); }
+            25% { transform: translate(-6px, -12px) rotate(2deg); }
+            50% { transform: translate(4px, -4px) rotate(-2deg); }
+            75% { transform: translate(8px, -14px) rotate(4deg); }
+        }
+        @keyframes twirl {
+            0% { transform: rotate(0) scale(1); }
+            40% { transform: translateY(-40px) rotate(200deg) scale(1.15); }
+            100% { transform: rotate(360deg) scale(1); }
+        }
+        .fairy-bubble {
+            position: absolute;
+            top: -4.2rem;
+            right: 8.5rem;
+            background: var(--card);
+            border: 2px solid var(--line);
+            border-radius: 1.2rem 1.2rem 0.3rem 1.2rem;
+            padding: 0.35rem 0.85rem;
+            font-family: var(--hand);
+            font-size: 1.3rem;
+            white-space: nowrap;
+            z-index: 6;
+            box-shadow: 3px 3px 0 var(--shadow);
+            transform-origin: bottom right;
+            animation: pop-in 500ms 1.2s cubic-bezier(.34,1.56,.64,1) backwards;
+        }
+        @keyframes pop-in { from { transform: scale(0); opacity: 0; } }
+
+        /* folder toy */
+        .dropzone {
+            position: relative;
+            border: 3px dashed var(--line);
+            border-radius: 1.75rem;
+            background: var(--card);
+            padding: 2.25rem 1.5rem 1.75rem;
+            text-align: center;
+            box-shadow: 8px 8px 0 var(--shadow);
+            transition: transform 220ms cubic-bezier(.34,1.56,.64,1), background 200ms;
+            transform: rotate(1.2deg);
+        }
+        .dropzone.over { transform: rotate(-1deg) scale(1.03); background: color-mix(in oklch, var(--butter) 60%, var(--card)); }
+        .dropzone.hidden-toy { display: none; }
+
+        .folder {
+            width: 150px;
+            height: 112px;
+            margin: 0 auto 1.25rem;
+            position: relative;
+            cursor: pointer;
+        }
+        .folder .back, .folder .front, .folder .tab, .folder .paper {
+            position: absolute;
+            border: 2.5px solid var(--obj-line);
+        }
+        .folder .tab { width: 58px; height: 22px; left: 0; top: 0; background: oklch(0.80 0.11 75); border-radius: 10px 10px 0 0; border-bottom: 0; }
+        .folder .back { inset: 16px 0 0 0; background: oklch(0.80 0.11 75); border-radius: 0 12px 12px 12px; }
+        .folder .paper { width: 104px; height: 80px; left: 22px; top: 8px; background: #fff; border-radius: 6px; transition: transform 300ms cubic-bezier(.34,1.56,.64,1); }
+        .folder .paper.p2 { transform: rotate(-8deg); left: 16px; background: var(--pink); }
+        .folder .paper.p3 { transform: rotate(7deg); left: 28px; background: var(--sky); }
+        .folder .front {
+            inset: 38px -4px 0 -4px;
+            background: oklch(0.87 0.12 85);
+            border-radius: 12px;
+            transform-origin: bottom center;
+            transition: transform 300ms cubic-bezier(.34,1.56,.64,1);
+        }
+        .dropzone:hover .folder .front, .dropzone.over .folder .front { transform: perspective(300px) rotateX(-28deg); }
+        .dropzone:hover .folder .paper.p2, .dropzone.over .folder .paper.p2 { transform: rotate(-16deg) translateY(-14px); }
+        .dropzone:hover .folder .paper.p3, .dropzone.over .folder .paper.p3 { transform: rotate(14deg) translateY(-18px); }
+        .dropzone:hover .folder .paper.p1, .dropzone.over .folder .paper.p1 { transform: translateY(-24px); }
+
+        .dropzone h3 { font-family: var(--display); font-variation-settings: "SOFT" 100, "WONK" 1; font-size: 1.6rem; margin-bottom: 0.35rem; }
+        .dropzone p { color: var(--ink-soft); font-size: 0.9rem; margin-bottom: 1.25rem; }
+        .dropzone .toy-actions { display: flex; gap: 0.6rem; justify-content: center; flex-wrap: wrap; }
+        .dropzone .fine { font-size: 0.78rem; margin: 1rem 0 0; }
+
+        /* mini browser result */
+        .mini-browser {
+            display: none;
+            border: 3px solid var(--line);
+            border-radius: 1.1rem;
+            background: var(--card);
+            box-shadow: 8px 8px 0 var(--shadow);
+            overflow: hidden;
+            transform: rotate(-1deg);
+            animation: pop-in 520ms cubic-bezier(.34,1.56,.64,1);
+        }
+        .mini-browser.show { display: block; }
+        .mb-bar {
             display: flex;
-            gap: 6px;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.6rem 0.8rem;
+            background: var(--pink);
+            border-bottom: 3px solid var(--line);
         }
+        .mb-dot { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--obj-line); background: var(--card); }
+        .mb-dot:nth-child(2) { background: var(--butter); }
+        .mb-dot:nth-child(3) { background: var(--mint); }
+        .mb-url {
+            flex: 1;
+            min-width: 0;
+            margin-left: 0.4rem;
+            background: oklch(0.995 0.004 60);
+            color: oklch(0.26 0.031 352);
+            border: 2px solid var(--obj-line);
+            border-radius: 999px;
+            padding: 0.15rem 0.75rem;
+            font-size: 0.78rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .mb-body { padding: 1.1rem 1.25rem 1.25rem; }
+        .mb-title { font-family: var(--display); font-variation-settings: "SOFT" 100, "WONK" 1; font-size: 1.5rem; font-weight: 700; margin-bottom: 0.25rem; overflow-wrap: anywhere; }
+        .mb-stats { color: var(--ink-soft); font-size: 0.82rem; margin-bottom: 0.85rem; }
+        .mb-verdict { font-family: var(--hand); font-size: 1.35rem; margin-bottom: 0.75rem; line-height: 1.2; }
+        .mb-files { list-style: none; margin: 0 0 1.1rem; padding: 0; font-size: 0.82rem; max-height: 180px; overflow: auto; }
+        .mb-files li { display: flex; justify-content: space-between; gap: 1rem; padding: 0.22rem 0; border-bottom: 1px dashed var(--border-light); opacity: 0; animation: file-in 300ms forwards; }
+        .mb-files li span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .mb-files li span:last-child { color: var(--ink-soft); flex-shrink: 0; }
+        @keyframes file-in { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: none; } }
+        .mb-actions { display: flex; gap: 0.6rem; flex-wrap: wrap; }
 
-        .terminal-dot {
-            width: 12px;
-            height: 12px;
+        /* cursor wisps */
+        .wisp-spark {
+            position: fixed;
+            width: 10px;
+            height: 10px;
             border-radius: 50%;
+            pointer-events: none;
+            z-index: 999;
+            background: radial-gradient(circle, #fff 0%, var(--glow) 45%, transparent 70%);
+            animation: spark 900ms ease-out forwards;
+        }
+        @keyframes spark {
+            from { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+            to { opacity: 0; transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy))) scale(0.2); }
         }
 
-        .terminal-dot.red { background: #ff5f56; }
-        .terminal-dot.yellow { background: #ffbd2e; }
-        .terminal-dot.green { background: #27ca40; }
-
-        .terminal-title {
-            color: #666;
-            font-size: 0.875rem;
-            margin-left: auto;
+        /* floating ambient wisps */
+        .ambient { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 0; }
+        .ambient i {
+            position: absolute;
+            width: var(--s, 8px);
+            height: var(--s, 8px);
+            border-radius: 50%;
+            background: radial-gradient(circle, #fff 0%, var(--glow) 40%, transparent 70%);
+            opacity: 0.8;
+            animation: drift var(--d, 12s) ease-in-out infinite alternate;
+        }
+        @keyframes drift {
+            0% { transform: translate(0, 0); opacity: 0.2; }
+            50% { opacity: 0.95; }
+            100% { transform: translate(var(--x, 30px), var(--y, -60px)); opacity: 0.3; }
         }
 
-        .terminal-body {
-            padding: 1.5rem;
+        /* ------------------------------------------------------------------
+           Marquee
+           ------------------------------------------------------------------ */
+        .marquee {
+            border-block: 3px solid var(--line);
+            background: var(--band-bg);
+            color: var(--band-fg);
+            overflow: hidden;
+            transform: rotate(-1.2deg);
+            margin: 0 -2rem;
+            position: relative;
+            z-index: 2;
+        }
+        .marquee-track {
+            display: flex;
+            width: max-content;
+            animation: scroll-x 60s linear infinite;
+        }
+        .marquee:hover .marquee-track { animation-play-state: paused; }
+        .marquee-track a {
+            padding: 0.7rem 1.1rem;
+            font-weight: 700;
+            color: inherit;
+            text-decoration: none;
+            white-space: nowrap;
+            display: inline-flex;
+            align-items: center;
+            gap: 1.1rem;
+        }
+        .marquee-track a::after { content: "✦"; color: var(--band-star); }
+        .marquee-track a:hover { text-decoration: underline wavy; opacity: 1; }
+        @keyframes scroll-x { to { transform: translateX(-50%); } }
+
+        /* ------------------------------------------------------------------
+           Neighborhood (polaroid board)
+           ------------------------------------------------------------------ */
+        .hood-head { display: flex; justify-content: space-between; align-items: end; gap: 2rem; flex-wrap: wrap; margin-bottom: 2rem; }
+        .hood-tools { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+
+        .board {
+            position: relative;
+            height: 720px;
+            border: 3px solid var(--line);
+            border-radius: 1.75rem;
+            background:
+                radial-gradient(circle, var(--board-dot) 1.2px, transparent 1.6px) 0 0 / 22px 22px,
+                var(--paper-2);
+            overflow: hidden;
+            touch-action: none;
+        }
+        .board-hint {
+            position: absolute;
+            left: 1.25rem;
+            bottom: 0.9rem;
+            font-family: var(--hand);
+            font-size: 1.35rem;
+            color: var(--ink-soft);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .polaroid {
+            position: absolute;
+            width: 250px;
+            padding: 10px 10px 0;
+            background: oklch(0.995 0.004 60);
+            color: oklch(0.26 0.031 352);
+            border: 2px solid var(--obj-line);
+            box-shadow: 5px 6px 0 var(--shadow);
+            transform: rotate(var(--r, 0deg));
+            cursor: grab;
+            user-select: none;
+            -webkit-user-select: none;
+            text-decoration: none;
+            transition: transform 220ms cubic-bezier(.34,1.56,.64,1), box-shadow 220ms;
+            animation: drop-in 600ms cubic-bezier(.34,1.56,.64,1) backwards;
+            animation-delay: var(--delay, 0ms);
+        }
+        .polaroid:hover { transform: rotate(0deg) scale(1.04); box-shadow: 8px 10px 0 var(--shadow); opacity: 1; }
+        .polaroid.dragging { cursor: grabbing; transform: rotate(calc(var(--r) * -0.5)) scale(1.08); box-shadow: 12px 16px 0 var(--shadow); transition: box-shadow 120ms; }
+        @keyframes drop-in { from { opacity: 0; transform: translateY(-60px) rotate(calc(var(--r) * 3)) scale(0.8); } }
+
+        .polaroid::before {
+            content: "";
+            position: absolute;
+            top: -12px;
+            left: 50%;
+            width: 84px;
+            height: 24px;
+            transform: translateX(-50%) rotate(var(--tape-r, -4deg));
+            background: var(--tape, oklch(0.84 0.075 300 / 0.75));
+            border-left: 2px dotted oklch(1 0 0 / 0.6);
+            border-right: 2px dotted oklch(1 0 0 / 0.6);
+        }
+        .polaroid img {
+            display: block;
+            width: 100%;
+            aspect-ratio: 16 / 10;
+            object-fit: cover;
+            object-position: top;
+            border: 1.5px solid var(--obj-line);
+            background: var(--paper-2);
+            pointer-events: none;
+            -webkit-user-drag: none;
+        }
+        .polaroid .cap {
+            font-family: var(--hand);
+            font-size: 1.4rem;
+            font-weight: 700;
+            padding: 0.35rem 0.2rem 0.45rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .polaroid .cap span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .polaroid .cap span:last-child { font-family: var(--wisp-font-family); font-size: 0.8rem; }
+
+        /* ------------------------------------------------------------------
+           Firehose feed
+           ------------------------------------------------------------------ */
+        .feed-wrap {
+            display: grid;
+            grid-template-columns: 1fr 1.2fr;
+            gap: 3rem;
+            align-items: center;
+        }
+        .feed {
+            border: 3px solid var(--line);
+            border-radius: 1.5rem;
+            background: var(--term-bg);
+            color: var(--term-text);
+            box-shadow: 8px 8px 0 var(--shadow);
+            overflow: hidden;
+            transform: rotate(-0.8deg);
+        }
+        .feed-head {
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            padding: 0.85rem 1.1rem;
+            border-bottom: 2px dashed oklch(1 0 0 / 0.15);
+            font-size: 0.85rem;
+        }
+        .live-dot { width: 10px; height: 10px; border-radius: 50%; background: oklch(0.72 0.19 150); box-shadow: 0 0 0 0 oklch(0.72 0.19 150 / 0.6); animation: ping 1.8s infinite; }
+        .live-dot.off { background: oklch(0.6 0.02 290); animation: none; }
+        @keyframes ping { 70% { box-shadow: 0 0 0 10px oklch(0.72 0.19 150 / 0); } 100% { box-shadow: 0 0 0 0 oklch(0.72 0.19 150 / 0); } }
+        .feed-head .muted { margin-left: auto; opacity: 0.6; font-size: 0.78rem; }
+        .feed-list { list-style: none; margin: 0; padding: 0.5rem; min-height: 260px; }
+        .feed-item {
+            display: flex;
+            align-items: center;
+            gap: 0.85rem;
+            padding: 0.7rem 0.75rem;
+            border-radius: 0.9rem;
+            color: inherit;
+            text-decoration: none;
+            animation: pop-in 480ms cubic-bezier(.34,1.56,.64,1);
+        }
+        .feed-item:hover { background: oklch(1 0 0 / 0.07); opacity: 1; }
+        .feed-item img, .feed-item .ph {
+            width: 38px; height: 38px; border-radius: 50%; flex-shrink: 0;
+            border: 2px solid var(--pink);
+            object-fit: cover;
+            background: var(--lilac);
+        }
+        .feed-item .who { font-size: 0.85rem; opacity: 0.75; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .feed-item .what { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .feed-item .what em { font-style: normal; color: var(--pink); }
+        .feed-item .when { margin-left: auto; font-size: 0.75rem; opacity: 0.6; white-space: nowrap; }
+        .feed-item > div { min-width: 0; }
+        .feed-empty { padding: 2.5rem 1rem; text-align: center; font-family: var(--hand); font-size: 1.5rem; opacity: 0.8; }
+
+        /* ------------------------------------------------------------------
+           Stickies
+           ------------------------------------------------------------------ */
+        .stickies {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1.75rem;
+            margin-top: 3rem;
+        }
+        .sticky {
+            background: var(--c, var(--butter));
+            color: oklch(0.26 0.031 352);
+            padding: 1.4rem 1.2rem 1.6rem;
+            min-height: 190px;
+            border: 2px solid var(--obj-line);
+            box-shadow: 5px 6px 0 var(--shadow);
+            transform: rotate(var(--r, -2deg));
+            transition: transform 260ms cubic-bezier(.34,1.56,.64,1);
+            position: relative;
+        }
+        .sticky:hover { transform: rotate(0deg) translateY(-6px) scale(1.03); }
+        .sticky::before {
+            content: "";
+            position: absolute;
+            top: -9px; left: 50%;
+            width: 18px; height: 18px;
+            transform: translateX(-50%);
+            border-radius: 50%;
+            background: var(--rose);
+            background: oklch(0.62 0.19 10);
+            border: 2px solid var(--obj-line);
+        }
+        .sticky .big { font-family: var(--hand); font-size: 2.1rem; font-weight: 700; line-height: 1; margin-bottom: 0.6rem; display: block; }
+        .sticky p { font-size: 0.95rem; line-height: 1.55; margin: 0; color: oklch(0.26 0.031 352); font-weight: 500; }
+
+        /* ------------------------------------------------------------------
+           CLI
+           ------------------------------------------------------------------ */
+        .cli-grid { display: grid; grid-template-columns: 1fr 1.1fr; gap: 3.5rem; align-items: center; }
+        .cli-perks { list-style: none; padding: 0; margin: 1.75rem 0 2rem; display: grid; gap: 0.85rem; }
+        .cli-perks li { display: flex; gap: 0.85rem; align-items: baseline; }
+        .cli-perks li b { display: block; }
+        .cli-perks .ico {
+            flex-shrink: 0;
+            width: 2rem; height: 2rem;
+            border-radius: 0.6rem;
+            display: grid; place-items: center;
+            border: 2px solid var(--line);
+            background: var(--c);
+            color: oklch(0.26 0.031 352);
             font-size: 0.95rem;
-            line-height: 1.8;
-            color: #c9d1d9;
+            transform: rotate(-6deg);
+        }
+        .cli-perks span.t { color: var(--ink-soft); font-size: 0.92rem; }
+
+        .copy-cmd {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-family: var(--wisp-font-family);
+            font-size: 0.9rem;
+            padding: 0.7rem 1rem;
+            border: 2px solid var(--line);
+            border-radius: 0.9rem;
+            background: var(--card);
+            color: var(--ink);
+            box-shadow: 3px 3px 0 var(--shadow);
+            cursor: pointer;
+            transition: transform 160ms ease;
+        }
+        .copy-cmd:hover { transform: translate(-1px, -1px); opacity: 1; background: var(--card); }
+        .copy-cmd .tag { font-family: var(--hand); font-size: 1.15rem; color: var(--rose); }
+
+        .terminal {
+            border: 3px solid var(--line);
+            border-radius: 1.25rem;
+            background: var(--term-bg);
+            box-shadow: 8px 8px 0 var(--shadow);
+            overflow: hidden;
+            transform: rotate(1deg);
+        }
+        .terminal-header { display: flex; align-items: center; gap: 0.45rem; padding: 0.7rem 1rem; background: var(--lilac); border-bottom: 3px solid var(--line); }
+        .terminal-header .mb-dot { width: 13px; height: 13px; }
+        .terminal-title { margin-left: auto; font-family: var(--hand); font-size: 1.2rem; color: oklch(0.26 0.031 352); }
+        .terminal-body { padding: 1.3rem 1.4rem; font-size: 0.9rem; line-height: 1.85; color: var(--term-text); min-height: 280px; }
+        .terminal-line { white-space: pre-wrap; }
+        .t-prompt { color: var(--pink); }
+        .t-muted { color: oklch(0.72 0.03 300); }
+        .t-ok { color: oklch(0.82 0.15 150); }
+        .t-link { color: var(--sky); }
+        .caret { display: inline-block; width: 0.55em; height: 1.1em; vertical-align: -0.2em; background: var(--pink); animation: blink 1s steps(1) infinite; }
+        @keyframes blink { 50% { opacity: 0; } }
+
+        /* ------------------------------------------------------------------
+           Final CTA
+           ------------------------------------------------------------------ */
+        .final {
+            text-align: center;
+            padding: 7rem 1.5rem 7rem;
+            position: relative;
+            overflow: hidden;
+        }
+        .final h2 { font-size: clamp(2.4rem, 6vw, 4.5rem); font-weight: 800; margin-bottom: 1rem; }
+        .final p { color: var(--ink-soft); margin: 0 auto 2.25rem; max-width: 30rem; }
+        .final .cta-row { justify-content: center; }
+        .final .fairy-mini { width: 70px; margin: 0 auto 1rem; display: block; animation: bob 3.4s ease-in-out infinite; }
+
+        footer { border-top: 2px dashed var(--border-light); }
+        .footer-brand p:first-child { font-family: var(--display); font-size: 1.3rem; }
+
+        /* ------------------------------------------------------------------
+           Responsive
+           ------------------------------------------------------------------ */
+        @media (max-width: 960px) {
+            .hero-grid, .feed-wrap, .cli-grid { grid-template-columns: 1fr; gap: 3rem; }
+            .stage { min-height: 0; margin-top: 3rem; }
+            .stickies { grid-template-columns: repeat(2, 1fr); }
         }
 
-        .terminal-line {
-            margin-bottom: 0.25rem;
-        }
-
-        .js .terminal[data-animate-on-view] .terminal-body > .terminal-line,
-        .js .terminal[data-animate-on-view] .terminal-body > .terminal-spacer {
-            opacity: 0;
-            transform: translateY(10px);
-            transition: opacity 240ms ease, transform 240ms ease;
-            will-change: opacity, transform;
-        }
-
-        .js .terminal[data-animate-on-view] .terminal-body > .terminal-line.is-visible,
-        .js .terminal[data-animate-on-view] .terminal-body > .terminal-spacer.is-visible,
-        .js .terminal[data-animate-on-view].is-complete .terminal-body > .terminal-line,
-        .js .terminal[data-animate-on-view].is-complete .terminal-body > .terminal-spacer {
-            opacity: 1;
-            transform: translateY(0);
-        }
-
-        .t-prompt { color: #7c7cff; }
-        .t-cmd { color: #c9d1d9; }
-        .t-muted { color: #666; }
-        .t-success { color: #27ca40; }
-        .t-cyan { color: #58a6ff; }
-        .t-output { color: #8b949e; padding-left: 1rem; display: block; }
-
-        .terminal-spacer {
-            height: 1rem;
-        }
-
-        /* Light mode terminal */
-        @media (prefers-color-scheme: light) {
-            .terminal {
-                background: #f6f8fa;
-                border: 1px solid var(--border-light);
-                box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.15);
+        @media (max-width: 720px) {
+            header { padding: 0.75rem 1rem; }
+            header nav { gap: 1rem; }
+            header nav a:not(.nav-cta) { display: none; }
+            .section { padding: 4.5rem 1rem; }
+            .hero { padding: 3rem 1rem 4rem; }
+            .fairy { width: 92px; top: -3rem; right: 0; }
+            .fairy-bubble { right: 6rem; top: -3.4rem; font-size: 1.1rem; }
+            .board {
+                height: auto;
+                display: flex;
+                gap: 1.25rem;
+                overflow-x: auto;
+                scroll-snap-type: x mandatory;
+                padding: 2rem 1rem 3.5rem;
+                touch-action: auto;
             }
-
-            .terminal-header {
-                background: #eaeef2;
-            }
-
-            .terminal-title {
-                color: #57606a;
-            }
-
-            .terminal-body {
-                color: #1f2328;
-            }
-
-            .t-prompt { color: #6639ba; }
-            .t-cmd { color: #1f2328; }
-            .t-muted { color: #656d76; }
-            .t-success { color: #1a7f37; }
-            .t-cyan { color: #0969da; }
-            .t-output { color: #656d76; }
+            .polaroid { position: relative; left: auto !important; top: auto !important; flex: 0 0 78%; width: auto; scroll-snap-align: center; cursor: pointer; }
+            .stickies { grid-template-columns: 1fr; gap: 1.5rem; }
+            .footer-inner { grid-template-columns: 1fr 1fr; gap: 2rem; }
+            .footer-bottom { flex-direction: column; gap: 1rem; align-items: flex-start; }
         }
 
         @media (prefers-reduced-motion: reduce) {
-            .js .terminal[data-animate-on-view] .terminal-body > .terminal-line,
-            .js .terminal[data-animate-on-view] .terminal-body > .terminal-spacer {
-                transition: none;
-                transform: none;
+            *, *::before, *::after {
+                animation-duration: 1ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 1ms !important;
             }
-        }
-
-        /* Showcase */
-        .showcase {
-            padding: 5rem 2rem;
-            background: var(--bg-alt);
-        }
-
-        .showcase-inner {
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-
-        .section-label {
-            color: var(--accent);
-            font-size: 0.875rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.1em;
-            margin-bottom: 1rem;
-        }
-
-        .section-title {
-            font-size: 2rem;
-            font-weight: 700;
-            margin-bottom: 0.75rem;
-            letter-spacing: -0.02em;
-        }
-
-        .showcase-desc {
-            color: var(--text-muted);
-            margin-bottom: 3rem;
-            font-size: 1.0625rem;
-            max-width: 40rem;
-        }
-
-        .showcase-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-            gap: 1.25rem;
-        }
-
-        .showcase-card {
-            display: block;
-            background: var(--bg);
-            border: 1px solid var(--border-light);
-            overflow: hidden;
-            text-decoration: none;
-            color: inherit;
-            transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
-        }
-
-        .showcase-card:hover {
-            transform: translateY(-2px);
-            border-color: var(--accent);
-            box-shadow: 0 12px 30px -18px rgba(0, 0, 0, 0.35);
-        }
-
-        .showcase-card picture {
-            display: block;
-        }
-
-        .showcase-thumb {
-            aspect-ratio: 16 / 10;
-            width: 100%;
-            object-fit: cover;
-            object-position: top;
-            display: block;
-            background: var(--bg-alt);
-        }
-
-        .showcase-meta {
-            padding: 0.75rem 1rem;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 0.75rem;
-            border-top: 1px solid var(--border-light);
-        }
-
-        .showcase-domain {
-            font-size: 0.875rem;
-            font-weight: 600;
-            color: var(--text);
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-
-        .showcase-arrow {
-            color: var(--text-subtle);
-            font-size: 0.875rem;
-        }
-
-        .showcase-empty {
-            color: var(--text-subtle);
-            font-size: 0.9375rem;
-        }
-
-        /* Features */
-        .features {
-            padding: 6rem 2rem;
-            background: var(--bg-alt);
-        }
-
-        .features-inner {
-            max-width: 1100px;
-            margin: 0 auto;
-        }
-
-        .features-list {
-            list-style: none;
-            margin: 2.5rem 0 0;
-            padding: 0;
-            display: grid;
-            gap: 1.25rem;
-            max-width: 46rem;
-        }
-
-        .features-list li {
-            position: relative;
-            padding-left: 1.75rem;
-            font-size: 1.125rem;
-            color: var(--text);
-            line-height: 1.5;
-        }
-
-        .features-list li::before {
-            content: "•";
-            position: absolute;
-            left: 0.25rem;
-            color: var(--text-subtle);
-        }
-
-        .features-list .hl {
-            color: var(--success);
-            font-weight: 600;
-        }
-
-        /* CLI Section */
-        .cli-section {
-            padding: 6rem 2rem;
-        }
-
-        .cli-inner {
-            max-width: 1100px;
-            margin: 0 auto;
-        }
-
-        .cli-section .section-title {
-            margin-bottom: 1rem;
-        }
-
-        .cli-desc {
-            color: var(--text-muted);
-            margin-bottom: 3rem;
-            font-size: 1.125rem;
-        }
-
-        .cli-features {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 1.5rem;
-            text-align: left;
-            margin-bottom: 3rem;
-        }
-
-        .cli-feature {
-            padding: 1.5rem;
-            border: 1px solid var(--border-light);
-            background: var(--bg);
-        }
-
-        .cli-feature h4 {
-            font-size: 1rem;
-            font-weight: 600;
-            margin-bottom: 0.5rem;
-        }
-
-        .cli-feature p {
-            font-size: 0.9375rem;
-            color: var(--text-muted);
-            line-height: 1.6;
-        }
-
-        .cli-subsection-grid {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 3rem;
-            align-items: center;
-            margin-top: 3rem;
-        }
-
-        .cli-subsection-grid > div > h3 {
-            font-size: 1.5rem;
-            font-weight: 600;
-            margin-bottom: 1rem;
-        }
-
-        .cli-subsection-grid > div > p {
-            color: var(--text-muted);
-            margin-bottom: 1.5rem;
-        }
-
-        .cli-install-row {
-            display: flex;
-            align-items: center;
-            gap: 1.5rem;
-            flex-wrap: wrap;
-        }
-        .cli-install-row code {
-            color: var(--text);
-            background: var(--code-bg);
-            padding: 0.5rem 0.75rem;
-            border: 1px solid var(--border-light);
-            border-radius: 4px;
-            font-size: 0.875rem;
-        }
-
-        /* Final CTA */
-        .final-cta {
-            padding: 6rem 2rem;
-            text-align: center;
-            background: var(--bg-alt);
-        }
-
-        .final-cta-inner {
-            max-width: 600px;
-            margin: 0 auto;
-        }
-
-        .final-cta h2 {
-            font-size: 2.25rem;
-            font-weight: 700;
-            margin-bottom: 1rem;
-            letter-spacing: -0.02em;
-        }
-
-        .final-cta p {
-            color: var(--text-muted);
-            margin-bottom: 2rem;
-        }
-
-        .final-cta .cta-buttons {
-            justify-content: center;
-        }
-
-        /* Responsive */
-        @media (max-width: 900px) {
-            .hero {
-                padding: 4rem 1.5rem 3rem;
-            }
-
-            .hero-grid {
-                grid-template-columns: 1fr;
-                gap: 3rem;
-            }
-
-            .cli-features {
-                grid-template-columns: 1fr;
-            }
-
-            .cli-subsection-grid {
-                grid-template-columns: 1fr;
-                gap: 2rem;
-            }
-
-            .cta-buttons {
-                flex-direction: column;
-                width: 100%;
-            }
-
-            .cta-primary, .cta-secondary {
-                width: 100%;
-                text-align: center;
-            }
+            .marquee-track { animation: none; }
         }
     </style>
 </head>
@@ -501,155 +846,186 @@
     </script>
     <header>
         <div class="header-inner">
-            <a href="/" class="logo"><img src="/transparent-full-size-ico.png" alt="">wisp.place</a>
+            <a href="/" class="logo"><img src="/fairy.webp" alt="">wisp.place</a>
             <nav>
                 <a href="https://docs.wisp.place" target="_blank">Docs</a>
                 <a href="https://blog.wisp.place" target="_blank">Blog</a>
                 <a href="https://status.wisp.place" target="_blank">Status</a>
-                <a href="{{ATPROTO_LOGIN_URL}}" class="nav-cta">Sign In</a>
+                <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Toggle light and dark">☾</button>
+                <a href="{{ATPROTO_LOGIN_URL}}" class="nav-cta">Sign in ✦</a>
             </nav>
         </div>
     </header>
 
-    <section class="hero">
-        <div class="hero-inner">
+    <main>
+        <section class="hero">
+            <div class="ambient" id="ambient" aria-hidden="true"></div>
             <div class="hero-grid">
-                <div class="hero-left">
-                    <h1>Somewhere to put your stuff.</h1>
+                <div>
+                    <h1 class="display">Somewhere to put your
+                        <span class="squiggle">stuff.<svg viewBox="0 0 200 20" preserveAspectRatio="none" aria-hidden="true"><path d="M2 12 C 20 2, 35 20, 55 10 S 90 2, 110 11 S 150 20, 170 9 S 192 6, 198 10"/></svg></span>
+                    </h1>
                     <p class="hero-desc">
-                        A folder becomes a website. That's the whole thing.
+                        <span class="hand">A folder becomes a website.</span>
                     </p>
-                    <div class="cta-buttons">
-                        <a href="{{ATPROTO_LOGIN_URL}}" class="cta-primary">Upload a folder</a>
-                        <a href="https://docs.wisp.place" target="_blank" class="cta-secondary">Read Docs</a>
+                    <div class="cta-row">
+                        <a href="{{ATPROTO_LOGIN_URL}}" class="btn-pop">Upload a folder →</a>
+                        <a href="https://docs.wisp.place" target="_blank" class="btn-pop alt">Read the docs</a>
                     </div>
+                    <p class="hero-note">✿ free, no card, run by one person for fun</p>
                 </div>
-                <div class="hero-right">
-                    <div class="terminal" data-animate-on-view>
-                        <div class="terminal-header">
-                            <div class="terminal-dots">
-                                <span class="terminal-dot red"></span>
-                                <span class="terminal-dot yellow"></span>
-                                <span class="terminal-dot green"></span>
+
+                <div class="stage">
+                    <button class="fairy" id="fairy" type="button" aria-label="Poke the fairy">
+                        <img src="/fairy.webp" alt="" width="315" height="480">
+                    </button>
+                    <div class="fairy-bubble" id="fairy-bubble">psst, try it! ↓</div>
+
+                    <div class="dropzone" id="dropzone">
+                        <div class="folder" aria-hidden="true">
+                            <div class="tab"></div>
+                            <div class="back"></div>
+                            <div class="paper p2"></div>
+                            <div class="paper p3"></div>
+                            <div class="paper p1"></div>
+                            <div class="front"></div>
+                        </div>
+                        <h3>Drop a folder on me</h3>
+                        <p>See what it'd look like as a website.</p>
+                        <div class="toy-actions">
+                            <label class="btn-pop butter small" for="folder-input" style="margin:0">pick a folder</label>
+                            <button type="button" class="btn-pop alt small" id="pretend">use a pretend one</button>
+                        </div>
+                        <input type="file" id="folder-input" webkitdirectory directory multiple hidden>
+                        <p class="fine">Nothing leaves your computer until you sign in.</p>
+                    </div>
+
+                    <div class="mini-browser" id="mini-browser" aria-live="polite">
+                        <div class="mb-bar">
+                            <span class="mb-dot"></span><span class="mb-dot"></span><span class="mb-dot"></span>
+                            <span class="mb-url" id="mb-url">sites.wisp.place/you/my-site</span>
+                        </div>
+                        <div class="mb-body">
+                            <div class="mb-title" id="mb-title">my-site</div>
+                            <div class="mb-stats" id="mb-stats"></div>
+                            <div class="mb-verdict" id="mb-verdict"></div>
+                            <ul class="mb-files" id="mb-files"></ul>
+                            <div class="mb-actions">
+                                <a href="{{ATPROTO_LOGIN_URL}}" class="btn-pop small">make it real ✦</a>
+                                <button type="button" class="btn-pop alt small" id="again">another one</button>
                             </div>
-                            <span class="terminal-title">terminal</span>
-                        </div>
-                        <div class="terminal-body">
-                            <div class="terminal-line"><span class="t-prompt">$</span> <span class="t-cmd">npx wispctl deploy</span></div>
-                            <div class="terminal-spacer"></div>
-                            <div class="terminal-line"><span class="t-muted">◇</span> Authenticated as <span class="t-cyan">@nekomimi.pet</span></div>
-                            <div class="terminal-line"><span class="t-muted">◇</span> Found 12 files (24 KB)</div>
-                            <div class="terminal-line"><span class="t-muted">◇</span> Uploading to PDS...</div>
-                            <div class="terminal-spacer"></div>
-                            <div class="terminal-line"><span class="t-success">✓</span> <span class="t-success">Deployed successfully</span></div>
-                            <div class="terminal-line t-output">https://sites.wisp.place/nekomimi.pet/mysite</div>
                         </div>
                     </div>
                 </div>
             </div>
+        </section>
+
+        <div class="marquee" aria-label="Sites hosted on wisp.place">
+            <div class="marquee-track" id="marquee-track"></div>
         </div>
-    </section>
 
-    <section class="showcase">
-        <div class="showcase-inner">
-            <p class="section-label">In the wild</p>
-            <h2 class="section-title">Featured sites</h2>
-            <p class="showcase-desc">A handful of pages people have put on wisp.place.</p>
-            <div class="showcase-grid" id="showcase-grid">
-                <p class="showcase-empty">Loading sites…</p>
-            </div>
-        </div>
-    </section>
-
-    <section class="features">
-        <div class="features-inner">
-            <p class="section-label">No suits involved</p>
-            <h2 class="section-title">A passion project, not a startup</h2>
-            <ul class="features-list">
-                <li>Run by <span class="hl">one person</span> for fun — no investors, no roadmap meetings</li>
-                <li><span class="hl">Free</span> because I want it to be, not as a trial that expires</li>
-                <li>No upsells, no analytics pixels, no "contact sales" — just hosting</li>
-                <li>Built in spare time, so be kind — <span class="hl">it'll keep getting better</span></li>
-            </ul>
-        </div>
-    </section>
-
-    <section class="cli-section">
-        <div class="cli-inner">
-            <p class="section-label">For power users</p>
-            <h2 class="section-title">Command line first</h2>
-            <p class="cli-desc">Full control from your terminal. Integrates with your existing workflow.</p>
-
-            <div class="cli-features">
-                <div class="cli-feature">
-                    <h4>Deploy from anywhere</h4>
-                    <p>Git hooks, CI/CD pipelines, makefiles. Drop in one command.</p>
+        <section class="section" id="neighborhood">
+            <div class="section-inner">
+                <div class="hood-head">
+                    <div>
+                        <span class="kicker">the neighborhood</span>
+                        <h2 class="section-title">People are putting<br>their stuff here</h2>
+                        <p class="lede">Real sites, living on wisp.place right now. Drag them around, click one to visit.</p>
+                    </div>
+                    <div class="hood-tools">
+                        <button type="button" class="btn-pop mint small" id="shuffle">shuffle ⟳</button>
+                        <button type="button" class="btn-pop small" id="random">take me somewhere ✈</button>
+                    </div>
                 </div>
-                <div class="cli-feature">
-                    <h4>Self-host option</h4>
-                    <p>Run your own server. Watches the firehose, pulls updates automatically.</p>
-                </div>
-                <div class="cli-feature">
-                    <h4>Zero config</h4>
-                    <p>No YAML, no JSON. Sensible defaults that just work.</p>
-                </div>
-                <div class="cli-feature">
-                    <h4>Local preview</h4>
-                    <p>Serve any wisp site locally for development and testing.</p>
+                <div class="board" id="board">
+                    <span class="board-hint">← they're sticky, but only a little</span>
                 </div>
             </div>
+        </section>
 
-            <div class="cli-subsection-grid">
+
+        <section class="section" style="background: var(--paper-2); border-block: 3px solid var(--line);">
+            <div class="section-inner">
+                <span class="kicker">no suits involved</span>
+                <h2 class="section-title">A passion project,<br>not a startup</h2>
+                <div class="stickies">
+                    <div class="sticky" style="--c: var(--butter); --r: -3deg"><span class="big">one person</span><p>Run by one person for fun. No investors, no roadmap meetings.</p></div>
+                    <div class="sticky" style="--c: var(--pink); --r: 2deg"><span class="big">free!</span><p>Because I want it to be, not as a trial that expires.</p></div>
+                    <div class="sticky" style="--c: var(--mint); --r: -1.5deg"><span class="big">no nonsense</span><p>No upsells, no analytics pixels, no "contact sales". Just hosting.</p></div>
+                    <div class="sticky" style="--c: var(--lilac); --r: 3deg"><span class="big">be kind ♡</span><p>Built in spare time, so it'll keep getting better.</p></div>
+                </div>
+            </div>
+        </section>
+
+        <section class="section">
+            <div class="section-inner cli-grid">
                 <div>
-                    <h3>Self-host anywhere</h3>
-                    <p>Deploy your own server anywhere in the world. The CLI watches the firehose and automatically pulls updates when you push changes—complete control over your hosting infrastructure.</p>
-                    <div class="cli-install-row">
-                        <a href="https://docs.wisp.place/cli/" target="_blank" class="cta-secondary">Install CLI</a>
-                        <code>npm install -g wispctl</code>
-                    </div>
+                    <span class="kicker">for terminal goblins</span>
+                    <h2 class="section-title">Or just type<br>one command</h2>
+                    <p class="lede">The CLI deploys straight from your terminal. It can also run your own little server that watches the firehose and pulls updates by itself.</p>
+                    <ul class="cli-perks">
+                        <li><span class="ico" style="--c: var(--pink)">⚡</span><div><b>Deploy from anywhere</b><span class="t">Git hooks, CI, makefiles. One line.</span></div></li>
+                        <li><span class="ico" style="--c: var(--mint)">⌂</span><div><b>Self-host if you like</b><span class="t">Watches the firehose, re-pulls on every push.</span></div></li>
+                        <li><span class="ico" style="--c: var(--butter)">✎</span><div><b>Zero config</b><span class="t">No YAML. Sensible defaults.</span></div></li>
+                    </ul>
+                    <button type="button" class="copy-cmd" id="copy-cmd" data-cmd="npm install -g wispctl">
+                        <span>$ npm install -g wispctl</span><span class="tag" id="copy-tag">copy</span>
+                    </button>
                 </div>
-                <div>
-                    <div class="terminal" data-animate-on-view data-visible-items="5">
-                        <div class="terminal-header">
-                            <div class="terminal-dots">
-                                <span class="terminal-dot red"></span>
-                                <span class="terminal-dot yellow"></span>
-                                <span class="terminal-dot green"></span>
-                            </div>
-                            <span class="terminal-title">terminal</span>
-                        </div>
-                        <div class="terminal-body">
-                            <div class="terminal-line"><span class="t-prompt">$</span> <span class="t-cmd">wispctl serve nekomimi.pet -s myblog</span></div>
-                            <div class="terminal-spacer"></div>
-                            <div class="terminal-line"><span class="t-muted">◇</span> Serving myblog from nekomimi.pet</div>
-                            <div class="terminal-line"><span class="t-success">✓</span> <span class="t-success">Server running at http://localhost:8080</span></div>
-                            <div class="terminal-line"><span class="t-muted">◇</span> Watching for updates via firehose...</div>
-                            <div class="terminal-spacer"></div>
-                            <div class="terminal-line"><span class="t-muted">◇</span> Site update received, re-pulling...</div>
-                            <div class="terminal-line"><span class="t-muted">◇</span> Files to download: 1, unchanged: 4</div>
-                            <div class="terminal-line"><span class="t-success">✓</span> <span class="t-success">Site reloaded</span></div>
-                        </div>
+                <div class="terminal" id="terminal">
+                    <div class="terminal-header">
+                        <span class="mb-dot" style="background: var(--pink)"></span><span class="mb-dot"></span><span class="mb-dot"></span>
+                        <span class="terminal-title">~/my-stuff</span>
+                    </div>
+                    <div class="terminal-body" id="terminal-body" aria-label="wispctl deploy example">
+                        <div class="terminal-line"><span class="t-prompt">$</span> npx wispctl deploy</div>
+                        <div class="terminal-line"><span class="t-muted">◇</span> Authenticated as <span class="t-link">@nekomimi.pet</span></div>
+                        <div class="terminal-line"><span class="t-muted">◇</span> Found 12 files (24 KB)</div>
+                        <div class="terminal-line"><span class="t-muted">◇</span> Uploading to PDS...</div>
+                        <div class="terminal-line"><span class="t-ok">✓ Deployed successfully</span></div>
+                        <div class="terminal-line">  <span class="t-link">https://sites.wisp.place/nekomimi.pet/mysite</span></div>
                     </div>
                 </div>
             </div>
-        </div>
-    </section>
+        </section>
 
-    <section class="final-cta">
-        <div class="final-cta-inner">
-            <h2>Ready to deploy?</h2>
-            <p>Free forever. No credit card required.</p>
-            <div class="cta-buttons">
-                <a href="{{ATPROTO_LOGIN_URL}}" class="cta-primary">Start Deploying</a>
+        <section class="section" style="padding-top: 1rem">
+            <div class="section-inner feed-wrap">
+                <div>
+                    <span class="kicker">straight from the firehose</span>
+                    <h2 class="section-title">Fresh deploys, live</h2>
+                    <p class="lede">This little box is listening for new sites going up. Watch long enough and you'll catch one landing.</p>
+                </div>
+                <div class="feed">
+                    <div class="feed-head">
+                        <span class="live-dot off" id="live-dot"></span>
+                        <span id="live-label">connecting…</span>
+                        <span class="muted">new sites</span>
+                    </div>
+                    <ul class="feed-list" id="feed-list">
+                        <li class="feed-empty">tuning the antenna ✦</li>
+                    </ul>
+                </div>
             </div>
-        </div>
-    </section>
+        </section>
+
+        <section class="final">
+            <div class="ambient" id="ambient-2" aria-hidden="true"></div>
+            <img class="fairy-mini" src="/fairy.webp" alt="">
+            <h2 class="display">Go on, put your<br><span class="squiggle">stuff</span> somewhere.</h2>
+            <p>Free forever. No credit card. Just sign in with your Bluesky account.</p>
+            <div class="cta-row">
+                <a href="{{ATPROTO_LOGIN_URL}}" class="btn-pop">Start deploying ✦</a>
+                <a href="#neighborhood" class="btn-pop alt">see the neighborhood</a>
+            </div>
+        </section>
+    </main>
 
     <footer>
         <div class="footer-inner">
             <div class="footer-brand">
                 <p>wisp.place</p>
-                <p>Static hosting on AT Protocol.<br>Your data, your PDS, your rules.</p>
+                <p>Somewhere to put your stuff.<br>A folder becomes a website.</p>
             </div>
             <div class="footer-col">
                 <h4>Product</h4>
@@ -677,7 +1053,7 @@
             </div>
         </div>
         <div class="footer-bottom">
-            <p>Built by @nekomimi.pet</p>
+            <p>Built with ♡ by @nekomimi.pet</p>
             <nav>
                 <a href="/acceptable-use">Acceptable Use</a>
                 <a href="/privacy">Privacy Policy</a>
@@ -685,14 +1061,14 @@
             </nav>
         </div>
     </footer>
+
     <script>
-        // Featured sites loader — pulls from /api/screenshots and renders a grid.
         (() => {
-            const grid = document.getElementById('showcase-grid');
-            if (!grid) return;
-
-            const filenameToDomain = (filename) => filename.replace(/\.webp$/i, '').replace(/_/g, '.');
-
+            const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+            const finePointer = window.matchMedia('(pointer: fine)').matches;
+            const $ = (id) => document.getElementById(id);
+            const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+            const rand = (a, b) => a + Math.random() * (b - a);
             const shuffle = (arr) => {
                 const copy = arr.slice();
                 for (let i = copy.length - 1; i > 0; i--) {
@@ -701,151 +1077,471 @@
                 }
                 return copy;
             };
+            const fmtBytes = (n) => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`;
+
+            // ── Sparkles ────────────────────────────────────────────────
+            const spark = (x, y, spread = 30) => {
+                const el = document.createElement('i');
+                el.className = 'wisp-spark';
+                el.style.left = `${x}px`;
+                el.style.top = `${y}px`;
+                el.style.setProperty('--dx', `${rand(-spread, spread)}px`);
+                el.style.setProperty('--dy', `${rand(-spread * 1.4, spread * 0.4)}px`);
+                const s = rand(6, 14);
+                el.style.width = el.style.height = `${s}px`;
+                document.body.appendChild(el);
+                el.addEventListener('animationend', () => el.remove());
+            };
+            const burst = (x, y, n = 18) => { if (!reduceMotion) for (let i = 0; i < n; i++) spark(x, y, 70); };
+
+            if (!reduceMotion && finePointer) {
+                let last = 0;
+                window.addEventListener('pointermove', (e) => {
+                    const now = performance.now();
+                    if (now - last < 45) return;
+                    last = now;
+                    spark(e.clientX, e.clientY, 18);
+                }, { passive: true });
+            }
+
+            for (const id of ['ambient', 'ambient-2']) {
+                const box = $(id);
+                if (!box || reduceMotion) continue;
+                for (let i = 0; i < 16; i++) {
+                    const w = document.createElement('i');
+                    w.style.left = `${rand(0, 100)}%`;
+                    w.style.top = `${rand(0, 100)}%`;
+                    w.style.setProperty('--s', `${rand(5, 13)}px`);
+                    w.style.setProperty('--d', `${rand(7, 16)}s`);
+                    w.style.setProperty('--x', `${rand(-60, 60)}px`);
+                    w.style.setProperty('--y', `${rand(-90, 30)}px`);
+                    w.style.animationDelay = `${rand(-10, 0)}s`;
+                    box.appendChild(w);
+                }
+            }
+
+            // ── Fairy ───────────────────────────────────────────────────
+            const fairy = $('fairy');
+            const bubble = $('fairy-bubble');
+            const quips = ['hi!! ✦', 'wheee', 'that tickles', 'put your stuff here!', 'i live on the internet', 'boop', 'no investors, just me', 'psst, try it! ↓'];
+            let quip = 0;
+            fairy.addEventListener('click', (e) => {
+                fairy.classList.remove('twirl');
+                void fairy.offsetWidth;
+                fairy.classList.add('twirl');
+                const r = fairy.getBoundingClientRect();
+                burst(r.left + r.width / 2, r.top + r.height / 2, 24);
+                bubble.textContent = quips[quip++ % quips.length];
+            });
+            fairy.addEventListener('animationend', () => fairy.classList.remove('twirl'));
+
+            // ── Folder toy ──────────────────────────────────────────────
+            const zone = $('dropzone');
+            const input = $('folder-input');
+            const browser = $('mini-browser');
+
+            const slug = (s) => (s || 'my-site').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'my-site';
+
+            const showSite = (name, files) => {
+                const total = files.reduce((n, f) => n + (f.size || 0), 0);
+                const hasIndex = files.some((f) => /^index\.html?$/i.test(f.path));
+                const htmlCount = files.filter((f) => /\.html?$/i.test(f.path)).length;
+                const site = slug(name);
+                $('mb-url').textContent = `sites.wisp.place/you.bsky.social/${site}`;
+                $('mb-title').textContent = site;
+                $('mb-stats').textContent = `${files.length} file${files.length === 1 ? '' : 's'} · ${fmtBytes(total)}`;
+                $('mb-verdict').textContent = hasIndex
+                    ? '✓ found an index.html, this is a website already!'
+                    : htmlCount
+                        ? `✿ ${htmlCount} html page${htmlCount === 1 ? '' : 's'}, no index. turn on directory listing and you're golden`
+                        : '✿ no html, but with directory listing on it becomes a cute little file share';
+                const list = $('mb-files');
+                list.innerHTML = '';
+                const shown = files.slice().sort((a, b) => a.path.split('/').length - b.path.split('/').length || a.path.localeCompare(b.path)).slice(0, 14);
+                shown.forEach((f, i) => {
+                    const li = document.createElement('li');
+                    li.style.animationDelay = `${i * 45}ms`;
+                    li.innerHTML = `<span>${esc(f.path)}</span><span>${fmtBytes(f.size || 0)}</span>`;
+                    list.appendChild(li);
+                });
+                if (files.length > shown.length) {
+                    const li = document.createElement('li');
+                    li.style.animationDelay = `${shown.length * 45}ms`;
+                    li.innerHTML = `<span>…and ${files.length - shown.length} more</span><span></span>`;
+                    list.appendChild(li);
+                }
+                const r = zone.getBoundingClientRect();
+                burst(r.left + r.width / 2, r.top + r.height / 3, 30);
+                zone.classList.add('hidden-toy');
+                browser.classList.remove('show');
+                void browser.offsetWidth;
+                browser.classList.add('show');
+                bubble.textContent = 'ooh, nice stuff!';
+            };
+
+            const reset = () => {
+                browser.classList.remove('show');
+                zone.classList.remove('hidden-toy');
+                input.value = '';
+                bubble.textContent = 'psst, try it! ↓';
+            };
+            $('again').addEventListener('click', reset);
+
+            $('pretend').addEventListener('click', () => {
+                showSite('my-cool-zine', [
+                    { path: 'index.html', size: 4210 },
+                    { path: 'about.html', size: 2380 },
+                    { path: 'style.css', size: 3120 },
+                    { path: 'img/me.png', size: 184320 },
+                    { path: 'img/cat.gif', size: 92110 },
+                    { path: 'zines/issue-1.html', size: 8840 },
+                    { path: 'zines/issue-2.html', size: 9120 },
+                    { path: 'fonts/comic.woff2', size: 30210 },
+                ]);
+            });
+
+            input.addEventListener('change', () => {
+                const picked = Array.from(input.files || []);
+                if (!picked.length) return;
+                const root = (picked[0].webkitRelativePath || picked[0].name).split('/')[0];
+                const files = picked.map((f) => ({
+                    path: (f.webkitRelativePath || f.name).split('/').slice(1).join('/') || f.name,
+                    size: f.size,
+                }));
+                showSite(root, files);
+            });
+
+            const walk = async (entry, prefix, out) => {
+                if (out.length >= 2000) return;
+                if (entry.isFile) {
+                    const file = await new Promise((res) => entry.file(res, () => res(null)));
+                    out.push({ path: prefix + entry.name, size: file ? file.size : 0 });
+                } else if (entry.isDirectory) {
+                    const reader = entry.createReader();
+                    let batch;
+                    do {
+                        batch = await new Promise((res) => reader.readEntries(res, () => res([])));
+                        for (const child of batch) await walk(child, `${prefix}${entry.name}/`, out);
+                    } while (batch.length && out.length < 2000);
+                }
+            };
+
+            ['dragenter', 'dragover'].forEach((t) => zone.addEventListener(t, (e) => { e.preventDefault(); zone.classList.add('over'); }));
+            ['dragleave', 'drop'].forEach((t) => zone.addEventListener(t, () => zone.classList.remove('over')));
+            zone.addEventListener('drop', async (e) => {
+                e.preventDefault();
+                const items = Array.from(e.dataTransfer?.items || []).map((i) => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
+                if (!items.length) return;
+                const out = [];
+                let name = 'my-site';
+                if (items.length === 1 && items[0].isDirectory) {
+                    name = items[0].name;
+                    await walk(items[0], '', out);
+                    out.forEach((f) => { f.path = f.path.split('/').slice(1).join('/'); });
+                } else {
+                    for (const it of items) await walk(it, '', out);
+                }
+                if (out.length) showSite(name, out);
+            });
+            // keep a stray drop elsewhere from navigating away
+            window.addEventListener('dragover', (e) => e.preventDefault());
+            window.addEventListener('drop', (e) => e.preventDefault());
+
+            // ── Theme toggle ────────────────────────────────────────────
+            const root = document.documentElement;
+            const systemDark = window.matchMedia('(prefers-color-scheme: dark)');
+            const isDark = () => root.dataset.theme ? root.dataset.theme === 'dark' : systemDark.matches;
+            const shotFor = (s) => (isDark() ? s.dark || s.light : s.light || s.dark);
+            const toggle = $('theme-toggle');
+            const syncTheme = () => {
+                toggle.textContent = isDark() ? '☀' : '☾';
+                for (const card of document.querySelectorAll('.polaroid')) {
+                    const src = shotFor({ light: card.dataset.light, dark: card.dataset.dark });
+                    const img = card.querySelector('img');
+                    if (src && img.getAttribute('src') !== src) img.src = src;
+                }
+            };
+            toggle.addEventListener('click', (e) => {
+                const next = isDark() ? 'light' : 'dark';
+                root.dataset.theme = next;
+                try { localStorage.setItem('wisp-theme', next); } catch {}
+                const r = e.currentTarget.getBoundingClientRect();
+                burst(r.left + r.width / 2, r.top + r.height / 2, 16);
+                syncTheme();
+            });
+            systemDark.addEventListener('change', syncTheme);
+            syncTheme();
+
+            // ── Real sites: marquee + polaroid board ────────────────────
+            const board = $('board');
+            const tapes = ['oklch(0.84 0.075 300 / 0.8)', 'oklch(0.83 0.095 5 / 0.8)', 'oklch(0.89 0.075 165 / 0.8)', 'oklch(0.93 0.095 95 / 0.85)', 'oklch(0.88 0.06 235 / 0.8)'];
+            const toDomain = (f) => f.replace(/\.webp$/i, '').replace(/_/g, '.');
+            let sites = [];
+
+            const layout = () => {
+                const cards = Array.from(board.querySelectorAll('.polaroid'));
+                const W = board.clientWidth;
+                const H = board.clientHeight;
+                const cardW = 250;
+                const cols = Math.max(1, Math.floor(W / (cardW * 0.82)));
+                const rows = Math.ceil(cards.length / cols);
+                const cellW = W / cols;
+                const cellH = (H - 40) / Math.max(rows, 1);
+                cards.forEach((c, i) => {
+                    const col = i % cols;
+                    const row = Math.floor(i / cols);
+                    const x = col * cellW + (cellW - cardW) / 2 + rand(-24, 24);
+                    const y = row * cellH + 20 + rand(-10, 30);
+                    c.style.left = `${Math.max(8, Math.min(W - cardW - 8, x))}px`;
+                    c.style.top = `${Math.max(12, Math.min(H - 230, y))}px`;
+                });
+            };
+
+            let zTop = 10;
+            const makeDraggable = (card) => {
+                let sx = 0, sy = 0, ox = 0, oy = 0, moved = false, active = false;
+                card.addEventListener('pointerdown', (e) => {
+                    if (window.matchMedia('(max-width: 720px)').matches || e.button !== 0) return;
+                    active = true;
+                    moved = false;
+                    sx = e.clientX; sy = e.clientY;
+                    ox = card.offsetLeft; oy = card.offsetTop;
+                    card.style.zIndex = ++zTop;
+                    card.setPointerCapture(e.pointerId);
+                });
+                card.addEventListener('pointermove', (e) => {
+                    if (!active) return;
+                    const dx = e.clientX - sx, dy = e.clientY - sy;
+                    if (!moved && Math.hypot(dx, dy) < 5) return;
+                    moved = true;
+                    card.classList.add('dragging');
+                    const maxX = board.clientWidth - card.offsetWidth + 60;
+                    const maxY = board.clientHeight - card.offsetHeight + 60;
+                    card.style.left = `${Math.max(-60, Math.min(maxX, ox + dx))}px`;
+                    card.style.top = `${Math.max(-40, Math.min(maxY, oy + dy))}px`;
+                });
+                const end = (e) => {
+                    if (!active) return;
+                    active = false;
+                    card.classList.remove('dragging');
+                    if (moved) {
+                        card.style.setProperty('--r', `${rand(-9, 9).toFixed(1)}deg`);
+                        burst(e.clientX, e.clientY, 8);
+                    }
+                };
+                card.addEventListener('pointerup', end);
+                card.addEventListener('pointercancel', end);
+                card.addEventListener('click', (e) => { if (moved) { e.preventDefault(); moved = false; } });
+            };
+
+            const renderBoard = () => {
+                board.querySelectorAll('.polaroid').forEach((n) => n.remove());
+                const narrow = window.matchMedia('(max-width: 720px)').matches;
+                const count = narrow ? 8 : Math.min(sites.length, board.clientWidth > 1000 ? 10 : 7);
+                shuffle(sites).slice(0, count).forEach((s, i) => {
+                    const a = document.createElement('a');
+                    a.className = 'polaroid';
+                    a.href = `https://${s.domain}`;
+                    a.target = '_blank';
+                    a.rel = 'noopener noreferrer';
+                    a.draggable = false;
+                    a.style.setProperty('--r', `${rand(-8, 8).toFixed(1)}deg`);
+                    a.style.setProperty('--tape', tapes[i % tapes.length]);
+                    a.style.setProperty('--tape-r', `${rand(-8, 8).toFixed(1)}deg`);
+                    a.style.setProperty('--delay', `${i * 70}ms`);
+                    a.innerHTML = `<img src="${shotFor(s)}" alt="Screenshot of ${esc(s.domain)}" loading="lazy" decoding="async" draggable="false"><div class="cap"><span>${esc(s.domain)}</span><span>↗</span></div>`;
+                    a.dataset.light = s.light || '';
+                    a.dataset.dark = s.dark || '';
+                    board.appendChild(a);
+                    makeDraggable(a);
+                });
+                if (!narrow) layout();
+            };
 
             fetch('/api/screenshots')
                 .then((r) => r.ok ? r.json() : { light: [], dark: [] })
-                .then(({ light, dark }) => {
-                    const lightSet = new Set(Array.isArray(light) ? light : []);
-                    const darkSet = new Set(Array.isArray(dark) ? dark : []);
-                    // Only show sites that have at least one variant; prefer ones with both.
-                    const all = Array.from(new Set([...lightSet, ...darkSet]));
-
-                    if (all.length === 0) {
-                        grid.innerHTML = '<p class="showcase-empty">No sites to show yet.</p>';
+                .then(({ light = [], dark = [] }) => {
+                    const lightSet = new Set(light);
+                    const darkSet = new Set(dark);
+                    sites = Array.from(new Set([...light, ...dark])).map((f) => ({
+                        domain: toDomain(f),
+                        light: lightSet.has(f) ? `/screenshots/light/${encodeURIComponent(f)}` : null,
+                        dark: darkSet.has(f) ? `/screenshots/dark/${encodeURIComponent(f)}` : null,
+                    }));
+                    if (!sites.length) {
+                        board.insertAdjacentHTML('beforeend', '<p class="feed-empty" style="padding-top:8rem">the neighborhood is still moving in ✦</p>');
                         return;
                     }
-
-                    const picks = shuffle(all).slice(0, 8);
-
-                    grid.innerHTML = '';
-                    for (const file of picks) {
-                        const domain = filenameToDomain(file);
-                        const hasLight = lightSet.has(file);
-                        const hasDark = darkSet.has(file);
-                        const lightSrc = hasLight ? `/screenshots/light/${encodeURIComponent(file)}` : null;
-                        const darkSrc = hasDark ? `/screenshots/dark/${encodeURIComponent(file)}` : null;
-                        const fallback = lightSrc || darkSrc;
-
-                        const card = document.createElement('a');
-                        card.className = 'showcase-card';
-                        card.href = `https://${domain}`;
-                        card.target = '_blank';
-                        card.rel = 'noopener noreferrer';
-
-                        const darkSource = darkSrc
-                            ? `<source media="(prefers-color-scheme: dark)" srcset="${darkSrc}">`
-                            : '';
-                        const lightSource = lightSrc
-                            ? `<source media="(prefers-color-scheme: light)" srcset="${lightSrc}">`
-                            : '';
-
-                        card.innerHTML = `
-                            <picture>
-                                ${darkSource}
-                                ${lightSource}
-                                <img class="showcase-thumb" src="${fallback}" alt="${domain}" loading="lazy" decoding="async">
-                            </picture>
-                            <div class="showcase-meta">
-                                <span class="showcase-domain">${domain}</span>
-                                <span class="showcase-arrow">↗</span>
-                            </div>
-                        `;
-                        grid.appendChild(card);
-                    }
+                    const track = $('marquee-track');
+                    const links = shuffle(sites).map((s) => `<a href="https://${esc(s.domain)}" target="_blank" rel="noopener noreferrer">${esc(s.domain)}</a>`).join('');
+                    track.innerHTML = links + links.replace(/<a /g, '<a aria-hidden="true" tabindex="-1" ');
+                    renderBoard();
                 })
-                .catch(() => {
-                    grid.innerHTML = '<p class="showcase-empty">Could not load sites.</p>';
-                });
-        })();
+                .catch(() => {});
 
-        document.addEventListener('DOMContentLoaded', () => {
-            const terminals = Array.from(document.querySelectorAll('.terminal[data-animate-on-view]'));
+            $('shuffle').addEventListener('click', (e) => {
+                const r = e.currentTarget.getBoundingClientRect();
+                burst(r.left + r.width / 2, r.top, 14);
+                renderBoard();
+            });
+            $('random').addEventListener('click', () => {
+                if (!sites.length) return;
+                const s = sites[Math.floor(Math.random() * sites.length)];
+                window.open(`https://${s.domain}`, '_blank', 'noopener');
+            });
+            let resizeTimer;
+            window.addEventListener('resize', () => {
+                clearTimeout(resizeTimer);
+                resizeTimer = setTimeout(() => { if (sites.length) renderBoard(); }, 250);
+            });
 
-            if (!terminals.length) {
-                return;
-            }
+            // ── Live firehose (Jetstream) ───────────────────────────────
+            const feed = $('feed-list');
+            const dot = $('live-dot');
+            const label = $('live-label');
+            const seen = new Set();
+            const entries = [];
+            // accounts whose deploys shouldn't be showcased (spam / generated content)
+            const HIDDEN_DIDS = new Set(['did:plc:6dis2hlap2lhwohabb2tniln']);
+            const profiles = new Map();
 
-            const revealAll = (terminal) => {
-                terminal.classList.add('is-complete');
-
-                for (const item of terminal.querySelectorAll('.terminal-body > .terminal-line, .terminal-body > .terminal-spacer')) {
-                    item.classList.add('is-visible');
-                }
+            const ago = (us) => {
+                const s = Math.max(1, Math.round((Date.now() - us / 1000) / 1000));
+                if (s < 60) return 'just now';
+                if (s < 3600) return `${Math.round(s / 60)}m ago`;
+                if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+                return `${Math.round(s / 86400)}d ago`;
             };
 
-            const getVisibleItems = (terminal) => {
-                const items = Array.from(terminal.querySelectorAll('.terminal-body > .terminal-line, .terminal-body > .terminal-spacer'));
-                const visibleCount = Number.parseInt(terminal.dataset.visibleItems || '0', 10);
-
-                if (Number.isNaN(visibleCount) || visibleCount <= 0) {
-                    return { items, hiddenItems: items };
+            const profile = (did) => {
+                if (!profiles.has(did)) {
+                    profiles.set(did, fetch(`https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor=${encodeURIComponent(did)}`)
+                        .then((r) => r.ok ? r.json() : null)
+                        .catch(() => null));
                 }
+                return profiles.get(did);
+            };
 
-                items.slice(0, visibleCount).forEach((item) => {
-                    item.classList.add('is-visible');
+            const renderFeed = async () => {
+                if (!entries.length) return;
+                const top = entries.slice(0, 5);
+                const profs = await Promise.all(top.map((e) => profile(e.did)));
+                feed.innerHTML = '';
+                top.forEach((e, i) => {
+                    const p = profs[i];
+                    const handle = p?.handle && p.handle !== 'handle.invalid' ? p.handle : null;
+                    const who = handle ? `@${handle}` : `${e.did.slice(0, 18)}…`;
+                    const url = `https://sites.wisp.place/${encodeURIComponent(handle || e.did)}/${encodeURIComponent(e.rkey)}`;
+                    const avatar = p?.avatar ? `<img src="${esc(p.avatar)}" alt="" loading="lazy">` : '<span class="ph"></span>';
+                    const li = document.createElement('li');
+                    li.innerHTML = `<a class="feed-item" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${avatar}<div><div class="what">${e.op === 'create' ? 'launched' : 'updated'} <em>${esc(e.site)}</em></div><div class="who">${esc(who)}${e.files ? ` · ${e.files} files` : ''}</div></div><span class="when">${ago(e.t)}</span></a>`;
+                    feed.appendChild(li);
                 });
+            };
 
-                return {
-                    items,
-                    hiddenItems: items.slice(visibleCount),
+            let replaying = true;
+            const connect = () => {
+                if (!('WebSocket' in window)) return;
+                const cursor = (Date.now() - 3 * 86400e3) * 1000;
+                let ws;
+                try {
+                    ws = new WebSocket(`wss://jetstream2.us-east.bsky.network/subscribe?wantedCollections=place.wisp.fs&cursor=${cursor}`);
+                } catch {
+                    label.textContent = 'firehose unreachable';
+                    return;
+                }
+                ws.onopen = () => {
+                    dot.classList.remove('off');
+                    label.textContent = 'catching up on the last few days…';
+                };
+                ws.onmessage = (msg) => {
+                    let m;
+                    try { m = JSON.parse(msg.data); } catch { return; }
+                    if (replaying && m.time_us > (Date.now() - 5000) * 1000) {
+                        replaying = false;
+                        label.textContent = 'live, listening for deploys';
+                        if (!entries.length) feed.innerHTML = '<li class="feed-empty">quiet out there.<br>yours could be next ✦</li>';
+                    }
+                    if (m.kind !== 'commit' || !m.commit || m.commit.collection !== 'place.wisp.fs') return;
+                    if (m.commit.operation === 'delete' || HIDDEN_DIDS.has(m.did)) return;
+                    const key = `${m.did}/${m.commit.rkey}`;
+                    const idx = entries.findIndex((e) => e.key === key);
+                    if (idx !== -1) entries.splice(idx, 1);
+                    entries.unshift({
+                        key,
+                        did: m.did,
+                        rkey: m.commit.rkey,
+                        site: m.commit.record?.site || m.commit.rkey,
+                        files: m.commit.record?.fileCount,
+                        op: seen.has(key) ? 'update' : m.commit.operation,
+                        t: m.time_us,
+                    });
+                    seen.add(key);
+                    renderFeed();
+                    if (!replaying) {
+                        const r = feed.getBoundingClientRect();
+                        if (r.top < window.innerHeight && r.bottom > 0) burst(r.left + 40, r.top + 30, 16);
+                    }
+                };
+                ws.onclose = ws.onerror = () => {
+                    dot.classList.add('off');
+                    label.textContent = entries.length ? 'recent deploys' : 'firehose napping';
+                    if (!entries.length) feed.innerHTML = '<li class="feed-empty">the firehose is napping.<br>check back soon ✦</li>';
                 };
             };
 
-            terminals.forEach((terminal) => {
-                getVisibleItems(terminal);
-            });
+            const feedObserver = new IntersectionObserver((obs) => {
+                if (obs.some((o) => o.isIntersecting)) {
+                    feedObserver.disconnect();
+                    connect();
+                }
+            }, { rootMargin: '300px' });
+            feedObserver.observe(feed);
 
-            if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-                terminals.forEach(revealAll);
-                return;
+            // ── Terminal typing ─────────────────────────────────────────
+            const termBody = $('terminal-body');
+            const lines = Array.from(termBody.children);
+            if (!reduceMotion) {
+                lines.forEach((l) => { l.style.visibility = 'hidden'; });
+                const termObserver = new IntersectionObserver((obs) => {
+                    if (!obs.some((o) => o.isIntersecting)) return;
+                    termObserver.disconnect();
+                    const first = lines[0];
+                    const full = first.innerHTML;
+                    const cmd = 'npx wispctl deploy';
+                    first.style.visibility = 'visible';
+                    let i = 0;
+                    const type = () => {
+                        first.innerHTML = `<span class="t-prompt">$</span> ${cmd.slice(0, i)}<span class="caret"></span>`;
+                        if (i++ < cmd.length) return setTimeout(type, rand(40, 110));
+                        first.innerHTML = full;
+                        lines.slice(1).forEach((l, n) => setTimeout(() => {
+                            l.style.visibility = 'visible';
+                            if (n === lines.length - 2) {
+                                const r = l.getBoundingClientRect();
+                                burst(r.left + 120, r.top, 14);
+                            }
+                        }, 350 + n * 420));
+                    };
+                    setTimeout(type, 400);
+                }, { threshold: 0.5 });
+                termObserver.observe(termBody);
             }
 
-            const animateTerminal = (terminal) => {
-                const { hiddenItems } = getVisibleItems(terminal);
-                const lineDelayMs = 180;
-
-                if (!hiddenItems.length) {
-                    terminal.classList.add('is-complete');
-                    return;
+            // ── Copy install command ────────────────────────────────────
+            $('copy-cmd').addEventListener('click', async (e) => {
+                const btn = e.currentTarget;
+                try {
+                    await navigator.clipboard.writeText(btn.dataset.cmd);
+                    $('copy-tag').textContent = 'copied ✦';
+                    const r = btn.getBoundingClientRect();
+                    burst(r.right - 30, r.top + r.height / 2, 12);
+                } catch {
+                    $('copy-tag').textContent = 'select it ↑';
                 }
-
-                hiddenItems.forEach((item, index) => {
-                    window.setTimeout(() => {
-                        item.classList.add('is-visible');
-
-                        if (index === hiddenItems.length - 1) {
-                            terminal.classList.add('is-complete');
-                        }
-                    }, index * lineDelayMs);
-                });
-            };
-
-            const observer = new IntersectionObserver((entries) => {
-                for (const entry of entries) {
-                    if (!entry.isIntersecting) {
-                        continue;
-                    }
-
-                    const terminal = entry.target;
-
-                    if (terminal.dataset.animated === 'true') {
-                        observer.unobserve(terminal);
-                        continue;
-                    }
-
-                    terminal.dataset.animated = 'true';
-                    animateTerminal(terminal);
-                    observer.unobserve(terminal);
-                }
-            }, {
-                threshold: 0.35,
-                rootMargin: '0px 0px -10% 0px',
+                setTimeout(() => { $('copy-tag').textContent = 'copy'; }, 1800);
             });
-
-            terminals.forEach((terminal) => {
-                observer.observe(terminal);
-            });
-        });
+        })();
     </script>
 </body>
 </html>
