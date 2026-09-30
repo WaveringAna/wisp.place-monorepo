@@ -52,6 +52,8 @@ export {
 	extractSubfsUris,
 	parseSubfsSubject,
 	SubfsExpansionError,
+	subfsMountPath,
+	walkOwnedSubfs,
 } from './subfs'
 export type {
 	ParsedWebhookScope,

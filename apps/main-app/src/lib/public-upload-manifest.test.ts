@@ -128,6 +128,18 @@ describe('public manifest splitting', () => {
 		)
 	})
 
+	test('splits an oversized directory inside a directory that is split out', async () => {
+		const names = Array.from({ length: 600 }, (_, index) => `icon-${index}-${'x'.repeat(80)}.svg`)
+		const root = directory([
+			fileEntry('index.html'),
+			{
+				name: 'assets',
+				node: directory([fileEntry('app.js'), { name: 'icons', node: directory(names.map(fileEntry)) } as Entry]),
+			} as Entry,
+		])
+		await expectRoundTrip(root, ['index.html', 'assets/app.js', ...names.map((name) => `assets/icons/${name}`)])
+	})
+
 	test('preserves paths and total fileCount for 1000 direct root files', async () => {
 		const names = Array.from({ length: 1_000 }, (_, index) => `${index}.txt`)
 		await expectRoundTrip(directory(names.map(fileEntry)), names)

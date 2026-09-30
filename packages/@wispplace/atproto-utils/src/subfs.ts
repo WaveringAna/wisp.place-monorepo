@@ -313,19 +313,71 @@ function makeDirectory(entries: FsEntry[]): FsDirectoryNode {
  * path used by existing record cleanup callers. This intentionally does not
  * fetch or validate subjects; expansion does both before a network request.
  */
-export function extractSubfsUris(directory: FsDirectory, currentPath = ''): Array<{ uri: string; path: string }> {
-	const uris: Array<{ uri: string; path: string }> = []
+export function extractSubfsUris(
+	directory: FsDirectory,
+	currentPath = '',
+): Array<{ uri: string; path: string; flat: boolean }> {
+	const uris: Array<{ uri: string; path: string; flat: boolean }> = []
 
 	for (const entry of directory.entries) {
 		const fullPath = currentPath ? `${currentPath}/${entry.name}` : entry.name
 		if (isFsSubfsNode(entry.node) && typeof entry.node.subject === 'string') {
-			uris.push({ uri: entry.node.subject, path: fullPath })
+			uris.push({ uri: entry.node.subject, path: fullPath, flat: entry.node.flat !== false })
 		} else if (isFsDirectoryNode(entry.node)) {
 			uris.push(...extractSubfsUris(entry.node, fullPath))
 		}
 	}
 
 	return uris
+}
+
+/**
+ * Where a SubFS reference's entries land in the site: a flat reference merges
+ * them into the directory holding it, otherwise they appear under its own name.
+ */
+export function subfsMountPath(reference: { path: string; flat: boolean }): string {
+	if (!reference.flat) return reference.path
+	const slash = reference.path.lastIndexOf('/')
+	return slash === -1 ? '' : reference.path.slice(0, slash)
+}
+
+/**
+ * Walks the `place.wisp.subfs` records in `did`'s own repo that `root` uses,
+ * breadth-first: chunked directories hang off a parent SubFS record, so the
+ * records a site owns can be nested. `fetchRoot` returns a record's root
+ * directory (or null when it is gone) and `visit` sees each one with the path
+ * its entries are mounted at. Returns the rkeys found, at most `maxRecords`.
+ */
+export async function walkOwnedSubfs(
+	root: FsDirectory,
+	did: string,
+	fetchRoot: (rkey: string) => Promise<FsDirectory | null>,
+	visit: (root: FsDirectory, mountPath: string) => void = () => {},
+	maxRecords = DEFAULT_SUBFS_EXPANSION_LIMITS.maxRecords,
+): Promise<string[]> {
+	const rkeys = new Set<string>()
+	const queue = extractSubfsUris(root)
+	while (queue.length > 0 && rkeys.size < maxRecords) {
+		const reference = queue.shift()!
+		const rkey = ownedSubfsRkey(reference.uri, did)
+		if (!rkey || rkeys.has(rkey)) continue
+		rkeys.add(rkey)
+		const subfsRoot = await fetchRoot(rkey)
+		if (!subfsRoot) continue
+		const mountPath = subfsMountPath(reference)
+		visit(subfsRoot, mountPath)
+		queue.push(...extractSubfsUris(subfsRoot, mountPath))
+	}
+	return [...rkeys]
+}
+
+function ownedSubfsRkey(uri: string, did: string): string | null {
+	try {
+		const subject = parseSubfsSubject(uri)
+		return subject.repo === did ? subject.rkey : null
+	} catch {
+		return null
+	}
 }
 
 /**

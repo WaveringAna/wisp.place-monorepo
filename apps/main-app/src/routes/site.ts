@@ -1,6 +1,6 @@
 import { Agent } from '@atproto/api'
 import type { NodeOAuthClient } from '@atproto/oauth-client-node'
-import { extractSubfsUris } from '@wispplace/atproto-utils'
+import { walkOwnedSubfs } from '@wispplace/atproto-utils'
 import { createLogger } from '@wispplace/observability'
 import { Elysia } from 'elysia'
 import { requireAuth, SESSION_COOKIE_NAME } from '../lib/wisp-auth'
@@ -39,8 +39,9 @@ export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				// Create agent with OAuth session
 				const agent = new Agent((url, init) => auth.session.fetchHandler(url, init))
 
-				// First, fetch the site record to find any subfs references
-				let subfsUris: Array<{ uri: string; path: string }> = []
+				// First, find the site's own subfs records, including chunks that
+				// hang off a parent subfs record
+				let subfsRkeys: string[] = []
 				try {
 					const existingRecord = await agent.com.atproto.repo.getRecord({
 						repo: auth.did,
@@ -54,10 +55,21 @@ export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 						'root' in existingRecord.data.value
 					) {
 						const manifest = existingRecord.data.value as any
-						subfsUris = extractSubfsUris(manifest.root)
+						subfsRkeys = await walkOwnedSubfs(manifest.root, auth.did, async (subRkey) => {
+							try {
+								const record = await agent.com.atproto.repo.getRecord({
+									repo: auth.did,
+									collection: 'place.wisp.subfs',
+									rkey: subRkey,
+								})
+								return (record.data.value as any)?.root ?? null
+							} catch {
+								return null
+							}
+						})
 
-						if (subfsUris.length > 0) {
-							logger.info(`[Site] Found ${subfsUris.length} subfs records associated with ${rkey}`)
+						if (subfsRkeys.length > 0) {
+							logger.info(`[Site] Found ${subfsRkeys.length} subfs records associated with ${rkey}`)
 						}
 					}
 				} catch (err) {
@@ -79,31 +91,27 @@ export const siteRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				}
 
 				// Delete associated subfs records
-				if (subfsUris.length > 0) {
-					logger.info(`[Site] Deleting ${subfsUris.length} associated subfs records for ${rkey}`)
+				if (subfsRkeys.length > 0) {
+					logger.info(`[Site] Deleting ${subfsRkeys.length} associated subfs records for ${rkey}`)
 
 					await Promise.all(
-						subfsUris.map(async ({ uri }) => {
+						subfsRkeys.map(async (subRkey) => {
 							try {
-								// Parse URI: at://did/collection/rkey
-								const parts = uri.replace('at://', '').split('/')
-								const subRkey = parts[2]
-
 								await agent.com.atproto.repo.deleteRecord({
 									repo: auth.did,
 									collection: 'place.wisp.subfs',
 									rkey: subRkey,
 								})
 
-								logger.info(`[Site] Deleted subfs record: ${uri}`)
+								logger.info(`[Site] Deleted subfs record: ${subRkey}`)
 							} catch (err) {
 								// Log but don't fail if subfs deletion fails.
-								logger.error('[Site] Failed to delete subfs record', err, { uri })
+								logger.error('[Site] Failed to delete subfs record', err, { rkey: subRkey })
 							}
 						}),
 					)
 
-					logger.info(`[Site] Deleted ${subfsUris.length} subfs records for ${rkey}`)
+					logger.info(`[Site] Deleted ${subfsRkeys.length} subfs records for ${rkey}`)
 				}
 
 				logger.info(`[Site] Successfully deleted site ${rkey} for ${auth.did}`)

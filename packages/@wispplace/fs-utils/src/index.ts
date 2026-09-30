@@ -24,6 +24,8 @@ export {
 export {
 	estimateDirectorySize,
 	findLargeDirectories,
+	findSplittableDirectory,
+	type LargeDirectory,
 	replaceDirectoryWithSubfs,
 	splitDirectoryIntoChunks,
 } from './subfs-split'

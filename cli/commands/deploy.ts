@@ -5,9 +5,9 @@ import {
 	compressFile,
 	computeCID,
 	extractBlobMap,
-	extractSubfsUris,
 	isTextMimeType,
 	shouldCompressFile,
+	walkOwnedSubfs,
 } from '@wispplace/atproto-utils'
 import { DEFAULT_IGNORE_PATTERNS, MAX_FILE_COUNT, MAX_FILE_SIZE, MAX_SITE_SIZE } from '@wispplace/constants'
 import {
@@ -16,6 +16,7 @@ import {
 	estimateDirectorySize,
 	type FileUploadResult,
 	findLargeDirectories,
+	findSplittableDirectory,
 	processUploadedFiles,
 	replaceDirectoryWithSubfs,
 	splitDirectoryIntoChunks,
@@ -108,11 +109,14 @@ export function collectFiles(dir: string, ig: Ignore, baseDir: string): FileInfo
 	return files
 }
 
-async function fetchExistingManifest(
-	agent: Agent,
-	did: string,
-	rkey: string,
-): Promise<{ record: FsRecord; blobMap: Map<string, { blobRef: BlobRef; cid: string }> } | null> {
+interface ExistingSite {
+	record: FsRecord
+	blobMap: Map<string, { blobRef: BlobRef; cid: string }>
+	/** Rkeys of our own place.wisp.subfs records the site uses, nested chunks included. */
+	subfsRkeys: string[]
+}
+
+async function fetchExistingManifest(agent: Agent, did: string, rkey: string): Promise<ExistingSite | null> {
 	try {
 		const response = await agent.com.atproto.repo.getRecord({
 			repo: did,
@@ -122,30 +126,24 @@ async function fetchExistingManifest(
 
 		const record = response.data.value as FsRecord
 		const blobMap = extractBlobMap(record.root)
-
-		// Also fetch any subfs records and merge their blob maps
-		const subfsUris = extractSubfsUris(record.root)
-		for (const { uri } of subfsUris) {
+		const fetchSubfsRoot = async (subfsRkey: string) => {
 			try {
-				const parts = uri.replace('at://', '').split('/')
-				const subfsRepo = parts[0]!
-				const subfsRkey = parts[2]!
-
 				const subfsResponse = await agent.com.atproto.repo.getRecord({
-					repo: subfsRepo,
+					repo: did,
 					collection: 'place.wisp.subfs',
 					rkey: subfsRkey,
 				})
-
-				const subfsRecord = subfsResponse.data.value as SubfsRecord
-				const subfsBlobMap = extractBlobMap(subfsRecord.root as unknown as Directory)
-				for (const [key, value] of subfsBlobMap) blobMap.set(key, value)
+				return (subfsResponse.data.value as SubfsRecord).root as unknown as Directory
 			} catch {
 				// Subfs not found, skip
+				return null
 			}
 		}
+		const subfsRkeys = await walkOwnedSubfs(record.root, did, fetchSubfsRoot, (subfsRoot, mountPath) => {
+			for (const [key, value] of extractBlobMap(subfsRoot, mountPath)) blobMap.set(key, value)
+		})
 
-		return { record, blobMap }
+		return { record, blobMap, subfsRkeys }
 	} catch {
 		return null
 	}
@@ -300,11 +298,19 @@ async function createSubfsRecord(agent: Agent, did: string, directory: Directory
 	return `at://${did}/place.wisp.subfs/${rkey}`
 }
 
+/**
+ * `generation` must be unique per attempt and goes into every record key.
+ * Reusing the previous deploy's keys would overwrite records that still
+ * reference reused blobs; the PDS deletes a blob as soon as nothing references
+ * it, so a later write then fails with BlobNotFound. With fresh keys the old
+ * records stay until the new manifest is in place.
+ */
 async function splitIntoSubfs(
 	agent: Agent,
 	did: string,
 	directory: Directory,
 	siteRkey: string,
+	generation: string,
 ): Promise<{ directory: Directory; subfsRkeys: string[] }> {
 	const spinner = createSpinner('Splitting large site into subfs records...').start()
 	const subfsRkeys: string[] = []
@@ -324,7 +330,7 @@ async function splitIntoSubfs(
 		directories.sort((a, b) => b.size - a.size)
 
 		if (directories.length > 0) {
-			const largest = directories[0]!
+			const largest = findSplittableDirectory(directories[0]!, MAX_SUBFS_SIZE)
 			spinner.text = `Split #${iteration}: ${largest.path} (${largest.fileCount} files, ${formatBytes(largest.size)})`
 
 			let subfsUri: string
@@ -340,7 +346,7 @@ async function splitIntoSubfs(
 				const chunkUris: string[] = []
 				for (let i = 0; i < chunks.length; i++) {
 					const chunk = chunks[i]!
-					const chunkRkey = `${siteRkey}-chunk-${chunkCounter++}`
+					const chunkRkey = `${siteRkey}-${generation}-chunk-${chunkCounter++}`
 					const chunkSize = estimateDirectorySize(chunk)
 					const chunkFileCount = countFilesInDirectory(chunk)
 
@@ -374,14 +380,14 @@ async function splitIntoSubfs(
 					entries: parentEntries,
 				}
 
-				const parentRkey = `${siteRkey}-subfs-${iteration}`
+				const parentRkey = `${siteRkey}-${generation}-subfs-${iteration}`
 				subfsUri = await createSubfsRecord(agent, did, parentDirectory, parentRkey)
 				subfsRkeys.push(parentRkey)
 
 				console.log(pc.green(`    ✓ Created parent subfs with ${chunks.length} chunks`))
 			} else {
 				// Directory fits in a single subfs record
-				const subfsRkey = `${siteRkey}-subfs-${iteration}`
+				const subfsRkey = `${siteRkey}-${generation}-subfs-${iteration}`
 				subfsUri = await createSubfsRecord(agent, did, largest.directory, subfsRkey)
 				subfsRkeys.push(subfsRkey)
 			}
@@ -412,7 +418,7 @@ async function splitIntoSubfs(
 				entries: chunkFiles,
 			}
 
-			const subfsRkey = `${siteRkey}-subfs-${iteration}`
+			const subfsRkey = `${siteRkey}-${generation}-subfs-${iteration}`
 			const subfsUri = await createSubfsRecord(agent, did, chunkDirectory, subfsRkey)
 			subfsRkeys.push(subfsRkey)
 
@@ -448,30 +454,16 @@ async function splitIntoSubfs(
 	return { directory: currentDir, subfsRkeys }
 }
 
-async function deleteOldSubfsRecords(
-	agent: Agent,
-	did: string,
-	oldRecord: FsRecord | null,
-	newSubfsRkeys: string[],
-): Promise<void> {
-	if (!oldRecord) return
-
-	const oldSubfsUris = extractSubfsUris(oldRecord.root)
-	const newSubfsSet = new Set(newSubfsRkeys)
-
-	for (const { uri } of oldSubfsUris) {
-		const parts = uri.replace('at://', '').split('/')
-		const rkey = parts[2]
-		if (rkey && !newSubfsSet.has(rkey)) {
-			try {
-				await agent.com.atproto.repo.deleteRecord({
-					repo: did,
-					collection: 'place.wisp.subfs',
-					rkey,
-				})
-			} catch {
-				// Ignore deletion errors
-			}
+async function deleteSubfsRecords(agent: Agent, did: string, rkeys: Iterable<string>): Promise<void> {
+	for (const rkey of rkeys) {
+		try {
+			await agent.com.atproto.repo.deleteRecord({
+				repo: did,
+				collection: 'place.wisp.subfs',
+				rkey,
+			})
+		} catch {
+			// Ignore deletion errors
 		}
 	}
 }
@@ -557,7 +549,11 @@ export async function deploy(agent: Agent, did: string, options: DeployOptions):
 	// 6+7. Create manifest and put record, retrying with base64 on 500
 	const manifestSpinner = createSpinner('Creating manifest...').start()
 
-	// Returns subfsRkeys created so old ones can be cleaned up.
+	// Subfs records written by any attempt; those the final manifest does not
+	// use are deleted with the previous deploy's records.
+	const createdSubfsRkeys: string[] = []
+
+	// Returns the subfs rkeys the new manifest references.
 	const attemptManifest = async (useBase64: boolean): Promise<string[]> => {
 		let curDirectory = directory
 
@@ -587,9 +583,11 @@ export async function deploy(agent: Agent, did: string, options: DeployOptions):
 			fileCount >= FILE_COUNT_THRESHOLD ||
 			JSON.stringify(createManifest(siteName, curDirectory, fileCount)).length > MAX_MANIFEST_SIZE
 		) {
-			const result = await splitIntoSubfs(agent, did, curDirectory, siteName)
+			const generation = Date.now().toString(36)
+			const result = await splitIntoSubfs(agent, did, curDirectory, siteName, generation)
 			finalDirectory = result.directory
 			subfsRkeys = result.subfsRkeys
+			createdSubfsRkeys.push(...subfsRkeys)
 		}
 
 		const manifest = createManifest(siteName, finalDirectory, countFilesInDirectory(finalDirectory))
@@ -614,7 +612,9 @@ export async function deploy(agent: Agent, did: string, options: DeployOptions):
 	manifestSpinner.succeed('Created manifest record')
 
 	// 8. Clean up old subfs records
-	await deleteOldSubfsRecords(agent, did, existing?.record || null, subfsRkeys)
+	const inUse = new Set(subfsRkeys)
+	const unused = [...(existing?.subfsRkeys ?? []), ...createdSubfsRkeys].filter((rkey) => !inUse.has(rkey))
+	await deleteSubfsRecords(agent, did, new Set(unused))
 
 	// 9. Create settings if requested
 	if (options.directory || options.spa) {

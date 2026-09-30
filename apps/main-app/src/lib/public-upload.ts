@@ -8,6 +8,7 @@ import {
 	isTextMimeType,
 	parseSubfsSubject,
 	shouldCompressFile,
+	subfsMountPath,
 } from '@wispplace/atproto-utils'
 import { GZIP_COMPRESSION_LEVEL, MAX_FILE_COUNT, MAX_FILE_SIZE } from '@wispplace/constants'
 import {
@@ -16,6 +17,7 @@ import {
 	estimateDirectorySize,
 	type FileUploadResult,
 	findLargeDirectories,
+	findSplittableDirectory,
 	normalizeSitePath,
 	processUploadedFiles,
 	replaceDirectoryWithSubfs,
@@ -105,6 +107,7 @@ interface RawPublicUploadFile extends ValidatedPublicUploadFile {
 interface OwnedSubfsSubject {
 	uri: string
 	rkey: string
+	/** Where the record's entries appear in the site. */
 	path: string
 }
 
@@ -417,7 +420,7 @@ export function collectOwnedSubfsSubjects(directory: Directory, did: string): Ow
 		const subject = parseOwnedSubfsSubject(candidate.uri, did)
 		if (!subject || seen.has(subject.uri)) continue
 		seen.add(subject.uri)
-		subjects.push({ ...subject, path: candidate.path })
+		subjects.push({ ...subject, path: subfsMountPath(candidate) })
 	}
 	return subjects
 }
@@ -697,7 +700,8 @@ function assertManifestFits(siteName: string, state: ManifestBuildState): void {
 }
 
 function largestDirectory(directory: Directory) {
-	return findLargeDirectories(directory).sort((left, right) => right.size - left.size)[0] ?? null
+	const largest = findLargeDirectories(directory).sort((left, right) => right.size - left.size)[0]
+	return largest ? findSplittableDirectory(largest, SUBFS_CHUNK_TARGET_SIZE) : null
 }
 
 function directoryContainsSubfs(directory: Directory): boolean {

@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import { parseLexiconJson } from '@wispplace/lexicons/public-json'
 import type { Directory, Record as FsRecord } from '@wispplace/lexicons/types/place/wisp/fs'
-import { expandSubfs, parseSubfsSubject, SubfsExpansionError } from './subfs'
+import { extractBlobMap } from './blob'
+import { expandSubfs, parseSubfsSubject, SubfsExpansionError, walkOwnedSubfs } from './subfs'
 
 const ROOT_DID = 'did:plc:aaaaaaaaaaaaaaaaaaaaaaaa'
 const FIRST_DID = 'did:plc:bbbbbbbbbbbbbbbbbbbbbbbb'
@@ -341,4 +342,38 @@ test('yields a real macrotask so a deadline timer can interrupt a large tree', a
 	} finally {
 		clearTimeout(timer)
 	}
+})
+
+describe('walkOwnedSubfs', () => {
+	const directory = (entries: unknown[]) => ({ type: 'directory', entries }) as unknown as Directory
+
+	test('follows nested chunk records to their mount paths and skips foreign ones', async () => {
+		const records: Record<string, Directory> = {
+			parent: directory([nestedSubfs('chunk0', subject(ROOT_DID, 'chunk'))]),
+			// A reference back to the parent must not loop.
+			chunk: directory([file('icon.svg', 'subfs'), nestedSubfs('again', subject(ROOT_DID, 'parent'))]),
+			flat: directory([file('about.html', 'subfs')]),
+		}
+		const site = root([
+			rootSubfs('assets', subject(ROOT_DID, 'parent'), false),
+			rootSubfs('__subfs_1', subject(ROOT_DID, 'flat')),
+			rootSubfs('theirs', subject(FIRST_DID, 'parent'), false),
+		])
+		const fetched: string[] = []
+		const blobPaths: string[] = []
+
+		const rkeys = await walkOwnedSubfs(
+			site,
+			ROOT_DID,
+			async (rkey) => {
+				fetched.push(rkey)
+				return records[rkey] ?? null
+			},
+			(subfsRoot, mountPath) => blobPaths.push(...extractBlobMap(subfsRoot, mountPath).keys()),
+		)
+
+		expect(rkeys).toEqual(['parent', 'flat', 'chunk'])
+		expect(fetched).toEqual(['parent', 'flat', 'chunk'])
+		expect(blobPaths.sort()).toEqual(['about.html', 'assets/icon.svg'])
+	})
 })
