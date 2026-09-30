@@ -227,6 +227,10 @@ fn local_web_url(did: &str) -> Option<reqwest::Url> {
     is_loopback(&url).then_some(url)
 }
 
+#[allow(
+    clippy::result_large_err,
+    reason = "the identity resolver's own error type, returned as-is to its callers"
+)]
 async fn bounded_body(
     mut response: reqwest::Response,
 ) -> jacquard::identity::resolver::Result<jacquard::deps::bytes::Bytes> {
