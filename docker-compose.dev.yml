@@ -13,7 +13,11 @@ services:
 
   minio:
     profiles: [dev]
-    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    # minio/minio and quay.io/minio are no longer published; Chainguard's free
+    # tier only ships `latest`. The -dev variant has the shell the checks need.
+    image: cgr.dev/chainguard/minio:latest-dev
+    # Runs as nonroot by default, which cannot write a fresh named volume.
+    user: "0:0"
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: minioadmin
@@ -24,14 +28,15 @@ services:
     volumes:
       - dev_minio_data:/data
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:9000/minio/health/live >/dev/null"]
+      # No curl in the image; bash can open the port itself.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9000"]
       interval: 5s
       timeout: 5s
       retries: 20
 
   minio-create-bucket:
     profiles: [dev]
-    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    image: cgr.dev/chainguard/minio:latest-dev
     depends_on:
       minio:
         condition: service_healthy
