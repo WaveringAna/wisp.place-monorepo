@@ -40,9 +40,12 @@ require recreating an app; coordinate activation with its next approved rollout.
 
 `compose.yaml` and `grafana/provisioning/` are snapshots of the existing valefar
 stack at `/home/regent/docker/observability`. images remain pinned by their
-existing digests; no new services, images or packages were introduced. named
-volumes preserve the existing metrics, logs and grafana state. keep the existing
-private `.env` and dashboards directory; these are not replaced by this snapshot.
+existing digests; no new services, images or packages were introduced. grafana
+state remains in its named volume; VictoriaMetrics and VictoriaLogs data live
+on the host under `/storage/wisp-observability/`. keep the existing private
+`.env` and dashboards directory; these are not replaced by this snapshot. the
+old `wisp-observability_victoria_metrics_data` Docker volume is retained as a
+rollback copy after the move to host `/storage`.
 
 on 2026-09-12, victoria-metrics and grafana had empty docker network membership
 while their localhost health checks passed. only these two services were recreated
@@ -50,16 +53,19 @@ with `--no-deps --force-recreate`, restoring the existing compose network. victo
 logs was not recreated. backup:
 `/home/regent/docker/observability/backup-network-restore-20260912T050458Z`.
 
-- logs: `http://100.64.0.20:9428`, 30-day retention, maximum disk usage 80%.
-- metrics: `http://100.64.0.20:8428`, 90-day retention.
-- grafana: `http://100.64.0.20:3030`, existing admin auth, anonymous access off.
+- logs: `http://valefar.mesh.wisp.place:9428`, 30-day retention, maximum disk usage 80%.
+- metrics: `http://valefar.mesh.wisp.place:8428`, 90-day retention.
+- grafana: `http://valefar.mesh.wisp.place:3030`, anonymous Admin access; no login screen.
 - public log route: `logs.Caddyfile`, merged into baal's existing
-  `/home/regent/docker/Caddyfile`. do not replace the whole Caddyfile.
+  `/home/regent/docker/Caddyfile`. only POST `/insert/loki/api/v1/push`
+  reaches VictoriaLogs; do not replace the whole Caddyfile.
 
-ports are tailscale-bound. metrics and grafana have no audited public DNS route;
-do not expose them to satisfy a public health check. the public logs HTTPS route
-is existing behavior, not new authentication or access control. logs can contain
-private operational data; access control is a separate unresolved concern.
+ports bind only valefar's wireguard mesh address (`10.88.0.10`, the name above) and
+its tailnet address (`100.64.0.11` on vpn.klbr.net). the wisp servers reach them over
+the mesh. metrics and grafana have no audited public DNS route;
+do not expose them to satisfy a public health check. public VictoriaLogs
+queries are blocked; the public Loki ingestion path remains unauthenticated
+for existing exporters, so restrict its write access separately if needed.
 
 ## focused alert rules
 
@@ -132,7 +138,7 @@ fleet config shape (replace scoped tokens privately):
 
 stolas additionally sets `redis_container: "wisp-redis-replica"` and a `queue`
 destination for `operations_revalidation`. stolas also sets
-`logs_url: "http://100.64.0.20:9428"` and a `logs` destination for
+`logs_url: "http://valefar.mesh.wisp.place:9428"` and a `logs` destination for
 `operations_log-ingestion`. default network is `proxy_network`.
 
 ```sh

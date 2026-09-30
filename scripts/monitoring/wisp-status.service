@@ -1,0 +1,15 @@
+[Unit]
+Description=wisp.place private health pushes to off-fleet Gatus
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/wisp-status/probe.py /etc/wisp-status/config.json
+TimeoutStartSec=45
+User=root
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true

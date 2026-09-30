@@ -10,3 +10,13 @@ providers:
     updateIntervalSeconds: 30
     options:
       path: /var/lib/grafana/dashboards
+  - name: infra monitoring
+    orgId: 1
+    folder: infra monitoring
+    folderUid: infra-monitoring
+    type: file
+    disableDeletion: false
+    allowUiUpdates: true
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/infra-monitoring

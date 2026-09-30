@@ -3,5 +3,5 @@
 services:
   wisp-place:
     environment:
-      GRAFANA_LOKI_URL: http://100.64.0.20:9428
+      GRAFANA_LOKI_URL: http://valefar.mesh.wisp.place:9428
       GRAFANA_LOKI_PATH: /insert/loki/api/v1/push

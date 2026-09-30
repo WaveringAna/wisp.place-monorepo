@@ -1,0 +1,15 @@
+[Unit]
+Description=wisp.place private app health heartbeats
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/wisp-betterstack/probe.py /etc/wisp-betterstack/config.json
+TimeoutStartSec=45
+User=root
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true

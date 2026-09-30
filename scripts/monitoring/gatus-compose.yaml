@@ -1,0 +1,24 @@
+services:
+  gatus:
+    image: twinproduction/gatus:v5.36.0@sha256:c5f210d095fa78e6efaa20ffeb14803f2ba4f10615e16a6d12087697149617f0
+    container_name: wisp-status
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    env_file: secrets.env
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
+      - ./data:/data
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 256m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"

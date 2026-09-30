@@ -1,0 +1,22 @@
+# One parent serves metrics for every streamed Netdata child. Hostname is the
+# Netdata-provided `instance`, not the parent's scrape address.
+global:
+  scrape_interval: 60s
+  scrape_timeout: 20s
+
+scrape_configs:
+  - job_name: netdata-fleet
+    metrics_path: /api/v1/allmetrics
+    params:
+      format: [prometheus_all_hosts]
+      source: [average]
+      server: [valefar-victoriametrics]
+      filter: ["system.* disk* mem.* net.*"]
+    honor_labels: true
+    sample_limit: 7500
+    metric_relabel_configs:
+      - source_labels: [instance]
+        regex: astaroth
+        action: drop
+    static_configs:
+      - targets: ["100.64.0.11:19999"]

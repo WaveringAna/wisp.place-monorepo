@@ -5,7 +5,7 @@ import json
 import sys
 
 APPS = ("wisp-place", "wisp-hosting-service", "wisp-firehose-service")
-URLS = ("http://100.64.0.20:9428", "https://logs.nekomimi.pet")
+URLS = ("http://valefar.mesh.wisp.place:9428", "https://logs.nekomimi.pet")
 
 
 def verify(config):

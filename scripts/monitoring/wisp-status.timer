@@ -1,0 +1,10 @@
+[Unit]
+Description=check wisp.place apps every minute
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=60s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

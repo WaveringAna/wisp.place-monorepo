@@ -1,0 +1,9 @@
+[Unit]
+Description=verified wisp database backups to valefar storage
+
+[Service]
+Type=oneshot
+ExecStart=/run/current-system/sw/bin/python3 /home/regent/.local/lib/wisp-db-backup/backup.py
+TimeoutStartSec=30min
+UMask=0077
+NoNewPrivileges=true

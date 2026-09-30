@@ -1,0 +1,9 @@
+[Unit]
+Description=back up wisp.place monitoring daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target

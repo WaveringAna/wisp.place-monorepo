@@ -1,0 +1,8 @@
+[Unit]
+Description=consistent local backup of wisp.place monitoring
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/wisp-status/backup.py
+UMask=0077
+NoNewPrivileges=true

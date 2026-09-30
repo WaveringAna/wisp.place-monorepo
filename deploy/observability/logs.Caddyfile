@@ -1,4 +1,13 @@
 # Merge this explicit route into baal's existing Caddyfile; do not replace it.
 logs.nekomimi.pet {
-    reverse_proxy 100.64.0.20:9428
+    @log_ingest {
+        method POST
+        path /insert/loki/api/v1/push
+    }
+    handle @log_ingest {
+        reverse_proxy valefar.mesh.wisp.place:9428
+    }
+    handle {
+        respond "Not Found" 404
+    }
 }

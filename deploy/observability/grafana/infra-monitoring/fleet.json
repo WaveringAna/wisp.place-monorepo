@@ -1,0 +1,874 @@
+{
+  "uid": "wisp-fleet",
+  "id": null,
+  "title": "fleet \u00b7 all machines",
+  "tags": [
+    "fleet",
+    "infrastructure",
+    "wisp"
+  ],
+  "schemaVersion": 42,
+  "version": 1,
+  "editable": true,
+  "timezone": "browser",
+  "graphTooltip": 1,
+  "refresh": "1m",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "annotations": {
+    "list": []
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "node",
+        "label": "machines",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "victoria-metrics"
+        },
+        "query": {
+          "query": "label_values(netdata_info{job=\"netdata-fleet\"}, instance)",
+          "refId": "StandardVariableQuery"
+        },
+        "definition": "label_values(netdata_info{job=\"netdata-fleet\"}, instance)",
+        "refresh": 2,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "options": [],
+        "hide": 0,
+        "skipUrlSync": false
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "fleet reporting",
+      "type": "stat",
+      "description": "Hosts with a live system.uptime sample. Known but offline children count as zero.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoria-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoria-metrics"
+          },
+          "editorMode": "code",
+          "expr": "100 * sum(clamp_max(count by (instance) (netdata_system_uptime_seconds_average{job=\"netdata-fleet\",instance=~\"${node:regex}\"}), 1) or on (instance) (0 * max by (instance) (netdata_info{job=\"netdata-fleet\",instance=~\"${node:regex}\"}))) / count(max by (instance) (netdata_info{job=\"netdata-fleet\",instance=~\"${node:regex}\"}))",
+          "instant": true,
+          "range": false,
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 90
+              },
+              {
+                "color": "green",
+                "value": 100
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 2,
+      "title": "known nodes",
+      "type": "stat",
+      "description": "Includes children remembered by Netdata even when their stream is offline.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoria-metrics"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoria-metrics"
+          },
+          "editorMode": "code",
+          "expr": "count(max by (instance) (netdata_info{job=\"netdata-fleet\",instance=~\"${node:regex}\"}))",
+          "instant": true,
+          "range": false,
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 3,
+      "title": "not reporting",
+      "type": "stat",
+      "description": "A missing stream is visible rather than silently disappearing.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoria-metrics"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoria-metrics"
+          },
+          "editorMode": "code",
+          "expr": "count(max by (instance) (netdata_info{job=\"netdata-fleet\",instance=~\"${node:regex}\"})) - sum(clamp_max(count by (instance) (netdata_system_uptime_seconds_average{job=\"netdata-fleet\",instance=~\"${node:regex}\"}), 1) or on (instance) (0 * max by (instance) (netdata_info{job=\"netdata-fleet\",instance=~\"${node:regex}\"})))",
+          "instant": true,
+          "range": false,
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 2
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 4,
+      "title": "parent scrape",
+      "type": "stat",
+      "description": "VictoriaMetrics scraping the valefar parent; 1 = OK, 0 = failed.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoria-metrics"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoria-metrics"
+          },
+          "editorMode": "code",
+          "expr": "up{job=\"netdata-fleet\"}",
+          "instant": true,
+          "range": false,
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 5,
+      "title": "node inventory \u00b7 1 reporting / 0 missing",
+      "type": "table",
+      "description": "Every Netdata-known host is listed, including offline hosts with no metrics. `instance` is the source hostname.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoria-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoria-metrics"
+          },
+          "editorMode": "code",
+          "expr": "clamp_max(count by (instance) (netdata_system_uptime_seconds_average{job=\"netdata-fleet\",instance=~\"${node:regex}\"}), 1) or on (instance) (0 * max by (instance) (netdata_info{job=\"netdata-fleet\",instance=~\"${node:regex}\"}))",
+          "instant": true,
+          "range": false,
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "OFFLINE",
+                  "color": "red"
+                },
+                "1": {
+                  "text": "ONLINE",
+                  "color": "green"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      }
+    },
+    {
+      "id": 6,
+      "title": "CPU busy",
+      "type": "timeseries",
+      "description": "Percentage of CPU not idle; aggregated across cores by Netdata.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoria-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 11,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoria-metrics"
+          },
+          "editorMode": "code",
+          "expr": "100 - max by (instance) (netdata_system_cpu_percentage_average{job=\"netdata-fleet\",instance=~\"${node:regex}\",dimension=\"idle\"})",
+          "instant": false,
+          "range": true,
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 70
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "title": "RAM unavailable",
+      "type": "timeseries",
+      "description": "Linux: 100 \u00d7 (1 \u2212 MemAvailable / total). macOS fallback: treats free + inactive as available; an estimate, not macOS memory pressure.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoria-metrics"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 11,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoria-metrics"
+          },
+          "editorMode": "code",
+          "expr": "(100 * (1 - max by (instance) (netdata_mem_available_MiB_average{job=\"netdata-fleet\",instance=~\"${node:regex}\",dimension=\"avail\"}) / sum by (instance) (netdata_system_ram_MiB_average{job=\"netdata-fleet\",instance=~\"${node:regex}\"}))) or on (instance) (100 * (1 - sum by (instance) (netdata_system_ram_MiB_average{job=\"netdata-fleet\",instance=~\"${node:regex}\",dimension=~\"free|inactive\"}) / sum by (instance) (netdata_system_ram_MiB_average{job=\"netdata-fleet\",instance=~\"${node:regex}\",dimension=~\"active|compressor|free|inactive|wired\"})))",
+          "instant": false,
+          "range": true,
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "title": "swap used \u00b7 MiB",
+      "type": "timeseries",
+      "description": "Total swap used, including compressed zram and disk swap. No swap shows as no data.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoria-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 19,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoria-metrics"
+          },
+          "editorMode": "code",
+          "expr": "netdata_mem_swap_MiB_average{job=\"netdata-fleet\",instance=~\"${node:regex}\",dimension=\"used\"}",
+          "instant": false,
+          "range": true,
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 9,
+      "title": "memory stalls \u00b7 % / 10s",
+      "type": "timeseries",
+      "description": "Linux PSI full memory pressure: time all non-idle work was blocked on memory. Linux hosts only.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoria-metrics"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 19,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoria-metrics"
+          },
+          "editorMode": "code",
+          "expr": "netdata_system_memory_full_pressure_percentage_average{job=\"netdata-fleet\",instance=~\"${node:regex}\",dimension=\"full 10\"}",
+          "instant": false,
+          "range": true,
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "title": "root filesystem used",
+      "type": "timeseries",
+      "description": "Filesystem used / (used + available), excluding root-reserved blocks. Hosts without a / mount chart show no data.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoria-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 27,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoria-metrics"
+          },
+          "editorMode": "code",
+          "expr": "100 * sum by (instance) (netdata_disk_space_GiB_average{job=\"netdata-fleet\",instance=~\"${node:regex}\",mount_point=\"/\",dimension=\"used\"}) / sum by (instance) (netdata_disk_space_GiB_average{job=\"netdata-fleet\",instance=~\"${node:regex}\",mount_point=\"/\",dimension=~\"used|avail\"})",
+          "instant": false,
+          "range": true,
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 11,
+      "title": "disk I/O stalls \u00b7 % / 10s",
+      "type": "timeseries",
+      "description": "Linux PSI full I/O pressure. Windows/macOS hosts may have no PSI chart.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoria-metrics"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 27,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoria-metrics"
+          },
+          "editorMode": "code",
+          "expr": "netdata_system_io_full_pressure_percentage_average{job=\"netdata-fleet\",instance=~\"${node:regex}\",dimension=\"full 10\"}",
+          "instant": false,
+          "range": true,
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 12,
+      "title": "network in / out \u00b7 kbit/s",
+      "type": "timeseries",
+      "description": "Netdata reports outbound as negative; absolute value shows both as positive throughput.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoria-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 35,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoria-metrics"
+          },
+          "editorMode": "code",
+          "expr": "abs(netdata_system_net_kilobits_persec_average{job=\"netdata-fleet\",instance=~\"${node:regex}\",dimension=~\"received|sent|InOctets|OutOctets\"})",
+          "instant": false,
+          "range": true,
+          "legendFormat": "{{instance}} \u00b7 {{dimension}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 13,
+      "title": "load \u00b7 1 minute",
+      "type": "timeseries",
+      "description": "Raw load, not normalized to CPU count. Linux/Unix hosts only.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoria-metrics"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 35,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoria-metrics"
+          },
+          "editorMode": "code",
+          "expr": "netdata_system_load_load_average{job=\"netdata-fleet\",instance=~\"${node:regex}\",dimension=\"load1\"}",
+          "instant": false,
+          "range": true,
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    }
+  ]
+}
