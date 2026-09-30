@@ -341,32 +341,47 @@ export function subfsMountPath(reference: { path: string; flat: boolean }): stri
 	return slash === -1 ? '' : reference.path.slice(0, slash)
 }
 
+export interface WalkOwnedSubfsOptions {
+	/** Sees each fetched record's root with the path its entries are mounted at. */
+	visit?: (root: FsDirectory, mountPath: string) => void
+	maxRecords?: number
+	maxConcurrentFetches?: number
+}
+
 /**
  * Walks the `place.wisp.subfs` records in `did`'s own repo that `root` uses,
  * breadth-first: chunked directories hang off a parent SubFS record, so the
  * records a site owns can be nested. `fetchRoot` returns a record's root
- * directory (or null when it is gone) and `visit` sees each one with the path
- * its entries are mounted at. Returns the rkeys found, at most `maxRecords`.
+ * directory, or null when it is gone. Returns the rkeys found.
  */
 export async function walkOwnedSubfs(
 	root: FsDirectory,
 	did: string,
 	fetchRoot: (rkey: string) => Promise<FsDirectory | null>,
-	visit: (root: FsDirectory, mountPath: string) => void = () => {},
-	maxRecords = DEFAULT_SUBFS_EXPANSION_LIMITS.maxRecords,
+	{
+		visit = () => {},
+		maxRecords = DEFAULT_SUBFS_EXPANSION_LIMITS.maxRecords,
+		maxConcurrentFetches = DEFAULT_SUBFS_EXPANSION_LIMITS.maxConcurrentFetches,
+	}: WalkOwnedSubfsOptions = {},
 ): Promise<string[]> {
 	const rkeys = new Set<string>()
 	const queue = extractSubfsUris(root)
 	while (queue.length > 0 && rkeys.size < maxRecords) {
-		const reference = queue.shift()!
-		const rkey = ownedSubfsRkey(reference.uri, did)
-		if (!rkey || rkeys.has(rkey)) continue
-		rkeys.add(rkey)
-		const subfsRoot = await fetchRoot(rkey)
-		if (!subfsRoot) continue
-		const mountPath = subfsMountPath(reference)
-		visit(subfsRoot, mountPath)
-		queue.push(...extractSubfsUris(subfsRoot, mountPath))
+		const batch: Array<{ rkey: string; mountPath: string }> = []
+		while (queue.length > 0 && batch.length < maxConcurrentFetches && rkeys.size < maxRecords) {
+			const reference = queue.shift()!
+			const rkey = ownedSubfsRkey(reference.uri, did)
+			if (!rkey || rkeys.has(rkey)) continue
+			rkeys.add(rkey)
+			batch.push({ rkey, mountPath: subfsMountPath(reference) })
+		}
+		const roots = await Promise.all(batch.map(({ rkey }) => fetchRoot(rkey)))
+		for (const [index, { mountPath }] of batch.entries()) {
+			const subfsRoot = roots[index]
+			if (!subfsRoot) continue
+			visit(subfsRoot, mountPath)
+			queue.push(...extractSubfsUris(subfsRoot, mountPath))
+		}
 	}
 	return [...rkeys]
 }

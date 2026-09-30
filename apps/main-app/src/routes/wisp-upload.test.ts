@@ -16,7 +16,6 @@ mock.module('@wispplace/observability', () => ({
 const { createUploadJob, getUploadJob, getUploadJobStats } = await import('../lib/upload-jobs')
 
 const {
-	collectOwnedSubfsSubjects,
 	INVALID_UPLOAD_MESSAGE,
 	processUploadInBackground,
 	selectPublicUploadFiles,
@@ -308,8 +307,6 @@ describe('public upload failures and SubFS cleanup', () => {
 				},
 			],
 		} as never
-		expect(collectOwnedSubfsSubjects(root, did)).toEqual([])
-
 		const jobId = createUploadJob(did, 'subfs-site', 0)
 		const getCalls: unknown[] = []
 		const deleteCalls: unknown[] = []
@@ -337,5 +334,59 @@ describe('public upload failures and SubFS cleanup', () => {
 		expect(getCalls).toHaveLength(1)
 		expect(deleteCalls).toEqual([])
 		expect(getUploadJob(jobId)?.status).toBe('completed')
+	})
+
+	test("deletes the previous manifest's SubFS records, nested chunks included, only after the new root commits", async () => {
+		const did = `did:example:detached${crypto.randomUUID().replaceAll('-', '')}`
+		const subfsNode = (rkey: string, lexicon: 'fs' | 'subfs') => ({
+			$type: `place.wisp.${lexicon}#subfs`,
+			type: 'subfs',
+			subject: `at://${did}/place.wisp.subfs/${rkey}`,
+			...(lexicon === 'fs' && { flat: false }),
+		})
+		const directory = (entries: unknown[]) => ({ $type: 'place.wisp.fs#directory', type: 'directory', entries })
+		const records: Record<string, unknown> = {
+			'site-parent': { root: directory([{ name: 'chunk0', node: subfsNode('site-chunk', 'subfs') }]) },
+			'site-chunk': { root: directory([]) },
+		}
+		const run = async (siteName: string, rootPut: () => Promise<unknown>) => {
+			const deleted: string[] = []
+			const agent = {
+				com: {
+					atproto: {
+						repo: {
+							getRecord: async ({ collection, rkey }: { collection: string; rkey: string }) =>
+								collection === 'place.wisp.fs'
+									? {
+											data: {
+												cid: 'old-cid',
+												value: { root: directory([{ name: 'assets', node: subfsNode('site-parent', 'fs') }]) },
+											},
+										}
+									: { data: { value: records[rkey] } },
+							uploadBlob: async () => ({ data: { blob: { ref: { toString: () => 'cid' } } } }),
+							putRecord: rootPut,
+							deleteRecord: async ({ rkey }: { rkey: string }) => {
+								deleted.push(rkey)
+							},
+						},
+					},
+				},
+			}
+			const jobId = createUploadJob(did, siteName, 1)
+			const files = validatePublicUploadFiles([new File(['hello'], 'index.html')], MAX_SITE_SIZE)
+			await processUploadInBackground(jobId, agent as never, did, siteName, files, [])
+			return { deleted: deleted.sort(), status: getUploadJob(jobId)?.status }
+		}
+
+		const committed = await run('detached-site', async () => ({
+			data: { uri: `at://${did}/place.wisp.fs/x`, cid: 'new' },
+		}))
+		expect(committed).toEqual({ deleted: ['site-chunk', 'site-parent'], status: 'completed' })
+
+		const conflicted = await run('conflict-site', async () => {
+			throw Object.assign(new Error('swap rejected'), { status: 409, error: 'InvalidSwap' })
+		})
+		expect(conflicted).toEqual({ deleted: [], status: 'failed' })
 	})
 })

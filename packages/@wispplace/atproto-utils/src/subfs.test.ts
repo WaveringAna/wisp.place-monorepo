@@ -369,7 +369,7 @@ describe('walkOwnedSubfs', () => {
 				fetched.push(rkey)
 				return records[rkey] ?? null
 			},
-			(subfsRoot, mountPath) => blobPaths.push(...extractBlobMap(subfsRoot, mountPath).keys()),
+			{ visit: (subfsRoot, mountPath) => blobPaths.push(...extractBlobMap(subfsRoot, mountPath).keys()) },
 		)
 
 		expect(rkeys).toEqual(['parent', 'flat', 'chunk'])

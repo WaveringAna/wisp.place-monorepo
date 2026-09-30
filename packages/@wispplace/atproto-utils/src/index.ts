@@ -43,6 +43,7 @@ export type {
 	SubfsExpansionErrorCode,
 	SubfsExpansionLimits,
 	SubfsSubject,
+	WalkOwnedSubfsOptions,
 } from './subfs'
 // Subfs utilities
 export {
@@ -52,7 +53,6 @@ export {
 	extractSubfsUris,
 	parseSubfsSubject,
 	SubfsExpansionError,
-	subfsMountPath,
 	walkOwnedSubfs,
 } from './subfs'
 export type {

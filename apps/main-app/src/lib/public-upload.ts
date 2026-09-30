@@ -6,9 +6,8 @@ import {
 	extractBlobMap,
 	extractSubfsUris,
 	isTextMimeType,
-	parseSubfsSubject,
 	shouldCompressFile,
-	subfsMountPath,
+	walkOwnedSubfs,
 } from '@wispplace/atproto-utils'
 import { GZIP_COMPRESSION_LEVEL, MAX_FILE_COUNT, MAX_FILE_SIZE } from '@wispplace/constants'
 import {
@@ -104,17 +103,11 @@ interface RawPublicUploadFile extends ValidatedPublicUploadFile {
 	fromWebkitRelativePath: boolean
 }
 
-interface OwnedSubfsSubject {
-	uri: string
-	rkey: string
-	/** Where the record's entries appear in the site. */
-	path: string
-}
-
 interface ExistingUploadState {
 	rootCid: string | null
 	blobMap: Map<string, { blobRef: any; cid: string }>
-	ownedSubfs: OwnedSubfsSubject[]
+	/** Rkeys of our own SubFS records the current manifest uses, nested chunks included. */
+	ownedSubfs: string[]
 }
 
 interface UploadedBlob {
@@ -411,30 +404,6 @@ async function runBounded<T>(items: readonly T[], limit: number, operation: (ite
 	await Promise.all(workers)
 }
 
-export function collectOwnedSubfsSubjects(directory: Directory, did: string): OwnedSubfsSubject[] {
-	const seen = new Set<string>()
-	const subjects: OwnedSubfsSubject[] = []
-	for (const candidate of extractSubfsUris(directory)) {
-		if (subjects.length >= MAX_OWNED_SUBFS_RECORDS) break
-		if (candidate.uri.length > 4096) continue
-		const subject = parseOwnedSubfsSubject(candidate.uri, did)
-		if (!subject || seen.has(subject.uri)) continue
-		seen.add(subject.uri)
-		subjects.push({ ...subject, path: subfsMountPath(candidate) })
-	}
-	return subjects
-}
-
-function parseOwnedSubfsSubject(uri: string, did: string): Omit<OwnedSubfsSubject, 'path'> | null {
-	try {
-		const subject = parseSubfsSubject(uri)
-		if (subject.repo !== did || subject.collection !== 'place.wisp.subfs') return null
-		return { uri: subject.uri, rkey: subject.rkey }
-	} catch {
-		return null
-	}
-}
-
 function emptyExistingState(rootCid: string | null): ExistingUploadState {
 	return { rootCid, blobMap: new Map(), ownedSubfs: [] }
 }
@@ -483,23 +452,17 @@ async function existingStateFromRecord(
 ): Promise<ExistingUploadState> {
 	const root = manifestRoot(value)
 	if (!root) return emptyExistingState(rootCid)
-	const state: ExistingUploadState = {
-		rootCid,
-		blobMap: extractBlobMap(root),
-		ownedSubfs: collectOwnedSubfsSubjects(root, did),
-	}
-	await mergeOwnedSubfsBlobMaps(agent, did, state)
-	return state
-}
-
-async function mergeOwnedSubfsBlobMaps(agent: Agent, did: string, state: ExistingUploadState): Promise<void> {
-	await runBounded(state.ownedSubfs, SUBFS_CONCURRENCY, async (subject) => {
-		const root = await fetchOwnedSubfsRoot(agent, did, subject.rkey)
-		if (!root) return
-		extractBlobMap(root, subject.path).forEach((blob, path) => {
-			state.blobMap.set(path, blob)
-		})
+	const blobMap = extractBlobMap(root)
+	const ownedSubfs = await walkOwnedSubfs(root, did, (rkey) => fetchOwnedSubfsRoot(agent, did, rkey), {
+		visit: (subfsRoot, mountPath) => {
+			extractBlobMap(subfsRoot, mountPath).forEach((blob, path) => {
+				blobMap.set(path, blob)
+			})
+		},
+		maxRecords: MAX_OWNED_SUBFS_RECORDS,
+		maxConcurrentFetches: SUBFS_CONCURRENCY,
 	})
+	return { rootCid, blobMap, ownedSubfs }
 }
 
 async function fetchOwnedSubfsRoot(agent: Agent, did: string, rkey: string): Promise<Directory | null> {
@@ -892,6 +855,31 @@ async function cleanupGeneratedSubfs(
 	})
 }
 
+/**
+ * After a successful commit, delete the SubFS records the replaced manifest
+ * used and the new one does not. Uploads never reuse old SubFS records, and
+ * the root compare-and-swap guarantees `previous` came from the manifest that
+ * was replaced, so nothing still references them. Failures are only logged:
+ * the site is already live.
+ */
+export async function deleteDetachedSubfs(
+	agent: Agent,
+	did: string,
+	previous: readonly string[],
+	commit: ManifestCommit,
+	signal?: AbortSignal,
+): Promise<void> {
+	if (signal?.aborted) return
+	const detached = previous.filter((rkey) => !commit.referencedSubfs.has(`at://${did}/place.wisp.subfs/${rkey}`))
+	await runBounded(detached, SUBFS_CONCURRENCY, async (rkey) => {
+		try {
+			await agent.com.atproto.repo.deleteRecord({ repo: did, collection: 'place.wisp.subfs', rkey })
+		} catch {
+			logger.warn('Failed to delete a detached SubFS record', { errorKind: 'subfs_detached_cleanup_failed' })
+		}
+	})
+}
+
 export async function commitPublicUploadManifest(
 	agent: Agent,
 	did: string,
@@ -1055,6 +1043,7 @@ export async function processUploadInBackground(
 			existingState.rootCid,
 		)
 		throwIfUploadCancelled(jobId, signal)
+		await deleteDetachedSubfs(agent, did, existingState.ownedSubfs, committed, signal)
 		completeUploadJob(jobId, {
 			success: true,
 			uri: committed.record.data.uri,

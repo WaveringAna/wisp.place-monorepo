@@ -139,8 +139,10 @@ async function fetchExistingManifest(agent: Agent, did: string, rkey: string): P
 				return null
 			}
 		}
-		const subfsRkeys = await walkOwnedSubfs(record.root, did, fetchSubfsRoot, (subfsRoot, mountPath) => {
-			for (const [key, value] of extractBlobMap(subfsRoot, mountPath)) blobMap.set(key, value)
+		const subfsRkeys = await walkOwnedSubfs(record.root, did, fetchSubfsRoot, {
+			visit: (subfsRoot, mountPath) => {
+				for (const [key, value] of extractBlobMap(subfsRoot, mountPath)) blobMap.set(key, value)
+			},
 		})
 
 		return { record, blobMap, subfsRkeys }

@@ -6,6 +6,7 @@ import { Elysia } from 'elysia'
 import { isSupporter } from '../lib/db'
 import {
 	commitPublicUploadManifest,
+	deleteDetachedSubfs,
 	invalidUploadError,
 	loadExistingUploadState,
 	PublicUploadError,
@@ -59,7 +60,7 @@ async function maxLogicalUploadBytes(did: string): Promise<number> {
 async function putEmptySite(agent: Agent, did: string, siteName: string) {
 	return await withSiteUploadLock(did, siteName, async () => {
 		const existingState = await loadExistingUploadState(agent, did, siteName)
-		return await commitPublicUploadManifest(
+		const committed = await commitPublicUploadManifest(
 			agent,
 			did,
 			siteName,
@@ -69,6 +70,8 @@ async function putEmptySite(agent: Agent, did: string, siteName: string) {
 			undefined,
 			existingState.rootCid,
 		)
+		await deleteDetachedSubfs(agent, did, existingState.ownedSubfs, committed)
+		return committed
 	})
 }
 
