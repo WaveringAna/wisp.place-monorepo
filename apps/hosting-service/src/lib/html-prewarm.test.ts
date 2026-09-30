@@ -3,10 +3,17 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test'
 const promotedKeys: string[] = []
 const failingKeys = new Set<string>()
 let listKeysCalls = 0
+let blockWarmupReads = false
+let blockedWarmupReads = 0
+const releaseWarmupReads: Array<() => void> = []
 
 const fakeStorage = {
 	async getWithMetadata(key: string) {
 		promotedKeys.push(key)
+		if (blockWarmupReads && blockedWarmupReads < 2) {
+			blockedWarmupReads++
+			await new Promise<void>((resolve) => releaseWarmupReads.push(resolve))
+		}
 		if (failingKeys.has(key)) {
 			throw Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' })
 		}
@@ -50,8 +57,12 @@ const RKEY = 'site'
 const key = (path: string) => `${DID}/${RKEY}/${path}`
 
 function warmup(paths: readonly string[]): Promise<void> {
-	triggerSiteHtmlHotCacheWarmup(DID, RKEY, paths)
-	return waitForSiteHtmlHotCacheWarmupForTests(DID, RKEY)
+	return warmupSite(DID, RKEY, paths)
+}
+
+function warmupSite(did: string, rkey: string, paths: readonly string[]): Promise<void> {
+	triggerSiteHtmlHotCacheWarmup(did, rkey, paths)
+	return waitForSiteHtmlHotCacheWarmupForTests(did, rkey)
 }
 
 describe('HTML prewarm', () => {
@@ -59,6 +70,9 @@ describe('HTML prewarm', () => {
 		promotedKeys.length = 0
 		failingKeys.clear()
 		listKeysCalls = 0
+		blockWarmupReads = false
+		blockedWarmupReads = 0
+		releaseWarmupReads.length = 0
 		resetHtmlHotCacheWarmupForTests()
 	})
 
@@ -106,6 +120,68 @@ describe('HTML prewarm', () => {
 		resetSiteHtmlHotCacheWarmup(DID, RKEY)
 		await warmup(['index.html'])
 		expect(promotedKeys).toHaveLength(2)
+	})
+
+	test('bounds concurrent warmups and reset cannot bypass admission', async () => {
+		blockWarmupReads = true
+		triggerSiteHtmlHotCacheWarmup(DID, 'active-0', ['index.html'])
+		triggerSiteHtmlHotCacheWarmup(DID, 'active-1', ['index.html'])
+		await Promise.resolve()
+		expect(blockedWarmupReads).toBe(2)
+
+		const first = waitForSiteHtmlHotCacheWarmupForTests(DID, 'active-0')
+		resetSiteHtmlHotCacheWarmup(DID, 'active-0')
+
+		// Forgetting active work must not release its admission slot.
+		triggerSiteHtmlHotCacheWarmup(DID, 'skipped', ['index.html'])
+		resetSiteHtmlHotCacheWarmup(DID, 'skipped')
+		triggerSiteHtmlHotCacheWarmup(DID, 'skipped', ['index.html'])
+		await Promise.resolve()
+		expect(promotedKeys).toHaveLength(2)
+
+		for (const release of releaseWarmupReads.splice(0)) release()
+		await first
+		await waitForSiteHtmlHotCacheWarmupForTests(DID, 'active-1')
+
+		await warmupSite(DID, 'skipped', ['index.html'])
+		expect(promotedKeys).toHaveLength(3)
+	})
+
+	test('stale warmup completion cannot mark a reset site warm or clear newer work', async () => {
+		blockWarmupReads = true
+		triggerSiteHtmlHotCacheWarmup(DID, RKEY, ['index.html'])
+		await Promise.resolve()
+		expect(blockedWarmupReads).toBe(1)
+		const stale = waitForSiteHtmlHotCacheWarmupForTests(DID, RKEY)
+
+		resetSiteHtmlHotCacheWarmup(DID, RKEY)
+		triggerSiteHtmlHotCacheWarmup(DID, RKEY, ['index.html'])
+		await Promise.resolve()
+		expect(blockedWarmupReads).toBe(2)
+		const fresh = waitForSiteHtmlHotCacheWarmupForTests(DID, RKEY)
+
+		// Resolve the stale read first. The fresh entry remains pending, so a
+		// request now must deduplicate rather than start a third read.
+		releaseWarmupReads.shift()!()
+		await stale
+		expect(promotedKeys).toHaveLength(2)
+		triggerSiteHtmlHotCacheWarmup(DID, RKEY, ['index.html'])
+		await Promise.resolve()
+		expect(promotedKeys).toHaveLength(2)
+
+		releaseWarmupReads.shift()!()
+		await fresh
+		await warmup(['index.html'])
+		expect(promotedKeys).toHaveLength(2)
+	})
+
+	test('bounds completed per-site warmup bookkeeping', async () => {
+		for (let index = 0; index < 1_001; index++) {
+			await warmupSite(DID, `site-${index}`, ['index.html'])
+		}
+
+		await warmupSite(DID, 'site-0', ['index.html'])
+		expect(promotedKeys).toHaveLength(1_002)
 	})
 
 	test('legacy callers without a manifest do not trigger a storage scan', async () => {

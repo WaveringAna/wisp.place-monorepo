@@ -4,13 +4,24 @@ import { storage } from './storage'
 const logger = createLogger('html-prewarm')
 
 const warmedSites = new Set<string>()
-const prewarmGeneration = new Map<string, number>()
-const prewarmInFlight = new Map<string, { generation: number; promise: Promise<void> }>()
+const prewarmInFlight = new Map<string, { promise: Promise<void> }>()
 const MAX_HTML_PREWARM_KEYS = 1_000
+const MAX_PREWARMED_SITES = 1_000
+const MAX_CONCURRENT_PREWARMS = 2
+let activePrewarmCount = 0
 let prewarmEpoch = 0
 
 function getSiteKey(did: string, rkey: string): string {
 	return `${did}/${rkey}`
+}
+
+/** Keep FIFO per-site warmup bookkeeping bounded as sites rotate through the host. */
+function enforcePrewarmStateLimit(): void {
+	while (warmedSites.size > MAX_PREWARMED_SITES) {
+		const oldestSite = warmedSites.values().next().value
+		if (oldestSite === undefined) return
+		warmedSites.delete(oldestSite)
+	}
 }
 
 function isHtmlStorageKey(key: string): boolean {
@@ -64,23 +75,22 @@ export function triggerSiteHtmlHotCacheWarmup(did: string, rkey: string, manifes
 	// LIST as a side effect of a request.
 	if (!manifestPaths || warmedSites.has(siteKey)) return
 
-	const generation = prewarmGeneration.get(siteKey) ?? 0
 	const epoch = prewarmEpoch
 	const existing = prewarmInFlight.get(siteKey)
-	if (existing && existing.generation === generation) return
+	if (existing || activePrewarmCount >= MAX_CONCURRENT_PREWARMS) return
+	activePrewarmCount++
 
-	const entry = {
-		generation,
-		promise: (async () => {
+	const entry: { promise: Promise<void> } = {
+		promise: Promise.resolve().then(async () => {
 			try {
 				const { scannedKeys, warmedHtmlKeys, failedKeys } = await loadSiteHtmlKeysIntoHotTier(did, rkey, manifestPaths)
-				const latestGeneration = prewarmGeneration.get(siteKey) ?? 0
-				if (prewarmEpoch !== epoch || latestGeneration !== generation) return
+				if (prewarmEpoch !== epoch || prewarmInFlight.get(siteKey) !== entry) return
 
 				// Remember a completed warmup even when there are no matching keys so repeated
 				// requests for the same site do not repeat manifest-backed reads. Individually
 				// skipped keys are re-fetched on demand by the normal serving path.
 				warmedSites.add(siteKey)
+				enforcePrewarmStateLimit()
 
 				logger.debug(`HTML prewarm finished for ${did}/${rkey}`, {
 					scannedKeys,
@@ -90,11 +100,12 @@ export function triggerSiteHtmlHotCacheWarmup(did: string, rkey: string, manifes
 			} catch (err) {
 				logger.warn(`HTML prewarm failed for ${did}/${rkey}`, { error: err })
 			}
-		})(),
+		}),
 	}
 
 	prewarmInFlight.set(siteKey, entry)
 	entry.promise.finally(() => {
+		activePrewarmCount--
 		const current = prewarmInFlight.get(siteKey)
 		if (current === entry) {
 			prewarmInFlight.delete(siteKey)
@@ -105,7 +116,6 @@ export function triggerSiteHtmlHotCacheWarmup(did: string, rkey: string, manifes
 export function resetSiteHtmlHotCacheWarmup(did: string, rkey: string): void {
 	const siteKey = getSiteKey(did, rkey)
 	warmedSites.delete(siteKey)
-	prewarmGeneration.set(siteKey, (prewarmGeneration.get(siteKey) ?? 0) + 1)
 	prewarmInFlight.delete(siteKey)
 }
 
@@ -115,7 +125,6 @@ export function resetAllHtmlHotCacheWarmups(): void {
 	// that started before broad cache recovery must not mark stale hot data warm.
 	prewarmEpoch += 1
 	warmedSites.clear()
-	prewarmGeneration.clear()
 	prewarmInFlight.clear()
 }
 
