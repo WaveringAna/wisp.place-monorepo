@@ -1,0 +1,11 @@
+[package]
+name = "wisp-ui"
+description = "Terminal rendering for wispctl: prompts, spinners, progress and live panels"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ratatui.workspace = true
+crossterm.workspace = true
+unicode-width.workspace = true

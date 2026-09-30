@@ -1,0 +1,142 @@
+[
+  {
+    "extension": "html",
+    "mime": "text/html",
+    "text": true
+  },
+  {
+    "extension": "css",
+    "mime": "text/css",
+    "text": true
+  },
+  {
+    "extension": "js",
+    "mime": "text/javascript",
+    "text": true
+  },
+  {
+    "extension": "JS",
+    "mime": "text/javascript",
+    "text": true
+  },
+  {
+    "extension": "mjs",
+    "mime": "text/javascript",
+    "text": true
+  },
+  {
+    "extension": "cjs",
+    "mime": "application/node",
+    "text": false
+  },
+  {
+    "extension": "json",
+    "mime": "application/json",
+    "text": true
+  },
+  {
+    "extension": "map",
+    "mime": "application/json",
+    "text": true
+  },
+  {
+    "extension": "xml",
+    "mime": "application/xml",
+    "text": false
+  },
+  {
+    "extension": "svg",
+    "mime": "image/svg+xml",
+    "text": false
+  },
+  {
+    "extension": "txt",
+    "mime": "text/plain",
+    "text": true
+  },
+  {
+    "extension": "csv",
+    "mime": "text/csv",
+    "text": true
+  },
+  {
+    "extension": "md",
+    "mime": "text/markdown",
+    "text": true
+  },
+  {
+    "extension": "wasm",
+    "mime": "application/wasm",
+    "text": false
+  },
+  {
+    "extension": "ico",
+    "mime": "image/vnd.microsoft.icon",
+    "text": false
+  },
+  {
+    "extension": "jpg",
+    "mime": "image/jpeg",
+    "text": false
+  },
+  {
+    "extension": "jpeg",
+    "mime": "image/jpeg",
+    "text": false
+  },
+  {
+    "extension": "png",
+    "mime": "image/png",
+    "text": false
+  },
+  {
+    "extension": "webp",
+    "mime": "image/webp",
+    "text": false
+  },
+  {
+    "extension": "avif",
+    "mime": "image/avif",
+    "text": false
+  },
+  {
+    "extension": "woff",
+    "mime": "font/woff",
+    "text": false
+  },
+  {
+    "extension": "woff2",
+    "mime": "font/woff2",
+    "text": false
+  },
+  {
+    "extension": "ttf",
+    "mime": "font/ttf",
+    "text": false
+  },
+  {
+    "extension": "otf",
+    "mime": "font/otf",
+    "text": false
+  },
+  {
+    "extension": "wav",
+    "mime": "audio/wav",
+    "text": false
+  },
+  {
+    "extension": "aiff",
+    "mime": "audio/x-aiff",
+    "text": false
+  },
+  {
+    "extension": "pdf",
+    "mime": "application/pdf",
+    "text": false
+  },
+  {
+    "extension": "webmanifest",
+    "mime": "application/manifest+json",
+    "text": true
+  }
+]

@@ -1,0 +1,78 @@
+{
+  "$type": "place.wisp.fs#directory",
+  "type": "directory",
+  "entries": [
+    {
+      "name": "index.html",
+      "node": {
+        "$type": "place.wisp.fs#file",
+        "type": "file",
+        "blob": {
+          "$type": "blob",
+          "ref": {
+            "$link": "bafkreibm6jg3ux5qumhcn2b3flc3tyu6dmlb4xa7u5bf44yegnrjhc4yeq"
+          },
+          "mimeType": "application/octet-stream",
+          "size": 5
+        },
+        "encoding": "gzip",
+        "mimeType": "text/html",
+        "base64": false
+      }
+    },
+    {
+      "name": "a",
+      "node": {
+        "$type": "place.wisp.fs#directory",
+        "type": "directory",
+        "entries": [
+          {
+            "name": "b",
+            "node": {
+              "$type": "place.wisp.fs#directory",
+              "type": "directory",
+              "entries": [
+                {
+                  "name": "index.html",
+                  "node": {
+                    "$type": "place.wisp.fs#file",
+                    "type": "file",
+                    "blob": {
+                      "$type": "blob",
+                      "ref": {
+                        "$link": "bafkreibm6jg3ux5qumhcn2b3flc3tyu6dmlb4xa7u5bf44yegnrjhc4yeq"
+                      },
+                      "mimeType": "application/octet-stream",
+                      "size": 5
+                    },
+                    "encoding": "gzip",
+                    "mimeType": "text/html",
+                    "base64": false
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "other.html",
+            "node": {
+              "$type": "place.wisp.fs#file",
+              "type": "file",
+              "blob": {
+                "$type": "blob",
+                "ref": {
+                  "$link": "bafkreibm6jg3ux5qumhcn2b3flc3tyu6dmlb4xa7u5bf44yegnrjhc4yeq"
+                },
+                "mimeType": "application/octet-stream",
+                "size": 5
+              },
+              "encoding": "gzip",
+              "mimeType": "text/html",
+              "base64": false
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

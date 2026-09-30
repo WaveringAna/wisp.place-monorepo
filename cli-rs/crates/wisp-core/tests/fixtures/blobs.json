@@ -1,0 +1,17 @@
+[
+  {
+    "name": "empty",
+    "cid": "bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku",
+    "gzipCid": "bafkreihrwzishcsy7yuqxlwgyxrs6o63dfb52k6vqlyck2jdd55hk7dyg4"
+  },
+  {
+    "name": "text",
+    "cid": "bafkreihwp6xdngcltqklgaareza7cgffpusdvm6zstdrew7ut2vy3eurqm",
+    "gzipCid": "bafkreid2dzal5pnj3nocnr64rlxcsvqpl2wn5ybkjzauzab7kla5tenecq"
+  },
+  {
+    "name": "random",
+    "cid": "bafkreif5k2o5wk3xvzluakxkynqwku4pkft4y4t56tdtxa3eme5h3rfqfa",
+    "gzipCid": "bafkreicpucxtweooj2elepmfowfgd42iwjz2dl6cmz5on7x2tt6wep4sre"
+  }
+]

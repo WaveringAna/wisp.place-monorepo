@@ -1,0 +1,67 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "2.0.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.90"
+
+[workspace.dependencies]
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm_0_29"] }
+crossterm = "0.29.0"
+unicode-width = "0.2"
+# jacquard from ana's fork: upstream main plus pending scope fixes (see DESIGN.md).
+jacquard = { git = "https://tangled.org/okami.mom/jacquard", branch = "main", default-features = false, features = ["api", "dns", "loopback", "websocket", "reqwest-rustls-ring", "reqwest-json", "reqwest-http2", "reqwest-stream"] }
+jacquard-common = { git = "https://tangled.org/okami.mom/jacquard", branch = "main" }
+# For com.atproto.sync.subscribeRepos types (the facade `streaming` feature drags in app.bsky).
+jacquard-api = { git = "https://tangled.org/okami.mom/jacquard", branch = "main", default-features = false, features = ["minimal", "std", "streaming"] }
+jacquard-derive = { git = "https://tangled.org/okami.mom/jacquard", branch = "main" }
+jacquard-lexicon = { git = "https://tangled.org/okami.mom/jacquard", branch = "main", default-features = false }
+miette = "7.6"
+anyhow = "1"
+clap = { version = "4.6.7", features = ["derive", "env", "wrap_help"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "fs", "net", "signal", "time", "sync", "io-util"] }
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+serde_json = "1"
+thiserror = { version = "2", default-features = false }
+
+flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs"] }
+sha2 = { version = "0.11.0", default-features = false }
+data-encoding = "2.11"
+mime_guess = "2.0.5"
+ignore = "0.4.33"
+
+# ring as the one rustls provider; installed at startup by wispctl::tls.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "json", "query"] }
+base64 = "0.23.1"
+tempfile = "3.27.0"
+futures-util = "0.3.32"
+
+http = "1"
+# Already in the tree via jacquard; used for local wall-clock times in serve.
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+serde_html_form = "0.4"
+
+webbrowser = "1"
+
+hyper = { version = "1", default-features = false, features = ["server", "http1"] }
+hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+percent-encoding = "2"
+
+url = "2.5.8"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+keyring = { version = "4.2.0", default-features = false, features = ["v1"] }
+
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

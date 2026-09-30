@@ -1,0 +1,25 @@
+[package]
+name = "wisp-core"
+description = "Pure wisp.place logic shared by wispctl: site trees, manifests, subfs, paths, redirects, scopes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+wisp-lexicons = { path = "../wisp-lexicons" }
+jacquard-common.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+flate2.workspace = true
+sha2.workspace = true
+data-encoding.workspace = true
+mime_guess.workspace = true
+ignore.workspace = true
+url.workspace = true
+percent-encoding.workspace = true
+
+jacquard-lexicon.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
