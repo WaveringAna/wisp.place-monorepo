@@ -1,5 +1,5 @@
 ---
-title: Wisp CLI v1.1.0
+title: Wisp CLI
 description: Command-line tool for deploying static sites to the AT Protocol
 ---
 
@@ -26,7 +26,7 @@ The Wisp CLI is a command-line tool for deploying static websites directly to yo
 
 <div class="downloads">
 
-<h2>Download v1.3.1</h2>
+<h2>Download v2.0.0</h2>
 
 <a href="https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-aarch64-darwin" class="download-link" download="">
 
@@ -61,17 +61,34 @@ The Wisp CLI is a command-line tool for deploying static websites directly to yo
 <h3 style="margin-top: 1.5rem; margin-bottom: 0.5rem;">SHA-256 Checksums</h3>
 
 <pre style="font-size: 0.75rem; padding: 1rem;" class="language-bash" tabindex="0"><code class="language-bash">
-ed3b5d82291fd955ade565780837844d67eba60869948f1ec1e78fa810f30a70  wisp-cli-aarch64-darwin
-11b911d957480731974c6aa6a7ac274c8ec64074a0886bd095596d77dce58196  wisp-cli-x86_64-darwin
-4402c7688d7e318b4d62fe132ec9ac67db368b24c01d987d736c7558e3fa2f2c  wisp-cli-darwin-universal
-3fc6ce46f7d07b5b55a59d5fc2f648ec446e25fc1e0475f92de51eb0a361eec2  wisp-cli-aarch64-linux
-e60bb9025c12dad7a1e4c53da58638737b7bc35c5e560aa3cf913573b2b8eb9f  wisp-cli-x86_64-linux
-5372c0ad37f2b925853d1fb1c9d9c85fbd4fbfbc11d58671cd084394e7584bdc  wisp-cli-x86_64-windows.exe
+ddcb144ba6478af8d01397cc380be22da8614f63bcbb8760a73ad127379cdbe4  wisp-cli-aarch64-darwin
+748aef90ef0ae2633188fb26c577c7a8523de6a1bb063f5198a67e6b8770d34f  wisp-cli-aarch64-linux
+1f2386c7b74d6a80627ec60f0677a5d9b21e50aba2aab01087b3bb222b6a7603  wisp-cli-darwin-universal
+323107dff1748a5ce38079f0d752ecf82809fc24d5c951a1b277312d0e6e185f  wisp-cli-x86_64-darwin
+28e5d5c70b04a5c8e73cc1a94280afc5e4a6193eca767206bcd0727b0b20e016  wisp-cli-x86_64-linux
+2d420f40a4b33915bf26206307c6c3f207a12e5ada0ab033bb629dd97dd5d333  wisp-cli-x86_64-windows.exe
 </code></pre>
 
 </div>
 
-note: the tool used to be named wisp-cli and downloadable binaries are kept this way to preseve compatibility with CI
+The downloads are native builds with no runtime to install. The Linux ones are statically linked, so
+they run on any distribution, including Alpine, busybox and nixery images.
+
+note: the tool used to be named wisp-cli and downloadable binaries are kept this way to preserve compatibility with CI
+
+### Upgrading from 1.x binaries
+
+Deploy flags, exit codes and the records a deploy writes are unchanged, so existing CI keeps working.
+A few things a script might notice:
+
+- Progress and status lines (`✓ Deployed successfully!` and friends) go to stderr. stdout carries only
+  results: the `URI:`/`URL:` lines after a deploy, `--json` output, listings and `--version`.
+- `--version` prints `2.0.0`.
+- Without a terminal, a missing `--site` or `--path` is an error (exit 1) instead of a silent no-op.
+- OAuth sessions saved by 1.x can't be reused. Run `wispctl login` once; app passwords saved by 1.x
+  still work.
+- Certificates: the system store is used, falling back to Mozilla's roots on Linux images that ship none.
+  `SSL_CERT_FILE` points at a custom bundle, and `NODE_EXTRA_CA_CERTS` is still honoured.
 
 ## CI/CD Integration
 
@@ -216,7 +233,7 @@ wispctl serve your-handle.bsky.social \
 # Enable directory listing for paths without index files
 wispctl serve your-handle.bsky.social \
   --site my-site \
-  --directory
+  --directory-listing
 
 # Explicitly expose the server to other machines (use a firewall or reverse proxy)
 wispctl serve your-handle.bsky.social \
@@ -309,7 +326,7 @@ than guessing which identity to deploy as.
 
 ## File Processing
 
-The CLI handles all file processing automatically to ensure reliable storage and delivery. Files are compressed with gzip at level 9 for optimal size reduction, then base64 encoded to bypass PDS content sniffing restrictions. Everything is uploaded as `application/octet-stream` blobs while preserving the original MIME type as metadata. When serving your site, the hosting service automatically decompresses non-HTML/CSS/JS files, ensuring your content is delivered correctly to visitors.
+The CLI handles all file processing automatically to ensure reliable storage and delivery. Text files (HTML, CSS, JS, JSON, SVG and the like) and uncompressed audio are compressed with gzip at level 9 (`--force-gzip` compresses everything); if the PDS rejects the manifest, the deploy retries once with text files base64 encoded to get past content sniffing. Everything is uploaded as `application/octet-stream` blobs while preserving the original MIME type as metadata. When serving your site, the hosting service automatically decompresses non-HTML/CSS/JS files, ensuring your content is delivered correctly to visitors.
 
 **File Filtering**: The CLI automatically excludes common files like `.git`, `node_modules`, `.env`, and other development artifacts. Customize this with a [`.wispignore` file](/file-filtering).
 
@@ -319,7 +336,7 @@ The CLI tracks file changes using CID-based content addressing to minimize uploa
 
 ## Limits
 
-- **Max file size**: 100MB per file (after compression)
+- **Max file size**: 200MB per file (after compression)
 - **Max total size**: 300MB per site
 - **Max files**: 1000 files per site
 - **Site name**: Must follow AT Protocol rkey format (alphanumeric, hyphens, underscores)
@@ -335,43 +352,51 @@ Arguments:
   [HANDLE]  Handle (e.g., alice.bsky.social) or DID. Optional once an account is stored.
 
 Options:
-  -p, --path <PATH>           Path to site directory [default: .]
-  -s, --site <SITE>           Site name (defaults to directory name)
-      --password <PASSWORD>   App password for authentication
-      --db <PATH>             Account database path [default: ~/.config/wispctl/state.sqlite]
-  -h, --help                  Print help
+  -p, --path <path>          Directory to deploy (prompted for when omitted)
+  -s, --site <name>          Site name (prompted for when omitted)
+      --directory            Enable directory listing
+      --spa                  Enable SPA mode (serve index.html for all routes)
+  -c, --concurrency <n>      Number of concurrent uploads (backs off to 2 on rate limit) [default: 3]
+      --force-gzip           Force gzip compression for all files regardless of type
+      --password <password>  App password for headless authentication (or set WISPCTL_APP_PASSWORD)
+      --db <path>            Account database path [default: ~/.config/wispctl/state.sqlite]
+  -y, --yes                  Skip confirmation prompts
+  -q, --quiet                Suppress progress output (or set WISPCTL_NO_PROGRESS=1)
+  -h, --help                 Print help
 ```
 
 ### Pull Command
 
 ```bash
-wispctl pull [OPTIONS] --site <SITE> <INPUT>
+wispctl pull [OPTIONS] --site <name> <HANDLE>
 
 Arguments:
-  <INPUT>  Handle or DID
+  <HANDLE>  Handle or DID
 
 Options:
-  -s, --site <SITE>           Site name to download
-  -p, --path <PATH>           Output directory [default: .]
-  -h, --help                  Print help
+  -s, --site <name>  Site name to download
+  -p, --path <path>  Output directory [default: .]
+  -q, --quiet        Suppress progress output
+  -h, --help         Print help
 ```
 
 ### Serve Command
 
 ```bash
-wispctl serve [OPTIONS] --site <SITE> <INPUT>
+wispctl serve [OPTIONS] --site <name> <HANDLE>
 
 Arguments:
-  <INPUT>  Handle or DID
+  <HANDLE>  Handle or DID
 
 Options:
-  -s, --site <SITE>           Site name to serve
-  -p, --path <PATH>           Site files directory [default: .]
-  -P, --port <PORT>           Port to serve on [default: 8080]
-      --host <HOST>           Bind address [default: 127.0.0.1]
-      --spa                   Enable SPA mode (serve index.html for all routes)
-      --directory             Enable directory listing mode for paths without index files
-  -h, --help                  Print help
+  -s, --site <name>        Site name to serve
+  -p, --path <path>        Local directory to cache the site [default: .wisp-serve]
+  -P, --port <port>        Port to serve on [default: 8080]
+      --host <host>        Bind address [default: 127.0.0.1]
+      --spa [<file>]       Enable SPA mode (serve <file> for unmatched routes, default index.html)
+      --directory-listing  Enable directory listing for paths without index files
+  -q, --quiet              Suppress progress output
+  -h, --help               Print help
 ```
 
 - [place.wisp.fs](/lexicons/place-wisp-fs) - Site manifest lexicon

@@ -9,27 +9,27 @@ const BINARIES = [
 	{
 		platform: 'macOS (Apple Silicon)',
 		filename: 'wisp-cli-aarch64-darwin',
-		sha256: 'ed3b5d82291fd955ade565780837844d67eba60869948f1ec1e78fa810f30a70',
+		sha256: 'ddcb144ba6478af8d01397cc380be22da8614f63bcbb8760a73ad127379cdbe4',
 	},
 	{
 		platform: 'macOS (Intel)',
 		filename: 'wisp-cli-x86_64-darwin',
-		sha256: '11b911d957480731974c6aa6a7ac274c8ec64074a0886bd095596d77dce58196',
+		sha256: '323107dff1748a5ce38079f0d752ecf82809fc24d5c951a1b277312d0e6e185f',
 	},
 	{
 		platform: 'Linux (ARM64)',
 		filename: 'wisp-cli-aarch64-linux',
-		sha256: '3fc6ce46f7d07b5b55a59d5fc2f648ec446e25fc1e0475f92de51eb0a361eec2',
+		sha256: '748aef90ef0ae2633188fb26c577c7a8523de6a1bb063f5198a67e6b8770d34f',
 	},
 	{
 		platform: 'Linux (x86_64)',
 		filename: 'wisp-cli-x86_64-linux',
-		sha256: 'e60bb9025c12dad7a1e4c53da58638737b7bc35c5e560aa3cf913573b2b8eb9f',
+		sha256: '28e5d5c70b04a5c8e73cc1a94280afc5e4a6193eca767206bcd0727b0b20e016',
 	},
 	{
 		platform: 'Windows (x86_64)',
 		filename: 'wisp-cli-x86_64-windows.exe',
-		sha256: '5372c0ad37f2b925853d1fb1c9d9c85fbd4fbfbc11d58671cd084394e7584bdc',
+		sha256: '2d420f40a4b33915bf26206307c6c3f207a12e5ada0ab033bb629dd97dd5d333',
 	},
 ] as const
 
@@ -58,7 +58,7 @@ export const CLITab = memo(function CLITab() {
 				<div className="flex items-center gap-2">
 					<span className="text-sm font-semibold">Wisp CLI</span>
 					<Badge variant="secondary" className="text-xs">
-						v1.3.1
+						v2.0.0
 					</Badge>
 				</div>
 				<div className="flex items-center gap-4">
@@ -100,7 +100,7 @@ export const CLITab = memo(function CLITab() {
 
 				{/* Binary downloads */}
 				<div className="p-4 border-b border-border/50">
-					<SectionLabel>Binary Downloads v1.3.1</SectionLabel>
+					<SectionLabel>Binary Downloads v2.0.0</SectionLabel>
 					<div className="grid grid-cols-2 gap-2">
 						{BINARIES.map(({ platform, filename, sha256 }) => (
 							<a
@@ -148,7 +148,7 @@ export const CLITab = memo(function CLITab() {
 								<p className="text-xs text-muted-foreground font-medium">Pull</p>
 								<CodeBlock
 									code={`./wisp-cli pull your-handle.bsky.social \\
-  --site my-site --output ./my-site`}
+  --site my-site --path ./my-site`}
 									language="bash"
 								/>
 							</div>
