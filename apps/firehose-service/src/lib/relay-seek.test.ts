@@ -59,6 +59,31 @@ describe('seekRelayCursorByTime', () => {
 		await expect(seekRelayCursorByTime(probe, T0, { maxProbes: 4 })).rejects.toThrow('probe budget')
 	})
 
+	test('rejects once the whole-seek deadline is spent before a safe cursor', async () => {
+		let clock = 0
+		const probe: RelayProbe = async (cursor, timeoutMs) => {
+			expect(timeoutMs).toBeLessThanOrEqual(1_000)
+			clock += 400
+			return { seq: (cursor ?? 1e9) + 1, timeMs: T0 + 1e9 }
+		}
+		await expect(
+			seekRelayCursorByTime(probe, T0, { deadlineMs: 1_000, probeTimeoutMs: 5_000, now: () => clock }),
+		).rejects.toThrow('deadline')
+	})
+
+	test('returns the best safe cursor found when the deadline ends bisection', async () => {
+		let clock = 0
+		const relay = simulatedRelay({ base: 0, oldest: 0, head: 100_000_000, rate: 300 })
+		const timed: RelayProbe = (cursor, timeoutMs) => {
+			clock += 1_000
+			return relay.probe(cursor, timeoutMs)
+		}
+		const target = T0 + 10 * 3600_000
+		const result = await seekRelayCursorByTime(timed, target, { deadlineMs: 6_000, toleranceMs: 1, now: () => clock })
+		expect(result.timeMs).toBeLessThanOrEqual(target)
+		expect(clock).toBeLessThanOrEqual(7_000)
+	})
+
 	test('propagates probe failures', async () => {
 		const probe: RelayProbe = async () => {
 			throw new Error('relay unreachable')
@@ -120,10 +145,15 @@ describe('relay failover by time', () => {
 			sourceTimeMs: T0,
 			seek: async (service, time) => {
 				seeks.push([service, time])
-				return 16_307_000_000
+				return { cursor: 16_307_000_000, timeMs: T0 - 301_000 }
 			},
 		})
-		expect(activation).toEqual({ cursor: 16_307_000_000, missingCheckpoint: false, source: 'time-estimate' })
+		expect(activation).toEqual({
+			cursor: 16_307_000_000,
+			missingCheckpoint: false,
+			source: 'time-estimate',
+			timeMs: T0 - 301_000,
+		})
 		expect(seeks).toEqual([['secondary', T0]])
 		expect(store.reads).toBe(0)
 		expect(cursors.knownCursor('secondary')).toBe(16_307_000_000)
@@ -151,7 +181,7 @@ describe('relay failover by time', () => {
 		const activation = await cursors.switchTo('secondary', 100, staleStore(42), {
 			seek: async () => {
 				seeks++
-				return 1
+				return { cursor: 1, timeMs: T0 }
 			},
 		})
 		expect(activation?.source).toBe('checkpoint')
@@ -165,10 +195,12 @@ describe('relay failover by time', () => {
 		cursors.initialize('primary', 1)
 		const activation = await cursors.switchTo('secondary', 1, staleStore(0), {
 			sourceTimeMs: sourceTime,
-			seek: async (_service, time) => (await seekRelayCursorByTime(relay.probe, time)).cursor,
+			seek: async (_service, time) => seekRelayCursorByTime(relay.probe, time),
 		})
-		const resumed: ProbedPosition = await relay.probe(activation?.cursor)
+		const resumed: ProbedPosition = await relay.probe(activation?.cursor, 1_000)
 		expect(resumed.timeMs).toBeLessThanOrEqual(sourceTime)
+		// The tracker is seeded with the probed resume time, not the nominal target.
+		expect(activation?.timeMs).toBe(resumed.timeMs)
 	})
 })
 
@@ -193,7 +225,7 @@ describe('StandbyCursorAdvancer', () => {
 			sourceTimeMs: () => T0,
 			seek: async (service, time) => {
 				seeks.push([service, time])
-				return 34_078_000_000
+				return { cursor: 34_078_000_000, timeMs: T0 }
 			},
 			store,
 			isCurrent: () => true,
@@ -211,7 +243,7 @@ describe('StandbyCursorAdvancer', () => {
 			sourceTimeMs: () => undefined,
 			seek: async () => {
 				seeks++
-				return 1
+				return { cursor: 1, timeMs: T0 }
 			},
 			store,
 			isCurrent: () => true,
@@ -229,7 +261,7 @@ describe('StandbyCursorAdvancer', () => {
 			sourceTimeMs: () => T0,
 			seek: async () => {
 				current = false
-				return 5
+				return { cursor: 5, timeMs: T0 }
 			},
 			store,
 			isCurrent: () => current,
@@ -246,7 +278,7 @@ describe('StandbyCursorAdvancer', () => {
 			sourceTimeMs: () => T0,
 			seek: async (service) => {
 				if (service === 'down') throw new Error('unreachable')
-				return 9
+				return { cursor: 9, timeMs: T0 }
 			},
 			store,
 			isCurrent: () => true,
@@ -265,7 +297,7 @@ describe('StandbyCursorAdvancer', () => {
 			sourceTimeMs: () => T0,
 			seek: async () => {
 				seeks++
-				return 1
+				return { cursor: 1, timeMs: T0 }
 			},
 			store,
 			isCurrent: () => true,

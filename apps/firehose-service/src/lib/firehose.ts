@@ -102,6 +102,7 @@ import {
 	type RelayCursorStore,
 	RelayFailureBudget,
 	RelayGenerationGuard,
+	type RelayTimePosition,
 	StandbyCursorAdvancer,
 } from './firehose-relay'
 import { type SchedulerDrainResult, SiteWorkScheduler } from './firehose-scheduler'
@@ -689,11 +690,15 @@ function createStandbyCursorAdvancer(): StandbyCursorAdvancer {
  * Place the target relay's cursor a margin before the source relay's safe
  * event time. Relay sequence spaces are independent, so this is a time search.
  */
-async function seekRelayCursorAtTime(service: string, sourceTimeMs: number, log = true): Promise<number | undefined> {
+async function seekRelayCursorAtTime(
+	service: string,
+	sourceTimeMs: number,
+	log = true,
+): Promise<RelayTimePosition | undefined> {
 	const signal = lifecycleAbortController.signal
 	const targetTimeMs = sourceTimeMs - FAILOVER_REWIND_MS
 	const result = await seekRelayCursorByTime(
-		(cursor) => probeRelayPosition(service, cursor, { timeoutMs: 10_000, signal }),
+		(cursor, timeoutMs) => probeRelayPosition(service, cursor, { timeoutMs, signal }),
 		targetTimeMs,
 	)
 	if (log)
@@ -711,7 +716,7 @@ async function seekRelayCursorAtTime(service: string, sourceTimeMs: number, log 
 			relay: relayLabel(service),
 		})
 	}
-	return result.cursor
+	return { cursor: result.cursor, timeMs: result.timeMs }
 }
 
 /**
@@ -748,11 +753,7 @@ function requestRelayFailover(targetService: string, onFailure?: () => void): vo
 
 		activeService = targetService
 		sourceProgress = resetSourceProgress(relayLabel(targetService))
-		const activationTimeMs =
-			activation.source === 'time-estimate' && sourceTimeMs !== undefined
-				? sourceTimeMs - FAILOVER_REWIND_MS
-				: undefined
-		cursorTracker.reset(activation.cursor, activationTimeMs)
+		cursorTracker.reset(activation.cursor, activation.timeMs)
 		lastEventTime = Date.now()
 		if (activation.missingCheckpoint) {
 			logger.warn('[Firehose] Target relay has no checkpoint; starting live without cross-relay replay', {

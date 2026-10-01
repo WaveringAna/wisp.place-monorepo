@@ -18,8 +18,11 @@ export interface ProbedPosition {
 	timeMs: number
 }
 
-/** First event after `cursor` (live head when undefined). */
-export type RelayProbe = (cursor: number | undefined) => Promise<ProbedPosition>
+/** First event after `cursor` (live head when undefined), within `timeoutMs`. */
+export type RelayProbe = (cursor: number | undefined, timeoutMs: number) => Promise<ProbedPosition>
+
+/** Default whole-seek deadline: well inside the 60s firehose liveness window. */
+export const RELAY_SEEK_DEADLINE_MS = 30_000
 
 export interface RelaySeekOptions {
 	/** Stop once a cursor at most this far behind the target time is found. */
@@ -28,6 +31,11 @@ export interface RelaySeekOptions {
 	maxProbes?: number
 	/** Minimum assumed relay rate, used only to size the first backward step. */
 	minEventsPerSecond?: number
+	/** Whole-operation deadline; the seek rejects once it is spent. */
+	deadlineMs?: number
+	/** Per-probe timeout, further capped by the remaining deadline. */
+	probeTimeoutMs?: number
+	now?: () => number
 }
 
 export interface RelaySeekResult {
@@ -54,11 +62,16 @@ export async function seekRelayCursorByTime(
 	const toleranceMs = options.toleranceMs ?? 60_000
 	const maxProbes = options.maxProbes ?? 48
 	const minRate = options.minEventsPerSecond ?? 100
+	const now = options.now ?? Date.now
+	const deadline = now() + (options.deadlineMs ?? RELAY_SEEK_DEADLINE_MS)
+	const probeTimeoutMs = options.probeTimeoutMs ?? 10_000
 	let probes = 0
 	const at = async (cursor: number | undefined) => {
 		if (probes >= maxProbes) throw new Error('Relay seek exceeded its probe budget')
+		const remainingMs = deadline - now()
+		if (remainingMs <= 0) throw new Error('Relay seek exceeded its deadline')
 		probes++
-		return probe(cursor)
+		return probe(cursor, Math.min(probeTimeoutMs, remainingMs))
 	}
 
 	const head = await at(undefined)
@@ -87,7 +100,7 @@ export async function seekRelayCursorByTime(
 	}
 
 	// Bisect between a cursor at/behind the target and one past it.
-	while (hi - lo.cursor > 1 && targetTimeMs - lo.timeMs > toleranceMs && probes < maxProbes) {
+	while (hi - lo.cursor > 1 && targetTimeMs - lo.timeMs > toleranceMs && probes < maxProbes && now() < deadline) {
 		const mid = lo.cursor + Math.floor((hi - lo.cursor) / 2)
 		const position = await at(mid)
 		if (position.timeMs <= targetTimeMs) lo = { cursor: mid, ...position }

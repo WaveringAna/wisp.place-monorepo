@@ -373,13 +373,21 @@ export interface RelayCursorActivation {
 	missingCheckpoint: boolean
 	/** Where the cursor came from: a time-based estimate, or the target's stored checkpoint. */
 	source: 'time-estimate' | 'checkpoint'
+	/** Relay time of the first event after `cursor`, when it was probed. */
+	timeMs?: number
+}
+
+/** A target-relay cursor and the relay time of the first event it resumes at. */
+export interface RelayTimePosition {
+	cursor: number
+	timeMs: number
 }
 
 /**
  * Places the target relay's cursor at or before a source-relay event time.
  * Resolves undefined (or rejects) when no estimate can be made.
  */
-export type RelayTimeSeeker = (service: string, sourceTimeMs: number) => Promise<number | undefined>
+export type RelayTimeSeeker = (service: string, sourceTimeMs: number) => Promise<RelayTimePosition | undefined>
 
 export interface RelaySwitchTiming {
 	/** Relay event time at the source relay's safe cursor. */
@@ -451,8 +459,8 @@ export class RelayCursorCoordinator {
 		const estimated = await this.estimateCursor(targetService, timing)
 		if (estimated !== undefined) {
 			this.active = { service: targetService, identity: targetIdentity }
-			this.cursorsByRelay.set(targetIdentity, estimated)
-			return { cursor: estimated, missingCheckpoint: false, source: 'time-estimate' }
+			this.cursorsByRelay.set(targetIdentity, estimated.cursor)
+			return { cursor: estimated.cursor, missingCheckpoint: false, source: 'time-estimate', timeMs: estimated.timeMs }
 		}
 
 		const loaded = await store.read(targetService)
@@ -463,11 +471,17 @@ export class RelayCursorCoordinator {
 		return { cursor, missingCheckpoint: loaded.kind === 'missing', source: 'checkpoint' }
 	}
 
-	private async estimateCursor(targetService: string, timing: RelaySwitchTiming): Promise<number | undefined> {
+	private async estimateCursor(
+		targetService: string,
+		timing: RelaySwitchTiming,
+	): Promise<RelayTimePosition | undefined> {
 		const { sourceTimeMs, seek } = timing
 		if (!seek || sourceTimeMs === undefined || !Number.isFinite(sourceTimeMs)) return undefined
 		try {
-			return this.toCursor(await seek(targetService, sourceTimeMs))
+			const position = await seek(targetService, sourceTimeMs)
+			const cursor = this.toCursor(position?.cursor)
+			if (!position || cursor === undefined || !Number.isFinite(position.timeMs)) return undefined
+			return { cursor, timeMs: position.timeMs }
 		} catch (error) {
 			timing.onSeekFailure?.(error)
 			return undefined
@@ -518,7 +532,7 @@ export class StandbyCursorAdvancer {
 		if (sourceTimeMs === undefined || !Number.isFinite(sourceTimeMs) || !this.opts.isCurrent()) return
 		for (const service of services) {
 			try {
-				const cursor = await this.opts.seek(service, sourceTimeMs)
+				const cursor = (await this.opts.seek(service, sourceTimeMs))?.cursor
 				if (cursor === undefined || !Number.isSafeInteger(cursor) || cursor < 0 || !this.opts.isCurrent()) continue
 				if (await this.opts.store.save(service, cursor)) this.opts.onAdvanced?.(service, cursor)
 			} catch (error) {
