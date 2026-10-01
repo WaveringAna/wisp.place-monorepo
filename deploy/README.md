@@ -105,9 +105,12 @@ Because it is plain HTTP, every host that pulls or pushes has to opt in:
   `http = true`. Recreate it with `docker buildx rm --keep-state` so the
   build cache survives.
 
-The Komodo Builds point at it with no account or organization, so no
-`docker login` happens. Compose `image:` lines name
-`valefar.mesh.wisp.place:5000/<image>:${WISP_TAG}`.
+Komodo will not push to a registry without an account, so Core holds a
+placeholder registry account (`wisp`, dummy token). `docker login` against an
+unauthenticated `registry:2` succeeds with any credentials. Komodo puts the
+account in the image path, so images are
+`valefar.mesh.wisp.place:5000/wisp/<image>`, and compose `image:` lines name
+`valefar.mesh.wisp.place:5000/wisp/<image>:${WISP_TAG}`.
 
 ## Traps this is shaped around
 
