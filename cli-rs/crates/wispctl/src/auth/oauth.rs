@@ -277,6 +277,8 @@ pub async fn restore(
     Ok(None)
 }
 
+// Self-contained (fairy and fonts inlined): the listener closes after this one
+// response, and login has to work offline.
 const SUCCESS_HTML: &str = include_str!("oauth-success.html");
 
 async fn callback(listener: &TcpListener) -> Result<CallbackParams> {
@@ -548,5 +550,12 @@ mod tests {
         assert_eq!(params.state.as_deref(), Some("test"));
         assert_eq!(params.iss.as_deref(), Some("http://localhost:3300"));
         client.await.unwrap();
+    }
+    #[test]
+    fn success_page_loads_nothing_from_the_network() {
+        assert!(SUCCESS_HTML.contains("<svg"));
+        for remote in ["<link", "src=\"http", "url(http"] {
+            assert!(!SUCCESS_HTML.contains(remote), "{remote}");
+        }
     }
 }
