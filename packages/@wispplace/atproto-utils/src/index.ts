@@ -1,5 +1,5 @@
 // Blob utilities
-export { computeCID, extractBlobCid, extractBlobMap } from './blob'
+export { computeCID, computeCIDFromDigest, extractBlobCid, extractBlobMap } from './blob'
 
 // Compression utilities
 export { compressFile, isTextMimeType, shouldCompressFile, shouldCompressMimeType } from './compression'

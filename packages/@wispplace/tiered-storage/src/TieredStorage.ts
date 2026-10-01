@@ -452,6 +452,7 @@ export class TieredStorage<T = unknown> {
 	 * Retrieve data as a readable stream with metadata.
 	 *
 	 * @param key - The key to retrieve
+	 * @param options - Cancellation signal and optional no-mutation borrowed chunks
 	 * @returns A readable stream, metadata, and source tier, or null if not found
 	 *
 	 * @remarks
@@ -464,6 +465,8 @@ export class TieredStorage<T = unknown> {
 	 *
 	 * Decompression is automatically handled if the data was stored with
 	 * compression enabled (metadata.compressed = true).
+	 * When `borrowChunks` is enabled, do not mutate returned chunk views; they
+	 * may share storage with the hot-tier cache.
 	 *
 	 * @example
 	 * ```typescript
@@ -473,52 +476,68 @@ export class TieredStorage<T = unknown> {
 	 * }
 	 * ```
 	 */
-	async getStream(key: string): Promise<StreamResult | null> {
-		// 1. Check hot tier first
-		if (this.config.tiers.hot?.getStream) {
-			const result = await this.config.tiers.hot.getStream(key)
-			if (result) {
+	async getStream(
+		key: string,
+		options: { signal?: AbortSignal; borrowChunks?: boolean } = {},
+	): Promise<StreamResult | null> {
+		throwIfAborted(options.signal)
+		const fence = this.acquireReadFence(key)
+		const generation = fence.generation
+		let ownsFence = false
+		try {
+			const tiers = [
+				['hot', this.config.tiers.hot],
+				['warm', this.config.tiers.warm],
+				['cold', this.config.tiers.cold],
+			] as const
+			for (const [name, tier] of tiers) {
+				if (!tier?.getStream) continue
+				throwIfAborted(options.signal)
+				const result = await tier.getStream(key, {
+					borrowChunks: options.borrowChunks === true,
+					...(options.signal && { signal: options.signal }),
+				})
+				if (!result) continue
+				if (fence.generation !== generation || options.signal?.aborted) {
+					;(result.stream as Readable).destroy?.()
+					throwIfAborted(options.signal)
+					return null
+				}
 				if (this.isExpired(result.metadata)) {
 					;(result.stream as Readable).destroy?.()
 					await this.delete(key)
 					return null
 				}
-				void this.updateAccessStats(key, 'hot')
-				return this.wrapStreamWithDecompression(result, 'hot')
-			}
-		}
-
-		// 2. Check warm tier
-		if (this.config.tiers.warm?.getStream) {
-			const result = await this.config.tiers.warm.getStream(key)
-			if (result) {
-				if (this.isExpired(result.metadata)) {
-					;(result.stream as Readable).destroy?.()
-					await this.delete(key)
-					return null
+				void this.updateAccessStats(key, name)
+				const owned = this.wrapStreamWithDecompression(
+					{ stream: result.stream, metadata: cloneStorageMetadata(result.metadata) },
+					name,
+				)
+				let released = false
+				let abort = () => {}
+				const release = () => {
+					if (released) return
+					released = true
+					options.signal?.removeEventListener('abort', abort)
+					this.releaseReadFence(key, fence)
 				}
-				// NOTE: No promotion for streaming (would require buffering)
-				void this.updateAccessStats(key, 'warm')
-				return this.wrapStreamWithDecompression(result, 'warm')
+				const stream = owned.stream as Readable
+				abort = () =>
+					stream.destroy(
+						options.signal?.reason instanceof Error ? options.signal.reason : new Error('storage stream aborted'),
+					)
+				stream.once('end', release)
+				stream.once('close', release)
+				stream.once('error', release)
+				options.signal?.addEventListener('abort', abort, { once: true })
+				ownsFence = true
+				if (options.signal?.aborted) abort()
+				return { ...owned, stream }
 			}
+			return null
+		} finally {
+			if (!ownsFence) this.releaseReadFence(key, fence)
 		}
-
-		// 3. Check cold tier (source of truth)
-		if (this.config.tiers.cold.getStream) {
-			const result = await this.config.tiers.cold.getStream(key)
-			if (result) {
-				if (this.isExpired(result.metadata)) {
-					;(result.stream as Readable).destroy?.()
-					await this.delete(key)
-					return null
-				}
-				// NOTE: No promotion for streaming (would require buffering)
-				void this.updateAccessStats(key, 'cold')
-				return this.wrapStreamWithDecompression(result, 'cold')
-			}
-		}
-
-		return null
 	}
 
 	/**
@@ -529,9 +548,13 @@ export class TieredStorage<T = unknown> {
 		source: 'hot' | 'warm' | 'cold',
 	): StreamResult {
 		if (result.metadata.compressed) {
-			// Pipe through decompression stream
+			const sourceStream = result.stream as Readable
 			const decompressStream = createDecompressStream()
-			;(result.stream as Readable).pipe(decompressStream)
+			sourceStream.once('error', (error) => decompressStream.destroy(error))
+			decompressStream.once('close', () => {
+				if (!sourceStream.destroyed) sourceStream.destroy()
+			})
+			sourceStream.pipe(decompressStream)
 			return { stream: decompressStream, metadata: result.metadata, source }
 		}
 		return { ...result, source }

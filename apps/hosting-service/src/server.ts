@@ -108,7 +108,10 @@ async function serveMappedPublicDomain(
 		domain.did,
 		domain.rkey,
 		c.req.method,
-		serveFromCache(domain.did, domain.rkey, path, c.req.url, headers),
+		serveFromCache(domain.did, domain.rkey, path, c.req.url, headers, {
+			method: c.req.method,
+			signal: c.req.raw.signal,
+		}),
 	)
 }
 
@@ -288,7 +291,10 @@ function serveSharedSiteFile(c: Context, sitePath: SharedSitePath, did: string):
 		did,
 		sitePath.site,
 		c.req.method,
-		serveFromCacheWithRewrite(did, sitePath.site, sitePath.filePath, basePath, c.req.url, headers),
+		serveFromCacheWithRewrite(did, sitePath.site, sitePath.filePath, basePath, c.req.url, headers, {
+			method: c.req.method,
+			signal: c.req.raw.signal,
+		}),
 	)
 }
 

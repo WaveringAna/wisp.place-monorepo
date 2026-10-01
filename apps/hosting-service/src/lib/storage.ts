@@ -525,9 +525,10 @@ export class ReadOnlyS3Tier implements StorageTier {
 		})
 	}
 
-	async getStream(key: string) {
-		return await this.performRead('getStream', async () => (await this.tier.getStream?.(key)) ?? null, {
+	async getStream(key: string, options?: { signal?: AbortSignal; borrowChunks?: boolean }) {
+		return await this.performRead('getStream', async () => (await this.tier.getStream?.(key, options)) ?? null, {
 			missingResult: null,
+			signal: options?.signal,
 		})
 	}
 
@@ -597,8 +598,9 @@ export class ReadOnlyS3Tier implements StorageTier {
 	private async performRead<T>(
 		operation: StorageReadOperation,
 		work: () => Promise<T>,
-		options?: { missingResult: T },
+		options?: { missingResult: T; signal?: AbortSignal },
 	): Promise<T> {
+		options?.signal?.throwIfAborted()
 		const permit = this.health.beginRead(operation)
 		if (permit instanceof StorageUnavailableError) throw permit
 		try {
@@ -606,6 +608,10 @@ export class ReadOnlyS3Tier implements StorageTier {
 			this.health.recordSuccess(permit)
 			return result
 		} catch (error) {
+			if (options?.signal?.aborted) {
+				this.health.abandonRead(permit)
+				throw error
+			}
 			if (options && isAuthoritativeS3Miss(error)) {
 				this.health.recordSuccess(permit)
 				return options.missingResult
@@ -714,9 +720,9 @@ class TTLMemoryTier implements StorageTier {
 		return result
 	}
 
-	async getStream(key: string) {
+	async getStream(key: string, options?: { signal?: AbortSignal; borrowChunks?: boolean }) {
 		if (await this.evictIfStale(key)) return null
-		const result = await this.inner.getStream(key)
+		const result = await this.inner.getStream(key, options)
 		if (!result) this.insertedAt.delete(key)
 		return result
 	}

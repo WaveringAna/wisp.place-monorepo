@@ -111,6 +111,7 @@ describe('TieredStorage write correctness', () => {
 
 		await new TieredStorage({ tiers: { warm, cold } }).setStream('key', Readable.from(chunks()), {
 			size: 100 * 16 * 1024,
+			onlyTiers: ['warm'],
 		})
 		expect(consumedBytes).toBe(100 * 16 * 1024)
 		// Pipeline and each branch have bounded high-water marks, not source-sized queues.

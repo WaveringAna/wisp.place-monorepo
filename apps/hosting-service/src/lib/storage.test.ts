@@ -216,6 +216,46 @@ describe('hosting storage source configuration', () => {
 })
 
 describe('ReadOnlyS3Tier availability contract', () => {
+	test('client cancellation does not record a backend failure or open the breaker', async () => {
+		const inner = new MemoryStorageTier({ maxSizeBytes: 1024 })
+		const tier = new ReadOnlyS3Tier(inner)
+		for (let index = 0; index < 4; index++) {
+			const controller = new AbortController()
+			inner.getStream = async () => {
+				controller.abort()
+				throw controller.signal.reason
+			}
+			await expect(tier.getStream('cancelled', { signal: controller.signal })).rejects.toHaveProperty(
+				'name',
+				'AbortError',
+			)
+		}
+		expect(tier.getHealthSnapshot()).toMatchObject({
+			breaker: 'closed',
+			totalFailures: 0,
+			totalSuccesses: 0,
+			circuitRejections: 0,
+		})
+		expect(logCollector.getLogs()).toHaveLength(0)
+	})
+
+	test('already-aborted streaming reads never call the backend', async () => {
+		const inner = new MemoryStorageTier({ maxSizeBytes: 1024 })
+		let reads = 0
+		inner.getStream = async () => {
+			reads++
+			return null
+		}
+		const tier = new ReadOnlyS3Tier(inner)
+		const controller = new AbortController()
+		controller.abort()
+		await expect(tier.getStream('cancelled', { signal: controller.signal })).rejects.toHaveProperty(
+			'name',
+			'AbortError',
+		)
+		expect(reads).toBe(0)
+	})
+
 	test('keeps an authoritative NoSuchKey miss as null without recording an outage', async () => {
 		const inner = new MemoryStorageTier({ maxSizeBytes: 1024 })
 		const missing = new Error('not found')

@@ -93,6 +93,31 @@ describe('MemoryStorageTier byte accounting', () => {
 		expect(await tier.getStats()).toMatchObject({ bytes: resident.byteLength, items: 1 })
 	})
 
+	test('streams resident bytes in bounded chunks isolated from cache storage', async () => {
+		const tier = new MemoryStorageTier({ maxSizeBytes: 300 * 1024 })
+		const resident = bytes(200 * 1024, 7)
+		await tier.set('resident', resident, metadata('resident', resident.byteLength))
+		const result = await tier.getStream('resident')
+		const iterator = result!.stream[Symbol.asyncIterator]()
+		const first = await iterator.next()
+		expect(first.value.byteLength).toBeLessThanOrEqual(64 * 1024)
+		first.value[0] = 0
+		expect((await tier.get('resident'))?.[0]).toBe(7)
+		await iterator.return?.()
+	})
+
+	test('offers bounded borrowed views only when explicitly requested', async () => {
+		const tier = new MemoryStorageTier({ maxSizeBytes: 300 * 1024 })
+		const resident = bytes(200 * 1024, 7)
+		await tier.set('resident', resident, metadata('resident', resident.byteLength))
+		const result = await tier.getStream('resident', { borrowChunks: true })
+		const iterator = result!.stream[Symbol.asyncIterator]()
+		const first = await iterator.next()
+		expect(first.value.byteLength).toBeLessThanOrEqual(64 * 1024)
+		expect(first.value.buffer).toBe(resident.buffer)
+		await iterator.return?.()
+	})
+
 	test('never retains an entry larger than its byte cap', async () => {
 		const tier = new MemoryStorageTier({ maxSizeBytes: 10 })
 		const resident = bytes(4, 1)

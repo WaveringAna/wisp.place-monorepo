@@ -3,6 +3,7 @@
  * Handles file retrieval, caching, redirects, and HTML rewriting
  */
 
+import { Readable } from 'node:stream'
 import { computeCID } from '@wispplace/atproto-utils'
 import { shouldCompressMimeType } from '@wispplace/atproto-utils/compression'
 import { MAX_BLOB_SIZE } from '@wispplace/constants'
@@ -17,11 +18,22 @@ import {
 	isGzipped,
 	measureDecompressedSize as measureGzipDecompressedSize,
 	type StorageResult,
+	type StreamResult,
 } from '@wispplace/tiered-storage'
 import { lookup } from 'mime-types'
 import { isSiteUpdating } from './cache-invalidation'
 import { cache } from './cache-manager'
 import { getSiteCache } from './db'
+import {
+	bufferResponseBody,
+	disposeFileStream,
+	disposeFileStreamAndWait,
+	FileStreamIntegrityError,
+	getStreamResponseBody,
+	peekFileStream,
+	transformFileStream,
+	verifyFileStream,
+} from './file-streams'
 import { triggerSiteHtmlHotCacheWarmup } from './html-prewarm'
 import { generate404Page, generateDirectoryListing, siteUpdatingResponse } from './page-generators'
 import { loadRedirectRules, matchRedirectRule, parseCookies, parseQueryString } from './redirects'
@@ -33,6 +45,11 @@ import { createTrace, logTrace, type RequestTrace, span } from './trace'
 import { getCachedSettings } from './utils'
 
 const logger = createLogger('file-serving')
+export interface FileServeRequestOptions {
+	method?: string
+	signal?: AbortSignal
+}
+
 const STANDARD_CACHE_CONTROL = 'public, max-age=600'
 const DEFAULT_GZIP_PROCESSING_CONCURRENCY = 2
 const MAX_GZIP_PROCESSING_CONCURRENCY = 4
@@ -76,7 +93,11 @@ async function withGzipProcessingBudget<T>(work: () => Promise<T>): Promise<T> {
 }
 
 type FileStorageResult = StorageResult<Uint8Array>
-type FileForRequestResult = { result: FileStorageResult; filePath: string; wasRewritten: boolean }
+type FileForRequestResult = {
+	result: FileStorageResult | (StreamResult & { streamGzipMagic?: boolean })
+	filePath: string
+	wasRewritten: boolean
+}
 
 class SourceCidValidationError extends Error {
 	constructor(readonly filePath: string) {
@@ -92,6 +113,7 @@ type SourceCidMismatchResolution =
 	| { kind: 'not-found' }
 	| { kind: 'matched'; result: FileStorageResult }
 	| { kind: 'mismatched' }
+type StreamCidMismatchResolution = { kind: 'matched' } | { kind: 'mismatched' }
 
 interface GzipOperations {
 	compress(data: Uint8Array): Promise<Uint8Array>
@@ -210,7 +232,7 @@ async function hasExpectedSourceCid(
 	if (hasSourceCidMetadata(metadata)) return metadata?.sourceCid === expectedSourceCid
 
 	if (result.data.byteLength > MAX_BLOB_SIZE || result.metadata.size > MAX_BLOB_SIZE) return false
-	if (computeCID(Buffer.from(result.data)) !== expectedSourceCid) return false
+	if (computeCID(result.data) !== expectedSourceCid) return false
 
 	// Source CID verification is the serving boundary. Metadata repair may use
 	// a cold HEAD/copy round trip, so it must not delay a verified response.
@@ -359,6 +381,7 @@ async function getFallbackFile(
 	fileCids: Record<string, string> | null,
 	strategy: FileServingStrategy,
 	trace?: RequestTrace | null,
+	signal?: AbortSignal,
 ): Promise<FileForRequestResult | null> {
 	const expectedSourceCid = getExpectedSourceCid(fileCids, filePath)
 	if (fileCids !== null && expectedSourceCid === undefined) return null
@@ -369,7 +392,7 @@ async function getFallbackFile(
 	if (negativeCached === null) return null
 
 	const result = await span(trace, `storage:${filePath}`, () =>
-		getFileForRequest(did, rkey, filePath, strategy, fileCids),
+		getFileForRequest(did, rkey, filePath, strategy, fileCids, signal),
 	)
 	if (result === null) {
 		cache.set('siteFiles', cacheKey, null)
@@ -507,12 +530,108 @@ async function hasFileForNonForcedRedirect(
 	return fileInStorage !== null
 }
 
+async function getVerifiedFileStream(
+	did: string,
+	rkey: string,
+	filePath: string,
+	expectedSourceCid: string | undefined,
+	signal?: AbortSignal,
+): Promise<StreamResult | null> {
+	if (typeof storage.getStream !== 'function') return null
+	const key = buildStorageKey(did, rkey, filePath)
+	const read = () => storage.getStream(key, { signal, borrowChunks: true })
+	const mismatchKey = `stream:${did}:${rkey}:${filePath}:${expectedSourceCid}`
+	if (
+		expectedSourceCid &&
+		cache.get<StreamCidMismatchResolution>(SOURCE_CID_MISMATCH_NAMESPACE, mismatchKey)?.kind === 'mismatched'
+	) {
+		throw new SourceCidValidationError(filePath)
+	}
+	const result = await read()
+	if (!result) return null
+
+	const verify = async (candidate: StreamResult): Promise<StreamResult> => {
+		if (!expectedSourceCid) return candidate
+		const metadata = candidate.metadata.customMetadata as StoredFileCustomMetadata | undefined
+		if (hasSourceCidMetadata(metadata)) {
+			if (metadata?.sourceCid === expectedSourceCid) return candidate
+			disposeFileStream(candidate.stream)
+			throw new FileStreamIntegrityError()
+		}
+		const verified = await verifyFileStream(candidate, expectedSourceCid, signal)
+		void repairLegacySourceCid(did, rkey, key, candidate.metadata.checksum, expectedSourceCid).catch(() => {
+			logger.warn('Unexpected legacy source CID repair failure', { did, rkey })
+		})
+		return verified
+	}
+
+	try {
+		return await verify(result)
+	} catch (error) {
+		if (!(error instanceof FileStreamIntegrityError) || !expectedSourceCid) throw error
+		logger.warn('Stored file source CID does not match the manifest; retrying cold storage', {
+			did,
+			rkey,
+			filePath,
+			tier: result.source,
+		})
+		const resolution = await cache.getOrFetch<StreamCidMismatchResolution>(
+			SOURCE_CID_MISMATCH_NAMESPACE,
+			mismatchKey,
+			async () => {
+				try {
+					await evictPublicCacheKey(key)
+				} catch (evictionError) {
+					signal?.throwIfAborted()
+					if (isStorageUnavailableError(evictionError)) throw evictionError
+					logger.warn('Failed to evict mismatched local file cache entry', { did, rkey, filePath })
+					return { kind: 'mismatched' }
+				}
+				let coldResult: StreamResult | null
+				try {
+					coldResult = await read()
+				} catch (readError) {
+					signal?.throwIfAborted()
+					if (isStorageUnavailableError(readError)) throw readError
+					logger.warn('Failed to retry cold storage after a source CID mismatch', { did, rkey, filePath })
+					return { kind: 'mismatched' }
+				}
+				signal?.throwIfAborted()
+				if (!coldResult) return { kind: 'mismatched' }
+				try {
+					const verified = await verify(coldResult)
+					disposeFileStream(verified.stream)
+					return { kind: 'matched' }
+				} catch (coldError) {
+					if (!(coldError instanceof FileStreamIntegrityError)) throw coldError
+					return { kind: 'mismatched' }
+				}
+			},
+			{
+				cacheIf: (value) => value.kind === 'mismatched',
+				ttl: SOURCE_CID_MISMATCH_TTL_MS,
+			},
+		)
+		if (resolution.kind === 'mismatched') throw new SourceCidValidationError(filePath)
+
+		const coldResult = await read()
+		if (!coldResult) throw new SourceCidValidationError(filePath)
+		try {
+			return await verify(coldResult)
+		} catch (coldError) {
+			if (coldError instanceof FileStreamIntegrityError) throw new SourceCidValidationError(filePath)
+			throw coldError
+		}
+	}
+}
+
 async function getFileForRequest(
 	did: string,
 	rkey: string,
 	filePath: string,
 	strategy: FileServingStrategy,
 	fileCids: Record<string, string> | null,
+	signal?: AbortSignal,
 ): Promise<FileForRequestResult | null> {
 	const expectedSourceCid = getExpectedSourceCid(fileCids, filePath)
 	if (fileCids !== null && expectedSourceCid === undefined) return null
@@ -530,15 +649,65 @@ async function getFileForRequest(
 		}
 	}
 
-	const mimeTypeGuess = lookup(filePath) || 'application/octet-stream'
-	if (strategy.fileLookup === 'prefer-pre-rewritten-html' && isHtmlContent(filePath, mimeTypeGuess)) {
-		const rewrittenPath = `${REWRITTEN_PATH_PREFIX}${filePath}`
-		const rewritten = await readCandidate(rewrittenPath)
-		if (rewritten) {
-			return { result: rewritten, filePath, wasRewritten: true }
+	const readStreamCandidate = async (
+		candidatePath: string,
+		wasRewritten: boolean,
+	): Promise<{ kind: 'stream'; file: FileForRequestResult } | { kind: 'fallback' | 'missing' | 'mismatch' }> => {
+		if (typeof storage.getStream !== 'function') return { kind: 'fallback' }
+		const guessedMimeType = lookup(candidatePath) || 'application/octet-stream'
+		if (strategy.rewriteMissingHtmlOnDemand && !wasRewritten && isHtmlContent(candidatePath, guessedMimeType)) {
+			return { kind: 'fallback' }
+		}
+		let streamed: StreamResult | null
+		try {
+			streamed = await getVerifiedFileStream(
+				did,
+				rkey,
+				candidatePath,
+				getExpectedSourceCid(fileCids, candidatePath),
+				signal,
+			)
+		} catch (error) {
+			if (error instanceof SourceCidValidationError) {
+				sourceCidValidationFailed = true
+				return { kind: 'mismatch' }
+			}
+			throw error
+		}
+		if (!streamed) return { kind: 'missing' }
+		const { result, prefix } = await peekFileStream(streamed)
+		const metadata = result.metadata.customMetadata as StoredFileCustomMetadata | undefined
+		const mimeType = metadata?.mimeType || lookup(candidatePath) || 'application/octet-stream'
+		const shouldRewriteOnDemand =
+			strategy.rewriteMissingHtmlOnDemand && !wasRewritten && isHtmlContent(candidatePath, mimeType)
+		if (shouldRewriteOnDemand) {
+			disposeFileStream(result.stream)
+			return { kind: 'fallback' }
+		}
+		return {
+			kind: 'stream',
+			file: { result: { ...result, streamGzipMagic: isGzipped(prefix) }, filePath, wasRewritten },
 		}
 	}
 
+	const mimeTypeGuess = lookup(filePath) || 'application/octet-stream'
+	if (strategy.fileLookup === 'prefer-pre-rewritten-html' && isHtmlContent(filePath, mimeTypeGuess)) {
+		const rewrittenPath = `${REWRITTEN_PATH_PREFIX}${filePath}`
+		const rewrittenStream = await readStreamCandidate(rewrittenPath, true)
+		if (rewrittenStream.kind === 'stream') return rewrittenStream.file
+		if (rewrittenStream.kind === 'fallback') {
+			const rewritten = await readCandidate(rewrittenPath)
+			if (rewritten) return { result: rewritten, filePath, wasRewritten: true }
+		}
+	}
+
+	const streamed = await readStreamCandidate(filePath, false)
+	if (streamed.kind === 'stream') return streamed.file
+	if (streamed.kind === 'missing') {
+		if (sourceCidValidationFailed) throw new SourceCidValidationError(filePath)
+		return null
+	}
+	if (streamed.kind === 'mismatch') throw new SourceCidValidationError(filePath)
 	const result = await readCandidate(filePath)
 	if (result) return { result, filePath, wasRewritten: false }
 	if (sourceCidValidationFailed) throw new SourceCidValidationError(filePath)
@@ -643,8 +812,8 @@ function buildGzipDecodeFailureResponse(
 }
 
 type StoredFileRepresentation = {
-	result: FileStorageResult
-	content: Buffer
+	result: FileStorageResult | StreamResult
+	content: Buffer | undefined
 	metadata: StoredFileCustomMetadata | undefined
 	mimeType: string
 	explicitlyGzipped: boolean
@@ -664,16 +833,18 @@ type RewrittenHtmlAttempt = { kind: 'rewritten'; output: Buffer } | { kind: 'ser
 type RewrittenHtmlCompression = { output: Buffer; contentEncoding?: 'gzip' }
 
 function createStoredFileRepresentation(
-	result: FileStorageResult,
+	result: FileStorageResult | StreamResult,
 	filePath: string,
 	requestHeaders: Record<string, string> | undefined,
 	varyForDynamicRewrite = false,
+	streamGzipMagic?: boolean,
 ): StoredFileRepresentation {
-	const content = Buffer.from(result.data)
+	const content =
+		'data' in result ? Buffer.from(result.data.buffer, result.data.byteOffset, result.data.byteLength) : undefined
 	const metadata = result.metadata?.customMetadata as StoredFileCustomMetadata | undefined
 	const mimeType = metadata?.mimeType || lookup(filePath) || 'application/octet-stream'
 	const shouldCompress = shouldCompressMimeType(mimeType)
-	const hasGzipMagic = isGzipped(content)
+	const hasGzipMagic = streamGzipMagic ?? (content ? isGzipped(content) : false)
 	const explicitlyGzipped = metadata?.encoding === 'gzip'
 	// Older cache objects can lack encoding metadata. For text assets, gzip magic
 	// is sufficient to safely negotiate the actual stored representation.
@@ -694,6 +865,11 @@ function createStoredFileRepresentation(
 		shouldServeCompressed,
 		varyByAcceptEncoding,
 	}
+}
+
+function getStoredFileContent(representation: StoredFileRepresentation): Buffer {
+	if (!representation.content) throw new Error('Stored representation has no buffered content')
+	return representation.content
 }
 
 function gzipFailure(filePath: string, failureKind: GzipFailureKind, varyByAcceptEncoding: boolean): GzipFailure {
@@ -749,12 +925,20 @@ async function prepareStoredGzipResponse(
 	if (representation.shouldServeCompressed) {
 		// A legacy object has no trusted firehose accounting metadata. Verify its
 		// logical size before returning compressed bytes to a gzip client.
-		return await measureLegacyGzipPassthrough(representation.content, filePath, representation.varyByAcceptEncoding)
+		return await measureLegacyGzipPassthrough(
+			getStoredFileContent(representation),
+			filePath,
+			representation.varyByAcceptEncoding,
+		)
 	}
 
 	// This branch must materialize identity bytes anyway. Decode once before
 	// conditionals so a malformed legacy object cannot receive a 304.
-	const decoded = await decodeStoredGzipIdentity(representation.content, filePath, representation.varyByAcceptEncoding)
+	const decoded = await decodeStoredGzipIdentity(
+		getStoredFileContent(representation),
+		filePath,
+		representation.varyByAcceptEncoding,
+	)
 	if (decoded.kind === 'failure') return decoded
 	return { kind: 'ready', decodedIdentity: decoded.content }
 }
@@ -867,9 +1051,7 @@ function buildStorageBodyResponse(
 	}
 	// Set this explicitly so Hono's automatic HEAD response retains GET parity.
 	headers['Content-Length'] = `${body.byteLength}`
-	// Node's Buffer generic is wider than the response constructor declaration,
-	// but the runtime accepts this Uint8Array-backed body without copying it.
-	return new Response(body as unknown as ConstructorParameters<typeof Response>[0], { status, headers })
+	return new Response(bufferResponseBody(body), { status, headers })
 }
 
 async function getIdentityResponseContent(
@@ -881,7 +1063,11 @@ async function getIdentityResponseContent(
 		return { kind: 'content', content: preparation.decodedIdentity }
 	}
 
-	const decoded = await decodeStoredGzipIdentity(representation.content, filePath, representation.varyByAcceptEncoding)
+	const decoded = await decodeStoredGzipIdentity(
+		getStoredFileContent(representation),
+		filePath,
+		representation.varyByAcceptEncoding,
+	)
 	if (decoded.kind === 'failure') return decoded
 	return { kind: 'content', content: decoded.content }
 }
@@ -912,7 +1098,7 @@ async function buildStoredFileBodyResponse(
 
 	if (representation.isGzipContent) headers['Content-Encoding'] = 'gzip'
 	return buildStorageBodyResponse(
-		representation.content,
+		getStoredFileContent(representation),
 		headers,
 		filePath,
 		settings,
@@ -954,12 +1140,16 @@ async function prepareHtmlRewriteSource(
 	if (representation.explicitlyGzipped && !representation.hasGzipMagic) {
 		return gzipFailure(filePath, 'invalid-gzip', representation.varyByAcceptEncoding)
 	}
-	if (!representation.isGzipContent) return { kind: 'content', content: representation.content }
+	if (!representation.isGzipContent) return { kind: 'content', content: getStoredFileContent(representation) }
 	if (getStoredGzipSizeStatus(representation.metadata) === 'over-limit') {
 		return gzipFailure(filePath, 'output-limit', representation.varyByAcceptEncoding)
 	}
 
-	const decoded = await decodeStoredGzipIdentity(representation.content, filePath, representation.varyByAcceptEncoding)
+	const decoded = await decodeStoredGzipIdentity(
+		getStoredFileContent(representation),
+		filePath,
+		representation.varyByAcceptEncoding,
+	)
 	if (decoded.kind === 'failure') return decoded
 	return { kind: 'content', content: decoded.content }
 }
@@ -1047,6 +1237,8 @@ interface FileResolverOptions {
 	rkey: string
 	settings: WispSettings | null
 	requestHeaders?: Record<string, string>
+	requestMethod?: string
+	signal?: AbortSignal
 	trace?: RequestTrace | null
 	strategy: FileServingStrategy
 	/** Preloaded manifest for top-level requests; avoids a second database read. */
@@ -1072,6 +1264,8 @@ interface CachedRequestOptions {
 	filePath: string
 	fullUrl?: string
 	requestHeaders?: Record<string, string>
+	requestMethod?: string
+	signal?: AbortSignal
 	strategy: FileServingStrategy
 }
 
@@ -1225,7 +1419,9 @@ function createFileResolver(options: FileResolverOptions): FileResolver {
 	const getExpectedFile = async (filePath: string): Promise<FileForRequestResult | null> => {
 		const fileCids = await getExpectedFileCids()
 		if (!manifestMayContainFile(fileCids, filePath, strategy)) return null
-		return await span(trace, `storage:${filePath}`, () => getFileForRequest(did, rkey, filePath, strategy, fileCids))
+		return await span(trace, `storage:${filePath}`, () =>
+			getFileForRequest(did, rkey, filePath, strategy, fileCids, options.signal),
+		)
 	}
 
 	return {
@@ -1242,15 +1438,114 @@ function createFileResolver(options: FileResolverOptions): FileResolver {
 			return null
 		},
 		findFallbackFile: async (filePath) =>
-			getFallbackFile(did, rkey, filePath, await getExpectedFileCids(), strategy, trace),
+			getFallbackFile(did, rkey, filePath, await getExpectedFileCids(), strategy, trace, options.signal),
 		markExpectedMiss: (filePath) => missTracker.mark(filePath),
 		expectedMissResponse: () => missTracker.response(),
 	}
 }
 
+async function buildStreamFileResponse(
+	options: FileResolverOptions,
+	filePath: string,
+	result: StreamResult & { streamGzipMagic?: boolean },
+): Promise<Response> {
+	const { requestHeaders, settings, strategy, signal, requestMethod } = options
+	const initialRepresentation = createStoredFileRepresentation(
+		result,
+		filePath,
+		requestHeaders,
+		false,
+		result.streamGzipMagic,
+	)
+	const { metadata, hasGzipMagic, explicitlyGzipped, isGzipContent, shouldServeCompressed, varyByAcceptEncoding } =
+		initialRepresentation
+	if (explicitlyGzipped && !hasGzipMagic) {
+		disposeFileStream(result.stream)
+		return gzipFailure(filePath, 'invalid-gzip', varyByAcceptEncoding).response
+	}
+
+	let prepared = result
+	if (isGzipContent) {
+		const sizeStatus = getStoredGzipSizeStatus(metadata)
+		if (sizeStatus === 'over-limit') {
+			disposeFileStream(prepared.stream)
+			return gzipFailure(filePath, 'output-limit', varyByAcceptEncoding).response
+		}
+		if (!(sizeStatus === 'trusted' && shouldServeCompressed)) {
+			try {
+				prepared = await withGzipProcessingBudget(() =>
+					transformFileStream(result, shouldServeCompressed ? 'measure-gzip' : 'identity', signal),
+				)
+			} catch (error) {
+				return gzipFailure(filePath, getGzipFailureKind(error), varyByAcceptEncoding).response
+			}
+		}
+	}
+
+	const representation = createStoredFileRepresentation(prepared, filePath, requestHeaders, false, hasGzipMagic)
+	const etag = getRepresentationEtag(representation)
+	const notModified = buildNotModifiedResponse(etag, requestHeaders, varyByAcceptEncoding)
+	if (notModified) {
+		await disposeFileStreamAndWait(prepared.stream)
+		return notModified
+	}
+
+	const headers = buildStoredResponseHeaders(representation, etag)
+	if (shouldServeCompressed) headers['Content-Encoding'] = 'gzip'
+	applyFileResponseHeaders(headers, filePath, settings, strategy.sharedOrigin, varyByAcceptEncoding)
+	headers['Accept-Ranges'] = 'bytes'
+	const size = prepared.metadata.size
+	const range = requestedByteRange(requestHeaders, headers, size)
+	if (range === 'unsatisfiable') {
+		await disposeFileStreamAndWait(prepared.stream)
+		headers['Content-Range'] = `bytes */${size}`
+		headers['Content-Length'] = '0'
+		return new Response(null, { status: 416, headers })
+	}
+
+	let bodyStream: NodeJS.ReadableStream = prepared.stream
+	let status = 200
+	let bodySize = size
+	if (range) {
+		bodyStream = sliceReadableStream(prepared.stream as Readable, range)
+		bodySize = range.end - range.start + 1
+		status = 206
+		headers['Content-Range'] = `bytes ${range.start}-${range.end}/${size}`
+	}
+	headers['Content-Length'] = `${bodySize}`
+	if (requestMethod?.toUpperCase() === 'HEAD') {
+		if (range) await disposeFileStreamAndWait(prepared.stream)
+		await disposeFileStreamAndWait(bodyStream)
+		return new Response(null, { status, headers })
+	}
+	return new Response(getStreamResponseBody(bodyStream, signal), { status, headers })
+}
+
+function sliceReadableStream(source: Readable, range: ByteRange): Readable {
+	async function* chunks() {
+		let offset = 0
+		for await (const chunk of source) {
+			const bytes = chunk as Uint8Array
+			const chunkStart = offset
+			const chunkEnd = offset + bytes.byteLength - 1
+			offset += bytes.byteLength
+			if (chunkEnd < range.start) continue
+			if (chunkStart > range.end) break
+			const start = Math.max(0, range.start - chunkStart)
+			const end = Math.min(bytes.byteLength, range.end - chunkStart + 1)
+			yield bytes.subarray(start, end)
+			if (chunkEnd >= range.end) break
+		}
+	}
+	const sliced = Readable.from(chunks(), { objectMode: false })
+	sliced.once('close', () => source.destroy())
+	return sliced
+}
+
 async function buildFileResponse(options: FileResolverOptions, fileResult: FileForRequestResult): Promise<Response> {
 	const { did, rkey, requestHeaders, settings, strategy } = options
 	const { filePath, result, wasRewritten } = fileResult
+	if ('stream' in result) return await buildStreamFileResponse(options, filePath, result)
 	const meta = result.metadata.customMetadata as { encoding?: string; mimeType?: string } | undefined
 	const mimeType = meta?.mimeType || lookup(filePath) || 'application/octet-stream'
 	const shouldRewriteOnDemand =
@@ -1486,6 +1781,8 @@ async function resolveCachedRequest(options: CachedRequestOptions, trace: Reques
 			filePath: path,
 			settings,
 			requestHeaders,
+			requestMethod: options.requestMethod,
+			signal: options.signal,
 			trace,
 			strategy,
 			expectedFileCids: siteFileCids,
@@ -1531,6 +1828,7 @@ export async function serveFromCache(
 	filePath: string,
 	fullUrl?: string,
 	headers?: Record<string, string>,
+	options?: FileServeRequestOptions,
 ): Promise<Response> {
 	return await serveCachedRequest({
 		did,
@@ -1538,6 +1836,8 @@ export async function serveFromCache(
 		filePath,
 		fullUrl,
 		requestHeaders: headers,
+		requestMethod: options?.method,
+		signal: options?.signal,
 		strategy: ORIGINAL_FILE_STRATEGY,
 	})
 }
@@ -1552,6 +1852,7 @@ export async function serveFileInternal(
 	settings: WispSettings | null = null,
 	requestHeaders?: Record<string, string>,
 	trace?: RequestTrace | null,
+	options?: FileServeRequestOptions,
 ): Promise<Response> {
 	return await serveFileRequest({
 		did,
@@ -1559,6 +1860,8 @@ export async function serveFileInternal(
 		filePath,
 		settings,
 		requestHeaders,
+		requestMethod: options?.method,
+		signal: options?.signal,
 		trace,
 		strategy: ORIGINAL_FILE_STRATEGY,
 	})
@@ -1574,6 +1877,7 @@ export async function serveFromCacheWithRewrite(
 	basePath: string,
 	fullUrl?: string,
 	headers?: Record<string, string>,
+	options?: FileServeRequestOptions,
 ): Promise<Response> {
 	return await serveCachedRequest({
 		did,
@@ -1581,6 +1885,8 @@ export async function serveFromCacheWithRewrite(
 		filePath,
 		fullUrl,
 		requestHeaders: headers,
+		requestMethod: options?.method,
+		signal: options?.signal,
 		strategy: createSharedOriginFileStrategy(basePath),
 	})
 }
@@ -1596,6 +1902,7 @@ export async function serveFileInternalWithRewrite(
 	settings: WispSettings | null = null,
 	requestHeaders?: Record<string, string>,
 	trace?: RequestTrace | null,
+	options?: FileServeRequestOptions,
 ): Promise<Response> {
 	return await serveFileRequest({
 		did,
@@ -1603,6 +1910,8 @@ export async function serveFileInternalWithRewrite(
 		filePath,
 		settings,
 		requestHeaders,
+		requestMethod: options?.method,
+		signal: options?.signal,
 		trace,
 		strategy: createSharedOriginFileStrategy(basePath),
 	})

@@ -58,6 +58,33 @@ describe('S3StorageTier metadata fallback', () => {
 		expect(result!.metadata.checksum).toBe('etag-stream')
 	})
 
+	test('getStream forwards its abort signal and keeps the response body owned', async () => {
+		const tier = new S3StorageTier({ bucket: 'test-bucket', region: 'us-east-1' })
+		const body = Readable.from([Buffer.from('stream')])
+		const controller = new AbortController()
+		let requestOptions: { abortSignal?: AbortSignal } | undefined
+		;(tier as any).client = {
+			send: async (_command: unknown, options: typeof requestOptions) => {
+				requestOptions = options
+				return { Body: body, Metadata: undefined, ContentLength: 6, ETag: '"stream-etag"' }
+			},
+		}
+
+		const result = await tier.getStream('key', { signal: controller.signal })
+		expect(requestOptions?.abortSignal).toBe(controller.signal)
+		expect(result?.stream).toBe(body)
+		;(result!.stream as Readable).destroy()
+	})
+
+	test('destroys an S3 response body when metadata conversion fails', async () => {
+		const tier = new S3StorageTier({ bucket: 'test-bucket', region: 'us-east-1' })
+		const body = Readable.from([Buffer.from('unused')])
+		;(tier as any).client = { send: async () => ({ Body: body, Metadata: { key: '%' } }) }
+
+		await expect(tier.getStream('key')).rejects.toThrow()
+		expect(body.destroyed).toBe(true)
+	})
+
 	test('getMetadata should synthesize metadata from HeadObject when headers are missing', async () => {
 		const tier = new S3StorageTier({
 			bucket: 'test-bucket',

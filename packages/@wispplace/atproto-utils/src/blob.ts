@@ -11,14 +11,14 @@ import { sha256 } from 'multiformats/hashes/sha2'
  * Uses the same algorithm as AT Protocol: CIDv1 with raw codec and SHA-256
  * Based on @atproto/common/src/ipld.ts sha256RawToCid implementation
  */
-export function computeCID(content: Buffer): string {
-	// Use node crypto to compute sha256 hash (same as AT Protocol)
-	const hash = createHash('sha256').update(content).digest()
-	// Create digest object from hash bytes
-	const digest = mf.digest.create(sha256.code, hash)
-	// Create CIDv1 with raw codec
-	const cid = CID.createV1(raw.code, digest)
-	return cid.toString()
+export function computeCID(content: Uint8Array): string {
+	return computeCIDFromDigest(createHash('sha256').update(content).digest())
+}
+
+/** Build the AT Protocol raw blob CID from an incremental SHA-256 digest. */
+export function computeCIDFromDigest(hash: Uint8Array): string {
+	if (hash.byteLength !== 32) throw new Error('Expected a SHA-256 digest')
+	return CID.createV1(raw.code, mf.digest.create(sha256.code, hash)).toString()
 }
 
 /**

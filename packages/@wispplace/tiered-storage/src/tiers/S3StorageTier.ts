@@ -216,13 +216,17 @@ export class S3StorageTier implements StorageTier {
 	 * Retrieve data as a readable stream with metadata.
 	 *
 	 * @param key - The key to retrieve
+	 * @param options - Optional abort signal and chunk ownership preference
 	 * @returns A readable stream and metadata, or null if not found
 	 *
 	 * @remarks
 	 * Use this for large files to avoid loading entire content into memory.
 	 * The stream must be consumed or destroyed by the caller.
 	 */
-	async getStream(key: string): Promise<TierStreamResult | null> {
+	async getStream(
+		key: string,
+		options: { signal?: AbortSignal; borrowChunks?: boolean } = {},
+	): Promise<TierStreamResult | null> {
 		const s3Key = this.getS3Key(key)
 
 		try {
@@ -231,17 +235,27 @@ export class S3StorageTier implements StorageTier {
 					Bucket: this.config.bucket,
 					Key: s3Key,
 				}),
+				options.signal ? { abortSignal: options.signal } : undefined,
 			)
 
 			if (!response.Body) {
 				return null
 			}
 
-			const metadata = response.Metadata
-				? this.s3ToMetadata(response.Metadata)
-				: this.metadataFromObjectResponse(key, response.ContentLength, response)
-
-			return { stream: response.Body as Readable, metadata }
+			const body = response.Body as Readable
+			if (options.signal?.aborted) {
+				body.destroy()
+				options.signal.throwIfAborted()
+			}
+			try {
+				const metadata = response.Metadata
+					? this.s3ToMetadata(response.Metadata)
+					: this.metadataFromObjectResponse(key, response.ContentLength, response)
+				return { stream: body, metadata }
+			} catch (error) {
+				body.destroy()
+				throw error
+			}
 		} catch (error) {
 			if (this.isNoSuchKeyError(error)) {
 				return null

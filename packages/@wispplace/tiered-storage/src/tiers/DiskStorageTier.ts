@@ -1,4 +1,4 @@
-import { createReadStream, createWriteStream, existsSync } from 'node:fs'
+import { createWriteStream, existsSync } from 'node:fs'
 import { mkdir, open, readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { pipeline } from 'node:stream/promises'
@@ -268,7 +268,7 @@ export class DiskStorageTier implements StorageTier {
 				metadata.ttl = new Date(metadata.ttl)
 			}
 
-			return { data: new Uint8Array(dataBuffer), metadata }
+			return { data: dataBuffer, metadata }
 		} catch (error) {
 			const code = getErrnoCode(error)
 			if (code === 'ENOENT' || code === 'ENOTDIR' || code === 'EISDIR') {
@@ -323,8 +323,8 @@ export class DiskStorageTier implements StorageTier {
 					return null
 				}
 
-				// createReadStream owns and closes this descriptor when the consumer is done.
-				const stream = createReadStream(filePath, { fd: fileHandle.fd, autoClose: true })
+				// The stream owns and closes this descriptor when the consumer is done.
+				const stream = fileHandle.createReadStream({ autoClose: true })
 				return { stream, metadata }
 			} catch (error) {
 				await fileHandle.close().catch(() => {})

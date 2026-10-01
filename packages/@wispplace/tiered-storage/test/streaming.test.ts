@@ -279,6 +279,7 @@ describe('Streaming Operations', () => {
 			const result = await storage.getStream('tier-test')
 			expect(result).not.toBeNull()
 			expect(result!.source).toBe('warm')
+			;(result!.stream as Readable).destroy()
 		})
 
 		test('should fall back to cold tier when warm has no data', async () => {
@@ -308,6 +309,7 @@ describe('Streaming Operations', () => {
 			const result = await storage.getStream('cold-only')
 			expect(result).not.toBeNull()
 			expect(result!.source).toBe('cold')
+			;(result!.stream as Readable).destroy()
 		})
 
 		test('should handle TTL with metadata', async () => {

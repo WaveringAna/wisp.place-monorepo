@@ -209,9 +209,10 @@ export interface StorageTier {
 	 *
 	 * @remarks
 	 * Use this for large files to avoid loading entire content into memory.
-	 * The stream must be consumed or destroyed by the caller.
+	 * The stream must be consumed or destroyed by the caller. When `borrowChunks`
+	 * is true, chunk views may share storage with a tier; callers must not mutate them.
 	 */
-	getStream?(key: string): Promise<TierStreamResult | null>
+	getStream?(key: string, options?: { borrowChunks?: boolean; signal?: AbortSignal }): Promise<TierStreamResult | null>
 
 	/**
 	 * Store data from a readable stream.

@@ -114,7 +114,7 @@ export class MemoryStorageTier implements StorageTier {
 	 * Note that for memory tier, data is already in memory, so this
 	 * provides API consistency rather than memory savings.
 	 */
-	async getStream(key: string): Promise<TierStreamResult | null> {
+	async getStream(key: string, options: { borrowChunks?: boolean } = {}): Promise<TierStreamResult | null> {
 		const entry = this.cache.get(key)
 
 		if (!entry) {
@@ -124,8 +124,14 @@ export class MemoryStorageTier implements StorageTier {
 
 		this.stats.hits++
 
-		// Create a readable stream from the buffer
-		const stream = Readable.from([entry.data])
+		const data = entry.data
+		const chunks = (function* () {
+			for (let offset = 0; offset < data.byteLength; offset += 64 * 1024) {
+				const chunk = data.subarray(offset, offset + 64 * 1024)
+				yield options.borrowChunks ? chunk : Buffer.from(chunk)
+			}
+		})()
+		const stream = Readable.from(chunks, { objectMode: false })
 
 		return { stream, metadata: entry.metadata }
 	}
