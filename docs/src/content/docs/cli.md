@@ -18,9 +18,26 @@ The Wisp CLI is a command-line tool for deploying static websites directly to yo
 - **Authenticate** with app password or OAuth
 - **Incremental updates**: Only upload changed files
 
-## Recommended Install
+## Install
 
-`npm install -g wispctl@latest`
+With npm (or bun, pnpm, yarn). The package ships a native binary for your platform, and nothing is
+downloaded at install time:
+
+```bash
+npm install -g wispctl
+# or run it without installing
+npx wispctl deploy your-handle.bsky.social --path ./dist --site my-site
+```
+
+With cargo, using [cargo-binstall](https://github.com/cargo-bins/cargo-binstall) to fetch the same
+prebuilt binary, or `cargo install` to compile it yourself:
+
+```bash
+cargo binstall --git https://tangled.org/nekomimi.pet/wisp.place-monorepo wispctl
+cargo install --locked --git https://tangled.org/nekomimi.pet/wisp.place-monorepo wispctl
+```
+
+Or download a binary directly:
 
 ## Downloads
 

@@ -9,6 +9,24 @@ license.workspace = true
 name = "wispctl"
 path = "src/main.rs"
 
+# `cargo binstall` downloads the published release binaries instead of compiling.
+# Linux targets (gnu or musl) all get the static musl build.
+[package.metadata.binstall]
+pkg-url = "https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-{ target-arch }-linux"
+pkg-fmt = "bin"
+
+[package.metadata.binstall.overrides.aarch64-apple-darwin]
+pkg-url = "https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-aarch64-darwin"
+
+[package.metadata.binstall.overrides.x86_64-apple-darwin]
+pkg-url = "https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-x86_64-darwin"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-url = "https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-x86_64-windows.exe"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-gnu]
+pkg-url = "https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-x86_64-windows.exe"
+
 [dependencies]
 wispplace-core = { path = "../wispplace-core" }
 wispplace-lexicons = { path = "../wispplace-lexicons" }
