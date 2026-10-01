@@ -24,13 +24,12 @@ anyhow = "1"
 clap = { version = "4.6.7", features = ["derive", "env", "wrap_help"] }
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "fs", "net", "signal", "time", "sync", "io-util"] }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = { version = "2", default-features = false }
 
 flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs"] }
 sha2 = { version = "0.11.0", default-features = false }
 data-encoding = "2.11"
-mime_guess = "2.0.5"
 ignore = "0.4.33"
 
 # ring as the one rustls provider; installed at startup by wispctl::tls.
@@ -57,6 +56,9 @@ percent-encoding = "2"
 url = "2.5.8"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 keyring = { version = "4.2.0", default-features = false, features = ["v1"] }
+# Linux fallback roots for containers without a CA bundle (see wispctl::tls).
+rustls-native-certs = "0.8.4"
+webpki-root-certs = "1.0.9"
 
 
 [profile.release]

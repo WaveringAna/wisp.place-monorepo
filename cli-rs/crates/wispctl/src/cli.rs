@@ -10,9 +10,17 @@ use clap::{Args, Parser, Subcommand};
     name = "wispctl",
     version,
     about = "CLI for wisp.place - deploy static sites to the AT Protocol",
-    subcommand_negates_reqs = true
+    subcommand_negates_reqs = true,
+    // commander keeps the last of a repeated option instead of rejecting it.
+    args_override_self = true,
+    // `--version` prints the bare version, as commander did.
+    disable_version_flag = true
 )]
 pub struct Cli {
+    /// Output the version number
+    #[arg(short = 'V', long)]
+    pub version: bool,
+
     /// Suppress progress output — useful for CI/agents (also set via WISPCTL_NO_PROGRESS=1)
     #[arg(short, long, global = true)]
     pub quiet: bool,
@@ -61,7 +69,7 @@ pub struct DbArg {
 #[derive(Args, Debug, Clone, Default)]
 pub struct XrpcOptions {
     /// App password for headless authentication
-    #[arg(long, value_name = "password")]
+    #[arg(long, value_name = "password", allow_hyphen_values = true)]
     pub password: Option<String>,
     #[command(flatten)]
     pub db: DbArg,
@@ -80,7 +88,7 @@ pub struct DeployArgs {
     /// Directory to deploy
     #[arg(short, long, value_name = "path")]
     pub path: Option<PathBuf>,
-    /// Site name (defaults to directory name)
+    /// Site name (prompted for when omitted)
     #[arg(short, long, value_name = "name")]
     pub site: Option<String>,
     /// Enable directory listing
@@ -96,7 +104,7 @@ pub struct DeployArgs {
     #[arg(long)]
     pub force_gzip: bool,
     /// App password for headless authentication
-    #[arg(long, value_name = "password")]
+    #[arg(long, value_name = "password", allow_hyphen_values = true)]
     pub password: Option<String>,
     #[command(flatten)]
     pub db: DbArg,
@@ -335,7 +343,7 @@ pub struct LoginArgs {
     #[command(flatten)]
     pub db: DbArg,
     /// Log in with an app password instead of OAuth (or set WISPCTL_APP_PASSWORD)
-    #[arg(long, value_name = "password")]
+    #[arg(long, value_name = "password", allow_hyphen_values = true)]
     pub password: Option<String>,
 }
 

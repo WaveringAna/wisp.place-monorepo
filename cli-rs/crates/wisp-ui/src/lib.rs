@@ -163,14 +163,16 @@ pub fn info(message: impl Into<String>) {
     note(Line::from(vec![s::muted("· "), s::muted(message.into())]));
 }
 
-/// A fatal error, printed as the last thing before a non-zero exit.
+/// A fatal error, printed as the last thing before a non-zero exit. Plain
+/// output keeps the TS CLI's `Error: ...` line start for log greps.
 pub fn error(message: impl Into<String>) {
     blank();
-    note(Line::from(vec![
-        s::danger("✗ "),
-        s::danger("Error: "),
-        s::plain(message.into()),
-    ]));
+    let glyph = (rt().mode() == Mode::Rich).then(|| s::danger("✗ "));
+    note(Line::from_iter(
+        glyph
+            .into_iter()
+            .chain([s::danger("Error: "), s::plain(message.into())]),
+    ));
     blank();
 }
 

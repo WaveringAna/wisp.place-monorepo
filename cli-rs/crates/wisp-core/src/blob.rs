@@ -1,4 +1,5 @@
 //! Byte-compatible blob preparation for the TypeScript CLI.
+use crate::mime_table;
 use sha2::{Digest, Sha256};
 use std::io::{self, Write};
 
@@ -37,29 +38,27 @@ pub fn gzip_variants(bytes: &[u8]) -> impl Iterator<Item = Vec<u8>> + '_ {
     })
 }
 
+/// The extension `mime-types`' `lookup` keys on: Node's
+/// `extname('x.' + path)`, so a bare root name like `json` counts as an
+/// extension while a leading-dot name inside a directory (`a/.env`) does not.
+fn lookup_extension(path: &str) -> Option<String> {
+    let prefixed = format!("x.{path}");
+    let base = prefixed.rsplit(['/', '\\']).next().unwrap_or(&prefixed);
+    let dot = base.rfind('.')?;
+    let ext = &base[dot + 1..];
+    (dot > 0 && !ext.is_empty() && base != "..").then(|| ext.to_ascii_lowercase())
+}
+
+/// `lookup(path) || 'application/octet-stream'`, with the TS CLI's table.
 pub fn mime_for(path: &str) -> String {
-    match std::path::Path::new(path)
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("js" | "mjs") => "text/javascript".into(),
-        Some("cjs") => "application/node".into(),
-        Some("map") => "application/json".into(),
-        Some("xml") => "application/xml".into(),
-        Some("woff") => "font/woff".into(),
-        Some("woff2") => "font/woff2".into(),
-        Some("ttf") => "font/ttf".into(),
-        Some("otf") => "font/otf".into(),
-        Some("ico") => "image/vnd.microsoft.icon".into(),
-        Some("wav") => "audio/wav".into(),
-        Some("aiff" | "aif" | "aifc") => "audio/x-aiff".into(),
-        _ => mime_guess::from_path(path)
-            .first_or_octet_stream()
-            .essence_str()
-            .to_owned(),
-    }
+    lookup_extension(path)
+        .and_then(|ext| {
+            mime_table::TYPES
+                .binary_search_by(|(known, _)| known.cmp(&ext.as_str()))
+                .ok()
+        })
+        .map_or("application/octet-stream", |i| mime_table::TYPES[i].1)
+        .to_owned()
 }
 
 pub fn should_compress(mime: &str, path: &str) -> bool {
@@ -185,6 +184,25 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn mime_table_is_sorted_for_binary_search() {
+        assert!(mime_table::TYPES.windows(2).all(|w| w[0].0 < w[1].0));
+    }
+
+    #[test]
+    fn lookup_uses_node_extname_of_x_dot_path() {
+        assert_eq!(mime_for("json"), "application/json");
+        assert_eq!(mime_for(".html"), "text/html");
+        assert_eq!(mime_for("dir/.html"), "application/octet-stream");
+        assert_eq!(mime_for("dir/json"), "application/octet-stream");
+        assert_eq!(mime_for("Dir/INDEX.HTML"), "text/html");
+        assert_eq!(mime_for("noext"), "application/octet-stream");
+        assert_eq!(mime_for("a.weirdext"), "application/octet-stream");
+        assert_eq!(mime_for("trailing."), "application/octet-stream");
+        assert_eq!(mime_for("config.yaml"), "text/yaml");
+        assert_eq!(mime_for("clip.ts"), "video/mp2t");
+    }
+
     #[test]
     fn types_and_redirects() {
         assert_eq!(mime_for("foo.js"), "text/javascript");

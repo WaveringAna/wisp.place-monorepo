@@ -304,15 +304,17 @@ fn replace_directory(root: &Directory, path: &[&str], uri: &str) -> Result<Direc
     Ok(directory(entries))
 }
 
+/// `splitDirectoryIntoChunks`: an empty chunk's size plus each entry and its comma.
 pub fn split_chunks(root: &Directory, max_size: usize) -> Vec<Directory> {
+    let empty = directory_size(&directory(Vec::new()));
     let mut chunks = Vec::new();
     let mut entries = Vec::new();
-    let mut size = 100;
+    let mut size = empty;
     for entry in &root.entries {
-        let entry_size = json_size(entry);
+        let entry_size = json_size(entry) + 1;
         if !entries.is_empty() && size + entry_size > max_size {
             chunks.push(directory(std::mem::take(&mut entries)));
-            size = 100;
+            size = empty;
         }
         entries.push(entry.clone());
         size += entry_size;
@@ -428,14 +430,8 @@ mod tests {
         );
         for write in &plan.records {
             assert!(write.root.entries.len() <= 500);
-            // The chunk budget ignores commas between entries, like the old CLI,
-            // so chunks can run a little over it.
             let as_fs = crate::convert::subfs_to_fs(&write.root);
-            assert!(
-                directory_size(&as_fs) <= MAX_SUBFS_SIZE * 21 / 20,
-                "{}",
-                write.rkey
-            );
+            assert!(directory_size(&as_fs) <= MAX_SUBFS_SIZE, "{}", write.rkey);
         }
     }
 

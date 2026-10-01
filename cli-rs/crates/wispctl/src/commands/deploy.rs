@@ -31,7 +31,7 @@ fn valid_site(site: &str) -> bool {
 
 pub async fn run(mut args: DeployArgs) -> Result<()> {
     let known = if args.handle.is_none() && args.password.is_none() {
-        auth::resolve_account_for_cwd(args.db.db.as_deref()).await?
+        auth::resolve_account_for_cwd(args.db.db.as_deref()).await
     } else {
         None
     };
@@ -129,7 +129,7 @@ pub async fn run(mut args: DeployArgs) -> Result<()> {
     }
     for file in files.iter().filter(|file| file.size > MAX_FILE_SIZE) {
         wisp_ui::warning(format!(
-            "{} exceeds max size ({} > {})",
+            "Warning: {} exceeds max size ({} > {})",
             file.relative_path,
             wisp_ui::format_bytes(file.size),
             wisp_ui::format_bytes(MAX_FILE_SIZE)
@@ -158,11 +158,14 @@ pub async fn run(mut args: DeployArgs) -> Result<()> {
     )
     .await?;
     let spinner = wisp_ui::spinner("Creating manifest...");
-    let writes = match put_manifest(&agent, &did, &site, &uploads).await {
+    // Every subfs record any attempt wrote, so a retried attempt's leftovers
+    // are cleaned up with the old site's.
+    let mut written = BTreeSet::new();
+    let writes = match put_manifest(&agent, &did, &site, &uploads, &mut written).await {
         Ok(writes) => writes,
         Err(error) if repo::http_status(&error) == Some(500) => {
             wisp_ui::warning(
-                "Manifest put failed with 500, retrying with base64 encoding for text files...",
+                "[Deploy] Manifest put failed with 500, retrying with base64 encoding for text files...",
             );
             let text_files: Vec<_> = files
                 .iter()
@@ -188,17 +191,16 @@ pub async fn run(mut args: DeployArgs) -> Result<()> {
                     *upload = replacement.clone();
                 }
             }
-            put_manifest(&agent, &did, &site, &uploads).await?
+            put_manifest(&agent, &did, &site, &uploads, &mut written).await?
         }
         Err(error) => return Err(error),
     };
     spinner.succeed("Created manifest record".to_owned());
-    if let Some(existing) = existing {
-        for (owner, key) in existing.subfs {
-            if owner == did && !writes.contains(&key) {
-                // Best effort, like the old CLI: a leftover record is harmless.
-                let _ = agent.delete::<SubfsRecord>(&key).await;
-            }
+    let previous = existing.into_iter().flat_map(|site| site.subfs);
+    for key in previous.chain(written).collect::<BTreeSet<_>>() {
+        if !writes.contains(&key) {
+            // Best effort, like the old CLI: a leftover record is harmless.
+            let _ = agent.delete::<SubfsRecord>(&key).await;
         }
     }
     if args.directory || args.spa {
@@ -247,6 +249,7 @@ async fn put_manifest(
     did: &str,
     site: &str,
     uploads: &[(String, UploadResult)],
+    written: &mut BTreeSet<String>,
 ) -> Result<BTreeSet<String>> {
     let root = build_tree(uploads);
     // Millisecond precision, like JavaScript's toISOString in the old CLI.
@@ -266,17 +269,18 @@ async fn put_manifest(
         ) {
             completed_messages.push(message);
         } else {
-            wisp_ui::info(split_message(message));
+            wisp_ui::note(s::muted(split_message(message)));
         }
     }
     let mut keys = BTreeSet::new();
     for record in plan.records {
         repo.put(&record.rkey, subfs_record(&record, &created_at))
             .await?;
+        written.insert(record.rkey.clone());
         keys.insert(record.rkey);
     }
     for message in completed_messages {
-        wisp_ui::info(split_message(message));
+        wisp_ui::note(s::muted(split_message(message)));
     }
     if let Some(spinner) = splitting {
         spinner.succeed(format!("Created {} subfs records", keys.len()));
@@ -318,7 +322,8 @@ fn split_message(message: wisp_core::split::SplitMessage) -> String {
 
 struct ExistingSite {
     blobs: BTreeMap<String, ExistingBlob>,
-    subfs: BTreeSet<(String, String)>,
+    /// Keys of this repo's subfs records the site references.
+    subfs: BTreeSet<String>,
 }
 
 async fn fetch_existing(repo: &impl SiteRepo, did: &str, site: &str) -> Option<ExistingSite> {
@@ -341,8 +346,13 @@ async fn fetch_existing(repo: &impl SiteRepo, did: &str, site: &str) -> Option<E
             let Ok(subject) = wisp_core::subfs::parse_subfs_subject(&uri) else {
                 continue;
             };
-            let (owner, key) = (subject.repo, subject.rkey);
-            result.subfs.insert((owner.clone(), key.clone()));
+            // Like the TS CLI, only follow (and later clean up) our own records:
+            // another repo's blobs cannot be referenced from this one.
+            if subject.repo != did {
+                continue;
+            }
+            let key = subject.rkey;
+            result.subfs.insert(key.clone());
             let base = if reference.flat {
                 reference
                     .path
@@ -356,7 +366,7 @@ async fn fetch_existing(repo: &impl SiteRepo, did: &str, site: &str) -> Option<E
             if !visited.insert((prefix.clone(), uri.clone())) {
                 continue;
             }
-            let Ok(record) = repo.fetch::<SubfsRecord>(&owner, &key).await else {
+            let Ok(record) = repo.fetch::<SubfsRecord>(did, &key).await else {
                 continue;
             };
             let root = subfs_to_fs(&record.root);

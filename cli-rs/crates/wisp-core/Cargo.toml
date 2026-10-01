@@ -13,7 +13,6 @@ serde_json.workspace = true
 flate2.workspace = true
 sha2.workspace = true
 data-encoding.workspace = true
-mime_guess.workspace = true
 ignore.workspace = true
 url.workspace = true
 percent-encoding.workspace = true

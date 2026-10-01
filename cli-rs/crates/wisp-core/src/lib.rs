@@ -5,7 +5,9 @@
 pub mod blob;
 pub mod constants;
 pub mod convert;
+pub mod identity;
 pub mod ignore;
+mod mime_table;
 pub mod pages;
 pub mod path;
 pub mod redirects;

@@ -4,7 +4,7 @@ pub mod oauth;
 pub mod resolver;
 pub mod store;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use jacquard::client::credential_session::{CredentialSession, SessionKey};
 use jacquard::{
     AuthorizationToken, BosStr, SmolStr,
@@ -27,6 +27,9 @@ use store::{AccountStore, AccountUpdates, AuthMethod, OAuthScopeStrategy, Stored
 pub struct AuthOptions {
     pub app_password: Option<String>,
     pub db_path: Option<PathBuf>,
+    /// `login`: authenticate afresh and remember the account. Other commands
+    /// reuse stored sessions, and an app password given to them is used once
+    /// without touching the account store.
     pub force_reauth: bool,
 }
 
@@ -173,8 +176,14 @@ fn open_store(db: Option<&Path>) -> Result<AccountStore> {
     }
 }
 
-pub async fn resolve_account_for_cwd(db: Option<&Path>) -> Result<Option<StoredAccount>> {
-    open_store(db)?.resolve_account_for_dir(&std::env::current_dir()?.to_string_lossy())
+/// The account a bare command here would use. Like the TS CLI, an unreadable
+/// store just means "none": the caller then asks for a handle.
+pub async fn resolve_account_for_cwd(db: Option<&Path>) -> Option<StoredAccount> {
+    let cwd = std::env::current_dir().ok()?;
+    open_store(db)
+        .and_then(|store| store.resolve_account_for_dir(&cwd.to_string_lossy()))
+        .ok()
+        .flatten()
 }
 
 async fn password_session(
@@ -203,7 +212,15 @@ async fn password_session(
             None,
             Some(Uri::parse(pds.clone()).map_err(|(err, _)| err)?),
         )
-        .await?;
+        .await
+        .map_err(|err| {
+            // jacquard drops the PDS's 401 message; this is what it says.
+            if err.is_auth() {
+                anyhow!("Invalid identifier or password")
+            } else {
+                err.into()
+            }
+        })?;
     let did = data.did.to_string();
     let handle = Some(data.handle.to_string());
     status(&format!("Authenticated as {did}"));
@@ -258,13 +275,22 @@ async fn finish(
     })
 }
 
+/// Whether the TypeScript CLI left an OAuth session for `did` (keychain account
+/// `<did>` or kv `oauth_session:<did>`).
+fn has_legacy_oauth_session(db: &Mutex<AccountStore>, did: &str) -> bool {
+    keychain::read_secret(did).is_some()
+        || db
+            .lock()
+            .ok()
+            .and_then(|store| store.get(&format!("oauth_session:{did}")).ok().flatten())
+            .is_some()
+}
+
 pub async fn authenticate(
     handle: Option<&str>,
     opts: &AuthOptions,
     mut on_status: impl FnMut(&str),
 ) -> Result<Authenticated> {
-    let db = Arc::new(Mutex::new(open_store(opts.db_path.as_deref())?));
-    let cwd = std::env::current_dir()?.to_string_lossy().into_owned();
     let normalized = handle.map(|h| {
         if h.starts_with("did:") {
             h.to_owned()
@@ -291,7 +317,7 @@ pub async fn authenticate(
     };
     let resolver = Arc::new(resolver::resolver()?);
     if let Some(password) = password {
-        let (session, did, pds, session_handle) = password_session(
+        let (session, did, pds, handle) = password_session(
             identifier.unwrap(),
             &password,
             None,
@@ -299,11 +325,22 @@ pub async fn authenticate(
             &mut on_status,
         )
         .await?;
+        if !opts.force_reauth {
+            // Headless/CI path: like the TS CLI, it never touches the account
+            // store, so it works without a writable (or any) home directory.
+            return Ok(Authenticated {
+                agent: Agent::new(session),
+                did,
+                handle,
+            });
+        }
+        let db = Arc::new(Mutex::new(open_store(opts.db_path.as_deref())?));
+        let cwd = std::env::current_dir()?.to_string_lossy().into_owned();
         return finish(
             &db,
             session,
             did,
-            session_handle,
+            handle,
             AccountUpdates {
                 method: Some(AuthMethod::AppPassword),
                 pds_url: Some(pds),
@@ -313,6 +350,8 @@ pub async fn authenticate(
         )
         .await;
     }
+    let db = Arc::new(Mutex::new(open_store(opts.db_path.as_deref())?));
+    let cwd = std::env::current_dir()?.to_string_lossy().into_owned();
     let target_did = match identifier {
         Some(value) => {
             let lookup = open_store(opts.db_path.as_deref())?;
@@ -435,6 +474,17 @@ pub async fn authenticate(
     let identifier = identifier
         .or(target_did.as_deref())
         .context("No stored account. Run `wispctl login <handle>` first.")?;
+    if !opts.force_reauth
+        && !wisp_ui::can_prompt()
+        && let Some(did) = &target_did
+        && has_legacy_oauth_session(&db, did)
+    {
+        // wispctl 1.x sessions can't be carried over. Rather than wait five
+        // minutes for a browser nobody will see, say how to fix it.
+        bail!(
+            "The stored session for {identifier} was created by wispctl 1.x and cannot be reused. Run `wispctl login {identifier}` once in a terminal, or pass --password / WISPCTL_APP_PASSWORD."
+        );
+    }
     let (session, strategy, port) = oauth::login(
         store,
         resolver,

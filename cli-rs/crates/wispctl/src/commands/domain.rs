@@ -164,7 +164,7 @@ pub async fn run(args: DomainArgs) -> Result<()> {
         _ => xrpc::call::<domain::delete::Delete>(&agent, &service, input).await?,
     };
     let domain = text(&data, "domain");
-    if action == "verify" && data["verified"] == false {
+    if action == "verify" && data["verified"] != true {
         let error = data["error"]
             .as_str()
             .filter(|s| !s.is_empty())

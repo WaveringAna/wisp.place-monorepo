@@ -58,6 +58,29 @@ fn deserialize_scope<'de, D: serde::Deserializer<'de>>(
     OAuthScopeStrategy::deserialize(deserializer).map(Some)
 }
 
+/// Timestamps are JS `Date.now()` values: write whole milliseconds as integers,
+/// as the TS CLI does, rather than `1735689600000.0`.
+fn millis<S: serde::Serializer>(
+    value: &f64,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    if value.fract() == 0.0 && value.abs() < 9.007_199_254_740_992e15 {
+        serializer.serialize_i64(*value as i64)
+    } else {
+        serializer.serialize_f64(*value)
+    }
+}
+
+fn millis_opt<S: serde::Serializer>(
+    value: &Option<f64>,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    match value {
+        Some(value) => millis(value, serializer),
+        None => serializer.serialize_none(),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StoredAccount {
@@ -67,9 +90,11 @@ pub struct StoredAccount {
     pub method: AuthMethod,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pds_url: Option<String>,
+    #[serde(serialize_with = "millis")]
     pub added_at: f64,
+    #[serde(serialize_with = "millis")]
     pub last_used_at: f64,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "millis_opt", skip_serializing_if = "Option::is_none")]
     pub handle_checked_at: Option<f64>,
     #[serde(
         default,

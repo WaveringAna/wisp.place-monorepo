@@ -71,7 +71,7 @@ pub async fn authenticate_for_xrpc(
         );
     }
     let known = if handle.is_none() && options.password.is_none() {
-        auth::resolve_account_for_cwd(options.db.db.as_deref()).await?
+        auth::resolve_account_for_cwd(options.db.db.as_deref()).await
     } else {
         None
     };

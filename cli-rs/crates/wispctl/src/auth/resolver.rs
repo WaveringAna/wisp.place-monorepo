@@ -1,6 +1,6 @@
 //! Environment-aware identity resolution using Jacquard's HTTP stack.
 use super::store::{AccountStore, AccountUpdates, normalize_handle};
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow};
 use jacquard::{
     BosStr, IntoStatic,
     deps::fluent_uri::Uri,
@@ -12,16 +12,29 @@ use jacquard::{
     oauth::{dpop::DpopExt, resolver::OAuthResolver},
     types::string::{Did, Handle},
 };
+use wisp_core::identity::{is_loopback_host, validate_pds_endpoint};
+
+/// The TS CLI resolved handles only through this endpoint (then checked the
+/// DID document), so CI egress allowlists name it rather than DNS/well-known.
+const HANDLE_RESOLVER: &str =
+    "https://slingshot.microcosm.blue/xrpc/com.atproto.identity.resolveHandle";
 
 #[derive(Clone)]
 pub struct EnvResolver {
+    /// PDS traffic. No total timeout: a large blob upload takes as long as the
+    /// link needs, as it did with the TS CLI.
     http: reqwest::Client,
+    /// Identity lookups, which are small and bounded.
+    identity: reqwest::Client,
     inner: PublicResolver,
-    handle_url: Option<String>,
+    handle_url: String,
 }
 
 pub fn resolver() -> Result<EnvResolver> {
     let http = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .build()?;
+    let identity = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
         .build()?;
     let mut opts = ResolverOptions::default();
@@ -30,12 +43,18 @@ pub fn resolver() -> Result<EnvResolver> {
             base: Uri::parse(format!("{}/", url.trim_end_matches('/'))).map_err(|(err, _)| err)?,
         };
     }
-    let inner = PublicResolver::new(http.clone(), opts).with_system_dns();
+    let inner = PublicResolver::new(identity.clone(), opts);
     Ok(EnvResolver {
         http,
+        identity,
         inner,
-        handle_url: std::env::var("WISP_HANDLE_RESOLVER_URL").ok(),
+        handle_url: std::env::var("WISP_HANDLE_RESOLVER_URL")
+            .unwrap_or_else(|_| HANDLE_RESOLVER.to_owned()),
     })
+}
+
+fn allow_localhost() -> bool {
+    std::env::var("WISP_ALLOW_LOCALHOST_FETCH").as_deref() == Ok("1")
 }
 
 impl HttpClient for EnvResolver {
@@ -56,41 +75,48 @@ impl IdentityResolver for EnvResolver {
         &self,
         handle: &Handle<S>,
     ) -> jacquard::identity::resolver::Result<Did> {
-        if let Some(url) = &self.handle_url {
-            let response = self
-                .http
-                .get(url)
-                .query(&[("handle", handle.as_str())])
-                .send()
-                .await
-                .map_err(|err| {
-                    IdentityError::transport("handle resolver request failed".into(), err)
-                })?
-                .error_for_status()
-                .map_err(|err| {
-                    IdentityError::transport("handle resolver rejected request".into(), err)
-                })?;
-            #[derive(serde::Deserialize)]
-            struct Answer {
-                did: Did,
-            }
-            return serde_json::from_slice::<Answer>(&bounded_body(response).await?)
-                .map(|answer| answer.did)
-                .map_err(|err| {
-                    IdentityError::transport("invalid handle resolver response".into(), err)
-                });
+        let response = self
+            .identity
+            .get(&self.handle_url)
+            .query(&[("handle", handle.as_str())])
+            .send()
+            .await
+            .map_err(|err| IdentityError::transport("handle resolver request failed".into(), err))?
+            .error_for_status()
+            .map_err(|err| {
+                IdentityError::transport("handle resolver rejected request".into(), err)
+            })?;
+        #[derive(serde::Deserialize)]
+        struct Answer {
+            did: Did,
         }
-        self.inner.resolve_handle(handle).await
+        let did = serde_json::from_slice::<Answer>(&bounded_body(response).await?)
+            .map(|answer| answer.did)
+            .map_err(|err| {
+                IdentityError::transport("invalid handle resolver response".into(), err)
+            })?;
+        // Bidirectional check, as the TS CLI did: the DID must claim the handle.
+        let doc = self.resolve_did_doc(&did).await?.into_owned()?;
+        if doc
+            .handles()
+            .iter()
+            .any(|claimed| claimed.as_str().eq_ignore_ascii_case(handle.as_str()))
+        {
+            Ok(did)
+        } else {
+            Err(IdentityError::handle_resolution_exhausted()
+                .with_context("the DID document does not list this handle"))
+        }
     }
     async fn resolve_did_doc<S: BosStr + Sync>(
         &self,
         did: &Did<S>,
     ) -> jacquard::identity::resolver::Result<DidDocResponse> {
-        if std::env::var("WISP_ALLOW_LOCALHOST_FETCH").as_deref() == Ok("1")
+        if allow_localhost()
             && let Some(url) = local_web_url(did.as_str())
         {
             let response =
-                self.http.get(url).send().await.map_err(|err| {
+                self.identity.get(url).send().await.map_err(|err| {
                     IdentityError::transport("local DID request failed".into(), err)
                 })?;
             let status = response.status();
@@ -109,28 +135,29 @@ impl IdentityResolver for EnvResolver {
 impl OAuthResolver for EnvResolver {}
 impl DpopExt for EnvResolver {}
 
+/// Handle or DID → (DID, PDS endpoint), failing with the TS CLI's messages.
 pub async fn resolve_identity(identifier: &str) -> Result<(String, String)> {
     let resolver = resolver()?;
     let did = if identifier.starts_with("did:") {
         Did::new(identifier)?.into_static()
     } else {
+        let handle = Handle::new(normalize_handle(identifier))
+            .map_err(|_| anyhow!("Failed to resolve handle"))?;
         resolver
-            .resolve_handle(&Handle::new(normalize_handle(identifier))?)
-            .await?
+            .resolve_handle(&handle)
+            .await
+            .map_err(|_| anyhow!("Failed to resolve handle"))?
     };
-    let doc = resolver.resolve_did_doc(&did).await?.into_owned()?;
+    let doc = match resolver.resolve_did_doc(&did).await {
+        Ok(response) => Some(response.into_owned()?),
+        Err(_) => None,
+    };
     let pds = doc
-        .pds_endpoint()
-        .context("DID document has no PDS endpoint")?;
-    let url = reqwest::Url::parse(pds.as_str())?;
-    if url.scheme() != "https"
-        && !(url.scheme() == "http"
-            && is_loopback(&url)
-            && std::env::var("WISP_ALLOW_LOCALHOST_FETCH").as_deref() == Ok("1"))
-    {
-        bail!("HTTP PDS requires a loopback host and WISP_ALLOW_LOCALHOST_FETCH=1");
-    }
-    Ok((did.to_string(), pds.to_string()))
+        .as_ref()
+        .and_then(|doc| doc.pds_endpoint())
+        .and_then(|pds| validate_pds_endpoint(pds.as_str(), allow_localhost()))
+        .context("Could not find a valid PDS endpoint")?;
+    Ok((did.to_string(), pds))
 }
 
 pub async fn resolve_identifier_to_did(
@@ -209,22 +236,13 @@ pub async fn verified_handle(did: &str) -> Result<Option<String>> {
     Ok(None)
 }
 
-fn is_loopback(url: &reqwest::Url) -> bool {
-    url.host_str().is_some_and(|host| {
-        host == "localhost"
-            || host
-                .trim_matches(['[', ']'])
-                .parse::<std::net::IpAddr>()
-                .is_ok_and(|ip| ip.is_loopback())
-    })
-}
 fn local_web_url(did: &str) -> Option<reqwest::Url> {
     let authority = did
         .strip_prefix("did:web:")?
         .replace("%3A", ":")
         .replace("%3a", ":");
     let url = reqwest::Url::parse(&format!("http://{authority}/.well-known/did.json")).ok()?;
-    is_loopback(&url).then_some(url)
+    is_loopback_host(&url).then_some(url)
 }
 
 #[allow(

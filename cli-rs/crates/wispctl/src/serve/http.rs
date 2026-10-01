@@ -209,9 +209,7 @@ pub async fn respond(
             builder = builder
                 .header(
                     "Content-Type",
-                    mime_guess::from_path(&path)
-                        .first_or_octet_stream()
-                        .as_ref(),
+                    wisp_core::blob::mime_for(&resolved.to_string_lossy()),
                 )
                 .header("Content-Length", info.len())
                 .header("Cache-Control", "no-cache");

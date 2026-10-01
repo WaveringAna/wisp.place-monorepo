@@ -35,7 +35,10 @@ hyper.workspace = true
 hyper-util.workspace = true
 http-body-util.workspace = true
 bytes.workspace = true
-mime_guess.workspace = true
 jacquard-common.workspace = true
 rusqlite.workspace = true
 keyring.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustls-native-certs.workspace = true
+webpki-root-certs.workspace = true
