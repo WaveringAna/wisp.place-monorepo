@@ -29,11 +29,9 @@ npm install -g wispctl
 npx wispctl deploy your-handle.bsky.social --path ./dist --site my-site
 ```
 
-With cargo, using [cargo-binstall](https://github.com/cargo-bins/cargo-binstall) to fetch the same
-prebuilt binary, or `cargo install` to compile it yourself:
+With cargo, compiling from source:
 
 ```bash
-cargo binstall --git https://tangled.org/nekomimi.pet/wisp.place-monorepo wispctl
 cargo install --locked --git https://tangled.org/nekomimi.pet/wisp.place-monorepo wispctl
 ```
 

@@ -62,8 +62,9 @@ the permission-set lexicons (`aud: "*"`).
 3. `bun cli-rs/scripts/npm-packages.ts` stages `wispctl` (a node shim) and the
    `@wispplace/wispctl-<os>-<cpu>` binary packages in `target/npm/`. Publish the
    platform packages first, then `wispctl`.
-4. `cargo binstall` reads `[package.metadata.binstall]` in `wispctl/Cargo.toml`,
-   which points at the same `wisp-cli-binaries` URLs.
+4. `[package.metadata.binstall]` in `wispctl/Cargo.toml` points `cargo binstall`
+   at the same `wisp-cli-binaries` URLs. It only takes effect from crates.io:
+   `cargo binstall --git` wants a `Cargo.toml` at the repository root.
 
 crates.io waits for a jacquard release carrying the fork's fixes (git
 dependencies cannot be published); the crates are already named `wispplace-*`
