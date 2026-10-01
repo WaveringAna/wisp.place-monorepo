@@ -585,12 +585,12 @@ describe('relay-scoped durable cursors', () => {
 		expect(cursors.initialize('relay-a', 50)).toBe(50)
 
 		const switchedToB = await cursors.switchTo('relay-b', 52, store)
-		expect(switchedToB).toEqual({ cursor: 87, missingCheckpoint: false })
+		expect(switchedToB).toEqual({ cursor: 87, missingCheckpoint: false, source: 'checkpoint' })
 		expect(saves).toEqual([['relay-a', 52]])
 
 		cursors.recordActiveCursor(91)
 		const switchedBackToA = await cursors.switchTo('relay-a', 91, store)
-		expect(switchedBackToA).toEqual({ cursor: 52, missingCheckpoint: false })
+		expect(switchedBackToA).toEqual({ cursor: 52, missingCheckpoint: false, source: 'checkpoint' })
 		expect(saves).toEqual([
 			['relay-a', 52],
 			['relay-b', 91],
@@ -611,7 +611,7 @@ describe('relay-scoped durable cursors', () => {
 			},
 		})
 		expect(saves).toEqual([])
-		expect(activation).toEqual({ cursor: undefined, missingCheckpoint: true })
+		expect(activation).toEqual({ cursor: undefined, missingCheckpoint: true, source: 'checkpoint' })
 	})
 
 	test('refuses a target transition when durable state is unavailable', async () => {

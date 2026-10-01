@@ -8,7 +8,7 @@
 
 import { IdResolver } from '@atproto/identity'
 import { Firehose } from '@atproto/sync'
-import { BunFirehose, type CommitEvt, type Event, isBun } from '@wispplace/bun-firehose'
+import { BunFirehose, type CommitEvt, type Event, isBun, probeRelayPosition } from '@wispplace/bun-firehose'
 import type { Record as WispFsRecord } from '@wispplace/lexicons/types/place/wisp/fs'
 import type { Record as WispSettings } from '@wispplace/lexicons/types/place/wisp/settings'
 import { validateRecord as validateSettingsRecord } from '@wispplace/lexicons/types/place/wisp/settings'
@@ -102,8 +102,10 @@ import {
 	type RelayCursorStore,
 	RelayFailureBudget,
 	RelayGenerationGuard,
+	StandbyCursorAdvancer,
 } from './firehose-relay'
 import { type SchedulerDrainResult, SiteWorkScheduler } from './firehose-scheduler'
+import { FAILOVER_REWIND_MS, seekRelayCursorByTime } from './relay-seek'
 
 export { type CursorReservation, isValidFirehoseSeq, OrderedCursorTracker } from './firehose-cursor'
 export {
@@ -324,6 +326,7 @@ let lifecycleAbortController = new AbortController()
 let firehoseHandle: FirehoseHandle | null = null
 let stallWatchdogHandle: ReturnType<typeof setInterval> | null = null
 let statusLogHandle: ReturnType<typeof setInterval> | null = null
+let standbyCursorHandle: ReturnType<typeof setInterval> | null = null
 let activeFailureCallback: (() => void) | undefined
 let stopAndDrainPromise: Promise<FirehoseDrainResult> | null = null
 let relayTransitionPromise: Promise<void> | null = null
@@ -540,7 +543,7 @@ async function handleEvent(evt: Event | CommitEvt, relayGeneration: number): Pro
 
 	let reservation: CursorReservation | undefined
 	try {
-		reservation = await cursorTracker.reserve(evt.seq)
+		reservation = await cursorTracker.reserve(evt.seq, evt.time)
 		if (!reservation || !canAcceptRelayEvent(relayGeneration)) {
 			reservation?.fail()
 			return
@@ -616,6 +619,70 @@ function clearRuntimeTimers(): void {
 		clearInterval(statusLogHandle)
 		statusLogHandle = null
 	}
+	if (standbyCursorHandle) {
+		clearInterval(standbyCursorHandle)
+		standbyCursorHandle = null
+	}
+}
+
+/** How often standby relay checkpoints are moved up to the active relay's progress. */
+const STANDBY_CURSOR_INTERVAL_MS = 5 * 60_000
+
+function standbyServices(): string[] {
+	const alternate = getAlternateService(activeService)
+	return alternate ? [alternate] : []
+}
+
+/** Started once per process start; each tick reads the then-active relay. */
+function createStandbyCursorAdvancer(): StandbyCursorAdvancer {
+	let tickService = activeService
+	return new StandbyCursorAdvancer({
+		standbyServices: () => {
+			tickService = activeService
+			return standbyServices()
+		},
+		sourceTimeMs: () => cursorTracker.resumableTimeMs,
+		seek: (service, sourceTimeMs) => seekRelayCursorAtTime(service, sourceTimeMs, false),
+		store: relayCursorStore,
+		isCurrent: () =>
+			acceptingEvents && !relaySwitchPromise && !durableReplayController.pending && activeService === tickService,
+		onAdvanced: (service, cursor) =>
+			logger.debug('[Firehose] Advanced standby relay checkpoint', { relay: relayLabel(service), cursor }),
+		onFailure: (service, error) =>
+			logger.warn('[Firehose] Could not advance standby relay checkpoint', {
+				relay: relayLabel(service),
+				errorKind: errorKind(error),
+			}),
+	})
+}
+
+/**
+ * Place the target relay's cursor a margin before the source relay's safe
+ * event time. Relay sequence spaces are independent, so this is a time search.
+ */
+async function seekRelayCursorAtTime(service: string, sourceTimeMs: number, log = true): Promise<number | undefined> {
+	const signal = lifecycleAbortController.signal
+	const targetTimeMs = sourceTimeMs - FAILOVER_REWIND_MS
+	const result = await seekRelayCursorByTime(
+		(cursor) => probeRelayPosition(service, cursor, { timeoutMs: 10_000, signal }),
+		targetTimeMs,
+	)
+	if (log)
+		logger.info('[Firehose] Placed target relay cursor by time', {
+			relay: relayLabel(service),
+			cursor: result.cursor,
+			sourceTime: new Date(sourceTimeMs).toISOString(),
+			targetTime: new Date(targetTimeMs).toISOString(),
+			resumeTime: new Date(result.timeMs).toISOString(),
+			probes: result.probes,
+			beyondRetention: result.beyondRetention,
+		})
+	if (log && result.beyondRetention) {
+		logger.warn('[Firehose] Target relay does not retain the failover time; resuming from its oldest event', {
+			relay: relayLabel(service),
+		})
+	}
+	return result.cursor
 }
 
 /**
@@ -627,6 +694,7 @@ function requestRelayFailover(targetService: string, onFailure?: () => void): vo
 
 	const sourceService = activeService
 	const sourceCursor = getCurrentSeq()
+	const sourceTimeMs = cursorTracker.resumableTimeMs
 	const priorRelayTransition = relayTransitionPromise
 	// Fence callbacks before any await. Accepted site work may finish, but it
 	// cannot advance the target relay's cursor generation. The existing relay
@@ -637,12 +705,24 @@ function requestRelayFailover(targetService: string, onFailure?: () => void): vo
 	const switching = (async () => {
 		if (priorRelayTransition) await priorRelayTransition
 		await destroyCurrentRelay(false)
-		const activation = await relayCursorCoordinator.switchTo(targetService, sourceCursor, relayCursorStore)
+		const activation = await relayCursorCoordinator.switchTo(targetService, sourceCursor, relayCursorStore, {
+			sourceTimeMs,
+			seek: seekRelayCursorAtTime,
+			onSeekFailure: (error) =>
+				logger.warn('[Firehose] Could not place target relay cursor by time; using its stored checkpoint', {
+					relay: relayLabel(targetService),
+					errorKind: errorKind(error),
+				}),
+		})
 		if (!activation) throw new Error('Durable relay checkpoint is unavailable')
 		if (!acceptingEvents) return
 
 		activeService = targetService
-		cursorTracker.reset(activation.cursor)
+		const activationTimeMs =
+			activation.source === 'time-estimate' && sourceTimeMs !== undefined
+				? sourceTimeMs - FAILOVER_REWIND_MS
+				: undefined
+		cursorTracker.reset(activation.cursor, activationTimeMs)
 		lastEventTime = Date.now()
 		if (activation.missingCheckpoint) {
 			logger.warn('[Firehose] Target relay has no checkpoint; starting live without cross-relay replay', {
@@ -704,7 +784,7 @@ function handleStall(onTooManyFailures?: () => void): void {
 	if (relayFailureBudget.recordStall() === 1) {
 		logger.warn('[Firehose] Relay stalled; reconnecting from the safe cursor', { relay: relayLabel(activeService) })
 		const cursor = getCurrentSeq()
-		cursorTracker.reset(cursor)
+		cursorTracker.reset(cursor, cursorTracker.resumableTimeMs)
 		lastEventTime = Date.now()
 		void reconnectRelay()
 		return
@@ -799,7 +879,7 @@ function requestReplay(): void {
 		const cursor = getCurrentSeq()
 		// Discard old reservations after retaining their safe prefix. Replayed
 		// events receive fresh reservations; callbacks from old work are ignored.
-		cursorTracker.reset(cursor)
+		cursorTracker.reset(cursor, cursorTracker.resumableTimeMs)
 		isConnected = false
 		await reconnectRelay()
 	}, failClosedAfterDurableReplayFailures)
@@ -843,6 +923,12 @@ function startFirehoseNow(initialCursor: number | undefined, onTooManyFailures?:
 
 	if (stallWatchdogHandle) clearInterval(stallWatchdogHandle)
 	stallWatchdogHandle = setInterval(() => handleStall(onTooManyFailures), STALL_THRESHOLD_MS)
+
+	if (standbyCursorHandle) clearInterval(standbyCursorHandle)
+	if (config.firehoseServiceSecondary) {
+		const advancer = createStandbyCursorAdvancer()
+		standbyCursorHandle = setInterval(() => void advancer.tick(), STANDBY_CURSOR_INTERVAL_MS)
+	}
 }
 
 /**

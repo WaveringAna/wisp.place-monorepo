@@ -16,15 +16,25 @@ interface PendingCursorGroup {
 	failed: boolean
 	sealed: boolean
 	generation: number
+	/** Relay event time (epoch ms) of this sequence, when the relay supplied a valid one. */
+	timeMs?: number
 }
 
 interface CursorWaiter {
 	seq: number
+	timeMs?: number
 	resolve: (reservation: CursorReservation | undefined) => void
 }
 
 export function isValidFirehoseSeq(seq: unknown): seq is number {
 	return typeof seq === 'number' && Number.isSafeInteger(seq) && seq >= 0
+}
+
+/** Epoch ms of a relay `time` field, or undefined when missing or unparseable. */
+export function parseRelayTime(time: unknown): number | undefined {
+	if (typeof time !== 'string') return undefined
+	const ms = Date.parse(time)
+	return Number.isFinite(ms) ? ms : undefined
 }
 
 /**
@@ -41,16 +51,19 @@ export class OrderedCursorTracker {
 	private accepting = true
 	private generation = 0
 	private confirmedCursor: number | undefined
+	private confirmedTimeMs: number | undefined
 	private openGroup: PendingCursorGroup | null = null
 
 	constructor(
 		private readonly maxPendingEvents: number,
 		initialCursor?: number,
+		initialTimeMs?: number,
 	) {
 		if (!Number.isSafeInteger(maxPendingEvents) || maxPendingEvents < 1) {
 			throw new Error('maxPendingEvents must be a positive safe integer')
 		}
 		this.confirmedCursor = isValidFirehoseSeq(initialCursor) ? initialCursor : undefined
+		this.confirmedTimeMs = this.confirmedCursor === undefined ? undefined : initialTimeMs
 	}
 
 	/** The newest fully completed and sealed relay sequence. */
@@ -69,6 +82,15 @@ export class OrderedCursorTracker {
 		return first !== undefined && first > 0 ? first - 1 : undefined
 	}
 
+	/**
+	 * Relay event time at `resumableCursor`, used to place a different relay's
+	 * cursor in time on failover. Undefined when no event time is known.
+	 */
+	get resumableTimeMs(): number | undefined {
+		if (this.confirmedCursor !== undefined) return this.confirmedTimeMs
+		return this.pending[0]?.timeMs
+	}
+
 	/** Number of bounded relay-sequence groups awaiting a checkpoint. */
 	get pendingCount(): number {
 		return this.pending.length
@@ -84,15 +106,16 @@ export class OrderedCursorTracker {
 	 * Invalid, duplicate, and rewound sequences are ignored and never regress a
 	 * confirmed cursor.
 	 */
-	reserve(seq: number): Promise<CursorReservation | undefined> {
+	reserve(seq: number, time?: unknown): Promise<CursorReservation | undefined> {
 		if (!this.accepting || !isValidFirehoseSeq(seq) || this.isStaleOrRewound(seq)) {
 			return Promise.resolve(undefined)
 		}
 
-		const reservation = this.admit(seq)
+		const timeMs = parseRelayTime(time)
+		const reservation = this.admit(seq, timeMs)
 		if (reservation !== null) return Promise.resolve(reservation)
 		return new Promise((resolve) => {
-			this.waiters.push({ seq, resolve })
+			this.waiters.push({ seq, timeMs, resolve })
 		})
 	}
 
@@ -110,11 +133,12 @@ export class OrderedCursorTracker {
 	}
 
 	/** Reset stale pending work before reconnecting from a known safe cursor. */
-	reset(initialCursor?: number): void {
+	reset(initialCursor?: number, initialTimeMs?: number): void {
 		this.generation++
 		this.pending.length = 0
 		this.openGroup = null
 		this.confirmedCursor = isValidFirehoseSeq(initialCursor) ? initialCursor : undefined
+		this.confirmedTimeMs = this.confirmedCursor === undefined ? undefined : initialTimeMs
 		this.accepting = true
 		for (const waiter of this.waiters.splice(0)) waiter.resolve(undefined)
 	}
@@ -134,7 +158,7 @@ export class OrderedCursorTracker {
 	 * Returns null only when a new sequence must wait for bounded capacity.
 	 * Callers must validate staleness before this method.
 	 */
-	private admit(seq: number, releaseWaiters = true): CursorReservation | undefined | null {
+	private admit(seq: number, timeMs: number | undefined, releaseWaiters = true): CursorReservation | undefined | null {
 		if (this.openGroup && this.openGroup.seq === seq) {
 			return this.createReservation(this.openGroup)
 		}
@@ -155,6 +179,7 @@ export class OrderedCursorTracker {
 			failed: false,
 			sealed: false,
 			generation: this.generation,
+			timeMs,
 		}
 		this.pending.push(group)
 		this.openGroup = group
@@ -188,6 +213,7 @@ export class OrderedCursorTracker {
 			// duplicate can never move a confirmed checkpoint backward.
 			if (this.confirmedCursor === undefined || first.seq > this.confirmedCursor) {
 				this.confirmedCursor = first.seq
+				this.confirmedTimeMs = first.timeMs ?? this.confirmedTimeMs
 			}
 			this.pending.shift()
 		}
@@ -203,7 +229,7 @@ export class OrderedCursorTracker {
 				continue
 			}
 
-			const reservation = this.admit(waiter.seq, false)
+			const reservation = this.admit(waiter.seq, waiter.timeMs, false)
 			if (reservation === null) return
 			this.waiters.shift()?.resolve(reservation)
 		}

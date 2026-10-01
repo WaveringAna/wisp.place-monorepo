@@ -371,6 +371,21 @@ export interface RelayCursorActivation {
 	cursor: number | undefined
 	/** True only when durable storage proved that this relay has no usable checkpoint. */
 	missingCheckpoint: boolean
+	/** Where the cursor came from: a time-based estimate, or the target's stored checkpoint. */
+	source: 'time-estimate' | 'checkpoint'
+}
+
+/**
+ * Places the target relay's cursor at or before a source-relay event time.
+ * Resolves undefined (or rejects) when no estimate can be made.
+ */
+export type RelayTimeSeeker = (service: string, sourceTimeMs: number) => Promise<number | undefined>
+
+export interface RelaySwitchTiming {
+	/** Relay event time at the source relay's safe cursor. */
+	sourceTimeMs?: number
+	seek?: RelayTimeSeeker
+	onSeekFailure?: (error: unknown) => void
 }
 
 /**
@@ -402,16 +417,22 @@ export class RelayCursorCoordinator {
 		return this.cursorsByRelay.get(this.relayIdentity(service))
 	}
 
+	/**
+	 * The target's stored checkpoint is only a fallback: it dates from whenever
+	 * that relay was last active, which can be days behind. When the source
+	 * cursor's event time is known, the target starts from that time instead.
+	 */
 	async switchTo(
 		targetService: string,
 		currentCursor: number | undefined,
 		store: RelayCursorStore,
+		timing: RelaySwitchTiming = {},
 	): Promise<RelayCursorActivation | undefined> {
 		const targetIdentity = this.relayIdentity(targetService)
 		if (this.active?.identity === targetIdentity) {
 			const cursor = this.toCursor(currentCursor)
 			this.recordActiveCursor(cursor)
-			return { cursor, missingCheckpoint: false }
+			return { cursor, missingCheckpoint: false, source: 'checkpoint' }
 		}
 
 		if (this.active) {
@@ -427,15 +448,82 @@ export class RelayCursorCoordinator {
 			}
 		}
 
+		const estimated = await this.estimateCursor(targetService, timing)
+		if (estimated !== undefined) {
+			this.active = { service: targetService, identity: targetIdentity }
+			this.cursorsByRelay.set(targetIdentity, estimated)
+			return { cursor: estimated, missingCheckpoint: false, source: 'time-estimate' }
+		}
+
 		const loaded = await store.read(targetService)
 		if (loaded.kind === 'unavailable') return undefined
 		const cursor = loaded.kind === 'found' ? this.toCursor(loaded.cursor) : undefined
 		this.active = { service: targetService, identity: targetIdentity }
 		this.cursorsByRelay.set(targetIdentity, cursor)
-		return { cursor, missingCheckpoint: loaded.kind === 'missing' }
+		return { cursor, missingCheckpoint: loaded.kind === 'missing', source: 'checkpoint' }
+	}
+
+	private async estimateCursor(targetService: string, timing: RelaySwitchTiming): Promise<number | undefined> {
+		const { sourceTimeMs, seek } = timing
+		if (!seek || sourceTimeMs === undefined || !Number.isFinite(sourceTimeMs)) return undefined
+		try {
+			return this.toCursor(await seek(targetService, sourceTimeMs))
+		} catch (error) {
+			timing.onSeekFailure?.(error)
+			return undefined
+		}
 	}
 
 	private toCursor(cursor: number | undefined): number | undefined {
 		return typeof cursor === 'number' && Number.isSafeInteger(cursor) && cursor >= 0 ? cursor : undefined
+	}
+}
+
+export interface StandbyCursorAdvancerOptions {
+	/** Relays other than the active one, whose checkpoints should track it. */
+	standbyServices: () => string[]
+	/** Relay event time at the active relay's safe cursor. */
+	sourceTimeMs: () => number | undefined
+	seek: RelayTimeSeeker
+	store: RelayCursorStore
+	/** False once the active relay changed or intake stopped; late results are then discarded. */
+	isCurrent: () => boolean
+	onAdvanced?: (service: string, cursor: number) => void
+	onFailure?: (service: string, error: unknown) => void
+}
+
+/**
+ * Keeps each standby relay's durable checkpoint near the active relay's
+ * progress, by time. Without it a standby checkpoint is whatever was saved when
+ * that relay was last active, and a failover that cannot seek falls back to it.
+ */
+export class StandbyCursorAdvancer {
+	private inFlight: Promise<void> | null = null
+
+	constructor(private readonly opts: StandbyCursorAdvancerOptions) {}
+
+	/** Advance every standby once; overlapping calls share the running pass. */
+	tick(): Promise<void> {
+		if (!this.inFlight) {
+			this.inFlight = this.advanceAll().finally(() => {
+				this.inFlight = null
+			})
+		}
+		return this.inFlight
+	}
+
+	private async advanceAll(): Promise<void> {
+		const services = this.opts.standbyServices()
+		const sourceTimeMs = this.opts.sourceTimeMs()
+		if (sourceTimeMs === undefined || !Number.isFinite(sourceTimeMs) || !this.opts.isCurrent()) return
+		for (const service of services) {
+			try {
+				const cursor = await this.opts.seek(service, sourceTimeMs)
+				if (cursor === undefined || !Number.isSafeInteger(cursor) || cursor < 0 || !this.opts.isCurrent()) continue
+				if (await this.opts.store.save(service, cursor)) this.opts.onAdvanced?.(service, cursor)
+			} catch (error) {
+				this.opts.onFailure?.(service, error)
+			}
+		}
 	}
 }
