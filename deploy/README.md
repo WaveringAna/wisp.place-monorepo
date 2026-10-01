@@ -86,7 +86,12 @@ the Action's log — it prints every stack it selected — the first few times.
 ## Registry
 
 Images live in the registry on valefar, `valefar.mesh.wisp.place:5000`
-(`registry:2`, plain HTTP, no auth), reached over the WireGuard mesh. This
+(`registry:2`, plain HTTP, no auth, deliberately), reached over the WireGuard mesh.
+It is a plain `docker run` container on valefar (not in its Nix config), with
+data in `/var/lib/registry`, published only on the LAN (`10.0.0.30`), tailnet
+(`100.64.0.11`) and mesh (`10.88.0.10`) addresses. valefar has
+`net.ipv4.ip_nonlocal_bind=1` and docker waits for `wg-quick-wg0`, so those binds
+survive a reboot. This
 replaced atcr.io on 2026-10-01, after atcr served just-pushed tags before
 their blobs were readable and a release failed halfway through the fleet.
 
