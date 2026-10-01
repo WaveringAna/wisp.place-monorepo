@@ -32,9 +32,14 @@ const createPoolOptions = (pool: typeof databaseConfiguration.primaryPool) => ({
 	max: pool.max,
 	idleTimeout: pool.idleTimeoutSeconds,
 	connectionTimeout: pool.connectionTimeoutSeconds,
-	maxLifetime: 300,
 })
 
+// Deliberately no maxLifetime on the primary pool. Bun closes a connection when
+// its lifetime ends even with a query in flight, failing that query with
+// ERR_POSTGRES_LIFETIME_TIMEOUT ("Max lifetime timeout reached"); with a 300s
+// cap that hit hourly maintenance and the Caddy domain check several times a
+// day. Failover does not need it: HAProxy's primary backend uses
+// `on-marked-down shutdown-sessions`, which drops sessions to a demoted primary.
 export const db = new SQL(databaseConfiguration.primaryUrl, createPoolOptions(databaseConfiguration.primaryPool))
 
 /**
@@ -69,6 +74,11 @@ export const connectionWarmingIntervalMs = resolveConnectionWarmingIntervalMs(
 const replicaReadDb = databaseConfiguration.hasSeparateReadPool
 	? new SQL(databaseConfiguration.readUrl, {
 			...createPoolOptions(databaseConfiguration.readPool),
+			// Kept for the replica pool only: HAProxy's read backend does not shut
+			// down sessions when a replica is marked down for lag, so the lifetime is
+			// what moves these connections off it. The cost is the in-flight query
+			// kill described above the primary pool.
+			maxLifetime: 300,
 			connection: {
 				statement_timeout: databaseConfiguration.readQueryTimeoutMs,
 			},

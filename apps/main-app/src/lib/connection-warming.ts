@@ -12,8 +12,9 @@
 /**
  * Touch a pool once, retrying a single time.
  *
- * A connection that reaches `maxLifetime` can be handed out and retired in the
- * same moment, which fails whichever query received it. That race is inherent
+ * A connection can be handed out and closed in the same moment (a replica-pool
+ * connection reaching `maxLifetime`, or a dropped socket), which fails whichever
+ * query received it. That race is inherent
  * to recycling connections and is transient by construction: the retry is
  * served by a replacement connection.
  */
