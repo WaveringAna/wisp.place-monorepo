@@ -22,7 +22,7 @@ use tokio::{
     sync::{OwnedSemaphorePermit, RwLock, Semaphore},
     task::JoinSet,
 };
-use wisp_core::{
+use wispplace_core::{
     pages::DirectoryEntry,
     redirects::{MAX_REDIRECT_FILE_BYTES, RedirectRule, parse_redirects_file_bytes},
 };
@@ -209,7 +209,7 @@ pub async fn respond(
             builder = builder
                 .header(
                     "Content-Type",
-                    wisp_core::blob::mime_for(&resolved.to_string_lossy()),
+                    wispplace_core::blob::mime_for(&resolved.to_string_lossy()),
                 )
                 .header("Content-Length", info.len())
                 .header("Cache-Control", "no-cache");

@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::future::{Future, poll_fn};
 use std::task::Poll;
-use wisp_lexicons::place_wisp::{fs, subfs};
+use wispplace_lexicons::place_wisp::{fs, subfs};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SubfsSubject {

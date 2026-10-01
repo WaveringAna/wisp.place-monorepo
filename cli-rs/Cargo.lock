@@ -5208,45 +5208,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "wisp-core"
-version = "2.0.0"
-dependencies = [
- "data-encoding",
- "flate2",
- "ignore",
- "jacquard-common",
- "jacquard-lexicon",
- "percent-encoding",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "tempfile",
- "url",
- "wisp-lexicons",
-]
-
-[[package]]
-name = "wisp-lexicons"
-version = "2.0.0"
-dependencies = [
- "jacquard-common",
- "jacquard-derive",
- "jacquard-lexicon",
- "miette",
- "serde",
- "thiserror",
-]
-
-[[package]]
-name = "wisp-ui"
-version = "2.0.0"
-dependencies = [
- "crossterm",
- "ratatui",
- "unicode-width 0.2.2",
-]
-
-[[package]]
 name = "wispctl"
 version = "2.0.0"
 dependencies = [
@@ -5277,9 +5238,48 @@ dependencies = [
  "tokio",
  "webbrowser",
  "webpki-root-certs",
- "wisp-core",
- "wisp-lexicons",
- "wisp-ui",
+ "wispplace-core",
+ "wispplace-lexicons",
+ "wispplace-ui",
+]
+
+[[package]]
+name = "wispplace-core"
+version = "2.0.0"
+dependencies = [
+ "data-encoding",
+ "flate2",
+ "ignore",
+ "jacquard-common",
+ "jacquard-lexicon",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "url",
+ "wispplace-lexicons",
+]
+
+[[package]]
+name = "wispplace-lexicons"
+version = "2.0.0"
+dependencies = [
+ "jacquard-common",
+ "jacquard-derive",
+ "jacquard-lexicon",
+ "miette",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
+name = "wispplace-ui"
+version = "2.0.0"
+dependencies = [
+ "crossterm",
+ "ratatui",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]

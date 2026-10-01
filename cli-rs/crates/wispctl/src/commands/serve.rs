@@ -16,7 +16,7 @@ use tokio::{
     net::TcpListener,
     sync::{RwLock, mpsc},
 };
-use wisp_ui::{Line, s};
+use wispplace_ui::{Line, s};
 
 async fn fetch_settings(pds: &str, did: &str, site: &str) -> Option<Settings> {
     let record = tokio::time::timeout(
@@ -33,7 +33,7 @@ fn decode_settings(value: serde_json::Value) -> Option<Settings> {
     if value.get("$type")?.as_str()? != "place.wisp.settings" {
         return None;
     }
-    let record: wisp_lexicons::place_wisp::settings::Settings<String> =
+    let record: wispplace_lexicons::place_wisp::settings::Settings<String> =
         serde_json::from_value(value).ok()?;
     record.validate().ok()?;
     for header in record.headers.iter().flatten() {
@@ -64,40 +64,40 @@ async fn reload_updates(
             update.settings |= next.settings;
         }
         if update.site {
-            wisp_ui::warning("Site updated, re-pulling...");
+            wispplace_ui::warning("Site updated, re-pulling...");
             dashboard.sync(SyncStatus::Pulling, None);
             match pull_site(&args.handle, &args.site, &root).await {
                 Ok(pulled) => {
                     dashboard.sync(SyncStatus::Idle, Some(pulled.file_count));
                     let rules = http::load_redirects(&root);
                     state.write().await.redirects = rules;
-                    wisp_ui::success("Site reloaded");
+                    wispplace_ui::success("Site reloaded");
                 }
                 Err(error) => {
                     dashboard.sync(SyncStatus::Error(format!("{error:#}")), None);
-                    wisp_ui::warning(format!("Failed to reload site: {error:#}"));
+                    wispplace_ui::warning(format!("Failed to reload site: {error:#}"));
                 }
             }
         }
         if update.settings {
-            wisp_ui::info("Settings updated...");
+            wispplace_ui::info("Settings updated...");
             dashboard.sync(SyncStatus::Settings, None);
             let settings = fetch_settings(&pds, &did, &args.site).await;
             state.write().await.settings = settings;
             dashboard.sync(SyncStatus::Idle, None);
-            wisp_ui::success("Settings reloaded");
+            wispplace_ui::success("Settings reloaded");
         }
     }
 }
 
 pub async fn run(args: ServeArgs) -> Result<()> {
-    wisp_ui::blank();
-    wisp_ui::note(Line::from(vec![
+    wispplace_ui::blank();
+    wispplace_ui::note(Line::from(vec![
         s::accent("Serving "),
         s::accent_bold(args.site.clone()),
         s::accent(format!(" from {}", args.handle)),
     ]));
-    wisp_ui::blank();
+    wispplace_ui::blank();
     let pulled = pull_site(&args.handle, &args.site, &args.path).await?;
     let root = args
         .path
@@ -113,8 +113,8 @@ pub async fn run(args: ServeArgs) -> Result<()> {
         .await
         .context("Could not start HTTP server")?;
     let address = listener.local_addr()?;
-    wisp_ui::success(format!("Server running at http://{address}"));
-    wisp_ui::info("Watching for updates via firehose...");
+    wispplace_ui::success(format!("Server running at http://{address}"));
+    wispplace_ui::info("Watching for updates via firehose...");
     let dashboard = Arc::new(Dashboard::new(
         format!("http://{address}"),
         args.site.clone(),
@@ -127,7 +127,7 @@ pub async fn run(args: ServeArgs) -> Result<()> {
         _ = firehose::watch(pulled.pds.clone(), pulled.did.clone(), args.site.clone(), sender, dashboard.clone()) => Ok(()),
         _ = reload_updates(args.clone(), root, pulled.did, pulled.pds, state, receiver, dashboard.clone()) => Ok(()),
         _ = tokio::signal::ctrl_c() => {
-            wisp_ui::info("Shutting down...");
+            wispplace_ui::info("Shutting down...");
             Ok(())
         }
     }

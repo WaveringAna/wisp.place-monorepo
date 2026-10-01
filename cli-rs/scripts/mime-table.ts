@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Regenerate crates/wisp-core/src/mime_table.rs: the extension -> type map
+// Regenerate crates/wispplace-core/src/mime_table.rs: the extension -> type map
 // that the TypeScript CLI's `mime-types` (3.0.2) `lookup` used, so deployed
 // files keep their Content-Type and gzip decision.
 //
@@ -22,5 +22,5 @@ pub static TYPES: &[(&str, &str)] = &[
 ${rows.join('\n')}
 ];
 `
-writeFileSync(join(import.meta.dir, '../crates/wisp-core/src/mime_table.rs'), out)
+writeFileSync(join(import.meta.dir, '../crates/wispplace-core/src/mime_table.rs'), out)
 console.log(`${rows.length} extensions from mime-types ${version}`)

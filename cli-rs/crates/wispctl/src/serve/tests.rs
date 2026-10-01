@@ -6,7 +6,7 @@ use http_body_util::BodyExt;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
-use wisp_core::{
+use wispplace_core::{
     pages::DirectoryEntry,
     redirects::{MAX_REDIRECT_FILE_BYTES, parse_redirects_file},
 };

@@ -12,7 +12,7 @@ use jacquard::{
     oauth::{dpop::DpopExt, resolver::OAuthResolver},
     types::string::{Did, Handle},
 };
-use wisp_core::identity::{is_loopback_host, validate_pds_endpoint};
+use wispplace_core::identity::{is_loopback_host, validate_pds_endpoint};
 
 /// The TS CLI resolved handles only through this endpoint (then checked the
 /// DID document), so CI egress allowlists name it rather than DNS/well-known.

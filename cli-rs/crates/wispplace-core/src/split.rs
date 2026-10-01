@@ -2,7 +2,7 @@
 use crate::convert::fs_to_subfs;
 use crate::tree::{count_files, directory, root_type};
 use jacquard_common::types::string::{AtUri, Datetime};
-use wisp_lexicons::place_wisp::{
+use wispplace_lexicons::place_wisp::{
     fs::{Directory, Entry, EntryNode, Fs, Subfs},
     subfs::{self, SubfsRecord},
 };

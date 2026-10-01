@@ -10,7 +10,7 @@ use crate::{
 use anyhow::{Result, bail};
 use jacquard::types::{string::Datetime, tid::Tid};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use wisp_core::{
+use wispplace_core::{
     blob::{is_text_mime, mime_for, should_compress},
     constants::{MAX_FILE_COUNT, MAX_FILE_SIZE, MAX_SITE_SIZE},
     convert::subfs_to_fs,
@@ -18,8 +18,8 @@ use wisp_core::{
     split::{manifest, split_plan, subfs_record},
     tree::{ExistingBlob, UploadResult, build_tree, extract_blob_map, extract_subfs_uris},
 };
-use wisp_lexicons::place_wisp::{fs::Fs, settings::Settings, subfs::SubfsRecord};
-use wisp_ui::{TextPrompt, s};
+use wispplace_lexicons::place_wisp::{fs::Fs, settings::Settings, subfs::SubfsRecord};
+use wispplace_ui::{TextPrompt, s};
 
 fn valid_site(site: &str) -> bool {
     !site.is_empty()
@@ -38,7 +38,7 @@ pub async fn run(mut args: DeployArgs) -> Result<()> {
     let needs_handle = args.handle.is_none() && known.is_none();
     let prompted = needs_handle || args.path.is_none() || args.site.is_none();
     if prompted {
-        wisp_ui::intro("deploy");
+        wispplace_ui::intro("deploy");
     }
     if needs_handle {
         args.handle = Some(prompts::handle("Deploy cancelled")?);
@@ -79,7 +79,7 @@ pub async fn run(mut args: DeployArgs) -> Result<()> {
     if args.concurrency == 0 {
         bail!("Concurrency must be at least 1");
     }
-    let mut spinner = wisp_ui::spinner("Authenticating...");
+    let mut spinner = wispplace_ui::spinner("Authenticating...");
     let authenticated = auth::authenticate(
         args.handle.as_deref(),
         &AuthOptions {
@@ -93,14 +93,14 @@ pub async fn run(mut args: DeployArgs) -> Result<()> {
     spinner.succeed(format!("Authenticated as {}", authenticated.did));
     let agent = authenticated.agent;
     let did = authenticated.did;
-    wisp_ui::blank();
-    wisp_ui::note(wisp_ui::Line::from(vec![
+    wispplace_ui::blank();
+    wispplace_ui::note(wispplace_ui::Line::from(vec![
         s::accent("Deploying "),
         s::bold(site.clone()),
         s::accent(format!(" from {}", path.display())),
     ]));
-    wisp_ui::blank();
-    let spinner = wisp_ui::spinner("Scanning directory...");
+    wispplace_ui::blank();
+    let spinner = wispplace_ui::spinner("Scanning directory...");
     let files = collect_files(&path)?;
     if files.is_empty() {
         spinner.fail("No files found to deploy".to_owned());
@@ -110,33 +110,33 @@ pub async fn run(mut args: DeployArgs) -> Result<()> {
     spinner.succeed(format!(
         "Found {} files ({})",
         files.len(),
-        wisp_ui::format_bytes(size)
+        wispplace_ui::format_bytes(size)
     ));
     if files.len() > MAX_FILE_COUNT {
-        wisp_ui::warning(format!(
+        wispplace_ui::warning(format!(
             "Warning: Site has {} files (limit: {MAX_FILE_COUNT})",
             files.len()
         ));
-        wisp_ui::warning("Site may not be cached by the hosting service.");
+        wispplace_ui::warning("Site may not be cached by the hosting service.");
     }
     if size > MAX_SITE_SIZE {
-        wisp_ui::warning(format!(
+        wispplace_ui::warning(format!(
             "Warning: Site is {} (limit: {})",
-            wisp_ui::format_bytes(size),
-            wisp_ui::format_bytes(MAX_SITE_SIZE)
+            wispplace_ui::format_bytes(size),
+            wispplace_ui::format_bytes(MAX_SITE_SIZE)
         ));
-        wisp_ui::warning("Site may not be cached by the hosting service.");
+        wispplace_ui::warning("Site may not be cached by the hosting service.");
     }
     for file in files.iter().filter(|file| file.size > MAX_FILE_SIZE) {
-        wisp_ui::warning(format!(
+        wispplace_ui::warning(format!(
             "Warning: {} exceeds max size ({} > {})",
             file.relative_path,
-            wisp_ui::format_bytes(file.size),
-            wisp_ui::format_bytes(MAX_FILE_SIZE)
+            wispplace_ui::format_bytes(file.size),
+            wispplace_ui::format_bytes(MAX_FILE_SIZE)
         ));
-        wisp_ui::warning("This file may not be cached by the hosting service.");
+        wispplace_ui::warning("This file may not be cached by the hosting service.");
     }
-    let spinner = wisp_ui::spinner("Checking for existing site...");
+    let spinner = wispplace_ui::spinner("Checking for existing site...");
     let existing = fetch_existing(&agent, &did, &site).await;
     spinner.succeed(
         if existing.is_some() {
@@ -157,14 +157,14 @@ pub async fn run(mut args: DeployArgs) -> Result<()> {
         args.force_gzip,
     )
     .await?;
-    let spinner = wisp_ui::spinner("Creating manifest...");
+    let spinner = wispplace_ui::spinner("Creating manifest...");
     // Every subfs record any attempt wrote, so a retried attempt's leftovers
     // are cleaned up with the old site's.
     let mut written = BTreeSet::new();
     let writes = match put_manifest(&agent, &did, &site, &uploads, &mut written).await {
         Ok(writes) => writes,
         Err(error) if repo::http_status(&error) == Some(500) => {
-            wisp_ui::warning(
+            wispplace_ui::warning(
                 "[Deploy] Manifest put failed with 500, retrying with base64 encoding for text files...",
             );
             let text_files: Vec<_> = files
@@ -204,7 +204,7 @@ pub async fn run(mut args: DeployArgs) -> Result<()> {
         }
     }
     if args.directory || args.spa {
-        let spinner = wisp_ui::spinner("Creating settings...");
+        let spinner = wispplace_ui::spinner("Creating settings...");
         let settings: Settings = Settings {
             directory_listing: Some(args.directory),
             clean_urls: Some(true),
@@ -217,8 +217,8 @@ pub async fn run(mut args: DeployArgs) -> Result<()> {
         agent.put(&site, settings).await?;
         spinner.succeed("Created settings record".to_owned());
     }
-    wisp_ui::blank();
-    wisp_ui::out(labelled(
+    wispplace_ui::blank();
+    wispplace_ui::out(labelled(
         "URI",
         s::muted(format!("at://{did}/place.wisp.fs/{site}")),
     ));
@@ -226,20 +226,20 @@ pub async fn run(mut args: DeployArgs) -> Result<()> {
         .handle
         .or_else(|| known.and_then(|account| account.handle))
     {
-        wisp_ui::out(labelled(
+        wispplace_ui::out(labelled(
             "URL",
             s::link(format!("https://sites.wisp.place/{handle}/{site}")),
         ));
     }
-    wisp_ui::out(labelled(
+    wispplace_ui::out(labelled(
         "URL",
         s::link(format!("https://sites.wisp.place/{did}/{site}")),
     ));
     if prompted {
-        wisp_ui::outro("Deployed successfully!");
+        wispplace_ui::outro("Deployed successfully!");
     } else {
-        wisp_ui::blank();
-        wisp_ui::success("Deployed successfully!");
+        wispplace_ui::blank();
+        wispplace_ui::success("Deployed successfully!");
     }
     Ok(())
 }
@@ -260,16 +260,16 @@ async fn put_manifest(
     let generation = Tid::now_0().to_string();
     let plan = split_plan(&root, did, site, &generation, &created_at)?;
     let splitting = (!plan.records.is_empty())
-        .then(|| wisp_ui::spinner("Splitting large site into subfs records..."));
+        .then(|| wispplace_ui::spinner("Splitting large site into subfs records..."));
     let mut completed_messages = Vec::new();
     for message in plan.messages {
         if matches!(
             message,
-            wisp_core::split::SplitMessage::CreatedParent { .. }
+            wispplace_core::split::SplitMessage::CreatedParent { .. }
         ) {
             completed_messages.push(message);
         } else {
-            wisp_ui::note(s::muted(split_message(message)));
+            wispplace_ui::note(s::muted(split_message(message)));
         }
     }
     let mut keys = BTreeSet::new();
@@ -280,7 +280,7 @@ async fn put_manifest(
         keys.insert(record.rkey);
     }
     for message in completed_messages {
-        wisp_ui::note(s::muted(split_message(message)));
+        wispplace_ui::note(s::muted(split_message(message)));
     }
     if let Some(spinner) = splitting {
         spinner.succeed(format!("Created {} subfs records", keys.len()));
@@ -290,12 +290,12 @@ async fn put_manifest(
     Ok(keys)
 }
 
-fn split_message(message: wisp_core::split::SplitMessage) -> String {
-    use wisp_core::split::SplitMessage;
+fn split_message(message: wispplace_core::split::SplitMessage) -> String {
+    use wispplace_core::split::SplitMessage;
     match message {
         SplitMessage::DirectoryTooLarge { size } => format!(
             "    → Directory too large ({}), splitting into chunks...",
-            wisp_ui::format_bytes(size as u64)
+            wispplace_ui::format_bytes(size as u64)
         ),
         SplitMessage::CreatedChunks { count } => format!("    → Created {count} chunks"),
         SplitMessage::UploadingChunk {
@@ -305,7 +305,7 @@ fn split_message(message: wisp_core::split::SplitMessage) -> String {
             size,
         } => format!(
             "    → Uploading chunk {index}/{count} ({files} files, {})...",
-            wisp_ui::format_bytes(size as u64)
+            wispplace_ui::format_bytes(size as u64)
         ),
         SplitMessage::CreatingParent { count } => {
             format!("    → Creating parent subfs with {count} chunk references...")
@@ -343,7 +343,7 @@ async fn fetch_existing(repo: &impl SiteRepo, did: &str, site: &str) -> Option<E
             if ancestors.contains(&uri) {
                 continue;
             }
-            let Ok(subject) = wisp_core::subfs::parse_subfs_subject(&uri) else {
+            let Ok(subject) = wispplace_core::subfs::parse_subfs_subject(&uri) else {
                 continue;
             };
             // Like the TS CLI, only follow (and later clean up) our own records:
@@ -392,8 +392,8 @@ fn join(prefix: &str, path: &str) -> String {
 }
 
 /// `  URL: <value>`: a muted label so only the value itself is highlighted.
-fn labelled(label: &str, value: wisp_ui::Span<'static>) -> wisp_ui::Line<'static> {
-    wisp_ui::Line::from(vec![s::muted(format!("  {label}: ")), value])
+fn labelled(label: &str, value: wispplace_ui::Span<'static>) -> wispplace_ui::Line<'static> {
+    wispplace_ui::Line::from(vec![s::muted(format!("  {label}: ")), value])
 }
 
 #[cfg(test)]

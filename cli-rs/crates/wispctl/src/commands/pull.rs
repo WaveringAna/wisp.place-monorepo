@@ -15,12 +15,12 @@ use base64::{
 use futures_util::{StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use wisp_core::{
+use wispplace_core::{
     constants::{MAX_BLOB_SIZE, MAX_SITE_SIZE_SUPPORTER},
     path::require_site_file_path,
     subfs::{ExpansionError, ExpansionLimits, expand_subfs, validate_fs_record},
 };
-use wisp_ui::{Direction, Line, s};
+use wispplace_ui::{Direction, Line, s};
 
 use crate::cli::PullArgs;
 
@@ -378,14 +378,14 @@ fn replace_directory(temp: &Path, output: &Path) -> Result<()> {
 }
 
 pub async fn pull_site(identifier: &str, site: &str, output: &Path) -> Result<PullResult> {
-    wisp_ui::blank();
-    wisp_ui::note(Line::from(vec![
+    wispplace_ui::blank();
+    wispplace_ui::note(Line::from(vec![
         s::accent("Pulling "),
         s::bold(site.to_owned()),
         s::accent(format!(" from {identifier}")),
     ]));
-    wisp_ui::blank();
-    let resolving = wisp_ui::spinner("Resolving identity...");
+    wispplace_ui::blank();
+    let resolving = wispplace_ui::spinner("Resolving identity...");
     let (did, pds) = match resolve_identity(identifier).await {
         Ok(identity) => identity,
         Err(error) => {
@@ -394,8 +394,8 @@ pub async fn pull_site(identifier: &str, site: &str, output: &Path) -> Result<Pu
         }
     };
     resolving.succeed(Some(format!("Resolved to {did}")));
-    wisp_ui::spinner("Getting PDS endpoint...").succeed(Some("Got PDS endpoint".into()));
-    let fetching = wisp_ui::spinner("Fetching site record...");
+    wispplace_ui::spinner("Getting PDS endpoint...").succeed(Some("Got PDS endpoint".into()));
+    let fetching = wispplace_ui::spinner("Fetching site record...");
     let response = match fetch_record(&pds, &did, "place.wisp.fs", site).await {
         Ok(record) => record,
         Err(_) => {
@@ -410,7 +410,7 @@ pub async fn pull_site(identifier: &str, site: &str, output: &Path) -> Result<Pu
         bail!("Site record is invalid");
     }
     fetching.succeed(Some("Fetched site record".into()));
-    let expanding = wisp_ui::spinner("Expanding subfs nodes...");
+    let expanding = wispplace_ui::spinner("Expanding subfs nodes...");
     let sources = SourceEndpoints::new(&did, &pds);
     let expanded = expand_subfs(
         value["root"].clone(),
@@ -470,7 +470,7 @@ pub async fn pull_site(identifier: &str, site: &str, output: &Path) -> Result<Pu
                 .ok()
                 .is_some_and(|path| path.is_file())
     });
-    wisp_ui::note(Line::from(s::muted(format!(
+    wispplace_ui::note(Line::from(s::muted(format!(
         "Files to download: {}, unchanged: {}",
         downloads.len(),
         unchanged.len()
@@ -484,7 +484,7 @@ pub async fn pull_site(identifier: &str, site: &str, output: &Path) -> Result<Pu
                 MAX_SITE_SIZE_SUPPORTER,
             )?;
         }
-        wisp_ui::success("Site is already up to date");
+        wispplace_ui::success("Site is already up to date");
         return Ok(result);
     }
     let parent = output.parent().context("Output has no parent")?;
@@ -498,7 +498,7 @@ pub async fn pull_site(identifier: &str, site: &str, output: &Path) -> Result<Pu
     for owner in owners {
         endpoints.insert(owner.clone(), sources.get(owner).await?);
     }
-    let progress = wisp_ui::progress("Downloading", downloads.len() as u64, Direction::Down);
+    let progress = wispplace_ui::progress("Downloading", downloads.len() as u64, Direction::Down);
     let mut stream = futures_util::stream::iter(downloads.iter().map(|file| {
         let endpoint = &endpoints[&file.owner_did];
         let http = &http;
@@ -524,7 +524,8 @@ pub async fn pull_site(identifier: &str, site: &str, output: &Path) -> Result<Pu
     drop(stream);
     progress.succeed(format!("Downloaded {} files", downloads.len()));
     if !unchanged.is_empty() {
-        let copying = wisp_ui::spinner(format!("Copying {} unchanged files...", unchanged.len()));
+        let copying =
+            wispplace_ui::spinner(format!("Copying {} unchanged files...", unchanged.len()));
         for file in unchanged {
             let source = resolve_pull_file_path(&output, &file.path, false)?;
             reserve(
@@ -553,9 +554,9 @@ pub async fn pull_site(identifier: &str, site: &str, output: &Path) -> Result<Pu
         serde_json::to_vec_pretty(&metadata)?,
     )?;
     replace_directory(temp.path(), &output)?;
-    wisp_ui::blank();
-    wisp_ui::success(format!("Pulled {site} to {}", output.display()));
-    wisp_ui::blank();
+    wispplace_ui::blank();
+    wispplace_ui::success(format!("Pulled {site} to {}", output.display()));
+    wispplace_ui::blank();
     Ok(result)
 }
 

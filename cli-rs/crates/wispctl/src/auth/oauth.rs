@@ -97,7 +97,7 @@ impl OAuthStore {
             db.delete(key)?;
         } else {
             if secret && !self.warned.swap(true, Ordering::Relaxed) {
-                wisp_ui::warning(
+                wispplace_ui::warning(
                     "Could not save the session in the system credential store; keeping it in the local wispctl database instead.",
                 );
             }
@@ -201,7 +201,8 @@ impl ClientAuthStore for OAuthStore {
 }
 
 fn scope(strategy: OAuthScopeStrategy) -> String {
-    let scopes = wisp_core::scopes::build_wisp_scopes(wisp_core::scopes::WISP_CLI_PERMISSION_SETS);
+    let scopes =
+        wispplace_core::scopes::build_wisp_scopes(wispplace_core::scopes::WISP_CLI_PERMISSION_SETS);
     match strategy {
         OAuthScopeStrategy::Granular => scopes.legacy,
         _ => scopes.preferred,
@@ -261,9 +262,9 @@ pub async fn restore(
             Err(_) => continue,
         };
         if let Some(data) = store.get_session(&key.did, key.session_id.as_str()).await? {
-            let missing = wisp_core::scopes::missing_capabilities(
+            let missing = wispplace_core::scopes::missing_capabilities(
                 Some(data.scopes.as_str()),
-                &wisp_core::scopes::wisp_cli_required_capabilities(),
+                &wispplace_core::scopes::wisp_cli_required_capabilities(),
             );
             if missing.is_empty() {
                 return Ok(Some(session));
@@ -344,7 +345,7 @@ pub async fn login(
         let url = match client.start_auth(identifier, opts).await {
             Ok(url) => url,
             Err(err) if strategy == OAuthScopeStrategy::Sets => {
-                wisp_ui::warning(format!(
+                wispplace_ui::warning(format!(
                     "Authorization server rejected the wisp.place permission sets ({err}). Falling back to granular scopes."
                 ));
                 strategy = OAuthScopeStrategy::Granular;
@@ -373,12 +374,12 @@ pub async fn login(
             .get_session(&did, &id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("OAuth session was not persisted"))?;
-        let missing = wisp_core::scopes::missing_capabilities(
+        let missing = wispplace_core::scopes::missing_capabilities(
             Some(data.scopes.as_str()),
-            &wisp_core::scopes::wisp_cli_required_capabilities(),
+            &wispplace_core::scopes::wisp_cli_required_capabilities(),
         );
         if !missing.is_empty() && strategy == OAuthScopeStrategy::Sets {
-            wisp_ui::warning(
+            wispplace_ui::warning(
                 "Authorization server ignored the wisp.place permission sets. Retrying with granular scopes...",
             );
             store.delete_session(&did, &id).await?;
@@ -386,10 +387,10 @@ pub async fn login(
             continue;
         }
         if let Some(first) = missing.first() {
-            wisp_ui::warning(format!(
+            wispplace_ui::warning(format!(
                 "OAuth token is missing {} requested permission(s). First missing: {}",
                 missing.len(),
-                wisp_core::scopes::describe_capability(first)
+                wispplace_core::scopes::describe_capability(first)
             ));
         }
         return Ok((session, strategy, port));

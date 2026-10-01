@@ -1,4 +1,4 @@
-// Run from the repository root: bun cli-rs/crates/wisp-core/tests/fixtures/generate-blobs.ts
+// Run from the repository root: bun cli-rs/crates/wispplace-core/tests/fixtures/generate-blobs.ts
 import { writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'

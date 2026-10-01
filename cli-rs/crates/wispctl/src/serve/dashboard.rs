@@ -1,5 +1,5 @@
 use std::sync::Mutex;
-use wisp_ui::{Line, Panel, PanelStatus, s};
+use wispplace_ui::{Line, Panel, PanelStatus, s};
 
 #[derive(Clone)]
 pub enum FirehoseStatus {
@@ -30,7 +30,7 @@ pub struct Dashboard {
 impl Dashboard {
     pub fn new(url: String, site: String, files: usize) -> Self {
         let dashboard = Self {
-            panel: wisp_ui::panel(PanelStatus::Busy, vec![]),
+            panel: wispplace_ui::panel(PanelStatus::Busy, vec![]),
             url,
             site,
             status: Mutex::new(Status {

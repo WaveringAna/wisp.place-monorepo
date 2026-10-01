@@ -26,9 +26,9 @@ fn main() {
     };
     let roots = tls::fallback_roots();
     tls::install_crypto_provider();
-    let guard = wisp_ui::init(wisp_ui::Options { quiet: cli.quiet });
+    let guard = wispplace_ui::init(wispplace_ui::Options { quiet: cli.quiet });
     if cli.version {
-        wisp_ui::out_text(env!("CARGO_PKG_VERSION"));
+        wispplace_ui::out_text(env!("CARGO_PKG_VERSION"));
         drop(guard);
         std::process::exit(0);
     }
@@ -36,8 +36,8 @@ fn main() {
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(runtime) => runtime,
         Err(err) => {
-            wisp_ui::error(format!("could not start the async runtime: {err}"));
-            wisp_ui::exit(1);
+            wispplace_ui::error(format!("could not start the async runtime: {err}"));
+            wispplace_ui::exit(1);
         }
     };
 
@@ -55,13 +55,13 @@ fn main() {
             result = commands::run(cli) => match result {
                 Ok(()) => 0,
                 Err(err) => {
-                    wisp_ui::error(format!("{err:#}"));
+                    wispplace_ui::error(format!("{err:#}"));
                     1
                 }
             },
             () = interrupted => {
-                wisp_ui::blank();
-                wisp_ui::cancelled("Interrupted");
+                wispplace_ui::blank();
+                wispplace_ui::cancelled("Interrupted");
                 130
             }
         }

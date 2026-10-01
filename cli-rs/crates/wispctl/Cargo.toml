@@ -10,9 +10,9 @@ name = "wispctl"
 path = "src/main.rs"
 
 [dependencies]
-wisp-core = { path = "../wisp-core" }
-wisp-lexicons = { path = "../wisp-lexicons" }
-wisp-ui = { path = "../wisp-ui" }
+wispplace-core = { path = "../wispplace-core" }
+wispplace-lexicons = { path = "../wispplace-lexicons" }
+wispplace-ui = { path = "../wispplace-ui" }
 anyhow.workspace = true
 clap.workspace = true
 jacquard.workspace = true

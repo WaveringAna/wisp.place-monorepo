@@ -459,10 +459,10 @@ pub async fn authenticate(
                                 )
                                 .await;
                             }
-                            Ok((_, actual, _, _)) => wisp_ui::warning(format!(
+                            Ok((_, actual, _, _)) => wispplace_ui::warning(format!(
                                 "Stored app password authenticated as {actual}, expected {did}; ignoring it."
                             )),
-                            Err(_) => wisp_ui::warning(format!(
+                            Err(_) => wispplace_ui::warning(format!(
                                 "Stored app password for {label} was rejected."
                             )),
                         }
@@ -475,7 +475,7 @@ pub async fn authenticate(
         .or(target_did.as_deref())
         .context("No stored account. Run `wispctl login <handle>` first.")?;
     if !opts.force_reauth
-        && !wisp_ui::can_prompt()
+        && !wispplace_ui::can_prompt()
         && let Some(did) = &target_did
         && has_legacy_oauth_session(&db, did)
     {

@@ -9,7 +9,7 @@ use crate::{
 };
 use anyhow::{Result, bail};
 use serde::Serialize;
-use wisp_ui::{Line, s};
+use wispplace_ui::{Line, s};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -57,14 +57,14 @@ async fn list(args: AccountsListArgs) -> Result<()> {
         });
     }
     if args.json {
-        wisp_ui::out_text(&serde_json::to_string_pretty(&listings)?);
+        wispplace_ui::out_text(&serde_json::to_string_pretty(&listings)?);
         return Ok(());
     }
     if listings.is_empty() {
-        wisp_ui::out("No stored accounts. Run `wispctl login <handle>` to add one.");
+        wispplace_ui::out("No stored accounts. Run `wispctl login <handle>` to add one.");
         return Ok(());
     }
-    wisp_ui::out("");
+    wispplace_ui::out("");
     for listing in listings {
         let mut tags = vec![s::muted(
             if listing.account.method == AuthMethod::AppPassword {
@@ -97,19 +97,19 @@ async fn list(args: AccountsListArgs) -> Result<()> {
         ];
         line.extend(tags);
         line.push(s::muted(")"));
-        wisp_ui::out(Line::from(line));
+        wispplace_ui::out(Line::from(line));
         if listing.account.handle.is_some() {
-            wisp_ui::out(Line::from(s::muted(format!("    {}", listing.account.did))));
+            wispplace_ui::out(Line::from(s::muted(format!("    {}", listing.account.did))));
         }
         if !listing.dirs.is_empty() {
             let suffix = if listing.dirs.len() == 1 { "y" } else { "ies" };
-            wisp_ui::out(Line::from(s::muted(format!(
+            wispplace_ui::out(Line::from(s::muted(format!(
                 "    {} linked director{suffix}",
                 listing.dirs.len()
             ))));
         }
     }
-    wisp_ui::out("");
+    wispplace_ui::out("");
     Ok(())
 }
 
@@ -123,7 +123,7 @@ pub async fn run(args: AccountsArgs) -> Result<()> {
                 bail!("No stored account for {handle}. Run `wispctl login {handle}` first.");
             };
             store.set_default(&account.did)?;
-            wisp_ui::out(format!(
+            wispplace_ui::out(format!(
                 "Default account set to {}",
                 account.handle.as_deref().unwrap_or(&account.did)
             ));

@@ -40,12 +40,12 @@ pub(super) async fn forget(store: &AccountStore, identifier: &str) -> Result<()>
     if let Some(account) = find_account(store, identifier).await? {
         remove_credentials(store, &account.did)?;
         store.delete_account(&account.did)?;
-        wisp_ui::out(format!(
+        wispplace_ui::out(format!(
             "Forgot {} and removed its stored credentials",
             account.handle.as_deref().unwrap_or(&account.did)
         ));
     } else {
-        wisp_ui::out(format!("No stored account for {identifier}"));
+        wispplace_ui::out(format!("No stored account for {identifier}"));
     }
     Ok(())
 }
@@ -66,12 +66,12 @@ pub async fn run(args: LogoutArgs) -> Result<()> {
             remove_credentials(&store, &did)?;
         }
         store.clear()?;
-        wisp_ui::out("Cleared all stored accounts and credentials");
+        wispplace_ui::out("Cleared all stored accounts and credentials");
     } else if let Some(identifier) = args.handle {
         forget(&store, &identifier).await?;
     } else {
         store.delete_dir(&std::env::current_dir()?.to_string_lossy())?;
-        wisp_ui::out("Unlinked the current directory (stored credentials kept)");
+        wispplace_ui::out("Unlinked the current directory (stored credentials kept)");
     }
     Ok(())
 }

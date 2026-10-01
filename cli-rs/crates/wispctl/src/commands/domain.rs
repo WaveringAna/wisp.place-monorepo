@@ -5,14 +5,14 @@ use crate::{
 };
 use anyhow::Result;
 use serde_json::{Value, json};
-use wisp_lexicons::place_wisp::v2::domain;
-use wisp_ui::{Choice, Line, s};
+use wispplace_lexicons::place_wisp::v2::domain;
+use wispplace_ui::{Choice, Line, s};
 
 pub async fn run(args: DomainArgs) -> Result<()> {
     let command = match args.command {
         Some(command) => command,
         None => {
-            wisp_ui::intro("domain");
+            wispplace_ui::intro("domain");
             let action = prompts::select(
                 "Choose domain action",
                 vec![
@@ -146,7 +146,7 @@ pub async fn run(args: DomainArgs) -> Result<()> {
         "verify" => format!("Verifying {value}..."),
         _ => format!("Deleting {value}..."),
     };
-    let spinner = wisp_ui::spinner(label);
+    let spinner = wispplace_ui::spinner(label);
     let mut input = json!({"domain": value});
     if let Some(site) = site {
         input["siteRkey"] = json!(site);
@@ -203,7 +203,7 @@ fn render(action: &str, data: &Value) {
         ),
         _ => format!(" -> {}", text(data, "status")),
     };
-    wisp_ui::out(Line::from(vec![
+    wispplace_ui::out(Line::from(vec![
         s::bold(domain),
         if action == "verify" {
             if data["verified"] == true {
@@ -217,14 +217,14 @@ fn render(action: &str, data: &Value) {
     ]));
     if action == "claim" {
         if let (Some(name), Some(value)) = (data["txtName"].as_str(), data["txtValue"].as_str()) {
-            wisp_ui::out(format!("TXT: {name} = {value}"));
+            wispplace_ui::out(format!("TXT: {name} = {value}"));
         }
         field(data, "cnameTarget", "CNAME");
     }
     if action == "status" {
         field(data, "kind", "Kind");
         if let Some(verified) = data["verified"].as_bool() {
-            wisp_ui::out(format!("Verified: {verified}"));
+            wispplace_ui::out(format!("Verified: {verified}"));
         }
     }
     if matches!(action, "claim" | "claim-subdomain" | "status") {
@@ -237,12 +237,12 @@ fn render(action: &str, data: &Value) {
     if action == "verify"
         && let Some(warning) = data["warning"].as_str().filter(|s| !s.is_empty())
     {
-        wisp_ui::out(s::warn(format!("warning: {warning}")));
+        wispplace_ui::out(s::warn(format!("warning: {warning}")));
     }
 }
 
 fn field(data: &Value, key: &str, label: &str) {
     if let Some(value) = data[key].as_str().filter(|s| !s.is_empty()) {
-        wisp_ui::out(format!("{label}: {value}"));
+        wispplace_ui::out(format!("{label}: {value}"));
     }
 }

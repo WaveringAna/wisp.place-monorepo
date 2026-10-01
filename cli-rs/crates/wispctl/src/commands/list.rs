@@ -5,15 +5,15 @@ use crate::{
 };
 use anyhow::Result;
 use serde_json::Value;
-use wisp_lexicons::place_wisp::v2::{domain, site};
-use wisp_ui::{Choice, Line, s};
+use wispplace_lexicons::place_wisp::v2::{domain, site};
+use wispplace_ui::{Choice, Line, s};
 
 pub async fn run(args: ListArgs) -> Result<()> {
     match args.command {
         Some(ListCommand::Domains(args)) => domains(args.handle.as_deref(), &args.xrpc).await,
         Some(ListCommand::Sites(args)) => sites(args.handle.as_deref(), &args.xrpc).await,
         None => {
-            wisp_ui::intro("list");
+            wispplace_ui::intro("list");
             let domains_selected = prompts::select(
                 "What do you want to list?",
                 vec![
@@ -52,7 +52,7 @@ pub fn domain_line(domain: &Value, prefix: &str, mapped: bool) -> Line<'static> 
 
 pub async fn domains(handle: Option<&str>, opts: &XrpcOptions) -> Result<()> {
     let (agent, service, _) = xrpc::authenticate_for_xrpc(handle, opts).await?;
-    let spinner = wisp_ui::spinner("Fetching domains...");
+    let spinner = wispplace_ui::spinner("Fetching domains...");
     let data = xrpc::send(&agent, &service, domain::get_list::GetList, None).await?;
     spinner.succeed("Fetched domains".to_owned());
     if opts.json {
@@ -60,19 +60,19 @@ pub async fn domains(handle: Option<&str>, opts: &XrpcOptions) -> Result<()> {
     }
     let domains = items(&data, "domains");
     if domains.is_empty() {
-        wisp_ui::out(s::muted("No domains found."));
+        wispplace_ui::out(s::muted("No domains found."));
         return Ok(());
     }
-    wisp_ui::out(s::bold(format!("Domains ({})", domains.len())));
+    wispplace_ui::out(s::bold(format!("Domains ({})", domains.len())));
     for domain in domains {
-        wisp_ui::out(domain_line(domain, "- ", true));
+        wispplace_ui::out(domain_line(domain, "- ", true));
     }
     Ok(())
 }
 
 pub async fn sites(handle: Option<&str>, opts: &XrpcOptions) -> Result<()> {
     let (agent, service, _) = xrpc::authenticate_for_xrpc(handle, opts).await?;
-    let spinner = wisp_ui::spinner("Fetching sites...");
+    let spinner = wispplace_ui::spinner("Fetching sites...");
     let data = xrpc::send(&agent, &service, site::get_list::GetList, None).await?;
     spinner.succeed("Fetched sites".to_owned());
     if opts.json {
@@ -80,18 +80,18 @@ pub async fn sites(handle: Option<&str>, opts: &XrpcOptions) -> Result<()> {
     }
     let sites = items(&data, "sites");
     if sites.is_empty() {
-        wisp_ui::out(s::muted("No sites found."));
+        wispplace_ui::out(s::muted("No sites found."));
         return Ok(());
     }
-    wisp_ui::out(s::bold(format!("Sites ({})", sites.len())));
+    wispplace_ui::out(s::bold(format!("Sites ({})", sites.len())));
     for site in sites {
-        wisp_ui::out(Line::from(vec![s::plain("- "), s::bold(site_title(site))]));
+        wispplace_ui::out(Line::from(vec![s::plain("- "), s::bold(site_title(site))]));
         let domains = items(site, "domains");
         if domains.is_empty() {
-            wisp_ui::out(s::muted("  (no mapped domains)"));
+            wispplace_ui::out(s::muted("  (no mapped domains)"));
         }
         for domain in domains {
-            wisp_ui::out(domain_line(domain, "  ", false));
+            wispplace_ui::out(domain_line(domain, "  ", false));
         }
     }
     Ok(())

@@ -6,8 +6,8 @@ use crate::{
 };
 use anyhow::{Result, bail};
 use serde_json::json;
-use wisp_lexicons::place_wisp::v2::site;
-use wisp_ui::{Choice, Line, s};
+use wispplace_lexicons::place_wisp::v2::site;
+use wispplace_ui::{Choice, Line, s};
 
 pub async fn run(args: SiteArgs) -> Result<()> {
     match args.command {
@@ -18,7 +18,7 @@ pub async fn run(args: SiteArgs) -> Result<()> {
             xrpc,
         }) => delete(handle.as_deref(), site, yes, &xrpc).await,
         None => {
-            wisp_ui::intro("site");
+            wispplace_ui::intro("site");
             let listing = prompts::select(
                 "Choose site action",
                 vec![
@@ -47,7 +47,7 @@ async fn delete(
     let rkey = match rkey {
         Some(rkey) => rkey,
         None => {
-            let spinner = wisp_ui::spinner("Fetching sites...");
+            let spinner = wispplace_ui::spinner("Fetching sites...");
             let data = xrpc::send(&agent, &service, site::get_list::GetList, None).await?;
             spinner.succeed("Fetched sites".to_owned());
             let sites = items(&data, "sites");
@@ -82,25 +82,25 @@ async fn delete(
             "Pass --yes to confirm deletion",
         )?
     {
-        wisp_ui::cancelled("Site deletion cancelled");
+        wispplace_ui::cancelled("Site deletion cancelled");
         return Ok(());
     }
-    let spinner = wisp_ui::spinner(format!("Deleting site {rkey}..."));
+    let spinner = wispplace_ui::spinner(format!("Deleting site {rkey}..."));
     let data =
         xrpc::call::<site::delete::Delete>(&agent, &service, json!({"siteRkey": rkey})).await?;
     spinner.succeed(format!("Deleted site {}", text(&data, "siteRkey")));
     if opts.json {
         return xrpc::json(&data);
     }
-    wisp_ui::out(Line::from(vec![
+    wispplace_ui::out(Line::from(vec![
         s::bold(text(&data, "siteRkey").to_owned()),
         s::plain(" deleted"),
     ]));
     let domains = items(&data, "unmappedDomains");
     if !domains.is_empty() {
-        wisp_ui::out("Unmapped domains:");
+        wispplace_ui::out("Unmapped domains:");
         for domain in domains {
-            wisp_ui::out(list::domain_line(domain, "- ", false));
+            wispplace_ui::out(list::domain_line(domain, "- ", false));
         }
     }
     Ok(())

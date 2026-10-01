@@ -9,7 +9,7 @@ use anyhow::{Result, bail};
 use jacquard::xrpc::{CallOptions, XrpcClient, XrpcRequest, XrpcResp};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
-use wisp_core::constants::{DEFAULT_WISP_SERVICE_DID, WISP_PROXY_SERVICE_ID};
+use wispplace_core::constants::{DEFAULT_WISP_SERVICE_DID, WISP_PROXY_SERVICE_ID};
 
 pub async fn resolve_identity(identifier: &str) -> Result<(String, String)> {
     auth::resolver::resolve_identity(identifier).await
@@ -52,10 +52,10 @@ fn spinner_text(message: &str) -> String {
     }
 }
 
-pub fn bind_auth_status(spinner: &mut wisp_ui::Spinner, message: &str) {
+pub fn bind_auth_status(spinner: &mut wispplace_ui::Spinner, message: &str) {
     if message.starts_with("If browser does not open, visit: ") {
         spinner.set_text("Waiting for OAuth callback...");
-        wisp_ui::note(message.to_owned());
+        wispplace_ui::note(message.to_owned());
     } else {
         spinner.set_text(spinner_text(message));
     }
@@ -82,7 +82,7 @@ pub async fn authenticate_for_xrpc(
     };
     let identifier = handle.or(prompted.as_deref());
     let service = parse_service_did(options.service.as_deref())?;
-    let mut spinner = wisp_ui::spinner("Authenticating...");
+    let mut spinner = wispplace_ui::spinner("Authenticating...");
     let authenticated = auth::authenticate(
         identifier,
         &AuthOptions {
@@ -137,7 +137,7 @@ where
 }
 
 pub fn json(data: &Value) -> Result<()> {
-    wisp_ui::out_text(&serde_json::to_string_pretty(data)?);
+    wispplace_ui::out_text(&serde_json::to_string_pretty(data)?);
     Ok(())
 }
 

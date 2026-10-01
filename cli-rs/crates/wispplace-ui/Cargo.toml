@@ -1,5 +1,5 @@
 [package]
-name = "wisp-ui"
+name = "wispplace-ui"
 description = "Terminal rendering for wispctl: prompts, spinners, progress and live panels"
 version.workspace = true
 edition.workspace = true

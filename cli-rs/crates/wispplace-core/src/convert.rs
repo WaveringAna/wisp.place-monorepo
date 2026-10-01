@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use jacquard_common::{deps::smol_str::SmolStr, types::value::Data};
-use wisp_lexicons::place_wisp::{fs, subfs};
+use wispplace_lexicons::place_wisp::{fs, subfs};
 
 /// Directory extras without a root `$type`, which names the source lexicon
 /// and would be wrong in the other one (records re-add their own).

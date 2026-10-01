@@ -7,10 +7,10 @@ use anyhow::{Result, bail};
 use jacquard::types::string::Datetime;
 use serde_json::{Value, json};
 use std::path::Path;
-use wisp_lexicons::place_wisp::v2::privateSite as private;
-use wisp_ui::{Line, Span, s};
+use wispplace_lexicons::place_wisp::v2::privateSite as private;
+use wispplace_ui::{Line, Span, s};
 
-use wisp_core::constants::{
+use wispplace_core::constants::{
     MAX_PRIVATE_SITE_FILE_COUNT as MAX_FILES, MAX_PRIVATE_SITE_SIZE as MAX_SIZE,
 };
 
@@ -96,7 +96,7 @@ pub async fn run(args: PrivateArgs) -> Result<()> {
         PrivateCommand::List(args) => {
             let (agent, service, _) =
                 xrpc::authenticate_for_xrpc(args.handle.as_deref(), &args.xrpc).await?;
-            let spinner = wisp_ui::spinner("Fetching private sites...");
+            let spinner = wispplace_ui::spinner("Fetching private sites...");
             let data = xrpc::send(&agent, &service, private::list::List, None).await?;
             spinner.succeed("Fetched private sites".to_owned());
             render_sites(&data);
@@ -108,7 +108,7 @@ pub async fn run(args: PrivateArgs) -> Result<()> {
             xrpc,
         } => {
             let (agent, service, _) = xrpc::authenticate_for_xrpc(handle.as_deref(), &xrpc).await?;
-            let spinner = wisp_ui::spinner("Deleting private site...");
+            let spinner = wispplace_ui::spinner("Deleting private site...");
             xrpc::call::<private::delete::Delete>(&agent, &service, json!({"siteId": site_id}))
                 .await?;
             spinner.succeed(format!("Deleted private site {site_id}"));
@@ -124,7 +124,7 @@ pub async fn run(args: PrivateArgs) -> Result<()> {
         } => {
             let (agent, service, _) = xrpc::authenticate_for_xrpc(handle.as_deref(), &xrpc).await?;
             let expiry_minutes = expiry(raw_expiry.as_deref())?;
-            let spinner = wisp_ui::spinner("Creating share link...");
+            let spinner = wispplace_ui::spinner("Creating share link...");
             let data = xrpc::call::<private::create_share::CreateShare>(&agent, &service, json!({
                 "siteId": site_id, "label": label, "expiryMinutes": expiry_minutes, "audienceDid": to,
             })).await?;
@@ -144,7 +144,7 @@ pub async fn run(args: PrivateArgs) -> Result<()> {
             xrpc,
         } => {
             let (agent, service, _) = xrpc::authenticate_for_xrpc(handle.as_deref(), &xrpc).await?;
-            let spinner = wisp_ui::spinner("Revoking share link...");
+            let spinner = wispplace_ui::spinner("Revoking share link...");
             xrpc::call::<private::revoke_share::RevokeShare>(
                 &agent,
                 &service,
@@ -190,12 +190,12 @@ async fn deploy(
     let fallback = site_dir.file_name().and_then(|s| s.to_str()).unwrap_or("");
     let name = name.filter(|s| !s.is_empty()).unwrap_or(fallback).trim();
     let expiry_minutes = expiry(raw_expiry)?;
-    wisp_ui::out(s::accent(format!(
+    wispplace_ui::out(s::accent(format!(
         "\nCreating private site {name} from {}\n",
         site_dir.display()
     )));
-    let spinner = wisp_ui::spinner("Scanning directory...");
-    let files = wisp_core::ignore::collect_files(&site_dir)?;
+    let spinner = wispplace_ui::spinner("Scanning directory...");
+    let files = wispplace_core::ignore::collect_files(&site_dir)?;
     if files.is_empty() {
         spinner.fail("No files to upload".to_owned());
         bail!("No files found to upload");
@@ -221,13 +221,13 @@ async fn deploy(
         files.len(),
         format_bytes(total_bytes)
     ));
-    let spinner = wisp_ui::spinner("Uploading privately...");
+    let spinner = wispplace_ui::spinner("Uploading privately...");
     let parts = files
         .iter()
         .map(|file| {
             Ok((
                 file.relative_path.clone(),
-                wisp_core::blob::mime_for(&file.relative_path),
+                wispplace_core::blob::mime_for(&file.relative_path),
                 std::fs::read(&file.path)?,
             ))
         })
@@ -241,24 +241,24 @@ async fn deploy(
     )
     .await?;
     spinner.succeed("Uploaded".to_owned());
-    wisp_ui::out("");
-    wisp_ui::out(Line::from(vec![
+    wispplace_ui::out("");
+    wispplace_ui::out(Line::from(vec![
         s::bold("Private site: "),
         s::link(text(&data, "url").to_owned()),
     ]));
-    wisp_ui::out(format!("site id: {}", text(&data, "siteId")));
-    wisp_ui::out(format!(
+    wispplace_ui::out(format!("site id: {}", text(&data, "siteId")));
+    wispplace_ui::out(format!(
         "files: {}  size: {}",
         data["fileCount"],
         size(&data)
     ));
-    wisp_ui::out(Line::from(vec![
+    wispplace_ui::out(Line::from(vec![
         s::muted("expiry: "),
         expiry_label(data["expiresAt"].as_str()),
     ]));
-    wisp_ui::out("");
-    wisp_ui::out(s::muted("Only you can open that URL while signed in."));
-    wisp_ui::out(s::muted(format!(
+    wispplace_ui::out("");
+    wispplace_ui::out(s::muted("Only you can open that URL while signed in."));
+    wispplace_ui::out(s::muted(format!(
         "Create a shareable link with: wisp private share {}",
         text(&data, "siteId")
     )));
@@ -324,10 +324,10 @@ fn multipart(
 fn render_sites(data: &Value) {
     let sites = items(data, "sites");
     if sites.is_empty() {
-        wisp_ui::out(s::muted("No private sites found."));
+        wispplace_ui::out(s::muted("No private sites found."));
         return;
     }
-    wisp_ui::out(s::bold(format!("\nPrivate sites ({})", sites.len())));
+    wispplace_ui::out(s::bold(format!("\nPrivate sites ({})", sites.len())));
     for site in sites {
         let name = text(site, "name");
         let header = if site["expired"] == true {
@@ -335,9 +335,9 @@ fn render_sites(data: &Value) {
         } else {
             s::bold(name.to_owned())
         };
-        wisp_ui::out(Line::from(vec![s::plain("- "), header]));
-        wisp_ui::out(format!("  id: {}", text(site, "siteId")));
-        wisp_ui::out(Line::from(vec![
+        wispplace_ui::out(Line::from(vec![s::plain("- "), header]));
+        wispplace_ui::out(format!("  id: {}", text(site, "siteId")));
+        wispplace_ui::out(Line::from(vec![
             s::plain(format!(
                 "  files: {}  size: {}  ",
                 site["fileCount"],
@@ -345,34 +345,34 @@ fn render_sites(data: &Value) {
             )),
             expiry_label(site["expiresAt"].as_str()),
         ]));
-        wisp_ui::out(format!("  active share links: {}", site["shareCount"]));
+        wispplace_ui::out(format!("  active share links: {}", site["shareCount"]));
     }
 }
 
 fn render_share(data: &Value, site_id: &str) {
-    wisp_ui::out("");
-    wisp_ui::out(s::bold("Shareable link:"));
-    wisp_ui::out(s::link(text(data, "url").to_owned()));
+    wispplace_ui::out("");
+    wispplace_ui::out(s::bold("Shareable link:"));
+    wispplace_ui::out(s::link(text(data, "url").to_owned()));
     if let Some(direct) = data["directUrl"]
         .as_str()
         .filter(|direct| *direct != text(data, "url"))
     {
-        wisp_ui::out(s::muted(format!("direct: {direct}")));
+        wispplace_ui::out(s::muted(format!("direct: {direct}")));
     }
-    wisp_ui::out("");
-    wisp_ui::out(Line::from(vec![
+    wispplace_ui::out("");
+    wispplace_ui::out(Line::from(vec![
         s::muted(format!("share id: {}  ", text(data, "shareId"))),
         expiry_label(data["expiresAt"].as_str()),
     ]));
     if let Some(audience) = data["audienceDid"].as_str() {
-        wisp_ui::out(s::muted(format!(
+        wispplace_ui::out(s::muted(format!(
             "only {audience} can open this; they will be asked to sign in"
         )));
     }
-    wisp_ui::out(s::warn(
+    wispplace_ui::out(s::warn(
         "This link is shown once and cannot be retrieved later. Store it now.",
     ));
-    wisp_ui::out(s::muted(format!(
+    wispplace_ui::out(s::muted(format!(
         "Revoke it with: wisp private revoke {site_id} {}",
         text(data, "shareId")
     )));
@@ -380,7 +380,7 @@ fn render_share(data: &Value, site_id: &str) {
 
 async fn shares(handle: Option<&str>, site_id: &str, opts: &XrpcOptions) -> Result<()> {
     let (agent, service, _) = xrpc::authenticate_for_xrpc(handle, opts).await?;
-    let spinner = wisp_ui::spinner("Fetching share links...");
+    let spinner = wispplace_ui::spinner("Fetching share links...");
     let data = xrpc::call::<private::list_shares::ListShares>(
         &agent,
         &service,
@@ -390,10 +390,10 @@ async fn shares(handle: Option<&str>, site_id: &str, opts: &XrpcOptions) -> Resu
     spinner.succeed("Fetched share links".to_owned());
     let shares = items(&data, "shares");
     if shares.is_empty() {
-        wisp_ui::out(s::muted("No share links for this site."));
+        wispplace_ui::out(s::muted("No share links for this site."));
         return Ok(());
     }
-    wisp_ui::out(s::bold(format!("\nShare links ({})", shares.len())));
+    wispplace_ui::out(s::bold(format!("\nShare links ({})", shares.len())));
     for share in shares {
         let status = text(share, "status").to_owned();
         let color = match status.as_str() {
@@ -406,18 +406,18 @@ async fn shares(handle: Option<&str>, site_id: &str, opts: &XrpcOptions) -> Resu
             .filter(|s| !s.is_empty())
             .map(|s| format!(" ({s})"))
             .unwrap_or_default();
-        wisp_ui::out(Line::from(vec![
+        wispplace_ui::out(Line::from(vec![
             s::plain(format!("- {}", text(share, "shareId"))),
             s::muted(label),
             s::plain(" "),
             color,
         ]));
-        wisp_ui::out(Line::from(vec![
+        wispplace_ui::out(Line::from(vec![
             s::muted(format!("  token: {}...  ", text(share, "tokenPrefix"))),
             expiry_label(share["expiresAt"].as_str()),
         ]));
         if let Some(last) = share["lastUsedAt"].as_str() {
-            wisp_ui::out(format!("  last used: {last}"));
+            wispplace_ui::out(format!("  last used: {last}"));
         }
     }
     Ok(())

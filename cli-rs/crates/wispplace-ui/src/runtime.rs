@@ -72,7 +72,7 @@ impl Runtime {
         let (tx, thread) = if interactive {
             let (tx, rx) = mpsc::channel();
             let thread = std::thread::Builder::new()
-                .name("wisp-ui".into())
+                .name("wispplace-ui".into())
                 .spawn(move || Renderer::new(stdout_tty).run(rx))
                 .ok();
             install_panic_hook();

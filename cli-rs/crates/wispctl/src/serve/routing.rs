@@ -1,5 +1,5 @@
 //! Request decisions over a read-only filesystem view; no network or terminal effects.
-use wisp_core::{
+use wispplace_core::{
     pages::{DirectoryEntry, generate_404_page, generate_directory_listing},
     redirects::{MatchRedirectContext, RedirectRule, match_redirect_rule, parse_query_string},
 };
@@ -59,7 +59,7 @@ impl Decision {
 }
 
 fn configured_path(path: &str) -> Option<String> {
-    wisp_core::path::normalize_configured_site_path(path).map(str::to_owned)
+    wispplace_core::path::normalize_configured_site_path(path).map(str::to_owned)
 }
 
 fn join(parent: &str, child: &str) -> String {
@@ -82,7 +82,7 @@ pub fn decide(
         response.headers.push(("Allow", "GET, HEAD".into()));
         return response;
     }
-    let Some(mut path) = wisp_core::path::decode_serve_request_path(encoded_path) else {
+    let Some(mut path) = wispplace_core::path::decode_serve_request_path(encoded_path) else {
         return Decision::text("Invalid path", 400, "text/plain");
     };
     let context = MatchRedirectContext {
@@ -92,7 +92,7 @@ pub fn decide(
     if let Some(matched) = match_redirect_rule(&path, &state.redirects, Some(&context)) {
         match matched.status {
             200 => {
-                let rewritten = wisp_core::path::normalize_rewrite_path(&matched.target_path);
+                let rewritten = wispplace_core::path::normalize_rewrite_path(&matched.target_path);
                 let Some(rewritten) = rewritten else {
                     return Decision::text("Invalid rewrite path", 400, "text/plain");
                 };

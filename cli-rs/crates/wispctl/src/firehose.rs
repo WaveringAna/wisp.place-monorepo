@@ -133,7 +133,7 @@ pub async fn watch(
         }
         if let Err(error) = subscribe(&pds, &did, &site, &mut cursor, &sender, &dashboard).await {
             dashboard.firehose(FirehoseStatus::Error(format!("{error:#}")));
-            wisp_ui::warning(format!("Firehose error: {error:#}"));
+            wispplace_ui::warning(format!("Firehose error: {error:#}"));
         }
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
     }

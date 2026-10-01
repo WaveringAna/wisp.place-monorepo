@@ -2,7 +2,7 @@
 use jacquard_common::deps::smol_str::SmolStr;
 use jacquard_common::types::{blob::BlobRef, string::AtprotoStr, value::Data};
 use std::collections::BTreeMap;
-use wisp_lexicons::place_wisp::fs::{Directory, Entry, EntryNode, File};
+use wispplace_lexicons::place_wisp::fs::{Directory, Entry, EntryNode, File};
 
 #[derive(Debug, Clone)]
 pub struct UploadResult {
@@ -55,7 +55,9 @@ fn file_entry(name: &str, upload: &UploadResult) -> Entry {
             r#type: "file".into(),
             blob: upload.blob.clone(),
             encoding: upload.encoding.as_ref().map(|encoding| {
-                wisp_lexicons::place_wisp::fs::FileEncoding::from_value(encoding.clone().into())
+                wispplace_lexicons::place_wisp::fs::FileEncoding::from_value(
+                    encoding.clone().into(),
+                )
             }),
             mime_type: Some(upload.mime_type.clone().into()),
             base64: Some(upload.base64),

@@ -8,7 +8,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
     time::Duration,
 };
-use wisp_core::{
+use wispplace_core::{
     blob::{
         compute_cid, gzip, gzip_cid_variants, gzip_variants, is_text_mime, mime_for,
         should_compress,
@@ -25,7 +25,8 @@ pub async fn process(
     base64: bool,
     force_gzip: bool,
 ) -> Result<Vec<(String, UploadResult)>> {
-    let progress = wisp_ui::progress("Uploading", files.len() as u64, wisp_ui::Direction::Up);
+    let progress =
+        wispplace_ui::progress("Uploading", files.len() as u64, wispplace_ui::Direction::Up);
     let limit = AtomicUsize::new(concurrency.max(1));
     let mut pending = files.iter();
     let mut workers = FuturesUnordered::new();
@@ -36,8 +37,10 @@ pub async fn process(
             let Some(file) = pending.next() else {
                 break;
             };
-            let item =
-                progress.start_item(file.relative_path.clone(), wisp_ui::format_bytes(file.size));
+            let item = progress.start_item(
+                file.relative_path.clone(),
+                wispplace_ui::format_bytes(file.size),
+            );
             let limit = &limit;
             workers.push(async move {
                 (
@@ -143,7 +146,7 @@ async fn upload_retry(
             Err(error) => {
                 let rate_limited = http_status(&error) == Some(429);
                 if rate_limited && limit.fetch_min(2, Ordering::Relaxed) > 2 {
-                    wisp_ui::warning("Rate limited — reducing concurrency to 2");
+                    wispplace_ui::warning("Rate limited — reducing concurrency to 2");
                 }
                 tokio::time::sleep(Duration::from_millis(
                     (1 << attempt) * if rate_limited { 2000 } else { 500 },

@@ -1,4 +1,4 @@
-# wisp-lexicons
+# wispplace-lexicons
 
 Generated from `../../../lexicons/*.json` by the jacquard fork's
 `jacquard-codegen`. Do not edit `src/` by hand; regenerate with:

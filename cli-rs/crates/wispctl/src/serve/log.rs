@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use wisp_ui::{Line, s};
+use wispplace_ui::{Line, s};
 
 /// Local wall-clock time, `HH:MM:SS`.
 pub fn timestamp() -> String {
@@ -16,7 +16,7 @@ pub fn request(status: u16, method: &str, path: &str, elapsed: Duration) {
         400..=499 => s::warn(code),
         _ => s::danger(code),
     };
-    wisp_ui::note(Line::from(vec![
+    wispplace_ui::note(Line::from(vec![
         s::muted(format!("  {}  ", timestamp())),
         code,
         s::muted(format!("  {method:<4}  ")),
