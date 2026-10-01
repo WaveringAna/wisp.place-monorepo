@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { resolveRevalidationHealth } from './health-policy'
+import { resolveIngestHealth, resolveRevalidationHealth } from './health-policy'
 
 describe('revalidation health policy', () => {
 	test('keeps a supervised reconnect live but not ready', () => {
@@ -27,5 +27,39 @@ describe('revalidation health policy', () => {
 		const stopped = { running: false, hasLoop: false, hasRedisClient: false }
 		expect(resolveRevalidationHealth(false, true, stopped).ready).toBe(true)
 		expect(resolveRevalidationHealth(true, false, stopped).ready).toBe(true)
+	})
+})
+
+describe('ingest health policy', () => {
+	const base = {
+		draining: false,
+		standbyHealthy: false,
+		workerExpected: true,
+		firehose: { healthy: true, ready: true },
+		revalidation: { live: true, ready: true },
+	}
+
+	test('caught-up worker is live and ready', () => {
+		expect(resolveIngestHealth(base)).toEqual({ healthy: true, ready: true })
+	})
+
+	test('replay lag or unknown source age stays live (200) but not ready', () => {
+		expect(resolveIngestHealth({ ...base, firehose: { healthy: true, ready: false } })).toEqual({
+			healthy: true,
+			ready: false,
+		})
+	})
+
+	test('draining, disconnected, and standby behave as before', () => {
+		expect(resolveIngestHealth({ ...base, draining: true })).toEqual({ healthy: false, ready: false })
+		expect(resolveIngestHealth({ ...base, firehose: { healthy: false, ready: false } }).healthy).toBe(false)
+		expect(
+			resolveIngestHealth({
+				...base,
+				workerExpected: false,
+				standbyHealthy: true,
+				firehose: { healthy: false, ready: false },
+			}),
+		).toEqual({ healthy: true, ready: false })
 	})
 })

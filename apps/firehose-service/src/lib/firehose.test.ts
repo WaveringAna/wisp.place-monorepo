@@ -5,6 +5,7 @@ import {
 	destroyThenConnect,
 	durableReplayBackoffCap,
 	durableReplayFullJitter,
+	getFirehoseHealth,
 	OrderedCursorTracker,
 	RelayCursorCoordinator,
 	RelayFailureBudget,
@@ -622,5 +623,16 @@ describe('relay-scoped durable cursors', () => {
 			save: async () => true,
 		})
 		expect(activation).toBeUndefined()
+	})
+})
+
+describe('firehose health before any relay event', () => {
+	test('reports unknown replay age, not ready and not live', () => {
+		const health = getFirehoseHealth()
+		expect(health.healthy).toBe(false)
+		expect(health.ready).toBe(false)
+		expect(health.replay.status).toBe('unknown')
+		expect(health.replay.replayAgeMs).toBeUndefined()
+		expect(health.replay.lastAcceptedSequence).toBeUndefined()
 	})
 })

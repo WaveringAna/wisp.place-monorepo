@@ -5,6 +5,7 @@
 
 import { decodeAll } from '@atproto/lex-cbor'
 import { isPlainObject } from '@atproto/lex-data'
+import { MessageQueue } from './queue'
 
 // Frame types from AT Protocol
 const FrameType = {
@@ -22,13 +23,17 @@ interface ErrorFrameBody {
 	message?: string
 }
 
-function decodeFrame(bytes: Uint8Array): { header: FrameHeader; body: unknown } {
-	const decoded = [...decodeAll(bytes)]
-	if (decoded.length < 2) {
+export function decodeFrame(bytes: Uint8Array): { header: FrameHeader; body: unknown } {
+	const decoded = decodeAll(bytes)[Symbol.iterator]()
+	const header = decoded.next()
+	const body = decoded.next()
+	if (header.done || body.done) {
 		throw new Error('Invalid frame: missing header or body')
 	}
-	const [header, body] = decoded as [FrameHeader, unknown]
-	return { header, body }
+	// Consume the remainder so malformed trailing CBOR still fails exactly as
+	// it did when decodeAll's result was spread into an array.
+	while (!decoded.next().done) {}
+	return { header: header.value as unknown as FrameHeader, body: body.value }
 }
 
 export interface BunSubscriptionOptions<T> {
@@ -82,7 +87,7 @@ export class BunSubscription<T = unknown> {
 				const url = await this.getUrl()
 
 				// Create a queue for messages
-				const messageQueue: Uint8Array[] = []
+				const messageQueue = new MessageQueue<Uint8Array>()
 				let resolveMessage: (() => void) | null = null
 				let wsError: Error | null = null
 				let wsOpen = false

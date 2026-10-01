@@ -31,7 +31,7 @@ import {
 	stopAndDrainFirehose,
 	stopFirehose,
 } from './lib/firehose'
-import { resolveRevalidationHealth } from './lib/health-policy'
+import { resolveIngestHealth, resolveRevalidationHealth } from './lib/health-policy'
 import {
 	closeLeaderRedis,
 	getLeaderInfo,
@@ -180,12 +180,15 @@ app.get('/health', (c) => {
 	// Standby is healthy liveness, but it is never ready to serve as the active
 	// ingest worker until the independent supervisor owns both authority locks.
 	const standbyHealthy = config.leadershipSupervisorEnabled && leadershipState === 'standby'
-	const activeLive = workerExpected && firehoseHealth.healthy && revalidation.live
-	const activeReady = activeLive && revalidation.ready
 	// Capacity-stat scans are diagnostic. A slow first S3 listing is not an
-	// ingest liveness failure. A bounded revalidation reconnect is live but not ready.
-	const healthy = !draining && (standbyHealthy || activeLive)
-	const ready = !draining && activeReady
+	// ingest liveness failure. Revalidation reconnects and replay lag are live but not ready.
+	const { healthy, ready } = resolveIngestHealth({
+		draining,
+		standbyHealthy,
+		workerExpected,
+		firehose: firehoseHealth,
+		revalidation,
+	})
 	const payload = {
 		status: healthy ? ('healthy' as const) : ('degraded' as const),
 		lifecycle: draining ? ('draining' as const) : serviceLifecycle,

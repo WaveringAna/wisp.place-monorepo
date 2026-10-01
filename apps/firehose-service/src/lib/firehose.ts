@@ -106,6 +106,14 @@ import {
 } from './firehose-relay'
 import { type SchedulerDrainResult, SiteWorkScheduler } from './firehose-scheduler'
 import { FAILOVER_REWIND_MS, seekRelayCursorByTime } from './relay-seek'
+import {
+	evaluateReplayAge,
+	observeSourceEvent,
+	type RelayLabel,
+	resetSourceProgress,
+	type SourceProgress,
+	staleReplayReport,
+} from './replay-age'
 
 export { type CursorReservation, isValidFirehoseSeq, OrderedCursorTracker } from './firehose-cursor'
 export {
@@ -187,7 +195,7 @@ function errorKind(error: unknown): string {
 	return error instanceof Error && error.name ? error.name : 'UnknownError'
 }
 
-function relayLabel(service: string): 'primary' | 'secondary' | 'configured' {
+function relayLabel(service: string): RelayLabel {
 	if (service === config.firehoseService) return 'primary'
 	if (service === config.firehoseServiceSecondary) return 'secondary'
 	return 'configured'
@@ -315,6 +323,9 @@ const siteWorkScheduler = new SiteWorkScheduler(configuredMaxConcurrency())
 
 // Track firehose health and lifecycle.
 let lastEventTime = Date.now()
+// Source-side progress is distinct from lastEventTime (local receipt time): it
+// shows how far behind the relay's own clock the accepted events are.
+let sourceProgress: SourceProgress = resetSourceProgress('primary')
 let isConnected = false
 const relayFailureBudget = new RelayFailureBudget()
 let activeService: string = config.firehoseService
@@ -349,17 +360,31 @@ export function getActiveService(): string {
 
 export function getFirehoseHealth() {
 	const draining = lifecycle === 'draining'
+	const now = Date.now()
+	const replay = evaluateReplayAge(sourceProgress, now)
 	return {
 		connected: isConnected,
 		lastEventTime,
-		timeSinceLastEvent: Date.now() - lastEventTime,
+		timeSinceLastEvent: now - lastEventTime,
 		queueSize: siteWorkScheduler.queuedHandlers,
 		activeHandlers: siteWorkScheduler.activeHandlers,
 		pendingCursorEvents: cursorTracker.pendingCount,
 		lifecycle,
 		draining,
 		consecutiveFailures: relayFailureBudget.consecutiveFailures,
-		healthy: lifecycle === 'running' && isConnected && Date.now() - lastEventTime < 60_000,
+		// Liveness ignores replay age so a lagging worker is not restarted mid-catch-up.
+		healthy: lifecycle === 'running' && isConnected && now - lastEventTime < 60_000,
+		ready: lifecycle === 'running' && isConnected && replay.ready,
+		replay: {
+			status: replay.status,
+			replayAgeMs: replay.replayAgeMs,
+			lastSourceEventTime:
+				sourceProgress.sourceEventTimeMs === undefined
+					? undefined
+					: new Date(sourceProgress.sourceEventTimeMs).toISOString(),
+			lastAcceptedSequence: sourceProgress.sequence,
+			relay: sourceProgress.relay,
+		},
 	}
 }
 
@@ -550,6 +575,10 @@ async function handleEvent(evt: Event | CommitEvt, relayGeneration: number): Pro
 		}
 
 		lastEventTime = Date.now()
+		const previousProgress = sourceProgress
+		sourceProgress = observeSourceEvent(previousProgress, evt, lastEventTime)
+		const staleReplay = staleReplayReport(previousProgress, sourceProgress, lastEventTime)
+		if (staleReplay) logger.warn('[Firehose] Relay is replaying events older than the readiness threshold', staleReplay)
 		relayFailureBudget.recordEvent()
 		if (!isCommitWriteEvent(evt)) {
 			reservation.complete()
@@ -718,6 +747,7 @@ function requestRelayFailover(targetService: string, onFailure?: () => void): vo
 		if (!acceptingEvents) return
 
 		activeService = targetService
+		sourceProgress = resetSourceProgress(relayLabel(targetService))
 		const activationTimeMs =
 			activation.source === 'time-estimate' && sourceTimeMs !== undefined
 				? sourceTimeMs - FAILOVER_REWIND_MS
@@ -902,6 +932,7 @@ function startFirehoseNow(initialCursor: number | undefined, onTooManyFailures?:
 	relayDestroyFailed = false
 	lifecycleAbortController = new AbortController()
 	activeService = config.firehoseService
+	sourceProgress = resetSourceProgress(relayLabel(activeService))
 	activeFailureCallback = onTooManyFailures
 	relayFailureBudget.reset()
 	durableReplayController.reset()
