@@ -83,9 +83,32 @@ the Action's log — it prints every stack it selected — the first few times.
 5. **Cut a throwaway tag** and watch it. If nothing fires at all, the
    spindle may predate the `tag:` trigger field.
 
+## Registry
+
+Images live in the registry on valefar, `valefar.mesh.wisp.place:5000`
+(`registry:2`, plain HTTP, no auth), reached over the WireGuard mesh. This
+replaced atcr.io on 2026-10-01, after atcr served just-pushed tags before
+their blobs were readable and a release failed halfway through the fleet.
+
+Because it is plain HTTP, every host that pulls or pushes has to opt in:
+
+- each node's `/etc/docker/daemon.json` lists it in `insecure-registries`.
+  That setting is reloadable, so apply it with `systemctl reload docker`,
+  which restarts no containers.
+- the `wisp-multiarch` buildx builder on stolas is created with
+  `--buildkitd-config /etc/buildkit/buildkitd.toml`, which marks the registry
+  `http = true`. Recreate it with `docker buildx rm --keep-state` so the
+  build cache survives.
+
+The Komodo Builds point at it with no account or organization, so no
+`docker login` happens. Compose `image:` lines name
+`valefar.mesh.wisp.place:5000/<image>:${WISP_TAG}`.
+
 ## Traps this is shaped around
 
-**Registry tokens here are short lived and expire as 403, not 401.** Docker
+**Registry tokens here are short lived and expire as 403, not 401.** This
+applied to atcr.io, the previous registry, and may matter again if an
+authenticated registry comes back. Docker
 only re-authenticates on a 401, so an expired token is fatal rather than
 transparent. Builds run **sequentially** for this reason: parallel builds
 contending for one builder stretch each login→push window past the token
