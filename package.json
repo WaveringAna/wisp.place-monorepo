@@ -40,7 +40,7 @@
     "codegen": "./scripts/codegen.sh",
     "download:aturi": "bun run scripts/download-place-wisp-fs.ts",
     "publish:permission-sets": "bun run scripts/publish-permission-sets.ts",
-    "publish:cli": "cd cli && bun run build && npm publish && cd ../packages/create-wisp && npm publish"
+    "publish:cli": "bun cli-rs/scripts/npm-packages.ts --publish"
   },
   "trustedDependencies": [
     "@parcel/watcher",

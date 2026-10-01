@@ -3,8 +3,11 @@
 // (scripts/build-cli-binaries.sh): one package per platform holding its native
 // binary, plus `wispctl`, a node shim that depends on all of them optionally.
 //
-// usage (from the repo root): bun cli-rs/scripts/npm-packages.ts
-// then publish every platform package before `wispctl` itself.
+// usage (from the repo root): bun cli-rs/scripts/npm-packages.ts [--publish]
+//
+// --publish then publishes in dependency order: the platform packages, then
+// `wispctl`, then packages/create-wisp. Versions already on npm are skipped,
+// so an interrupted release can simply be run again.
 import { spawnSync } from 'node:child_process'
 import { chmodSync, copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -73,3 +76,21 @@ copyFileSync(join(root, 'cli-rs/npm/wispctl.js'), join(main, 'bin/wispctl.js'))
 copyFileSync(join(root, 'cli-rs/npm/README.md'), join(main, 'README.md'))
 
 console.log(`staged wispctl ${version} and ${platforms.length} platform packages in ${out}`)
+
+const manifestOf = (dir: string) => JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
+
+const published = (name: string, version: string) =>
+	spawnSync('npm', ['view', `${name}@${version}`, 'version'], { encoding: 'utf8' }).stdout.trim() === version
+
+const publish = (dir: string) => {
+	const { name, version } = manifestOf(dir)
+	if (published(name, version)) return console.log(`${name}@${version} is already on npm`)
+	const { status } = spawnSync('npm', ['publish'], { cwd: dir, stdio: 'inherit' })
+	if (status !== 0) throw new Error(`npm publish failed for ${name}@${version}`)
+}
+
+if (process.argv.includes('--publish')) {
+	for (const p of platforms) publish(join(out, `wispctl-${p.os}-${p.cpu}`))
+	publish(main)
+	publish(join(root, 'packages/create-wisp'))
+}
