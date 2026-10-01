@@ -49,6 +49,29 @@ class OperationsTests(unittest.TestCase):
         self.assertIsNone(result["ingestion"])
         self.assertFalse(result["database"])
 
+    def test_relay_lag_is_leader_only_and_measures_relay_event_age(self):
+        for state in ("standby", "acquiring", "releasing", "stopped"):
+            self.assertIsNone(probe.relay_ok({"leadership": {"state": state}}))
+        body = {"leadership": {"state": "acquired"},
+                "firehose": {"replay": {"status": "caught-up", "replayAgeMs": 4_000}}}
+        self.assertTrue(probe.relay_ok(body))
+        # A leader replaying an old checkpoint still receives events, so only the
+        # relay event age shows it.
+        body["firehose"]["replay"] = {"status": "catching-up", "replayAgeMs": 26 * 3_600_000}
+        self.assertFalse(probe.relay_ok(body))
+        for replay in ({"status": "unknown"}, {"status": "invalid"},
+                       {"status": "caught-up", "replayAgeMs": 300_000}):
+            body["firehose"]["replay"] = replay
+            self.assertFalse(probe.relay_ok(body))
+        config = {"apps": {"main": "main", "firehose": "firehose"},
+                  "destinations": {"relay-lag": {"url": "x", "token": "y"}}}
+        with patch.object(probe, "inspect", side_effect=ValueError):
+            result = probe.collect(config, {}, 1)
+        self.assertIsNone(result["relay-lag"])
+        with patch.object(probe, "inspect", side_effect=ValueError):
+            result = probe.collect({"apps": {"main": "main", "firehose": "firehose"}}, {}, 1)
+        self.assertNotIn("relay-lag", result)
+
     def test_missing_samples_fail_instead_of_looking_healthy(self):
         for value in (None, True, "0", float("nan")):
             with self.assertRaises(ValueError):
@@ -159,7 +182,7 @@ class OperationsTests(unittest.TestCase):
         self.assertEqual(result["alerting"], before["alerting"])
         self.assertEqual(result["endpoints"], before["endpoints"])
         self.assertEqual(result["external-endpoints"][0], before["external-endpoints"][0])
-        self.assertEqual(len(result["external-endpoints"]), 12)
+        self.assertEqual(len(result["external-endpoints"]), 13)
         with self.assertRaises(ValueError):
             overlay.extend(result)
 

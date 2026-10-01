@@ -83,6 +83,16 @@ def ingestion_ok(body):
             and number(firehose["consecutiveFailures"]) < 5)
 
 
+def relay_ok(body):
+    # How far behind the relay the leader's accepted events are (relay event time,
+    # not local receipt time). A leader replaying a stale checkpoint keeps
+    # receiving events, so ingestion_ok stays green while sites go stale.
+    if body["leadership"]["state"] != "acquired":
+        return None
+    replay = body["firehose"]["replay"]
+    return replay["status"] == "caught-up" and number(replay["replayAgeMs"]) < 300_000
+
+
 def exporter_ok(containers):
     for container in containers:
         env = dict(entry.split("=", 1) for entry in container["Config"]["Env"])
@@ -159,6 +169,10 @@ def logs_ok(url):
     return sum(number(float(json.loads(line)["rows"])) for line in rows.splitlines() if line) > 0
 
 
+# Leader-only checks: a standby's probe error must not fail the shared endpoint.
+SHARED = ("ingestion", "relay-lag")
+
+
 def confirmed(name, healthy, state, now, delay=180):
     pending = state.setdefault("badSince", {})
     if healthy is None or healthy:
@@ -175,7 +189,7 @@ def collect(config, state, now):
         try:
             results[name] = operation()
         except Exception as error:
-            results[name] = None if name == "ingestion" else False
+            results[name] = None if name in SHARED else False
             # Health bodies, Docker output, endpoints and credentials stay private.
             print(f"{name}: unavailable ({type(error).__name__})", flush=True)
 
@@ -187,6 +201,8 @@ def collect(config, state, now):
         check("database", lambda: replica_ok(health(inspect(apps["main"]), 8000, "/api/health", network), now))
         check("exporter", lambda: exporter_ok([inspect(name) for name in apps.values()]))
         check("ingestion", lambda: ingestion_ok(health(inspect(apps["firehose"]), 3002, "/health", network)))
+        if "relay-lag" in config.get("destinations", {}):
+            check("relay-lag", lambda: relay_ok(health(inspect(apps["firehose"]), 3002, "/health", network)))
         if "redis_container" in config:
             check("queue", lambda: queue_ok(queue_snapshot(inspect(apps["firehose"]), config["redis_container"]),
                                             state.setdefault("queue", {}), now))

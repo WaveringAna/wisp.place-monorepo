@@ -8,7 +8,7 @@ import sys
 
 REGIONS = ("us-west", "eu", "us-east", "singapore")
 ENDPOINTS = [(region, name) for region in REGIONS for name in ("database-replica", "log-exporter")]
-ENDPOINTS += [("operations", name) for name in ("ingestion", "revalidation", "log-ingestion")]
+ENDPOINTS += [("operations", name) for name in ("ingestion", "relay-lag", "revalidation", "log-ingestion")]
 
 
 def token_name(group, name):

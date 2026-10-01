@@ -79,6 +79,7 @@ python's standard library, docker and existing redis-cli in stolas's redis conta
 | each region / database-replica | main `/api/health`: configured `database.readEndpoint`, mode `healthy`, no primary fallback, probe age <5 minutes; up to 30 seconds of clock skew allowed |
 | each region / log-exporter | all three containers running with log URL/path, fewer than 3 exporter errors in the last 5 minutes (bounded to last 2000 docker log lines, including stderr) |
 | operations / ingestion | only acquired leader reports: ready, connected, last firehose event <5 minutes, consecutive failures <5; standby withholds updates |
+| operations / relay-lag | only acquired leader reports: `firehose.replay.status` is `caught-up` and `replayAgeMs` <5 minutes, i.e. the relay event time of accepted events, not local receipt time; standby withholds updates. added 2026-10-01 after a leader replayed a 26-hour-old relay checkpoint while `ingestion` stayed green |
 | operations / revalidation | oldest pending <30 minutes; pending+consumer lag >=100 must persist 15 minutes; new DLQ entry marks unhealthy for 10 minutes |
 | operations / log-ingestion | any main/hosting/firehose log ingested within 30 minutes, using VictoriaLogs `/select/logsql/query` |
 
@@ -114,7 +115,7 @@ standby nodes never publish false shared ingestion checks on probe errors.
 2. run `gatus-overlay.py` against the actual existing JSON-format gatus config.
    it appends exactly 11 endpoints, preserves the old checks/contact, and refuses
    duplicate operational names. generate one independent token per endpoint;
-   only operations/ingestion is shared across app hosts.
+   only operations/ingestion and operations/relay-lag are shared across app hosts.
 3. add `OPS_*_TOKEN` variables to the existing private gatus `secrets.env`. distribute
    only scoped destinations to each host's `/etc/wisp-operations/config.json`
    (directory 0700, file 0600). never write secrets into this repository.
