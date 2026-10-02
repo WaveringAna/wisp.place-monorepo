@@ -12,20 +12,22 @@
 # is what gets checked. Line numbers are shifted by the wrapper preamble;
 # subtract 2 to map a reported line back to the source file.
 #
-# Types under komodo/vendor are fetched from a running Komodo:
-#   for f in types lib responses terminal; do
-#     curl -sL "https://<komodo>/client/$f.d.ts" -o deploy/komodo/vendor/$f.d.ts
-#   done
+# Types under komodo/vendor are fetched from a running Komodo by
+# fetch-komodo-types.sh (needs KOMODO_ADDRESS) and are not committed. They
+# are fetched here when missing; delete the directory to refresh.
 
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
+
+[ -f "$here/komodo/vendor/types.d.ts" ] || "$here/fetch-komodo-types.sh"
+
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 mkdir -p "$work/komodo"
 cp -R "$here/komodo/vendor" "$work/komodo/vendor"
-cp "$here/komodo/komodo-globals.d.ts" "$work/komodo/"
+cp "$here"/komodo/*.d.ts "$work/komodo/"
 
 for action in "$here"/komodo/*.ts; do
   name="$(basename "$action")"

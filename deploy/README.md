@@ -196,16 +196,15 @@ types. An Action is not a module — Komodo pastes its contents inside
 file the same way before checking it, and `komodo-globals.d.ts` declares
 what Komodo injects. Subtract 2 from a reported line to map it back.
 
-The types under `komodo/vendor/` are fetched from a running Komodo and
-committed so the check works offline:
+The types under `komodo/vendor/` come from a running Komodo and are not
+committed. `typecheck.sh` runs `./deploy/fetch-komodo-types.sh` when they are
+missing, which needs `KOMODO_ADDRESS` (the base url, no trailing slash):
 
 ```sh
-for f in types lib responses terminal; do
-  curl -sL "$KOMODO_ADDRESS/client/$f.d.ts" -o deploy/komodo/vendor/$f.d.ts
-done
+KOMODO_ADDRESS=https://komodo.example ./deploy/typecheck.sh
 ```
 
-Re-fetch them after a Komodo upgrade. This is worth keeping honest: typing
+Delete `komodo/vendor/` after a Komodo upgrade to re-fetch. This is worth keeping honest: typing
 these against the real client is what surfaced `execute_and_poll` (which
 replaced a hand-rolled poller), an Update id read as `.id` when it is
 `_id.$oid` (so every failure message printed `undefined`), and several
