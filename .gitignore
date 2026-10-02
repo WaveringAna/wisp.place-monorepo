@@ -61,3 +61,6 @@ e2e-artifacts/
 
 # fetched by deploy/fetch-komodo-types.sh
 deploy/komodo/vendor/
+
+# local reference checkout of Effect (see agents.md)
+/repos/effect/

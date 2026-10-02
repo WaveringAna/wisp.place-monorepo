@@ -105,11 +105,11 @@ Bun workspaces: `packages/@wisp/*`, `apps/main-app`, `apps/hosting-service`, etc
 
 PLEASE USE `bun check` to type check and `biome check --write` to lint.
 
-This codebase will be using Effect. Explore repos/effect (git subtree) when writing Effect code. This will help you understand Effect and write masterful Effect code.
+This codebase will be using Effect. Explore repos/effect (a local, gitignored checkout of Effect-TS/effect at commit 6389d9ac6; not tracked) when writing Effect code. This will help you understand Effect and write masterful Effect code.
 
 ### Vendored Repositories
 
-This project vendors external repositories under @repos/
+This project keeps external reference repositories under @repos/ (local checkouts, not tracked in git)
 
 - Use vendored repositories as read-only reference material when working with related libraries
 - Prefer examples and patterns from the vendored source code over generated guesses or web search results
