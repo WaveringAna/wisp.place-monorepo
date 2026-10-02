@@ -105,6 +105,19 @@ Bun workspaces: `packages/@wisp/*`, `apps/main-app`, `apps/hosting-service`, etc
 
 PLEASE USE `bun check` to type check and `biome check --write` to lint.
 
+This codebase will be using Effect. Explore repos/effect (git subtree) when writing Effect code. This will help you understand Effect and write masterful Effect code.
+
+### Vendored Repositories
+
+This project vendors external repositories under @repos/
+
+- Use vendored repositories as read-only reference material when working with related libraries
+- Prefer examples and patterns from the vendored source code over generated guesses or web search results
+- Do not edit files under @repos/ unless explicitly asked
+- Do not import from @repos/ - application code should continue importing from normal package dependencies
+
+### Tests conventions
+
 Run tests with `bun test --isolate` (or `bun run test`, which passes it), never a
 bare `bun test`. Several suites call `mock.module('../lib/db', ...)` with a partial
 set of exports, and without isolation that replacement leaks into every test file
