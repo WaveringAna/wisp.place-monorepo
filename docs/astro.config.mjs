@@ -34,6 +34,7 @@ export default defineConfig({
 						{ label: 'Monitoring & Metrics', slug: 'monitoring' },
 						{ label: 'Redirects & Rewrites', slug: 'redirects' },
 						{ label: 'Blob Reuse & Framework Caveats', slug: 'guides/blob-reuse' },
+						{ label: 'Preview Deploys', slug: 'guides/preview-deploys' },
 					],
 				},
 				{
