@@ -61,7 +61,7 @@ function world(overrides: Partial<Ports> = {}): World {
 function handlerFor(w: World, limits = { capacity: 100 }) {
 	return createHandler({
 		ports: w.ports,
-		config: { previewHost: 'wispsites.dev' },
+		config: { previewHost: 'preview.wisp.place' },
 		clientKey: () => 'client',
 		perClient: createRateLimiter({ capacity: limits.capacity, refillPerSecond: 0.0001 }),
 		perOwner: createRateLimiter({ capacity: limits.capacity, refillPerSecond: 0.0001 }),
@@ -84,10 +84,10 @@ describe('POST /v1/preview', () => {
 		const response = await handlerFor(w)(post(body))
 
 		expect(response.status).toBe(200)
-		expect(await response.json()).toEqual({ status: 'created', url: 'https://pr-ab12cd3-alice.wispsites.dev/' })
+		expect(await response.json()).toEqual({ status: 'created', url: 'https://pr-ab12cd3-alice.preview.wisp.place/' })
 		expect(w.creates).toHaveLength(1)
 		expect(w.creates[0]).toMatchObject({ pull: { uri: PULL_URI, cid: 'bafypull' }, roundIdx: 0 })
-		expect(w.creates[0]?.body).toContain('https://pr-ab12cd3-alice.wispsites.dev/')
+		expect(w.creates[0]?.body).toContain('https://pr-ab12cd3-alice.preview.wisp.place/')
 	})
 
 	test('a new commit updates the same comment and keeps the earlier previews', async () => {
@@ -211,7 +211,7 @@ describe('rate limits', () => {
 		const w = world()
 		const handle = createHandler({
 			ports: w.ports,
-			config: { previewHost: 'wispsites.dev' },
+			config: { previewHost: 'preview.wisp.place' },
 			clientKey: (() => {
 				let n = 0
 				return () => `client-${n++}`

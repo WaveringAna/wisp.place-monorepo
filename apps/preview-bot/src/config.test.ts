@@ -5,7 +5,7 @@ const valid = {
 	BOT_HANDLE: 'wisp.place',
 	BOT_PASSWORD: 'app-password-secret',
 	DATABASE_URL: 'postgres://postgres:postgres@localhost:5432/wisp',
-	PREVIEW_HOST: 'wispsites.dev',
+	PREVIEW_HOST: 'preview.wisp.place',
 }
 
 describe('resolveConfig', () => {
@@ -15,15 +15,20 @@ describe('resolveConfig', () => {
 		expect(config.botHandle).toBe('wisp.place')
 		expect(config.botPassword).toBe('app-password-secret')
 		expect(config.databaseUrl).toBe('postgres://postgres:postgres@localhost:5432/wisp')
-		expect(config.previewHost).toBe('wispsites.dev')
+		expect(config.previewHost).toBe('preview.wisp.place')
 		expect(config.baseHost).toBe('wisp.place')
 		expect(config.port).toBe(3004)
 	})
 
 	test('lowercases hosts and trims port', () => {
-		const config = resolveConfig({ ...valid, PREVIEW_HOST: 'WispSites.Dev', BASE_HOST: 'Wisp.Place', PORT: ' 8080 ' })
+		const config = resolveConfig({
+			...valid,
+			PREVIEW_HOST: 'Preview.Wisp.Place',
+			BASE_HOST: 'Wisp.Place',
+			PORT: ' 8080 ',
+		})
 
-		expect(config.previewHost).toBe('wispsites.dev')
+		expect(config.previewHost).toBe('preview.wisp.place')
 		expect(config.baseHost).toBe('wisp.place')
 		expect(config.port).toBe(8080)
 	})

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { MAX_PREVIEW_ROWS, parsePreviewRows, renderComment } from './comment'
 
-const row = (sha7: string, host = 'wispsites.dev') => ({ sha7, url: `https://pr-${sha7}-alice.${host}/` })
+const row = (sha7: string, host = 'preview.wisp.place') => ({ sha7, url: `https://pr-${sha7}-alice.${host}/` })
 
 describe('renderComment', () => {
 	test('lists the newest preview first and links it', () => {
@@ -9,7 +9,9 @@ describe('renderComment', () => {
 
 		const lines = body.split('\n')
 		expect(lines.findIndex((l) => l.includes('aaaaaaa'))).toBeLessThan(lines.findIndex((l) => l.includes('bbbbbbb')))
-		expect(body).toContain('[https://pr-aaaaaaa-alice.wispsites.dev/](https://pr-aaaaaaa-alice.wispsites.dev/)')
+		expect(body).toContain(
+			'[https://pr-aaaaaaa-alice.preview.wisp.place/](https://pr-aaaaaaa-alice.preview.wisp.place/)',
+		)
 		expect(body).toContain('`aaaaaaa`')
 	})
 
@@ -36,10 +38,10 @@ describe('parsePreviewRows', () => {
 			'someone edited this',
 			'| `abc` | [x](javascript:alert(1)) |',
 			'| `ddddddd` | [https://evil.example/](https://evil.example/) |',
-			'| `eeeeeee` | [https://pr-eeeeeee-alice.wispsites.dev/](https://pr-eeeeeee-alice.wispsites.dev/) |',
+			'| `eeeeeee` | [https://pr-eeeeeee-alice.preview.wisp.place/](https://pr-eeeeeee-alice.preview.wisp.place/) |',
 		].join('\n')
 
-		expect(parsePreviewRows(body, 'wispsites.dev')).toEqual([row('eeeeeee')])
+		expect(parsePreviewRows(body, 'preview.wisp.place')).toEqual([row('eeeeeee')])
 	})
 
 	test('treats an empty or foreign body as no rows', () => {

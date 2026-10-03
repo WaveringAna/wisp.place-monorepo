@@ -9,7 +9,7 @@ A preview deploy publishes a pull request's build as a site in **your own PDS**,
 
 - Each pull request round deploys a site named `pr-<sha7>`, where `<sha7>` is the first seven characters of the pull request's head commit.
 - The hosting service serves it at `https://pr-<sha7>-<claim>.<preview host>/`. `<claim>` is a wisp subdomain you already claimed (the `alice` in `alice.wisp.place`). Without the claim, nothing in the host would say whose site it is, and anyone could write the same site name into their own repo and answer for someone else's commit.
-- The preview host is a separate registrable domain from the one that serves production sites, so a preview's JavaScript cannot read the cookies or storage of any production site. Operators enable it by setting `PREVIEW_HOST` on the hosting service. It has no default, and unset means previews are off.
+- Preview URLs use `pr-<sha7>-<claim>.preview.wisp.place`. Operators enable this routing with `PREVIEW_HOST=preview.wisp.place` on the hosting service and DNS/TLS for `*.preview.wisp.place`. The environment variable has no default; unset means previews are off. These are separate origins, not a separate registrable domain: cookies scoped to `.wisp.place` can also reach preview hosts.
 - Every preview carries `X-Robots-Tag: noindex`, set through the site's settings record.
 
 Because each round is a new commit, each round gets its own URL. Earlier rounds stay up, so you can compare them, until they are pruned.
@@ -40,7 +40,7 @@ dependencies:
 
 environment:
   WISP_HANDLE: "alice.example.com"
-  PREVIEW_HOST: "your-preview-host.example"
+  PREVIEW_HOST: "preview.wisp.place"
   PREVIEW_CLAIM: "alice"
 
 steps:

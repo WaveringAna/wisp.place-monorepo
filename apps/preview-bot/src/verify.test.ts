@@ -47,7 +47,7 @@ function fakePorts(overrides: Partial<Ports> = {}): { ports: Ports; calls: Calls
 	return { ports, calls }
 }
 
-const config = { previewHost: 'wispsites.dev' }
+const config = { previewHost: 'preview.wisp.place' }
 
 describe('verifyPreview', () => {
 	test('accepts a preview whose every link is anchored in an authority the owner controls', async () => {
@@ -57,13 +57,13 @@ describe('verifyPreview', () => {
 
 		expect(result).toEqual({
 			ok: true,
-			url: 'https://pr-ab12cd3-alice.wispsites.dev/',
+			url: 'https://pr-ab12cd3-alice.preview.wisp.place/',
 			sha7: 'ab12cd3',
 			pull: { uri: PULL_URI, cid: 'bafypull' },
 			roundIdx: 2,
 		})
 		expect(calls.pipelines).toEqual([['spindle.example', '3kpipeline']])
-		expect(calls.probes).toEqual(['https://pr-ab12cd3-alice.wispsites.dev/'])
+		expect(calls.probes).toEqual(['https://pr-ab12cd3-alice.preview.wisp.place/'])
 	})
 
 	test("asks the spindle named in the owner's repo record, never one the request names", async () => {

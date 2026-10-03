@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test'
 
 process.env.BASE_HOST = 'wisp.place'
-process.env.PREVIEW_HOST = 'wispsites.dev'
+process.env.PREVIEW_HOST = 'preview.wisp.place'
 
 const OWNER_DID = 'did:plc:alice'
 const domainLookups: string[] = []
@@ -35,7 +35,7 @@ describe('preview host routing', () => {
 	})
 
 	test("serves the pr site from the claim owner, ignoring the claim's mapped site", async () => {
-		const response = await app.request('https://pr-ab12cd3-alice.wispsites.dev/docs/index.html')
+		const response = await app.request('https://pr-ab12cd3-alice.preview.wisp.place/docs/index.html')
 
 		expect(response.status).toBe(200)
 		expect(await response.text()).toBe('preview body')
@@ -44,16 +44,16 @@ describe('preview host routing', () => {
 	})
 
 	test('404s an unregistered claim', async () => {
-		const response = await app.request('https://pr-ab12cd3-nobody.wispsites.dev/')
+		const response = await app.request('https://pr-ab12cd3-nobody.preview.wisp.place/')
 
 		expect(response.status).toBe(404)
 		expect(served).toEqual([])
 	})
 
 	test.each([
-		'https://wispsites.dev/',
-		'https://main-alice.wispsites.dev/',
-		'https://x.pr-ab12cd3-alice.wispsites.dev/',
+		'https://preview.wisp.place/',
+		'https://main-alice.preview.wisp.place/',
+		'https://x.pr-ab12cd3-alice.preview.wisp.place/',
 	])('404s %s without a database lookup', async (url) => {
 		const response = await app.request(url)
 

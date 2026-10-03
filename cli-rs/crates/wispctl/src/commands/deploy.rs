@@ -597,8 +597,8 @@ mod preview_tests {
     #[test]
     fn preview_urls_validate_and_normalize() {
         assert_eq!(
-            build_preview_url("pr-abcdef0", "alice", "WispSites.Dev").unwrap(),
-            "https://pr-abcdef0-alice.wispsites.dev/"
+            build_preview_url("pr-abcdef0", "alice", "Preview.Wisp.Place").unwrap(),
+            "https://pr-abcdef0-alice.preview.wisp.place/"
         );
         assert_eq!(
             build_preview_url("pr-ABCDEF0", "alice", "example.com")
