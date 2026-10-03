@@ -8,7 +8,6 @@ COPY package.json bunfig.toml tsconfig.json bun.lock* ./
 COPY patches ./patches
 
 # Copy all workspace package.json files first (for dependency resolution)
-COPY cli ./cli
 COPY packages ./packages
 COPY apps/main-app/package.json ./apps/main-app/package.json
 COPY apps/hosting-service/package.json ./apps/hosting-service/package.json
