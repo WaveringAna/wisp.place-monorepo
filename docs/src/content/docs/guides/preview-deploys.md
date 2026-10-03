@@ -64,6 +64,13 @@ steps:
         --header "X-Robots-Tag: noindex" \
         --preview-host "$PREVIEW_HOST" \
         --yes
+
+      # Notify preview-bot to verify and post/update the PR comment
+      pipeline_id="${TANGLED_PIPELINE_ID##*/}"
+      claim="${PREVIEW_CLAIM:-${WISP_HANDLE%%.*}}"
+      curl -s -f -X POST "${PREVIEW_BOT_URL:-https://preview-bot.wisp.place}/v1/preview" \
+        -H "Content-Type: application/json" \
+        -d "{\"owner\":\"$TANGLED_REPO_DID\",\"repo\":\"$TANGLED_REPO_NAME\",\"pipeline\":\"$pipeline_id\",\"claim\":\"$claim\"}"
 ```
 
 `--preview-host` makes `wispctl` check that the site is named `pr-<sha7>` before it uploads anything, then print the preview URL once the deploy succeeds. If you have claimed more than one wisp subdomain, add `--preview-claim <label>` to choose one.
