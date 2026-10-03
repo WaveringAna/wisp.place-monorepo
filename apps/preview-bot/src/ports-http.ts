@@ -81,9 +81,10 @@ export function createHttpPorts(options: HttpPortsOptions): Ports {
 			for (const item of page.records ?? []) {
 				if (!isObject(item) || !isObject(item.value)) continue
 				const value = item.value
+				const rkey = typeof item.uri === 'string' ? (item.uri.split('/').pop() ?? '') : ''
 				result.push({
-					rkey: typeof item.uri === 'string' ? (item.uri.split('/').pop() ?? '') : '',
-					name: typeof value.name === 'string' ? value.name : undefined,
+					rkey,
+					name: typeof value.name === 'string' ? value.name : rkey,
 					spindle: typeof value.spindle === 'string' ? value.spindle : undefined,
 					repoDid: typeof value.repoDid === 'string' ? value.repoDid : undefined,
 				})

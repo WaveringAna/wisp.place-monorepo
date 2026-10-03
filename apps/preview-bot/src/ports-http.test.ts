@@ -52,6 +52,25 @@ describe('listRepoRecords', () => {
 		])
 	})
 
+	test('falls back to rkey as repository name when value.name is omitted', async () => {
+		const { fetch } = fakeFetch({
+			[`${PDS}/xrpc/com.atproto.repo.listRecords`]: () =>
+				json({
+					records: [
+						{
+							uri: `at://${OWNER}/sh.tangled.repo/wisp-preview-test`,
+							value: { knot: 'knot.example', spindle: 'spindle.example', repoDid: `did:plc:${'r'.repeat(24)}` },
+						},
+					],
+				}),
+		})
+
+		const records = await build({ fetch }).listRepoRecords(OWNER)
+		expect(records).toEqual([
+			{ rkey: 'wisp-preview-test', name: 'wisp-preview-test', spindle: 'spindle.example', repoDid: `did:plc:${'r'.repeat(24)}` },
+		])
+	})
+
 	test('follows the cursor and stops at 500 records', async () => {
 		const requested: string[] = []
 		const fetch = async (url: string) => {
