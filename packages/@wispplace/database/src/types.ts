@@ -64,6 +64,8 @@ export interface SiteCache {
 	rkey: string
 	record_cid: string
 	file_cids: Record<string, string> // path -> CID mapping
+	// path -> CAS key (see CAS_STORAGE.md). Null/absent until the site is converted or rewritten.
+	file_objects?: unknown
 	cached_at: number
 	updated_at: number
 	// True once the firehose-service has written every file to the S3 cold tier.

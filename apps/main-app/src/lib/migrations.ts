@@ -1,3 +1,4 @@
+import { CAS_SCHEMA_STATEMENTS } from '@wispplace/database'
 import type { SQL } from 'bun'
 import {
 	createRecordedMigrationRunner,
@@ -412,6 +413,12 @@ export const runDatabaseMigrations = async (primaryDb: SQL): Promise<void> => {
 			await db`ALTER TABLE site_cache ADD COLUMN IF NOT EXISTS absent_since BIGINT`
 			await db`ALTER TABLE site_cache ADD COLUMN IF NOT EXISTS absent_checks INTEGER NOT NULL DEFAULT 0`
 			await db`CREATE INDEX IF NOT EXISTS idx_site_cache_absent_since ON site_cache(absent_since) WHERE absent_since IS NOT NULL`
+		})
+
+		// Content-addressed site storage (CAS_STORAGE.md). Additive: site_cache.file_objects stays
+		// NULL for legacy sites, which keep being read from {did}/{rkey}/{path}.
+		await runMigration('add content-addressed storage schema', async () => {
+			for (const statement of CAS_SCHEMA_STATEMENTS) await db.unsafe(statement)
 		})
 
 		// Remove the unique constraint on domains.did to allow multiple domains per user

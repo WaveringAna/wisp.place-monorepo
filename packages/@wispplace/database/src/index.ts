@@ -7,6 +7,7 @@
  * The actual database client is passed in by the consuming application.
  */
 
+export { CAS_SCHEMA_STATEMENTS } from './cas-schema'
 // Re-export types
 export type {
 	AdminUser,
