@@ -5,6 +5,15 @@ import type { FileObjects } from '@wispplace/fs-utils'
 import { createLogger } from '@wispplace/observability'
 import postgres from 'postgres'
 import { config } from '../config'
+import {
+	type CasGcOptions,
+	type CasGcPorts,
+	type CasGcResult,
+	type CasReconcileOptions,
+	type CasReconcileResult,
+	collectGarbage,
+	reconcileCasReferences,
+} from './cas-gc'
 import { applyCasReferences, recordCasObject, touchCasObjects as touchCasObjectRows } from './cas-objects'
 
 const logger = createLogger('firehose-service')
@@ -1000,6 +1009,19 @@ export async function registerCasObject(key: string, size: number): Promise<void
 /** Restart the GC clock of objects a site update is reusing; returns those that still exist. */
 export async function touchCasObjects(keys: readonly string[]): Promise<string[]> {
 	return await touchCasObjectRows(sql, keys)
+}
+
+/** One bounded garbage-collection pass over unreferenced CAS objects. */
+export async function runCasCollection(
+	ports: CasGcPorts,
+	options: Pick<CasGcOptions, 'graceSeconds' | 'limit'>,
+): Promise<CasGcResult> {
+	return await collectGarbage(sql, ports, options)
+}
+
+/** One bounded pass repairing CAS reference counts against the sites' stored mappings. */
+export async function runCasReconcile(options: Pick<CasReconcileOptions, 'limit'>): Promise<CasReconcileResult> {
+	return await reconcileCasReferences(sql, options)
 }
 
 export interface AbsentSiteMark {

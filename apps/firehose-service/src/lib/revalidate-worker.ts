@@ -24,6 +24,7 @@ import {
 	SiteBlobBackoffError,
 	SiteLogicalQuotaExceededError,
 } from './cache-writer'
+import { startCasGarbageCollector, stopCasGarbageCollector } from './cas-gc-job'
 import { markSiteAbsent } from './db'
 import {
 	isSettingsFailureRevalidationReason,
@@ -1734,6 +1735,7 @@ export async function startRevalidateWorker(): Promise<void> {
 	startRevalidateWorkerWithFactory(config.redisUrl, defaultRedisClientFactory, revalidateWorkerRuntimeConfig)
 	// Leader-only like this worker, so two nodes never sweep the same site.
 	startAbsentSiteSweeper()
+	startCasGarbageCollector()
 }
 
 export function startRevalidateWorkerForTests(
@@ -1797,7 +1799,7 @@ export async function stopRevalidateWorker(
 ): Promise<RevalidateWorkerStopResult> {
 	running = false
 	cancelLoopRetryWait?.()
-	const sweeperStopped = stopAbsentSiteSweeper()
+	const sweeperStopped = Promise.all([stopAbsentSiteSweeper(), stopCasGarbageCollector()])
 
 	// Abort active PDS/blob work before disconnecting Redis. The resource context
 	// treats this as lifecycle cancellation, not a delivery failure, so the PEL
