@@ -5,7 +5,7 @@ use crate::{
     cli::XrpcOptions,
     prompts,
 };
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use jacquard::xrpc::{CallOptions, XrpcClient, XrpcRequest, XrpcResp};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
@@ -16,21 +16,25 @@ pub async fn resolve_identity(identifier: &str) -> Result<(String, String)> {
 }
 
 pub fn parse_service_did(input: Option<&str>) -> Result<String> {
-    let value = input
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or(DEFAULT_WISP_SERVICE_DID);
-    let valid = value.starts_with("did:")
-        && value.len() >= 8
-        && !value.contains('#')
-        && !value.chars().any(char::is_whitespace)
-        && value[4..]
-            .split_once(':')
-            .is_some_and(|(method, id)| !method.is_empty() && !id.is_empty());
-    if !valid {
-        bail!("Invalid --service value \"{value}\". Expected did:...");
-    }
-    Ok(value.to_owned())
+    let value = input.map(str::trim).filter(|s| !s.is_empty());
+    let Some(value) = value else {
+        return Ok(DEFAULT_WISP_SERVICE_DID.to_owned());
+    };
+    let result = if let Some(rest) = value.strip_prefix("did:") {
+        let valid = !value.contains('#')
+            && !value.chars().any(char::is_whitespace)
+            && rest
+                .split_once(':')
+                .is_some_and(|(method, id)| !method.is_empty() && !id.is_empty());
+        valid.then(|| value.to_owned())
+    } else {
+        let valid = !value.contains('#')
+            && !value.chars().any(char::is_whitespace)
+            && !value.contains('/')
+            && !value.contains('\\');
+        valid.then(|| format!("did:web:{}", value.replace(':', "%3A")))
+    };
+    result.ok_or_else(|| anyhow::anyhow!("Invalid --service value \"{value}\". Expected did:..."))
 }
 
 fn swallowed_handle(handle: Option<&str>, password: Option<&str>) -> bool {
@@ -128,7 +132,11 @@ where
         opts.extra_headers
             .push((http::header::CONTENT_TYPE, content_type.parse()?));
     }
-    let response = agent.send_with_opts(request, opts).await?;
+    let response = agent.send_with_opts(request, opts).await.with_context(|| {
+        format!(
+            "request via service {service} failed; if this is not the service you meant, set --service or WISPCTL_SERVICE"
+        )
+    })?;
     // Decode the generated output before returning the original JSON to renderers.
     response
         .parse::<String>()
@@ -158,6 +166,8 @@ mod tests {
             Some(""),
             Some(" did:web:localhost%3A8000 "),
             Some("did:plc:abc"),
+            Some("localhost:8000"),
+            Some("wisp.place"),
         ] {
             assert!(parse_service_did(valid).is_ok());
         }
@@ -167,6 +177,8 @@ mod tests {
             "did:web:",
             "did:web:x#proxy",
             "did:web:x y",
+            "#bad",
+            "local host",
         ] {
             assert!(parse_service_did(Some(invalid)).is_err());
         }

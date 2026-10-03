@@ -74,7 +74,7 @@ pub struct XrpcOptions {
     #[command(flatten)]
     pub db: DbArg,
     /// Service DID to proxy through
-    #[arg(long, value_name = "did:...")]
+    #[arg(long, env = "WISPCTL_SERVICE", value_name = "did:...")]
     pub service: Option<String>,
     /// Output raw JSON
     #[arg(long)]
@@ -496,5 +496,21 @@ mod tests {
             panic!("expected accounts");
         };
         assert!(args.command.is_none() && args.list.json);
+    }
+
+    #[test]
+    fn service_can_come_from_environment_and_flag_wins() {
+        unsafe { std::env::set_var("WISPCTL_SERVICE", "localhost:8000") };
+        let cli = parse(&["list"]);
+        let Some(Command::List(args)) = cli.command else {
+            panic!("expected list")
+        };
+        assert_eq!(args.xrpc.service.as_deref(), Some("localhost:8000"));
+        let cli = parse(&["list", "--service", "wisp.place"]);
+        let Some(Command::List(args)) = cli.command else {
+            panic!("expected list")
+        };
+        assert_eq!(args.xrpc.service.as_deref(), Some("wisp.place"));
+        unsafe { std::env::remove_var("WISPCTL_SERVICE") };
     }
 }
