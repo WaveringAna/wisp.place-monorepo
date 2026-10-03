@@ -13,6 +13,7 @@ import { type CacheInvalidationHealthSnapshot, getCacheInvalidationHealthSnapsho
 import { cache } from './lib/cache-manager'
 import { getCustomDomain, getCustomDomainByHash, getWispDomain } from './lib/db'
 import { serveFromCache, serveFromCacheWithRewrite } from './lib/file-serving'
+import { isPreviewHostname, parsePreviewHostname } from './lib/preview-host'
 import { privateNotFound, servePrivateSite } from './lib/private-serving'
 import { decodeRequestPathname, extractHeaders, isValidRkey } from './lib/request-utils'
 import { recordSiteResponse } from './lib/site-metrics'
@@ -84,6 +85,12 @@ const BASE_HOST = normalizeConfiguredHostname(process.env.BASE_HOST, DEFAULT_BAS
 
 // Separate origins keep tenant JavaScript and ambient cookies isolated.
 const PRIVATE_HOST = normalizeConfiguredHostname(process.env.PRIVATE_HOST, `priv.${BASE_HOST}`)
+
+// Preview deploys need a registrable domain of their own, so there is no default: unset disables them.
+const PREVIEW_HOST = normalizeConfiguredHostname(process.env.PREVIEW_HOST, '') || null
+if (PREVIEW_HOST && (PREVIEW_HOST === BASE_HOST || PREVIEW_HOST.endsWith(`.${BASE_HOST}`))) {
+	logger.warn(`PREVIEW_HOST ${PREVIEW_HOST} is under ${BASE_HOST}; previews will share its cookie scope`)
+}
 
 async function serveMappedPublicDomain(
 	c: Context,
@@ -318,6 +325,15 @@ function privateSiteResponse(c: Context, request: SiteRequest): Response | Promi
 	return request.hostname === PRIVATE_HOST ? privateNotFound() : null
 }
 
+async function servePreviewSite(c: Context, request: SiteRequest, previewHost: string): Promise<Response> {
+	const preview = parsePreviewHostname(request.hostname, previewHost)
+	if (!preview) return c.text('Preview not found', 404)
+
+	const owner = await getWispDomain(`${preview.claim}.${BASE_HOST}`)
+	if (!owner) return c.text('Preview not found', 404)
+	return serveMappedPublicDomain(c, { did: owner.did, rkey: preview.rkey }, request.publicPath, 'Preview not found')
+}
+
 function parseDnsHashHostname(hostname: string): DnsHashHostname | null {
 	const dnsMatch = hostname.match(/^([a-f0-9]{16})\.dns\.(.+)$/)
 	if (!dnsMatch) return null
@@ -356,6 +372,8 @@ async function routeSiteRequest(c: Context, request: SiteRequest): Promise<Respo
 	const privateResponse = privateSiteResponse(c, request)
 	if (privateResponse) return await privateResponse
 	if (request.hostname === `sites.${BASE_HOST}`) return await serveSharedSite(c, request)
+	if (PREVIEW_HOST && isPreviewHostname(request.hostname, PREVIEW_HOST))
+		return await servePreviewSite(c, request, PREVIEW_HOST)
 	return await servePublicDomain(c, request)
 }
 

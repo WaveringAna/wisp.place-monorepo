@@ -104,6 +104,19 @@ describe('applyCustomHeaders', () => {
 		expect(headers['X-Content-Type-Options']).toBe('nosniff')
 	})
 
+	test('applies X-Robots-Tag to every path on a dedicated origin', () => {
+		const headers: Record<string, string> = {}
+
+		applyCustomHeaders(
+			headers,
+			'docs/index.html',
+			withSettings({ headers: [{ name: 'X-Robots-Tag', value: 'noindex, nofollow' }] }),
+			{ sharedOrigin: false },
+		)
+
+		expect(headers['X-Robots-Tag']).toBe('noindex, nofollow')
+	})
+
 	test('allows shared-origin-safe path globs and blocks case-insensitive CORS headers', () => {
 		const headers: Record<string, string> = {}
 
