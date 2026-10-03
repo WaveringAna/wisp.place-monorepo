@@ -440,4 +440,41 @@ suite('migration queries (postgres)', () => {
 		expect(result).toBe('stale')
 		expect(await refs(key('a'))).toBeUndefined()
 	})
+
+	test('allows migrating an updated site when old writer left stale file_objects, but refuses a concurrent CAS writer', async () => {
+		// Pass 1: site had file 'a.css' -> key('a'). Mapping A is stored via commitMigratedMapping (which creates cas_objects rows).
+		await insertSite('update_race', { 'a.css': 'cid_a' })
+		await recordCasObject(sql, key('a'), 100)
+		await recordCasObject(sql, key('b'), 200)
+		const first = await commitMigratedMapping(sql, DID, 'update_race', { 'a.css': 'cid_a' }, { 'a.css': key('a') })
+		expect(first).toBe('committed')
+		expect(await refs(key('a'))).toBe(1)
+
+		// Old writer updates to 'b.css' -> 'cid_b', but leaves file_objects untouched as { 'a.css': key('a') }.
+		await sql`
+			UPDATE site_cache
+			SET file_cids = ${sql.json({ 'b.css': 'cid_b' })},
+			    record_cid = 'cid_2'
+			WHERE did = ${DID} AND rkey = 'update_race'
+		`
+
+		// Migration pass 2 scanned the updated file_cids ({ 'b.css': 'cid_b' }) and computed mapping { 'b.css': key('b') }.
+		const result = await commitMigratedMapping(sql, DID, 'update_race', { 'b.css': 'cid_b' }, { 'b.css': key('b') })
+		expect(result).toBe('committed')
+		expect(await refs(key('b'))).toBe(1)
+		expect(await refs(key('a'))).toBe(0)
+	})
+
+	test('refuses to overwrite a mapping that a concurrent CAS writer produced during migration', async () => {
+		await insertSite('cas_writer_race', { 'b.css': 'cid_b' }, { fileObjects: { 'b.css': key('writer') } })
+
+		const result = await commitMigratedMapping(
+			sql,
+			DID,
+			'cas_writer_race',
+			{ 'b.css': 'cid_b' },
+			{ 'b.css': key('migration') },
+		)
+		expect(result).toBe('stale')
+	})
 })

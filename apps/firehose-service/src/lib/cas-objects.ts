@@ -163,7 +163,7 @@ export async function commitMigratedMapping(
 		if (!row || !sameFileCids(normalizeFileCids(row.file_cids).value, expectedFileCids)) return 'stale' as const
 		const existing = normalizeFileObjects(row.file_objects) ?? {}
 		for (const [path, key] of Object.entries(existing)) {
-			if (mapping[path] !== key) return 'stale' as const
+			if (mapping[path] !== undefined && mapping[path] !== key) return 'stale' as const
 		}
 		await applyCasReferences(tx as unknown as Sql, did, rkey, mapping)
 		return 'committed' as const
