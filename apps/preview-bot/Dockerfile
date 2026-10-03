@@ -1,7 +1,7 @@
 # Build from monorepo root: docker build -f apps/preview-bot/Dockerfile .
 
 # Stage 1: Install dependencies and compile binary
-FROM oven/bun:1.4.2-alpine AS builder
+FROM docker.io/oven/bun:1.4.2-alpine AS builder
 
 WORKDIR /app
 
@@ -24,7 +24,7 @@ RUN bun install --frozen-lockfile
 RUN NODE_ENV=production bun build --compile --minify apps/preview-bot/src/index.ts --outfile /app/preview-bot
 
 # Stage 2: Minimal runtime
-FROM alpine:3.22
+FROM docker.io/alpine:3.22
 
 RUN apk add --no-cache libstdc++ libgcc ca-certificates
 

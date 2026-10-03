@@ -19,7 +19,7 @@ const exercise = async (command: string, supported = true, secret = 'fixture-pas
 			`#!/bin/bash
 set -eu
 [ "$1" = install ] && [ "$2" = --global ] && [ "$3" = --prefix ]
-[ "$4" = "$HOME/.local" ] && [ "$5" = wispctl@2.0.1 ]
+[ "$4" = "$HOME/.local" ] && [ "$5" = wispctl@2.0.2 ]
 mkdir -p "$4/bin"
 cp "$FAKE_CLI" "$4/bin/wispctl"
 `,

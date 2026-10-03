@@ -56,7 +56,7 @@ steps:
         echo "no deploy secret in this pipeline (pull request from a fork); skipping"
         exit 0
       fi
-      npm install --global --prefix "$HOME/.local" wispctl@2.0.1
+      npm install --global --prefix "$HOME/.local" wispctl@2.0.2
       export PATH="$HOME/.local/bin:$PATH"
 
       deploy_help="$(wispctl deploy --help)"
@@ -78,7 +78,7 @@ steps:
 
 `--preview-host` makes `wispctl` check that the site is named `pr-<sha7>` before it uploads anything, then print the preview URL once the deploy succeeds. Set `PREVIEW_CLAIM` to your claimed wisp subdomain label; it is required when your account has more than one claim.
 
-Replace the build commands and `./dist` with your own. The workflow pins `wispctl@2.0.1` and installs it under `$HOME/.local`, not into the read-only Nix store.
+Replace the build commands and `./dist` with your own. The workflow pins `wispctl@2.0.2` and installs it under `$HOME/.local`, not into the read-only Nix store.
 
 ## Cleaning up
 
@@ -103,7 +103,7 @@ steps:
   - name: prune old previews
     command: |
       set -euo pipefail
-      npm install --global --prefix "$HOME/.local" wispctl@2.0.1
+      npm install --global --prefix "$HOME/.local" wispctl@2.0.2
       export PATH="$HOME/.local/bin:$PATH"
       wispctl site prune "$WISP_HANDLE" \
         --password "$WISP_APP_PASSWORD" \
