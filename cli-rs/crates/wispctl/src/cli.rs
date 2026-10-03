@@ -97,6 +97,14 @@ pub struct DeployArgs {
     /// Enable SPA mode (serve index.html for all routes)
     #[arg(long)]
     pub spa: bool,
+    /// Response header for every file, as "Name: value" (repeatable)
+    #[arg(
+        long = "header",
+        value_name = "header",
+        value_parser = crate::commands::deploy::parse_header,
+        action = clap::ArgAction::Append
+    )]
+    pub headers: Vec<(String, String)>,
     /// Number of concurrent uploads (backs off to 2 on rate limit)
     #[arg(short, long, value_name = "n", default_value_t = 3)]
     pub concurrency: usize,
@@ -258,12 +266,36 @@ pub struct SiteArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum SiteCommand {
-    /// Delete a site from wisp metadata and unmap its domains
+    /// Delete sites from wisp metadata and unmap their domains
     Delete {
         handle: Option<String>,
-        /// Site rkey
+        /// Site rkey (repeatable)
         #[arg(short, long, value_name = "rkey")]
-        site: Option<String>,
+        site: Vec<String>,
+        /// Also delete the site's records from your repo
+        #[arg(long)]
+        records: bool,
+        /// Skip sites that no longer exist instead of failing
+        #[arg(long)]
+        ignore_missing: bool,
+        /// Skip delete confirmation
+        #[arg(short, long)]
+        yes: bool,
+        #[command(flatten)]
+        xrpc: XrpcOptions,
+    },
+    /// Delete stale preview sites and their records (rkeys starting `pr-`)
+    Prune {
+        handle: Option<String>,
+        /// Only sites whose rkey starts with this; must start with `pr-`
+        #[arg(long, value_name = "prefix", default_value = "pr-")]
+        prefix: String,
+        /// Only sites last updated at least this many days ago (0 for all)
+        #[arg(long, value_name = "days")]
+        older_than: u32,
+        /// List what would be deleted without deleting
+        #[arg(long)]
+        dry_run: bool,
         /// Skip delete confirmation
         #[arg(short, long)]
         yes: bool,

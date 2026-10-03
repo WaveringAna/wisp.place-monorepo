@@ -18,8 +18,62 @@ use wispplace_core::{
     split::{manifest, split_plan, subfs_record},
     tree::{ExistingBlob, UploadResult, build_tree, extract_blob_map, extract_subfs_uris},
 };
-use wispplace_lexicons::place_wisp::{fs::Fs, settings::Settings, subfs::SubfsRecord};
+use wispplace_lexicons::place_wisp::{
+    fs::Fs,
+    settings::{CustomHeader, Settings},
+    subfs::SubfsRecord,
+};
 use wispplace_ui::{TextPrompt, s};
+
+/// Mirrors the `place.wisp.settings` limits the hosting service enforces.
+const MAX_HEADERS: usize = 50;
+const MAX_HEADER_NAME: usize = 100;
+const MAX_HEADER_VALUE: usize = 1_000;
+
+/// One `--header "Name: value"`: an RFC 9110 token name, and a value free of
+/// control characters (tabs aside) so it cannot split the response.
+pub fn parse_header(raw: &str) -> Result<(String, String), String> {
+    let (name, value) = raw.split_once(':').ok_or("expected \"Name: value\"")?;
+    let (name, value) = (name.trim(), value.trim());
+    let token = |c: char| c.is_ascii_alphanumeric() || "!#$%&'*+-.^_`|~".contains(c);
+    if name.is_empty() || name.len() > MAX_HEADER_NAME || !name.chars().all(token) {
+        return Err(format!(
+            "invalid header name \"{name}\": use 1-{MAX_HEADER_NAME} token characters"
+        ));
+    }
+    if value.len() > MAX_HEADER_VALUE || value.chars().any(|c| c.is_control() && c != '\t') {
+        return Err(format!(
+            "invalid value for {name}: at most {MAX_HEADER_VALUE} characters, no control characters"
+        ));
+    }
+    Ok((name.to_owned(), value.to_owned()))
+}
+
+/// The settings record a deploy writes, or `None` when nothing was asked for.
+fn site_settings(directory: bool, spa: bool, headers: &[(String, String)]) -> Option<Settings> {
+    if !directory && !spa && headers.is_empty() {
+        return None;
+    }
+    Some(Settings {
+        directory_listing: Some(directory),
+        clean_urls: Some(true),
+        spa_mode: spa.then(|| "index.html".into()),
+        custom404: None,
+        headers: (!headers.is_empty()).then(|| {
+            headers
+                .iter()
+                .map(|(name, value)| CustomHeader {
+                    name: name.as_str().into(),
+                    path: None,
+                    value: value.as_str().into(),
+                    extra_data: None,
+                })
+                .collect()
+        }),
+        index_files: None,
+        extra_data: None,
+    })
+}
 
 fn valid_site(site: &str) -> bool {
     !site.is_empty()
@@ -78,6 +132,9 @@ pub async fn run(mut args: DeployArgs) -> Result<()> {
     }
     if args.concurrency == 0 {
         bail!("Concurrency must be at least 1");
+    }
+    if args.headers.len() > MAX_HEADERS {
+        bail!("At most {MAX_HEADERS} --header values are allowed");
     }
     let mut spinner = wispplace_ui::spinner("Authenticating...");
     let authenticated = auth::authenticate(
@@ -203,17 +260,8 @@ pub async fn run(mut args: DeployArgs) -> Result<()> {
             let _ = agent.delete::<SubfsRecord>(&key).await;
         }
     }
-    if args.directory || args.spa {
+    if let Some(settings) = site_settings(args.directory, args.spa, &args.headers) {
         let spinner = wispplace_ui::spinner("Creating settings...");
-        let settings: Settings = Settings {
-            directory_listing: Some(args.directory),
-            clean_urls: Some(true),
-            spa_mode: args.spa.then(|| "index.html".into()),
-            custom404: None,
-            headers: None,
-            index_files: None,
-            extra_data: None,
-        };
         agent.put(&site, settings).await?;
         spinner.succeed("Created settings record".to_owned());
     }
@@ -320,13 +368,17 @@ fn split_message(message: wispplace_core::split::SplitMessage) -> String {
     }
 }
 
-struct ExistingSite {
+pub(crate) struct ExistingSite {
     blobs: BTreeMap<String, ExistingBlob>,
     /// Keys of this repo's subfs records the site references.
-    subfs: BTreeSet<String>,
+    pub(crate) subfs: BTreeSet<String>,
 }
 
-async fn fetch_existing(repo: &impl SiteRepo, did: &str, site: &str) -> Option<ExistingSite> {
+pub(crate) async fn fetch_existing(
+    repo: &impl SiteRepo,
+    did: &str,
+    site: &str,
+) -> Option<ExistingSite> {
     let root = repo.fetch::<Fs>(did, site).await.ok()?.root;
     let mut result = ExistingSite {
         blobs: extract_blob_map(&root),
@@ -407,5 +459,34 @@ mod tests {
         for key in ["", "a/b", "a b", "é", &"x".repeat(513)] {
             assert!(!valid_site(key));
         }
+    }
+
+    #[test]
+    fn parses_headers() {
+        assert_eq!(
+            parse_header("X-Robots-Tag: noindex, nofollow"),
+            Ok(("X-Robots-Tag".into(), "noindex, nofollow".into()))
+        );
+        assert_eq!(
+            parse_header("Link:<https://a.example>; rel=x"),
+            Ok(("Link".into(), "<https://a.example>; rel=x".into()))
+        );
+        for bad in ["noindex", ": v", "Bad Name: v", "X: a\r\nSet-Cookie: b"] {
+            assert!(parse_header(bad).is_err(), "{bad}");
+        }
+        assert!(parse_header(&format!("X: {}", "v".repeat(1_001))).is_err());
+    }
+
+    #[test]
+    fn settings_only_when_requested() {
+        assert_eq!(site_settings(false, false, &[]), None);
+        let headers = [("X-Robots-Tag".to_owned(), "noindex".to_owned())];
+        let settings = site_settings(false, false, &headers).expect("headers imply settings");
+        assert_eq!(settings.directory_listing, Some(false));
+        assert_eq!(settings.clean_urls, Some(true));
+        let written = settings.headers.expect("headers");
+        assert_eq!(written.len(), 1);
+        assert_eq!(written[0].name.as_ref() as &str, "X-Robots-Tag");
+        assert_eq!(written[0].value.as_ref() as &str, "noindex");
     }
 }
