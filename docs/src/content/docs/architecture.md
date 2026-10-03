@@ -70,6 +70,24 @@ AWS_SECRET_ACCESS_KEY="..."
 
 Not everything goes on every tier. HTML, CSS, and JS go hot/warm/cold since they're critical for page loads. Large files like images and fonts skip hot — they'd just eat memory. When a file is found in a lower tier but not a higher one, it's promoted upward so the next request is faster.
 
+## Content-Addressed File Storage
+
+Site files are stored once per distinct content, not once per site. A file's body lives at
+`cas/{blob-cid}.{variant}.{ext}`: the blob's CID, a short hash of the manifest flags that change the stored
+bytes (`mimeType`, `encoding`, `base64`), and the file extension (so the placement rules above still match).
+Each site's `place.wisp.fs` manifest maps its paths to these keys, and the mapping is kept next to the site's
+file CIDs in the database.
+
+This is what makes previews and redeploys cheap. Updating a site, or publishing a second site from the same
+files, fetches nothing from the PDS for files that are already stored, and stores nothing twice. Per-site
+state is only the mapping and the pre-rewritten HTML (`{did}/{rkey}/.rewritten/...`), which embeds the site's
+own path prefix.
+
+Because a body's key contains its CID, bodies are immutable: a site update never has to invalidate one.
+A garbage collector deletes a body only when no site references it and it has been unreferenced for a grace
+period (24 hours by default, `CAS_GC_GRACE_SECONDS`, never below an hour), and a daily reconcile repairs
+reference counts against the stored mappings.
+
 ## Cache Invalidation
 
 ```

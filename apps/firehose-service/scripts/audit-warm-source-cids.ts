@@ -10,11 +10,12 @@ import { opendir, readFile, writeFile } from 'node:fs/promises'
 import { basename, join, relative } from 'node:path'
 import { parseArgs } from 'node:util'
 import { expandSubfs, getPdsForDid, type SubfsSubject } from '@wispplace/atproto-utils'
-import { collectFileCidsFromEntries } from '@wispplace/fs-utils'
+import { collectFileCidsFromEntries, isCasKey } from '@wispplace/fs-utils'
 import { parseLexiconJson } from '@wispplace/lexicons/public-json'
 import type { Record as WispFsRecord } from '@wispplace/lexicons/types/place/wisp/fs'
 import { validateRecord as validateFsRecord } from '@wispplace/lexicons/types/place/wisp/fs'
 import { safeFetch, safeFetchJson } from '@wispplace/safe-fetch'
+import { auditCasObject, type CasAuditKind } from '../src/lib/cas-audit'
 
 const DEFAULT_MAX_SITES = 50
 const DEFAULT_MAX_OBJECTS = 2_000
@@ -57,6 +58,7 @@ type FindingKind =
 	| 'orphaned_warm_path'
 	| 'record_absent'
 	| 'record_error'
+	| CasAuditKind
 
 interface Finding {
 	kind: FindingKind
@@ -98,6 +100,9 @@ Audit options:
 
 Inventory JSONL schema:
   {"node":"edge-a","key":"did:plc:.../rkey/index.html","sourceCid":"bafk...","sourceDid":"did:plc:..."}
+
+Content-addressed entries (cas/...) belong to no site and need no PDS read: each
+is checked against its own key, whose CID the recorded sourceCid must equal.
 
 The script is read-only. It does not invoke SSH or accept credentials. It clears
 identity endpoint overrides and does not include cache bytes, checksums, environment
@@ -303,7 +308,13 @@ for (const [index, root] of (values['cache-dir'] ?? []).entries()) {
 const entries = [...new Map(loaded.map((entry) => [`${entry.node}\0${entry.key}`, entry])).values()]
 const siteById = new Map<string, SiteRef>()
 let malformedKeys = 0
+const casEntries: WarmEntry[] = []
 for (const entry of entries) {
+	// Content-addressed bodies belong to no single site; they are audited on their own key below.
+	if (isCasKey(entry.key)) {
+		casEntries.push(entry)
+		continue
+	}
 	const parsed = parseObjectKey(entry.key)
 	if (parsed) siteById.set(parsed.id, parsed)
 	else malformedKeys++
@@ -412,7 +423,9 @@ function increment(node: string, kind: FindingKind): void {
 }
 function addFinding(finding: Finding): void {
 	increment(finding.node, finding.kind)
-	if (finding.kind !== 'match' && findings.length < MAX_ISSUE_DETAILS) findings.push(finding)
+	if (finding.kind !== 'match' && finding.kind !== 'cas_match' && findings.length < MAX_ISSUE_DETAILS) {
+		findings.push(finding)
+	}
 }
 
 for (const entry of selectedEntries) {
@@ -467,6 +480,18 @@ for (const entry of selectedEntries) {
 	})
 }
 
+// A CAS body's identity is its key: the recorded source CID must be the CID the key names.
+const selectedCasEntries = deterministicSample(
+	casEntries,
+	maxObjects,
+	(entry) => `${entry.node}:${entry.key}`,
+	values.seed!,
+)
+for (const entry of selectedCasEntries) {
+	const { kind, expectedCid, observedCid } = auditCasObject(entry.key, { sourceCid: entry.sourceCid })
+	addFinding({ kind, node: entry.node, key: entry.key, expectedCid, observedCid })
+}
+
 const report = {
 	schemaVersion: 1,
 	generatedAt: new Date().toISOString(),
@@ -487,6 +512,8 @@ const report = {
 		loadedObjects: entries.length,
 		discoveredSites: discoveredSites.length,
 		malformedKeys,
+		casObjectsLoaded: casEntries.length,
+		casObjectsAudited: selectedCasEntries.length,
 		selectedSites: selectedSites.length,
 		selectedObjects: selectedEntries.length,
 		selectedNodes: [...new Set(selectedEntries.map((entry) => entry.node))].sort(),
@@ -501,6 +528,9 @@ const report = {
 await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 })
 console.log(JSON.stringify({ reportPath, scope: report.scope, totals, byNode }, null, 2))
 
-if (values['fail-on-findings'] && Object.entries(totals).some(([kind, count]) => kind !== 'match' && count > 0)) {
+if (
+	values['fail-on-findings'] &&
+	Object.entries(totals).some(([kind, count]) => kind !== 'match' && kind !== 'cas_match' && count > 0)
+) {
 	process.exitCode = 2
 }

@@ -8,12 +8,13 @@
 import { writeFile } from 'node:fs/promises'
 import { parseArgs } from 'node:util'
 import { expandSubfs, getPdsForDid, type SubfsSubject } from '@wispplace/atproto-utils'
-import { collectFileCidsFromEntries } from '@wispplace/fs-utils'
+import { collectFileCidsFromEntries, isCasKey } from '@wispplace/fs-utils'
 import { parseLexiconJson } from '@wispplace/lexicons/public-json'
 import type { Record as WispFsRecord } from '@wispplace/lexicons/types/place/wisp/fs'
 import { validateRecord as validateFsRecord } from '@wispplace/lexicons/types/place/wisp/fs'
 import { safeFetch, safeFetchJson } from '@wispplace/safe-fetch'
 import { S3StorageTier } from '@wispplace/tiered-storage'
+import { auditCasObject, type CasAuditFinding } from '../src/lib/cas-audit'
 
 const DEFAULT_MAX_SITES = 50
 const DEFAULT_MAX_OBJECTS = 2_000
@@ -72,6 +73,7 @@ Options:
   --max-objects <n>     Audit at most this many objects across sampled sites (default: ${DEFAULT_MAX_OBJECTS})
   --concurrency <n>     Concurrent PDS and S3 metadata reads (default: ${DEFAULT_CONCURRENCY})
   --site <did/rkey>     Audit a specific site; repeatable
+  --max-cas-objects <n> Audit at most this many content-addressed objects (default: --max-objects)
   --prefix <prefix>     Limit the initial S3 key listing
   --seed <text>         Deterministic sample seed (default: wisp-s3-cid-audit-v1)
   --report <path>       JSON report path (default: /tmp/wisp-s3-cid-audit-<timestamp>.json)
@@ -80,7 +82,9 @@ Options:
   --help                Show this help
 
 The audit is read-only. Rewritten HTML keys are checked against the original
-file path because their sourceCid identifies the immutable source blob.`)
+file path because their sourceCid identifies the immutable source blob.
+Content-addressed objects (cas/...) belong to no single site: each is checked
+against its own key, whose CID the recorded sourceCid must equal. No PDS read.`)
 	process.exit(0)
 }
 
@@ -178,6 +182,7 @@ const { values } = parseArgs({
 		concurrency: { type: 'string' },
 		'fail-on-findings': { type: 'boolean', default: false },
 		help: { type: 'boolean', short: 'h', default: false },
+		'max-cas-objects': { type: 'string' },
 		'max-objects': { type: 'string' },
 		'max-sites': { type: 'string' },
 		prefix: { type: 'string' },
@@ -197,6 +202,9 @@ const maxSites = values.all
 const maxObjects = values.all
 	? Number.MAX_SAFE_INTEGER
 	: parsePositiveInteger(values['max-objects'], '--max-objects', DEFAULT_MAX_OBJECTS)
+const maxCasObjects = values.all
+	? Number.MAX_SAFE_INTEGER
+	: parsePositiveInteger(values['max-cas-objects'], '--max-cas-objects', maxObjects)
 const requestedSites = (values.site ?? []).map(parseSiteId)
 const reportPath = values.report ?? `/tmp/wisp-s3-cid-audit-${new Date().toISOString().replaceAll(/[:.]/g, '-')}.json`
 
@@ -219,8 +227,13 @@ console.error('Listing S3 object keys (read-only)...')
 const keysBySite = new Map<string, string[]>()
 let listedObjects = 0
 let malformedKeys = 0
+const casKeys: string[] = []
 for await (const key of tier.listKeys(values.prefix)) {
 	listedObjects++
+	if (isCasKey(key)) {
+		casKeys.push(key)
+		continue
+	}
 	const parsed = parseObjectKey(key)
 	if (!parsed) {
 		malformedKeys++
@@ -422,7 +435,22 @@ console.error(
 	`Auditing ${selectedObjects} objects across ${selectedSites.length} sites with concurrency ${concurrency} (read-only)...`,
 )
 const siteResults = await mapConcurrent(selectedSites, Math.min(concurrency, 4), auditSite)
+
+type CasFinding = CasAuditFinding | { kind: 'cas_metadata_missing' | 'cas_metadata_read_error'; key: string }
+const selectedCasKeys = deterministicSample(casKeys, maxCasObjects, (key) => key, values.seed!)
+const casFindings = await mapConcurrent(selectedCasKeys, concurrency, async (key): Promise<CasFinding> => {
+	try {
+		const metadata = await tier.getMetadata(key)
+		if (!metadata) return { kind: 'cas_metadata_missing', key }
+		return auditCasObject(key, { sourceCid: metadata.customMetadata?.sourceCid })
+	} catch {
+		return { kind: 'cas_metadata_read_error', key }
+	}
+})
+const casCounts: Record<string, number> = {}
+for (const finding of casFindings) increment(casCounts, finding.kind)
 const totals: Record<string, number> = {}
+for (const [kind, count] of Object.entries(casCounts)) totals[kind] = count
 for (const site of siteResults) {
 	increment(totals, `site_${site.status}`)
 	for (const [kind, count] of Object.entries(site.counts)) totals[kind] = (totals[kind] ?? 0) + count
@@ -447,6 +475,8 @@ const report = {
 		listedObjects,
 		discoveredSites: discoveredSites.length,
 		malformedKeys,
+		casObjectsListed: casKeys.length,
+		casObjectsAudited: selectedCasKeys.length,
 		selectedSites: selectedSites.length,
 		selectedObjects,
 		maxSites: values.all ? null : maxSites,
@@ -454,6 +484,7 @@ const report = {
 		concurrency,
 	},
 	totals,
+	casFindings: casFindings.filter((finding) => finding.kind !== 'cas_match').slice(0, MAX_ISSUE_DETAILS),
 	sites: siteResults,
 }
 await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 })
@@ -467,6 +498,11 @@ const findingKinds = [
 	'orphaned_cached_path',
 	'metadata_missing',
 	'metadata_read_error',
+	'cas_missing_source_identity',
+	'cas_source_cid_mismatch',
+	'cas_malformed_key',
+	'cas_metadata_missing',
+	'cas_metadata_read_error',
 ]
 if (
 	values['fail-on-findings'] &&
