@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test'
 import { gzipSync } from 'node:zlib'
 import { BlobRef } from '@atproto/api'
 import * as atproto from '@wispplace/atproto-utils'
+import { casKey } from '@wispplace/fs-utils'
 import type { Entry, Record as WispFsRecord } from '@wispplace/lexicons/types/place/wisp/fs'
 import * as safeFetch from '@wispplace/safe-fetch'
 import { CID } from 'multiformats/cid'
@@ -55,6 +56,8 @@ mock.module('./db', () => ({
 	getSiteCache: async () => ({ cold_synced: true, file_cids: oldLedger }),
 	isSupporter: async (_did: string, signal?: AbortSignal) => quotaAdmission(signal),
 	markSiteCacheDeleted: async () => undefined,
+	registerCasObject: async () => undefined,
+	touchCasObjects: async (keys: string[]) => keys,
 	upsertSiteCache: async () => {
 		commits++
 		events.push('commit')
@@ -73,6 +76,7 @@ mock.module('./storage', () => ({
 		deleted.push(key)
 	},
 	getFileMetadata: async () => null,
+	readFile: async () => null,
 	listFiles: async () => [],
 	writeFile: async (key: string, content: Uint8Array) => {
 		if (rewriteFailure && key.includes('/.rewritten/')) throw new Error('rewrite storage unavailable')
@@ -248,7 +252,7 @@ describe('verified cache materialization', () => {
 			verifiedRepair,
 			onVerifiedRepairComplete: async () => {
 				expect(cache.has(key)).toBe(false)
-				expect(cache.get(`${did}/site/page.shtml`)).toEqual(bytes)
+				expect(cache.get(casKey({ cid: blobCid, path: 'page.shtml', mimeType: 'text/html' }))).toEqual(bytes)
 			},
 		})
 		expect(deleted).toContain(key)

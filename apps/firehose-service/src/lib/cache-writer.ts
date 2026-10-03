@@ -10,13 +10,15 @@ import {
 	SubfsExpansionError,
 	type SubfsSubject,
 } from '@wispplace/atproto-utils'
-import { shouldCompressMimeType } from '@wispplace/atproto-utils/compression'
 import { MAX_BLOB_SIZE, MAX_FILE_COUNT, MAX_SITE_SIZE, MAX_SITE_SIZE_SUPPORTER } from '@wispplace/constants'
 import {
+	casKey,
 	collectFileCidsFromEntries,
 	countFilesInDirectory,
+	type FileObjects,
 	MAX_REDIRECT_FILE_BYTES,
 	normalizeFileCids,
+	normalizeFileObjects,
 } from '@wispplace/fs-utils'
 import { isHtmlContent, rewriteHtmlPaths } from '@wispplace/fs-utils/html-rewriter'
 import { parseLexiconJson } from '@wispplace/lexicons/public-json'
@@ -40,6 +42,8 @@ import {
 	getSiteCache,
 	isSupporter,
 	markSiteCacheDeleted,
+	registerCasObject,
+	touchCasObjects,
 	upsertSiteCache,
 	upsertSiteSettingsCache,
 	withSiteWriteLock,
@@ -51,7 +55,8 @@ import {
 	type VerifiedRepairRequest,
 	type VerifiedSitePreflight,
 } from './site-repair-protocol'
-import { deleteFile, getFileMetadata, listFiles, writeFile } from './storage'
+import { deleteFile, getFileMetadata, listFiles, readFile, writeFile } from './storage'
+import { isRedirectsFile, isTextLikeMime, shouldStayCompressed } from './stored-file-rules'
 
 const logger = createLogger('firehose-service')
 const SUBFS_EXPANSION_LIMITS = {
@@ -772,6 +777,17 @@ interface FileInfo {
 }
 
 type CachedFileMetadataExpectation = Pick<FileInfo, 'path' | 'cid' | 'ownerDid' | 'encoding' | 'mimeType' | 'base64'>
+
+/** The CAS key a file's stored body lives at: a function of the manifest alone, never of the site. */
+function objectKeyFor(file: FileInfo): string {
+	return casKey({
+		cid: file.cid,
+		path: file.path,
+		mimeType: file.mimeType,
+		encoding: file.encoding,
+		base64: file.base64,
+	})
+}
 type SourceFileIdentity = Pick<FileInfo, 'cid' | 'ownerDid'>
 
 // Blob CIDs are normally much shorter than this (for example, a CIDv1
@@ -828,6 +844,9 @@ export function createRewrittenHtmlMetadata(file: SourceFileIdentity): Record<st
 export function getStoredUncompressedSize(
 	metadata: StorageMetadata | null,
 	file: CachedFileMetadataExpectation,
+	// A shared CAS body is not bound to the repository that first wrote it, so its metadata carries no
+	// owner; per-site legacy objects do.
+	options: { checkSourceDid?: boolean } = {},
 ): number | null {
 	const custom = metadata?.customMetadata
 	if (!custom) return null
@@ -836,15 +855,13 @@ export function getStoredUncompressedSize(
 	// identical while its gzip/base64 interpretation (and therefore logical size)
 	// changes. Non-compressible gzip inputs are normalized to identity before write.
 	const expectedStoredEncoding =
-		file.encoding === 'gzip' && !isRedirectsFile(file.path) && shouldCompressMimeType(file.mimeType)
-			? 'gzip'
-			: undefined
+		file.encoding === 'gzip' && shouldStayCompressed(file.path, file.mimeType) ? 'gzip' : undefined
 	const encodingMatches =
 		custom.encoding === expectedStoredEncoding ||
 		(file.encoding === undefined && custom.encoding === 'gzip' && isTextLikeMime(file.mimeType, file.path))
 	if (
 		custom.sourceCid !== file.cid ||
-		custom.sourceDid !== file.ownerDid ||
+		(options.checkSourceDid !== false && custom.sourceDid !== file.ownerDid) ||
 		custom.mimeType !== file.mimeType ||
 		!encodingMatches ||
 		custom.base64 !== `${file.base64 === true}`
@@ -879,10 +896,6 @@ export function validateUncompressedSiteSize(
 		}
 	}
 	return totalUncompressedSize
-}
-
-function isRedirectsFile(filePath: string): boolean {
-	return filePath === '_redirects'
 }
 
 /**
@@ -995,28 +1008,6 @@ export async function reserveAndWriteWithinLogicalBudget<T>(
 ): Promise<T> {
 	budget.reserve(filePath, logicalSize)
 	return await write()
-}
-
-const TEXT_LIKE_MIME_TYPES = new Set([
-	'text/html',
-	'text/css',
-	'text/javascript',
-	'application/javascript',
-	'application/json',
-	'application/xml',
-	'image/svg+xml',
-])
-const TEXT_LIKE_PATH_SUFFIXES = ['.html', '.htm', '.css', '.js', '.json', '.xml', '.svg']
-
-function isTextLikeMime(mimeType?: string, path?: string): boolean {
-	if (mimeType && TEXT_LIKE_MIME_TYPES.has(mimeType)) return true
-	if (!path) return false
-	const lowerPath = path.toLowerCase()
-	return (
-		lowerPath === '_redirects' ||
-		lowerPath.endsWith('/_redirects') ||
-		TEXT_LIKE_PATH_SUFFIXES.some((suffix) => lowerPath.endsWith(suffix))
-	)
 }
 
 function looksLikeBase64(content: Uint8Array): boolean {
@@ -1262,7 +1253,7 @@ function normalizeBlobContent(
 	return {
 		content,
 		encoding,
-		shouldStayCompressed: !isRedirectsFile(file.path) && shouldCompressMimeType(file.mimeType),
+		shouldStayCompressed: shouldStayCompressed(file.path, file.mimeType),
 	}
 }
 
@@ -1293,10 +1284,12 @@ function createOriginalFileMetadata(
 	encoding: FileInfo['encoding'],
 	uncompressedSize: number,
 ): Record<string, string> {
+	// A CAS body is shared across sites and accounts, so it is bound to its blob CID, not to an owner.
+	assertSourceIdentityIsBounded(file)
 	const metadata: Record<string, string> = {
 		base64: `${file.base64 === true}`,
 		uncompressedSize: `${uncompressedSize}`,
-		...createSourceIdentityMetadata(file),
+		sourceCid: file.cid,
 	}
 	if (encoding) metadata.encoding = encoding
 	if (file.mimeType) metadata.mimeType = file.mimeType
@@ -1356,11 +1349,14 @@ async function writePreparedBlob(
 	const prepared = await measureBlobContent(file, normalizeBlobContent(file, inputContent, initialEncoding))
 	assertRevalidationActive(resources)
 	assertLogicalFileSizeWithinLimit(file.path, prepared.uncompressedSize)
-	const key = `${did}/${rkey}/${file.path}`
+	const key = objectKeyFor(file)
 	const metadata = createOriginalFileMetadata(file, prepared.encoding, prepared.uncompressedSize)
-	await reserveAndWriteWithinLogicalBudget(logicalSizeBudget, file.path, prepared.uncompressedSize, () =>
-		writeFile(key, prepared.content, metadata),
-	)
+	await reserveAndWriteWithinLogicalBudget(logicalSizeBudget, file.path, prepared.uncompressedSize, async () => {
+		// Registered before the object exists: the garbage collector never selects a row with a fresh
+		// clock, so it cannot delete this body between the write and the site's commit.
+		await registerCasObject(key, prepared.content.byteLength)
+		await writeFile(key, prepared.content, metadata)
+	})
 	await writeRewrittenHtml(did, rkey, file, prepared, resources, strictRewrites)
 	logger.debug(
 		`Stored ${file.path} (${prepared.content.length} stored bytes, ${prepared.uncompressedSize} logical bytes)`,
@@ -1404,6 +1400,8 @@ interface ValidatedSiteUpdate {
 
 interface SiteUpdateLedger {
 	oldFileCids: Record<string, string>
+	/** The site's previous path -> CAS key mapping; null when nothing was mapped yet. */
+	oldFileObjects: FileObjects | null
 	effectiveForceDownload: boolean
 }
 
@@ -1412,11 +1410,21 @@ interface SiteFilePlan {
 	invalidationToken?: string
 	newFileCids: Record<string, string>
 	newFiles: FileInfo[]
-	filesToDownload: FileInfo[]
+	/** path -> CAS key of every file in the new manifest. */
+	objectKeys: ReadonlyMap<string, string>
+	/** CAS keys this site already references; their refcount keeps them alive without a touch. */
+	previousObjectKeys: ReadonlySet<string>
+	/** Paths new to this site, changed or forced: their per-site pre-rewritten HTML must be rebuilt. */
+	changedPaths: ReadonlySet<string>
+	forceDownload: boolean
 	pathsToDelete: string[]
 }
 
 interface AccountedSiteFilePlan extends SiteFilePlan {
+	/** Bodies that must be fetched from the PDS: missing, unusable, or forced. */
+	filesToDownload: FileInfo[]
+	/** Existing bodies reused as they are whose pre-rewritten HTML must be rebuilt from storage. */
+	filesToRewrite: FileInfo[]
 	uncompressedSizes: Map<string, number>
 	logicalSizeBudget: SiteLogicalSizeBudget
 }
@@ -1551,7 +1559,11 @@ async function loadSiteUpdateLedger(update: ValidatedSiteUpdate): Promise<SiteUp
 			rkey: update.request.rkey,
 		})
 	}
-	return { oldFileCids: normalized.value, effectiveForceDownload: update.request.forceDownload || needsFullColdSync }
+	return {
+		oldFileCids: normalized.value,
+		oldFileObjects: normalizeFileObjects(existing?.file_objects),
+		effectiveForceDownload: update.request.forceDownload || needsFullColdSync,
+	}
 }
 
 async function markSiteUpdateInProgress(update: ValidatedSiteUpdate): Promise<string | undefined> {
@@ -1561,47 +1573,35 @@ async function markSiteUpdateInProgress(update: ValidatedSiteUpdate): Promise<st
 	return token
 }
 
-function appendUniqueDownload(files: FileInfo[], paths: Set<string>, file: FileInfo): void {
-	if (paths.has(file.path)) return
-	paths.add(file.path)
-	files.push(file)
-}
-
 export interface FileChangePlan {
-	downloadPaths: ReadonlySet<string>
-	downloadFileCids: ReadonlyMap<string, string>
+	/** Paths new to this site, changed or forced: their per-site outputs must be rebuilt. */
+	changedPaths: ReadonlySet<string>
 	pathsToDelete: string[]
 }
 
 /** Pure manifest/ledger diff used by the planning stage before any blob work. */
 export function planFileChanges(
-	files: ReadonlyArray<Pick<FileInfo, 'path' | 'cid'>>,
+	files: ReadonlyArray<Pick<FileInfo, 'path' | 'cid'> & { objectKey: string }>,
 	oldFileCids: Record<string, string>,
+	oldFileObjects: FileObjects | null,
 	effectiveForceDownload: boolean,
 	forceRewriteHtml: boolean,
 ): FileChangePlan {
-	const downloadFileCids = new Map<string, string>()
+	const changedPaths = new Set<string>()
 	const currentPaths = new Set<string>()
 	for (const file of files) {
 		currentPaths.add(file.path)
-		const needsDownload =
-			effectiveForceDownload || oldFileCids[file.path] !== file.cid || (forceRewriteHtml && isHtmlContent(file.path))
-		if (needsDownload && !downloadFileCids.has(file.path)) downloadFileCids.set(file.path, file.cid)
+		const changed =
+			effectiveForceDownload ||
+			oldFileCids[file.path] !== file.cid ||
+			oldFileObjects?.[file.path] !== file.objectKey ||
+			(forceRewriteHtml && isHtmlContent(file.path))
+		if (changed) changedPaths.add(file.path)
 	}
 	return {
-		downloadPaths: new Set(downloadFileCids.keys()),
-		downloadFileCids,
+		changedPaths,
 		pathsToDelete: Object.keys(oldFileCids).filter((path) => !currentPaths.has(path)),
 	}
-}
-
-function selectPlannedFiles(files: FileInfo[], plannedCids: ReadonlyMap<string, string>): FileInfo[] {
-	const selected: FileInfo[] = []
-	const selectedPaths = new Set<string>()
-	for (const file of files) {
-		if (plannedCids.get(file.path) === file.cid) appendUniqueDownload(selected, selectedPaths, file)
-	}
-	return selected
 }
 
 /** Build the manifest-derived file plan while the updating marker is active. */
@@ -1613,9 +1613,11 @@ function planSiteFiles(
 	const newFileCids: Record<string, string> = {}
 	collectFileCidsFromEntries(update.expandedRoot.entries, '', newFileCids)
 	const newFiles = collectFileInfo(update.expandedRoot.entries, update.ownerDidByFilePath)
+	const objectKeys = new Map(newFiles.map((file) => [file.path, objectKeyFor(file)]))
 	const changes = planFileChanges(
-		newFiles,
+		newFiles.map((file) => ({ path: file.path, cid: file.cid, objectKey: objectKeys.get(file.path) ?? '' })),
 		ledger.oldFileCids,
+		ledger.oldFileObjects,
 		ledger.effectiveForceDownload,
 		update.request.forceRewriteHtml,
 	)
@@ -1624,7 +1626,10 @@ function planSiteFiles(
 		invalidationToken,
 		newFileCids,
 		newFiles,
-		filesToDownload: selectPlannedFiles(newFiles, changes.downloadFileCids),
+		objectKeys,
+		previousObjectKeys: new Set(Object.values(ledger.oldFileObjects ?? {})),
+		changedPaths: changes.changedPaths,
+		forceDownload: ledger.effectiveForceDownload,
 		pathsToDelete: changes.pathsToDelete,
 	}
 }
@@ -1635,64 +1640,141 @@ interface AccountingProbe {
 	metadataReadFailed: boolean
 }
 
-async function probeStoredFileAccounting(did: string, rkey: string, file: FileInfo): Promise<AccountingProbe> {
+async function probeStoredFileAccounting(objectKey: string, file: FileInfo): Promise<AccountingProbe> {
 	try {
-		const metadata = await getFileMetadata(`${did}/${rkey}/${file.path}`)
-		return { file, storedSize: getStoredUncompressedSize(metadata, file), metadataReadFailed: false }
+		const metadata = await getFileMetadata(objectKey)
+		return {
+			file,
+			storedSize: getStoredUncompressedSize(metadata, file, { checkSourceDid: false }),
+			metadataReadFailed: false,
+		}
 	} catch {
 		return { file, storedSize: null, metadataReadFailed: true }
 	}
 }
 
-function applyAccountingProbe(
-	probe: AccountingProbe,
-	uncompressedSizes: Map<string, number>,
-	filesToDownload: FileInfo[],
-	downloadPaths: Set<string>,
-	update: ValidatedSiteUpdate,
-): boolean {
-	if (probe.storedSize !== null) {
-		uncompressedSizes.set(probe.file.path, probe.storedSize)
-		return false
-	}
-	appendUniqueDownload(filesToDownload, downloadPaths, probe.file)
-	if (probe.metadataReadFailed) {
-		logger.warn('Could not read cached logical size; re-downloading file for safe accounting', {
-			did: update.request.did,
-			rkey: update.request.rkey,
-			path: probe.file.path,
-		})
-	}
-	return true
-}
-
-/** Reuse trusted logical sizes and queue stale/legacy objects for safe refresh. */
+/**
+ * Decide, per file, whether its body already exists in storage. A body that exists with trustworthy
+ * accounting metadata is reused whoever stored it; anything else is fetched from the PDS. Forced
+ * updates (verified repair, cold tier not synced) refetch everything.
+ */
 async function accountSiteFiles(plan: SiteFilePlan): Promise<AccountedSiteFilePlan> {
 	const uncompressedSizes = new Map<string, number>()
-	const filesToDownload = [...plan.filesToDownload]
-	const downloadPaths = new Set(filesToDownload.map((file) => file.path))
-	const unchangedFiles = plan.newFiles.filter((file) => !downloadPaths.has(file.path))
-	let accountingRefreshes = 0
-	for (let index = 0; index < unchangedFiles.length; index += 20) {
-		assertRevalidationActive(plan.update.resources)
-		const batch = unchangedFiles.slice(index, index + 20)
-		const probes = await Promise.all(
-			batch.map((file) => probeStoredFileAccounting(plan.update.request.did, plan.update.request.rkey, file)),
-		)
-		for (const probe of probes)
-			accountingRefreshes += Number(
-				applyAccountingProbe(probe, uncompressedSizes, filesToDownload, downloadPaths, plan.update),
-			)
+	const filesToDownload: FileInfo[] = []
+	let reused: FileInfo[] = []
+	const keyOf = (file: FileInfo) => plan.objectKeys.get(file.path) ?? objectKeyFor(file)
+
+	if (plan.forceDownload) {
+		filesToDownload.push(...plan.newFiles)
+	} else {
+		for (let index = 0; index < plan.newFiles.length; index += 20) {
+			assertRevalidationActive(plan.update.resources)
+			const batch = plan.newFiles.slice(index, index + 20)
+			const probes = await Promise.all(batch.map((file) => probeStoredFileAccounting(keyOf(file), file)))
+			for (const probe of probes) {
+				if (probe.storedSize === null) {
+					filesToDownload.push(probe.file)
+					if (probe.metadataReadFailed) {
+						logger.warn('Could not read cached logical size; fetching file again for safe accounting', {
+							did: plan.update.request.did,
+							rkey: plan.update.request.rkey,
+							path: probe.file.path,
+						})
+					}
+					continue
+				}
+				uncompressedSizes.set(probe.file.path, probe.storedSize)
+				reused.push(probe.file)
+			}
+		}
+		const collected = await claimReusedObjects(plan, reused, keyOf)
+		for (const file of collected) {
+			uncompressedSizes.delete(file.path)
+			filesToDownload.push(file)
+		}
+		const lost = new Set(collected.map((file) => file.path))
+		reused = reused.filter((file) => !lost.has(file.path))
 	}
+	const filesToRewrite = reused.filter((file) => plan.changedPaths.has(file.path) && isHtmlContent(file.path))
 	logger.info(
-		`Files unchanged: ${unchangedFiles.length - accountingRefreshes}, accounting refreshes: ${accountingRefreshes}, to download: ${filesToDownload.length}, to delete: ${plan.pathsToDelete.length}`,
+		`Files reused: ${uncompressedSizes.size}, to rewrite from storage: ${filesToRewrite.length}, to download: ${filesToDownload.length}, to delete: ${plan.pathsToDelete.length}`,
 	)
 	return {
 		...plan,
 		filesToDownload,
+		filesToRewrite,
 		uncompressedSizes,
 		logicalSizeBudget: new SiteLogicalSizeBudget(plan.update.sizeLimit, uncompressedSizes),
 	}
+}
+
+/**
+ * Reused objects are about to be referenced by a new site: restart the garbage-collection clock of those
+ * nothing references yet. Returns the files whose object was collected between the probe and now; they
+ * are fetched again like any missing body.
+ */
+async function claimReusedObjects(
+	plan: SiteFilePlan,
+	reused: readonly FileInfo[],
+	keyOf: (file: FileInfo) => string,
+): Promise<FileInfo[]> {
+	const keys = [...new Set(reused.map(keyOf))].filter((key) => !plan.previousObjectKeys.has(key))
+	const alive = new Set<string>()
+	for (let index = 0; index < keys.length; index += 1_000) {
+		assertRevalidationActive(plan.update.resources)
+		for (const key of await touchCasObjects(keys.slice(index, index + 1_000))) alive.add(key)
+	}
+	return reused.filter((file) => !plan.previousObjectKeys.has(keyOf(file)) && !alive.has(keyOf(file)))
+}
+
+/** Build one file's pre-rewritten HTML for this site from the body already in storage. */
+async function rewriteFromStoredBody(plan: AccountedSiteFilePlan, file: FileInfo): Promise<void> {
+	const { did, rkey, resources } = plan.update.request
+	const key = plan.objectKeys.get(file.path) ?? objectKeyFor(file)
+	await blobProcessingGate.run(async () => {
+		assertRevalidationActive(resources)
+		const stored = await readFile(key)
+		if (!stored) throw new Error('Stored body is missing')
+		const encoding = stored.metadata.customMetadata?.encoding === 'gzip' ? ('gzip' as const) : undefined
+		const decodedHtml = Buffer.from(
+			encoding === 'gzip' ? await decompress(stored.data, getLogicalFileSizeLimit(file.path)) : stored.data,
+		)
+		assertRevalidationActive(resources)
+		await writeRewrittenHtml(
+			did,
+			rkey,
+			file,
+			{ content: stored.data, encoding, uncompressedSize: decodedHtml.byteLength, decodedHtml },
+			resources,
+			plan.update.request.verifiedRepair !== undefined,
+		)
+	})
+}
+
+/**
+ * Rebuild the per-site HTML of reused bodies from storage. A body that cannot be read or decoded is
+ * not trusted: that file falls back to a normal download, which rewrites it from verified bytes.
+ */
+async function rewriteReusedHtml(plan: AccountedSiteFilePlan): Promise<AccountedSiteFilePlan> {
+	const fallback: FileInfo[] = []
+	for (let index = 0; index < plan.filesToRewrite.length; index += DOWNLOAD_CONCURRENCY) {
+		assertRevalidationActive(plan.update.resources)
+		const batch = plan.filesToRewrite.slice(index, index + DOWNLOAD_CONCURRENCY)
+		const results = await Promise.allSettled(batch.map((file) => rewriteFromStoredBody(plan, file)))
+		for (const [batchIndex, result] of results.entries()) {
+			const file = batch[batchIndex]
+			if (!file || result.status === 'fulfilled') continue
+			// A stopped or expired update must propagate, not turn into a refetch.
+			assertRevalidationActive(plan.update.resources)
+			logger.warn('Could not rebuild HTML from the stored body; fetching it again', {
+				did: plan.update.request.did,
+				rkey: plan.update.request.rkey,
+				path: file.path,
+			})
+			fallback.push(file)
+		}
+	}
+	return fallback.length === 0 ? plan : { ...plan, filesToDownload: [...plan.filesToDownload, ...fallback] }
 }
 
 function isTerminalIngestError(error: unknown): boolean {
@@ -1752,10 +1834,13 @@ async function downloadSiteFiles(
 	return failures
 }
 
+/**
+ * Only per-site outputs are deleted here. Bodies live at shared CAS keys that other sites may still
+ * reference; the garbage collector removes them once nothing does.
+ */
 function getDeleteKeys(plan: SiteFilePlan): string[] {
 	const prefix = `${plan.update.request.did}/${plan.update.request.rkey}/`
-	const outputKeys = (path: string) =>
-		isHtmlContent(path) ? [`${prefix}${path}`, `${prefix}.rewritten/${path}`] : [`${prefix}${path}`]
+	const outputKeys = (path: string) => (isHtmlContent(path) ? [`${prefix}.rewritten/${path}`] : [])
 	const currentOutputs = new Set(plan.newFiles.flatMap((file) => outputKeys(file.path)))
 	return plan.pathsToDelete.flatMap(outputKeys).filter((key) => !currentOutputs.has(key))
 }
@@ -1922,7 +2007,7 @@ async function commitSiteLedger(plan: AccountedSiteFilePlan): Promise<void> {
 	// deadline cannot begin the next mutation after the operation is fenced.
 	assertRevalidationActive(resources)
 	logger.debug(`About to upsert site cache for ${did}/${rkey}`)
-	await upsertSiteCache(did, rkey, recordCid, plan.newFileCids)
+	await upsertSiteCache(did, rkey, recordCid, plan.newFileCids, true, Object.fromEntries(plan.objectKeys))
 	assertRevalidationActive(resources)
 	logger.debug(`Updated site cache for ${did}/${rkey} with record CID ${recordCid}`)
 	const settingsRecord = await fetchSettingsRecord(did, rkey, plan.update.pdsEndpoint, resources)
@@ -2114,13 +2199,14 @@ async function handleSiteCreateOrUpdateLocked(
 	const invalidationToken = await markSiteUpdateInProgress(update)
 	const plan = planSiteFiles(update, ledger, invalidationToken)
 	const accountedPlan = await accountSiteFiles(plan)
-	const downloadFailures = await downloadSiteFilesOrFailClosed(accountedPlan)
-	await recoverSiteFileFailures(accountedPlan, downloadFailures, [])
+	const rewrittenPlan = await rewriteReusedHtml(accountedPlan)
+	const downloadFailures = await downloadSiteFilesOrFailClosed(rewrittenPlan)
+	await recoverSiteFileFailures(rewrittenPlan, downloadFailures, [])
 	// Keep removed-but-recoverable cache objects until every replacement is verified.
-	const deleteFailures = await deleteSiteFiles(accountedPlan)
-	await retryDeleteFailures(accountedPlan, deleteFailures)
-	await commitSiteUpdate(accountedPlan)
-	await notifySiteUpdateComplete(accountedPlan)
+	const deleteFailures = await deleteSiteFiles(rewrittenPlan)
+	await retryDeleteFailures(rewrittenPlan, deleteFailures)
+	await commitSiteUpdate(rewrittenPlan)
+	await notifySiteUpdateComplete(rewrittenPlan)
 	logger.info(`Successfully cached site ${did}/${rkey}`)
 }
 

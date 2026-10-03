@@ -1,9 +1,11 @@
 import { createHash } from 'node:crypto'
 import { DELETED_SITE_RECORD_CID } from '@wispplace/constants'
 import type { SiteCache, SiteSettingsCache } from '@wispplace/database'
+import type { FileObjects } from '@wispplace/fs-utils'
 import { createLogger } from '@wispplace/observability'
 import postgres from 'postgres'
 import { config } from '../config'
+import { applyCasReferences, recordCasObject, touchCasObjects as touchCasObjectRows } from './cas-objects'
 
 const logger = createLogger('firehose-service')
 
@@ -960,12 +962,18 @@ export async function upsertSiteCache(
 	// it has finished writing files. Defaults to true to keep existing call sites
 	// (and the contract that this function is only called after S3 writes) intact.
 	coldSynced = true,
+	// path -> CAS key for every stored file of the site. Null has no mapped files (a tombstone, or a
+	// site not converted yet): it releases any references the row held.
+	fileObjects: FileObjects | null = null,
 ): Promise<void> {
 	logger.debug(`[DB] upsertSiteCache starting for ${did}/${rkey}`)
 	try {
-		await sql`
+		// The row and its CAS references commit together, so a reader never sees a mapping
+		// whose references were not taken, and a crash never leaks a half-moved count.
+		await sql.begin(async (tx) => {
+			await tx`
       INSERT INTO site_cache (did, rkey, record_cid, file_cids, cached_at, updated_at, cold_synced)
-      VALUES (${did}, ${rkey}, ${recordCid}, ${sql.json(fileCids ?? {})}, EXTRACT(EPOCH FROM NOW()), EXTRACT(EPOCH FROM NOW()), ${coldSynced})
+      VALUES (${did}, ${rkey}, ${recordCid}, ${tx.json(fileCids ?? {})}, EXTRACT(EPOCH FROM NOW()), EXTRACT(EPOCH FROM NOW()), ${coldSynced})
       ON CONFLICT (did, rkey)
       DO UPDATE SET
         record_cid = EXCLUDED.record_cid,
@@ -975,11 +983,23 @@ export async function upsertSiteCache(
         absent_since = NULL,
         absent_checks = 0
     `
+			await applyCasReferences(tx as unknown as postgres.Sql, did, rkey, fileObjects)
+		})
 		logger.debug(`[DB] upsertSiteCache completed for ${did}/${rkey}`)
 	} catch (err) {
 		logger.error('[DB] upsertSiteCache error', err, { did, rkey })
 		throw err
 	}
+}
+
+/** Register a body about to be written to storage; unreferenced until its site commits. */
+export async function registerCasObject(key: string, size: number): Promise<void> {
+	await recordCasObject(sql, key, size)
+}
+
+/** Restart the GC clock of objects a site update is reusing; returns those that still exist. */
+export async function touchCasObjects(keys: readonly string[]): Promise<string[]> {
+	return await touchCasObjectRows(sql, keys)
 }
 
 export interface AbsentSiteMark {

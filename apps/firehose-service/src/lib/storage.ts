@@ -4,7 +4,7 @@
  */
 
 import { createLogger } from '@wispplace/observability'
-import { DiskStorageTier, S3StorageTier, TieredStorage } from '@wispplace/tiered-storage'
+import { DiskStorageTier, S3StorageTier, type StorageMetadata, TieredStorage } from '@wispplace/tiered-storage'
 import { config } from '../config'
 import { StorageStatsCache, type StorageStatsSnapshot } from './storage-stats-cache'
 
@@ -110,6 +110,14 @@ export async function writeFile(key: string, data: Uint8Array, metadata?: Record
  */
 export async function getFileMetadata(key: string) {
 	return await getColdTier().getMetadata(key)
+}
+
+/**
+ * Read a stored object and its metadata from S3, or null when it does not exist.
+ */
+export async function readFile(key: string): Promise<{ data: Uint8Array; metadata: StorageMetadata } | null> {
+	const result = await getStorage().getWithMetadata(key)
+	return result ? { data: result.data, metadata: result.metadata } : null
 }
 
 /**

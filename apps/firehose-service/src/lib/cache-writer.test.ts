@@ -675,11 +675,11 @@ describe('bounded site record listing', () => {
 })
 
 describe('ingest resource and logical quota guards', () => {
-	test('plans changed and removed files before the accounting and download stages', () => {
+	test('plans changed, new-to-site and removed files before the accounting and download stages', () => {
 		const files = [
-			{ path: 'unchanged.css', cid: 'same' },
-			{ path: 'changed.js', cid: 'new' },
-			{ path: 'page.html', cid: 'same-page' },
+			{ path: 'unchanged.css', cid: 'same', objectKey: 'cas/same.css' },
+			{ path: 'changed.js', cid: 'new', objectKey: 'cas/new.js' },
+			{ path: 'page.html', cid: 'same-page', objectKey: 'cas/page.html' },
 		]
 		const oldFileCids = {
 			'unchanged.css': 'same',
@@ -687,24 +687,47 @@ describe('ingest resource and logical quota guards', () => {
 			'page.html': 'same-page',
 			'removed.txt': 'gone',
 		}
+		const oldFileObjects = {
+			'unchanged.css': 'cas/same.css',
+			'changed.js': 'cas/old.js',
+			'page.html': 'cas/page.html',
+			'removed.txt': 'cas/gone.txt',
+		}
 
-		const standard = planFileChanges(files, oldFileCids, false, false)
-		expect([...standard.downloadPaths]).toEqual(['changed.js'])
+		const standard = planFileChanges(files, oldFileCids, oldFileObjects, false, false)
+		expect([...standard.changedPaths]).toEqual(['changed.js'])
 		expect(standard.pathsToDelete).toEqual(['removed.txt'])
 
-		const forcedRewrite = planFileChanges(files, oldFileCids, false, true)
-		expect([...forcedRewrite.downloadPaths]).toEqual(['changed.js', 'page.html'])
+		const forcedRewrite = planFileChanges(files, oldFileCids, oldFileObjects, false, true)
+		expect([...forcedRewrite.changedPaths]).toEqual(['changed.js', 'page.html'])
 
-		const duplicatePath = planFileChanges(
-			[
-				{ path: 'duplicate.txt', cid: 'old' },
-				{ path: 'duplicate.txt', cid: 'new' },
-			],
-			{ 'duplicate.txt': 'old' },
+		const forcedDownload = planFileChanges(files, oldFileCids, oldFileObjects, true, false)
+		expect([...forcedDownload.changedPaths]).toEqual(['unchanged.css', 'changed.js', 'page.html'])
+	})
+
+	test('treats every file as new to a site that has no previous mapping', () => {
+		const files = [
+			{ path: 'a.css', cid: 'a', objectKey: 'cas/a.css' },
+			{ path: 'b.html', cid: 'b', objectKey: 'cas/b.html' },
+		]
+
+		// Same CIDs as the old ledger, but no stored mapping: the bodies may be shared, the site's own
+		// outputs are not built yet.
+		const plan = planFileChanges(files, { 'a.css': 'a', 'b.html': 'b' }, null, false, false)
+
+		expect([...plan.changedPaths]).toEqual(['a.css', 'b.html'])
+	})
+
+	test('treats a file whose CAS key changed as changed even when its CID did not', () => {
+		const plan = planFileChanges(
+			[{ path: 'data.txt', cid: 'same', objectKey: 'cas/same.json' }],
+			{ 'data.txt': 'same' },
+			{ 'data.txt': 'cas/same.plain' },
 			false,
 			false,
 		)
-		expect(duplicatePath.downloadFileCids.get('duplicate.txt')).toBe('new')
+
+		expect([...plan.changedPaths]).toEqual(['data.txt'])
 	})
 
 	test('falls back to safe resource settings for invalid backoff and concurrency values', () => {
