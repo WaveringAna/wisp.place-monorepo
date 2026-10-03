@@ -1,6 +1,5 @@
-# Build, lint and test the Rust port of wispctl (cli-rs/). The TypeScript CLI
-# in cli/ is still the shipped one (see build-wispctl.yml); this only keeps the
-# port green until it replaces it.
+# Lint and test the shipped Rust CLI (cli-rs/). build-wispctl.yml builds the
+# same workspace through the root Nix flake and publishes it to Cachix.
 when:
   - event: ["push", "manual"]
     branch: main
@@ -17,6 +16,7 @@ dependencies:
   - rustc
   - clippy
   - rustfmt
+  - cacert
 
 environment:
   CARGO_INCREMENTAL: "0"
@@ -43,6 +43,8 @@ steps:
     command: |
       export PATH="$HOME/.nix-profile/bin:$PATH"
       cd cli-rs
+      export SSL_CERT_FILE="$HOME/.nix-profile/etc/ssl/certs/ca-bundle.crt"
+      test -r "$SSL_CERT_FILE"
       cargo test --locked --workspace
 
   - name: release build

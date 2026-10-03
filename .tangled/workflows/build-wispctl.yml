@@ -18,8 +18,10 @@ dependencies:
 steps:
   - name: build and check wispctl
     command: |
-      nix flake check --accept-flake-config
-      nix build --accept-flake-config .#default
+      nix flake check --all-systems --no-build --accept-flake-config --no-update-lock-file
+      nix build --accept-flake-config --no-update-lock-file .#default
+      ./result/bin/wispctl --version
+      ./result/bin/wispctl --help > /dev/null
 
   - name: push wispctl to Cachix
     command: |

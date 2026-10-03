@@ -70,6 +70,29 @@ crates.io waits for a jacquard release carrying the fork's fixes (git
 dependencies cannot be published); the crates are already named `wispplace-*`
 because `wisp-core` and `wisp-ui` are taken there.
 
+## Nix distribution
+
+The root `flake.nix` packages this Rust workspace, not the legacy TypeScript CLI.
+`nix build .#default` (also `.#wispctl`) and `nix run . -- --help` keep the existing
+entry points. The version comes from the workspace manifest. Cargo dependencies
+are vendored from `Cargo.lock`; changing the jacquard git revision also requires
+updating its `cargoLock.outputHashes` entry with the hash Nix reports.
+
+`build-wispctl.yml` evaluates every advertised system, builds and tests the local
+system, checks the installed executable, then publishes to Cachix only on main
+pushes. `build-wispctl-rs.yml` separately runs rustfmt, clippy and workspace tests.
+The Nix build uses thin LTO to reduce CI memory usage. It supports x86_64 Linux,
+aarch64 Linux and aarch64 macOS; the pinned nixpkgs no longer supports Intel macOS.
+Evaluate all systems before changing the supported list or nixpkgs pin:
+
+```sh
+nix flake check --all-systems --no-build --no-update-lock-file
+nix build --no-update-lock-file .#default
+./result/bin/wispctl --version
+./result/bin/wispctl --help
+bun test --isolate scripts/wispctl-nix.test.ts
+```
+
 ## Compatibility decisions
 
 - State DB stays at `~/.config/wispctl/state.sqlite`, same `kv` table, same

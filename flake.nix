@@ -13,78 +13,61 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-    bun2nix.url = "github:nix-community/bun2nix";
-    bun2nix.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = { self, nixpkgs, flake-utils, bun2nix }:
-    flake-utils.lib.eachDefaultSystem (system:
+  outputs = { self, nixpkgs, flake-utils }:
+    flake-utils.lib.eachSystem [
+      "x86_64-linux"
+      "aarch64-linux"
+      "aarch64-darwin"
+    ] (system:
       let
-        pkgs = import nixpkgs {
-          inherit system;
-          overlays = [ bun2nix.overlays.default ];
-        };
+        pkgs = import nixpkgs { inherit system; };
+        workspace = builtins.fromTOML (builtins.readFile ./cli-rs/Cargo.toml);
 
-        wispctl = pkgs.bun2nix.mkDerivation {
+        wispctl = pkgs.rustPlatform.buildRustPackage {
           pname = "wispctl";
-          version = "1.1.3";
-          src = ./.;
-          postPatch = ''
-            mv package.json package.json.root
-            mv bun.lock bun.lock.root
-          '';
-
-          bunDeps = pkgs.bun2nix.fetchBunDeps {
-            bunNix = ./cli/bun.nix;
+          version = workspace.workspace.package.version;
+          src = ./cli-rs;
+          cargoLock = {
+            lockFile = ./cli-rs/Cargo.lock;
+            # All git crates in Cargo.lock come from this same jacquard checkout.
+            outputHashes = {
+              "jacquard-0.13.0" = "sha256-1YCga3kKaG4IkMi1Xf+RJakzSdtgqI7RJWT1OFjuNuo=";
+            };
           };
-
-          bunInstallFlags = [
-            "--frozen-lockfile"
-            "--offline"
-            "--linker=hoisted"
-            "--backend=copyfile"
-          ];
-          postBunLifecycleScriptsPhase = ''
-            ln -s "$PWD/node_modules" ../node_modules
-          '';
-          bunRoot = "cli";
-          module = "index.ts";
-          dontFixup = true;
-          buildPhase = ''
-            bun build ./cli/index.ts \
-              --outfile wispctl \
-              --compile \
-              --minify \
-              --sourcemap \
-              --bytecode \
-              --external @napi-rs/keyring \
-              --external '@napi-rs/keyring-*'
-          '';
-          installPhase = ''
-            install -Dm755 wispctl "$out/bin/wispctl"
-          '';
+          cargoBuildFlags = [ "-p" "wispctl" ];
+          cargoTestFlags = [ "--workspace" ];
+          # Lower CI memory use; release binary packaging still uses fat LTO.
+          CARGO_PROFILE_RELEASE_LTO = "thin";
+          WISPCTL_NO_KEYCHAIN = "1";
+          WISPCTL_NO_BROWSER = "1";
+          SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
           meta = {
             description = "Deploy and serve static sites on wisp.place";
             mainProgram = "wispctl";
+            license = pkgs.lib.licenses.mit;
           };
         };
       in
       {
         packages.default = wispctl;
+        packages.wispctl = wispctl;
+        checks.wispctl = wispctl;
 
         apps.default = {
           type = "app";
           program = "${wispctl}/bin/wispctl";
-          meta = {
-            description = "Deploy and serve static sites on wisp.place";
-            mainProgram = "wispctl";
-          };
+          meta.description = "Deploy and serve static sites on wisp.place";
         };
 
         devShells.default = pkgs.mkShell {
           packages = [
+            pkgs.cargo
+            pkgs.rustc
+            pkgs.clippy
+            pkgs.rustfmt
             pkgs.bun
-            pkgs.bun2nix
           ];
         };
       });

@@ -41,6 +41,7 @@ dependencies:
 environment:
   WISP_HANDLE: "alice.example.com"
   PREVIEW_HOST: "your-preview-host.example"
+  PREVIEW_CLAIM: "alice"
 
 steps:
   - name: build
@@ -55,7 +56,14 @@ steps:
         echo "no deploy secret in this pipeline (pull request from a fork); skipping"
         exit 0
       fi
-      npm install --global wispctl
+      npm install --global --prefix "$HOME/.local" wispctl@2.0.1
+      export PATH="$HOME/.local/bin:$PATH"
+
+      deploy_help="$(wispctl deploy --help)"
+      if [[ "$deploy_help" != *--preview-host* || "$deploy_help" != *--header* ]]; then
+        echo "wispctl is missing preview support; install a release with --preview-host and --header" >&2
+        exit 1
+      fi
       sha7="${TANGLED_COMMIT_SHA:0:7}"
       wispctl deploy "$WISP_HANDLE" \
         --password "$WISP_APP_PASSWORD" \
@@ -63,19 +71,14 @@ steps:
         --site "pr-$sha7" \
         --header "X-Robots-Tag: noindex" \
         --preview-host "$PREVIEW_HOST" \
+        --preview-claim "$PREVIEW_CLAIM" \
         --yes
 
-      # Notify preview-bot to verify and post/update the PR comment
-      pipeline_id="${TANGLED_PIPELINE_ID##*/}"
-      claim="${PREVIEW_CLAIM:-${WISP_HANDLE%%.*}}"
-      curl -s -f -X POST "${PREVIEW_BOT_URL:-https://preview-bot.wisp.place}/v1/preview" \
-        -H "Content-Type: application/json" \
-        -d "{\"owner\":\"$TANGLED_REPO_DID\",\"repo\":\"$TANGLED_REPO_NAME\",\"pipeline\":\"$pipeline_id\",\"claim\":\"$claim\"}"
 ```
 
-`--preview-host` makes `wispctl` check that the site is named `pr-<sha7>` before it uploads anything, then print the preview URL once the deploy succeeds. If you have claimed more than one wisp subdomain, add `--preview-claim <label>` to choose one.
+`--preview-host` makes `wispctl` check that the site is named `pr-<sha7>` before it uploads anything, then print the preview URL once the deploy succeeds. Set `PREVIEW_CLAIM` to your claimed wisp subdomain label; it is required when your account has more than one claim.
 
-Replace the build commands and `./dist` with your own.
+Replace the build commands and `./dist` with your own. The workflow pins `wispctl@2.0.1` and installs it under `$HOME/.local`, not into the read-only Nix store.
 
 ## Cleaning up
 
@@ -100,7 +103,8 @@ steps:
   - name: prune old previews
     command: |
       set -euo pipefail
-      npm install --global wispctl
+      npm install --global --prefix "$HOME/.local" wispctl@2.0.1
+      export PATH="$HOME/.local/bin:$PATH"
       wispctl site prune "$WISP_HANDLE" \
         --password "$WISP_APP_PASSWORD" \
         --prefix pr- \
