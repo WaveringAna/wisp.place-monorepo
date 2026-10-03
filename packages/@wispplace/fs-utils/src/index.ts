@@ -1,5 +1,10 @@
 // Path utilities
 
+// Content-addressed storage keys
+export type { CasObjectIdentity, CasVariantFlags, ParsedCasKey } from './cas-key'
+export { casKey, casVariant, isCasKey, parseCasKey } from './cas-key'
+export type { CasReferenceDiff, FileObjects } from './cas-refs'
+export { diffCasReferences, distinctCasKeys, normalizeFileObjects } from './cas-refs'
 // File CID normalization
 export type { FileCidsNormalization, FileCidsNormalizationSource } from './file-cids'
 export { normalizeFileCids } from './file-cids'
