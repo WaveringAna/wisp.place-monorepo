@@ -5,7 +5,7 @@ use crate::{
     auth::{self, AuthOptions},
     cli::DeployArgs,
     prompts,
-    xrpc::bind_auth_status,
+    xrpc::{self, bind_auth_status, items},
 };
 use anyhow::{Result, bail};
 use jacquard::types::{string::Datetime, tid::Tid};
@@ -22,6 +22,7 @@ use wispplace_lexicons::place_wisp::{
     fs::Fs,
     settings::{CustomHeader, Settings},
     subfs::SubfsRecord,
+    v2::domain,
 };
 use wispplace_ui::{TextPrompt, s};
 
@@ -73,6 +74,72 @@ fn site_settings(directory: bool, spa: bool, headers: &[(String, String)]) -> Op
         index_files: None,
         extra_data: None,
     })
+}
+
+/// Normalize and validate a preview host supplied by a user or environment.
+pub fn normalize_preview_host(host: &str) -> Result<String> {
+    let host = host.to_ascii_lowercase();
+    if host.is_empty()
+        || host.chars().any(char::is_whitespace)
+        || host.contains('/')
+        || host.contains(':')
+        || host.contains('?')
+        || host.contains('#')
+        || host.parse::<std::net::IpAddr>().is_ok()
+        || host.split('.').any(|label| {
+            label.is_empty()
+                || label.starts_with('-')
+                || label.ends_with('-')
+                || !label
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || c == b'-')
+        })
+    {
+        bail!("preview host must be a plain hostname");
+    }
+    Ok(host)
+}
+
+/// Whether `site` is `pr-` plus the seven lowercase hex characters of a commit.
+fn is_preview_site(site: &str) -> bool {
+    site.len() == 10
+        && site.starts_with("pr-")
+        && site[3..]
+            .bytes()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+}
+
+/// The claimed wisp subdomain labels in a `domain.getList` response, whatever base host serves them.
+fn wisp_claims(domains: &[serde_json::Value]) -> Vec<String> {
+    domains
+        .iter()
+        .filter(|item| item["kind"].as_str() == Some("wisp"))
+        .filter_map(|item| item["domain"].as_str()?.split('.').next())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Build the canonical host used by hosting-service preview routing.
+pub fn build_preview_url(site: &str, claim: &str, host: &str) -> Result<String> {
+    if !is_preview_site(site) {
+        bail!("--preview-host needs a site named pr-<sha7>");
+    }
+    if claim.is_empty()
+        || !claim
+            .bytes()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
+        || claim.starts_with('-')
+        || claim.ends_with('-')
+        || claim.contains("--")
+    {
+        bail!("preview claim must match [a-z0-9]+(-[a-z0-9]+)*");
+    }
+    let host = normalize_preview_host(host)?;
+    let label = format!("{site}-{claim}");
+    if label.len() > 63 {
+        bail!("preview host label is longer than 63 characters");
+    }
+    Ok(format!("https://{label}.{host}/"))
 }
 
 fn valid_site(site: &str) -> bool {
@@ -130,6 +197,14 @@ pub async fn run(mut args: DeployArgs) -> Result<()> {
     if !valid_site(&site) {
         bail!("Invalid site name: {site}. Must be 1-512 chars of [a-zA-Z0-9._~:-]");
     }
+    let preview_host = args
+        .preview_host
+        .as_deref()
+        .map(normalize_preview_host)
+        .transpose()?;
+    if preview_host.is_some() && !is_preview_site(&site) {
+        bail!("--preview-host needs a site named pr-<sha7>");
+    }
     if args.concurrency == 0 {
         bail!("Concurrency must be at least 1");
     }
@@ -150,6 +225,27 @@ pub async fn run(mut args: DeployArgs) -> Result<()> {
     spinner.succeed(format!("Authenticated as {}", authenticated.did));
     let agent = authenticated.agent;
     let did = authenticated.did;
+    let preview_url = if let Some(host) = preview_host.as_deref() {
+        let claim = match args.preview_claim.as_deref() {
+            Some(claim) => claim.to_owned(),
+            None => {
+                let service = xrpc::parse_service_did(args.service.as_deref())?;
+                let data = xrpc::send(&agent, &service, domain::get_list::GetList, None).await?;
+                let claims = wisp_claims(items(&data, "domains"));
+                match claims.as_slice() {
+                    [] => bail!("no wisp subdomain claimed; claim one or pass --preview-claim"),
+                    [claim] => claim.clone(),
+                    claims => bail!(
+                        "multiple wisp subdomains claimed ({}); pass --preview-claim",
+                        claims.join(", ")
+                    ),
+                }
+            }
+        };
+        Some(build_preview_url(&site, &claim, host)?)
+    } else {
+        None
+    };
     wispplace_ui::blank();
     wispplace_ui::note(wispplace_ui::Line::from(vec![
         s::accent("Deploying "),
@@ -266,6 +362,9 @@ pub async fn run(mut args: DeployArgs) -> Result<()> {
         spinner.succeed("Created settings record".to_owned());
     }
     wispplace_ui::blank();
+    if let Some(url) = preview_url {
+        wispplace_ui::out(labelled("Preview URL", s::link(url)));
+    }
     wispplace_ui::out(labelled(
         "URI",
         s::muted(format!("at://{did}/place.wisp.fs/{site}")),
@@ -488,5 +587,60 @@ mod tests {
         assert_eq!(written.len(), 1);
         assert_eq!(written[0].name.as_ref() as &str, "X-Robots-Tag");
         assert_eq!(written[0].value.as_ref() as &str, "noindex");
+    }
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+
+    #[test]
+    fn preview_urls_validate_and_normalize() {
+        assert_eq!(
+            build_preview_url("pr-abcdef0", "alice", "WispSites.Dev").unwrap(),
+            "https://pr-abcdef0-alice.wispsites.dev/"
+        );
+        assert_eq!(
+            build_preview_url("pr-ABCDEF0", "alice", "example.com")
+                .unwrap_err()
+                .to_string(),
+            "--preview-host needs a site named pr-<sha7>"
+        );
+        assert!(build_preview_url("pr-abcdef0", "alice-team", "example.com").is_ok());
+        assert!(build_preview_url("pr-abcdef0", &"a".repeat(52), "example.com").is_ok());
+        assert!(build_preview_url("pr-abcdef0", &"a".repeat(53), "example.com").is_err());
+        assert!(build_preview_url("pr-abcdef0", "alice", "https://example.com").is_err());
+        assert!(build_preview_url("pr-abcdef0", "alice", " example.com").is_err());
+    }
+
+    #[test]
+    fn claims_come_from_wisp_domains_on_any_base_host() {
+        let domains = serde_json::json!([
+            {"domain": "alice.wisp.place", "kind": "wisp"},
+            {"domain": "bob.wisp.localhost", "kind": "wisp"},
+            {"domain": "blog.example.com", "kind": "custom"},
+        ]);
+        assert_eq!(
+            wisp_claims(domains.as_array().unwrap()),
+            vec!["alice".to_owned(), "bob".to_owned()]
+        );
+        assert!(wisp_claims(&[]).is_empty());
+    }
+
+    #[test]
+    fn only_pr_sha7_sites_are_previews() {
+        for site in ["pr-abcdef0", "pr-0123456"] {
+            assert!(is_preview_site(site), "{site}");
+        }
+        for site in [
+            "pr-abcdef",
+            "pr-abcdef01",
+            "pr-ABCDEF0",
+            "xx-abcdef0",
+            "pr-abcdeg0",
+            "",
+        ] {
+            assert!(!is_preview_site(site), "{site}");
+        }
     }
 }

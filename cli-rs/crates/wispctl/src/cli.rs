@@ -119,6 +119,15 @@ pub struct DeployArgs {
     /// Skip confirmation prompts
     #[arg(short, long)]
     pub yes: bool,
+    /// Registrable host for pull-request preview URLs
+    #[arg(long, env = "WISPCTL_PREVIEW_HOST", value_name = "host")]
+    pub preview_host: Option<String>,
+    /// Wisp subdomain claim for pull-request preview URLs
+    #[arg(long, env = "WISPCTL_PREVIEW_CLAIM", value_name = "label")]
+    pub preview_claim: Option<String>,
+    /// Service DID to proxy through
+    #[arg(long, env = "WISPCTL_SERVICE", value_name = "did:...")]
+    pub service: Option<String>,
 }
 
 #[derive(Args, Debug, Clone)]
