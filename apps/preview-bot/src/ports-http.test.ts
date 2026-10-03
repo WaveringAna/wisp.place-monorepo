@@ -67,7 +67,12 @@ describe('listRepoRecords', () => {
 
 		const records = await build({ fetch }).listRepoRecords(OWNER)
 		expect(records).toEqual([
-			{ rkey: 'wisp-preview-test', name: 'wisp-preview-test', spindle: 'spindle.example', repoDid: `did:plc:${'r'.repeat(24)}` },
+			{
+				rkey: 'wisp-preview-test',
+				name: 'wisp-preview-test',
+				spindle: 'spindle.example',
+				repoDid: `did:plc:${'r'.repeat(24)}`,
+			},
 		])
 	})
 
@@ -130,7 +135,7 @@ describe('getPipeline', () => {
 	test.each([
 		['a push trigger', { $type: 'sh.tangled.ci.trigger#push', ref: 'refs/heads/main', newSha: SHA, oldSha: SHA }],
 		['a bad sha', { ...pullTrigger, sourceSha: 'ABC' }],
-		['a missing pull uri', { ...pullTrigger, pull: undefined }],
+		['a missing pull uri without branch', { ...pullTrigger, pull: undefined, sourceBranch: undefined }],
 	])('gives no pull request for %s', async (_name, trigger) => {
 		const { fetch } = fakeFetch({ 'https://spindle.example/': () => json(pipelineBody(trigger as Json)) })
 

@@ -84,11 +84,16 @@ export async function verifyPreview(
 	const pipeline = await ports.getPipeline(record.spindle, request.pipeline)
 	if (!pipeline) return reject('pipeline-not-found')
 	const trigger = pipeline.pullRequest
-	if (!trigger?.pull || !HEX40.test(trigger.sourceSha)) return reject('not-a-pull-request')
+	if (!trigger || !HEX40.test(trigger.sourceSha) || (!trigger.pull && !trigger.sourceBranch))
+		return reject('not-a-pull-request')
 	if (pipeline.sourceRepo && pipeline.sourceRepo !== pipeline.repo) return reject('fork-pull-request')
 	if (pipeline.repo !== record.repoDid) return reject('repo-mismatch')
 
-	const pull = await ports.getPull(trigger.pull)
+	const pull = trigger.pull
+		? await ports.getPull(trigger.pull)
+		: trigger.sourceBranch && ports.findPullForBranch
+			? await ports.findPullForBranch(request.owner, record.repoDid, trigger.sourceBranch)
+			: null
 	if (!pull) return reject('pull-not-found')
 	if (pull.targetRepoDid !== record.repoDid) return reject('pull-repo-mismatch')
 	if (pull.roundCount < 1) return reject('pull-has-no-rounds')

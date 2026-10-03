@@ -111,14 +111,55 @@ export function createHttpPorts(options: HttpPortsOptions): Ports {
 			if (
 				isObject(trigger) &&
 				trigger.$type === 'sh.tangled.ci.trigger#pullRequest' &&
-				typeof trigger.pull === 'string' &&
 				typeof trigger.sourceSha === 'string' &&
-				/^[0-9a-f]{40}$/.test(trigger.sourceSha)
-			)
-				out.pullRequest = { pull: trigger.pull, sourceSha: trigger.sourceSha }
+				/^[0-9a-f]{40}$/.test(trigger.sourceSha) &&
+				(typeof trigger.pull === 'string' || typeof trigger.sourceBranch === 'string')
+			) {
+				out.pullRequest = {
+					pull: typeof trigger.pull === 'string' ? trigger.pull : undefined,
+					sourceSha: trigger.sourceSha,
+					sourceBranch: typeof trigger.sourceBranch === 'string' ? trigger.sourceBranch : undefined,
+				}
+			}
 			return out
 		} catch (error) {
 			if (error instanceof HttpStatusError && error.status >= 500) throw error
+			return null
+		}
+	}
+	const findPullForBranch = async (
+		ownerDid: string,
+		targetRepoDid: string,
+		sourceBranch: string,
+	): Promise<Pull | null> => {
+		try {
+			const pds = await identity(ownerDid)
+			const query = new URLSearchParams({ repo: ownerDid, collection: 'sh.tangled.repo.pull', limit: '100' })
+			const response = await fetchJson<any>(fetcher, `${pds}/xrpc/com.atproto.repo.listRecords?${query}`)
+			for (const item of response.records ?? []) {
+				const value = item.value
+				if (
+					isObject(value) &&
+					isObject(value.target) &&
+					value.target.repo === targetRepoDid &&
+					isObject(value.source) &&
+					value.source.branch === sourceBranch &&
+					Array.isArray(value.rounds)
+				) {
+					const cid = typeof item.cid === 'string' ? item.cid : null
+					const uri = typeof item.uri === 'string' ? item.uri : null
+					if (!cid || !uri) continue
+					return {
+						uri,
+						cid,
+						authorDid: ownerDid,
+						targetRepoDid,
+						roundCount: value.rounds.length,
+					}
+				}
+			}
+			return null
+		} catch {
 			return null
 		}
 	}
@@ -198,6 +239,7 @@ export function createHttpPorts(options: HttpPortsOptions): Ports {
 		getPull,
 		claimOwner,
 		previewServes,
+		findPullForBranch,
 		findComment,
 		createComment: (input) => writeComment(undefined, input, new Date().toISOString()),
 		updateComment: (rkey, input) => writeComment(rkey, input, new Date().toISOString()),

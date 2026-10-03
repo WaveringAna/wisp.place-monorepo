@@ -30,6 +30,8 @@ export interface Pipeline {
 		pull?: string
 		/** Full 40-character head commit of the round that was built. */
 		sourceSha: string
+		/** Source branch name if pull URI was omitted by spindle. */
+		sourceBranch?: string
 	}
 }
 
@@ -65,6 +67,7 @@ export interface Ports {
 	getPipeline(spindleHost: string, pipelineId: string): Promise<Pipeline | null>
 	/** The pull record from its author's PDS; null when it does not exist. */
 	getPull(uri: string): Promise<Pull | null>
+	findPullForBranch?(ownerDid: string, targetRepoDid: string, sourceBranch: string): Promise<Pull | null>
 	/** DID that claimed the wisp subdomain `<claim>.<base host>`, or null when unclaimed. */
 	claimOwner(claim: string): Promise<string | null>
 	/** Whether the preview URL answers 200 right now. */
