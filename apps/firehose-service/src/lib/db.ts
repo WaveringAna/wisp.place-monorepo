@@ -877,7 +877,7 @@ export async function withSiteWriteLock<T>(
 
 export async function getSiteCache(did: string, rkey: string): Promise<SiteCache | null> {
 	const result = await sql<SiteCache[]>`
-    SELECT did, rkey, record_cid, file_cids, cached_at, updated_at, cold_synced
+    SELECT did, rkey, record_cid, file_cids, file_objects, cached_at, updated_at, cold_synced
     FROM site_cache
     WHERE did = ${did} AND rkey = ${rkey}
     LIMIT 1
