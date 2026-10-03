@@ -67,7 +67,11 @@ suite('CAS migration against a real S3 backend', () => {
 			listLegacyKeys: async () => [],
 		}
 
-		const report = await migrateSite({ did: DID, rkey: RKEY, fileCids: { 'style.css': cid } }, ports, { dryRun: false })
+		const report = await migrateSite(
+			{ did: DID, rkey: RKEY, fileCids: { 'style.css': cid }, fileObjects: null, recordCid: 'cid', updatedAt: 1000 },
+			ports,
+			{ dryRun: false },
+		)
 
 		const key = casKey({ cid, path: 'style.css', mimeType: 'text/css' })
 		expect(report).toMatchObject({ status: 'migrated', copied: 1 })

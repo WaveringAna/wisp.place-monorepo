@@ -101,7 +101,12 @@ export interface MigrationPorts {
 	commitMapping(
 		did: string,
 		rkey: string,
-		expected: { fileCids: Record<string, string>; recordCid?: string; updatedAt?: number },
+		expected: {
+			fileCids: Record<string, string>
+			fileObjects: FileObjects | null
+			recordCid: string
+			updatedAt: number
+		},
 		mapping: FileObjects,
 	): Promise<'committed' | 'stale'>
 	deleteObject(key: string): Promise<void>
@@ -112,8 +117,9 @@ export interface SiteToMigrate {
 	did: string
 	rkey: string
 	fileCids: Record<string, string>
-	recordCid?: string
-	updatedAt?: number
+	fileObjects: FileObjects | null
+	recordCid: string
+	updatedAt: number
 }
 
 export interface SiteMigrationReport {
@@ -205,7 +211,7 @@ export async function migrateSite(
 	const outcome = await ports.commitMapping(
 		site.did,
 		site.rkey,
-		{ fileCids: site.fileCids, recordCid: site.recordCid, updatedAt: site.updatedAt },
+		{ fileCids: site.fileCids, fileObjects: site.fileObjects, recordCid: site.recordCid, updatedAt: site.updatedAt },
 		mapping,
 	)
 	const skippedTotal = Object.values(report.skipped).reduce((sum, count) => sum + count, 0)

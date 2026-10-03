@@ -172,7 +172,14 @@ class FakeStorage {
 	}
 }
 
-const site = (rkey: string, fileCids: Record<string, string>): SiteToMigrate => ({ did: DID, rkey, fileCids })
+const site = (rkey: string, fileCids: Record<string, string>): SiteToMigrate => ({
+	did: DID,
+	rkey,
+	fileCids,
+	fileObjects: null,
+	recordCid: 'cid',
+	updatedAt: 1000,
+})
 let storage: FakeStorage
 
 beforeEach(() => {

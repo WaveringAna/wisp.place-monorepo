@@ -161,33 +161,42 @@ function sameFileCids(a: Record<string, string>, b: Record<string, string>): boo
  * site is exactly as it was when scanned, and only if it does not contradict a mapping already there:
  * a site the cache writer has since rewritten is the writer's, and the migration leaves it alone.
  */
+function sameFileObjects(a: FileObjects | null, b: FileObjects | null): boolean {
+	if (a === null && b === null) return true
+	if (a === null || b === null) return false
+	const keysA = Object.keys(a)
+	const keysB = Object.keys(b)
+	return keysA.length === keysB.length && keysA.every((k) => a[k] === b[k])
+}
+
+/**
+ * Expected site snapshot captured during the migration scan.
+ * Every field must match under row lock to guarantee no concurrent writer mutated the row.
+ */
 export interface ExpectedSiteState {
 	fileCids: Record<string, string>
-	recordCid?: string
-	updatedAt?: number
+	fileObjects: FileObjects | null
+	recordCid: string
+	updatedAt: number
 }
 
 /**
  * Store a migrated mapping for one site, atomically with its references.
  *
- * Fencing:
- * 1. The site's file_cids must match the snapshot scanned by the migration pass.
- * 2. If recordCid/updatedAt are provided, they must also match the scanned snapshot.
- *    Any concurrent writer (legacy or CAS) changes record_cid / updated_at, causing a race to fail closed as 'stale'.
- * 3. Any mapping already present for existing paths is replaced, with references safely diffed and adjusted.
+ * Full snapshot fencing:
+ * 1. `file_cids` must match the scanned snapshot.
+ * 2. `file_objects` must match the scanned snapshot (prevents overwriting a CAS writer that tied on timestamp/record_cid).
+ * 3. `record_cid` must match the scanned snapshot.
+ * 4. `updated_at` must match the scanned snapshot.
+ * Any concurrent mutation by a legacy or CAS writer causes commit to fail closed as 'stale'.
  */
 export async function commitMigratedMapping(
 	sql: Sql,
 	did: string,
 	rkey: string,
-	expected: ExpectedSiteState | Record<string, string>,
+	expected: ExpectedSiteState,
 	mapping: FileObjects,
 ): Promise<'committed' | 'stale'> {
-	const expectedState: ExpectedSiteState =
-		'fileCids' in expected && typeof expected.fileCids === 'object' && expected.fileCids !== null
-			? (expected as ExpectedSiteState)
-			: { fileCids: expected as Record<string, string> }
-
 	return await sql.begin(async (tx) => {
 		const rows = await tx<
 			Array<{ file_cids: unknown; file_objects: unknown; record_cid: string; updated_at: number | string }>
@@ -196,10 +205,10 @@ export async function commitMigratedMapping(
 		`
 		const row = rows[0]
 		if (!row) return 'stale' as const
-		if (!sameFileCids(normalizeFileCids(row.file_cids).value, expectedState.fileCids)) return 'stale' as const
-		if (expectedState.recordCid !== undefined && row.record_cid !== expectedState.recordCid) return 'stale' as const
-		if (expectedState.updatedAt !== undefined && Number(row.updated_at) !== expectedState.updatedAt)
-			return 'stale' as const
+		if (!sameFileCids(normalizeFileCids(row.file_cids).value, expected.fileCids)) return 'stale' as const
+		if (!sameFileObjects(normalizeFileObjects(row.file_objects), expected.fileObjects)) return 'stale' as const
+		if (row.record_cid !== expected.recordCid) return 'stale' as const
+		if (Number(row.updated_at) !== expected.updatedAt) return 'stale' as const
 
 		await applyCasReferences(tx as unknown as Sql, did, rkey, mapping)
 		return 'committed' as const

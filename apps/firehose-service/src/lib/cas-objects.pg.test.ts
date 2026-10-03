@@ -5,6 +5,7 @@ import postgres from 'postgres'
 import {
 	applyCasReferences,
 	commitMigratedMapping,
+	type ExpectedSiteState,
 	listSitesForMigration,
 	recordCasObject,
 	touchCasObjects,
@@ -393,7 +394,13 @@ suite('migration queries (postgres)', () => {
 	test('commits a mapping and takes references when the site is unchanged since it was scanned', async () => {
 		await insertSite('one', { 'a.css': 'x' })
 
-		const result = await commitMigratedMapping(sql, DID, 'one', { 'a.css': 'x' }, { 'a.css': key('a') })
+		const result = await commitMigratedMapping(
+			sql,
+			DID,
+			'one',
+			{ fileCids: { 'a.css': 'x' }, fileObjects: null, recordCid: 'cid', updatedAt: 1000 },
+			{ 'a.css': key('a') },
+		)
 
 		expect(result).toBe('committed')
 		expect(await refs(key('a'))).toBe(1)
@@ -402,32 +409,51 @@ suite('migration queries (postgres)', () => {
 	test('refuses a site whose file CIDs changed after the scan, leaving it untouched', async () => {
 		await insertSite('one', { 'a.css': 'newer' })
 
-		const result = await commitMigratedMapping(sql, DID, 'one', { 'a.css': 'x' }, { 'a.css': key('a') })
+		const result = await commitMigratedMapping(
+			sql,
+			DID,
+			'one',
+			{ fileCids: { 'a.css': 'x' }, fileObjects: null, recordCid: 'cid', updatedAt: 1000 },
+			{ 'a.css': key('a') },
+		)
 
 		expect(result).toBe('stale')
 		expect(await refs(key('a'))).toBeUndefined()
 	})
 
 	test('refuses a site that no longer exists', async () => {
-		expect(await commitMigratedMapping(sql, DID, 'nope', {}, { 'a.css': key('a') })).toBe('stale')
+		expect(
+			await commitMigratedMapping(
+				sql,
+				DID,
+				'nope',
+				{ fileCids: {}, fileObjects: null, recordCid: 'cid', updatedAt: 1000 },
+				{ 'a.css': key('a') },
+			),
+		).toBe('stale')
 	})
 
 	test('a rerun, or one that maps more files, keeps references exact', async () => {
 		await insertSite('one', { 'a.css': 'x', 'b.css': 'y' })
-		await commitMigratedMapping(sql, DID, 'one', { 'a.css': 'x', 'b.css': 'y' }, { 'a.css': key('a') })
+		const initialSnapshot: ExpectedSiteState = {
+			fileCids: { 'a.css': 'x', 'b.css': 'y' },
+			fileObjects: null,
+			recordCid: 'cid',
+			updatedAt: 1000,
+		}
+		await commitMigratedMapping(sql, DID, 'one', initialSnapshot, { 'a.css': key('a') })
 
-		expect(await commitMigratedMapping(sql, DID, 'one', { 'a.css': 'x', 'b.css': 'y' }, { 'a.css': key('a') })).toBe(
-			'committed',
-		)
+		// Second pass with the new fileObjects snapshot:
+		const rerunSnapshot: ExpectedSiteState = {
+			fileCids: { 'a.css': 'x', 'b.css': 'y' },
+			fileObjects: { 'a.css': key('a') },
+			recordCid: 'cid',
+			updatedAt: 1000,
+		}
+		expect(await commitMigratedMapping(sql, DID, 'one', rerunSnapshot, { 'a.css': key('a') })).toBe('committed')
 		expect(await refs(key('a'))).toBe(1)
 
-		await commitMigratedMapping(
-			sql,
-			DID,
-			'one',
-			{ 'a.css': 'x', 'b.css': 'y' },
-			{ 'a.css': key('a'), 'b.css': key('b') },
-		)
+		await commitMigratedMapping(sql, DID, 'one', rerunSnapshot, { 'a.css': key('a'), 'b.css': key('b') })
 		expect(await refs(key('a'))).toBe(1)
 		expect(await refs(key('b'))).toBe(1)
 	})
@@ -435,7 +461,12 @@ suite('migration queries (postgres)', () => {
 	test('never overwrites a mapping the cache writer produced for the same path', async () => {
 		// Scanned snapshot before CAS writer runs:
 		await insertSite('one', { 'a.css': 'x' })
-		const snapshot = { fileCids: { 'a.css': 'x' }, recordCid: 'cid', updatedAt: 1000 }
+		const snapshot: ExpectedSiteState = {
+			fileCids: { 'a.css': 'x' },
+			fileObjects: null,
+			recordCid: 'cid',
+			updatedAt: 1000,
+		}
 
 		// Concurrent CAS writer completes an update, updating record_cid and updated_at and file_objects:
 		await sql`
@@ -457,7 +488,13 @@ suite('migration queries (postgres)', () => {
 		await insertSite('update_race', { 'a.css': 'cid_a' })
 		await recordCasObject(sql, key('a'), 100)
 		await recordCasObject(sql, key('b'), 200)
-		const first = await commitMigratedMapping(sql, DID, 'update_race', { 'a.css': 'cid_a' }, { 'a.css': key('a') })
+		const first = await commitMigratedMapping(
+			sql,
+			DID,
+			'update_race',
+			{ fileCids: { 'a.css': 'cid_a' }, fileObjects: null, recordCid: 'cid', updatedAt: 1000 },
+			{ 'a.css': key('a') },
+		)
 		expect(first).toBe('committed')
 		expect(await refs(key('a'))).toBe(1)
 
@@ -470,7 +507,13 @@ suite('migration queries (postgres)', () => {
 		`
 
 		// Migration pass 2 scanned the updated file_cids ({ 'b.css': 'cid_b' }) and computed mapping { 'b.css': key('b') }.
-		const result = await commitMigratedMapping(sql, DID, 'update_race', { 'b.css': 'cid_b' }, { 'b.css': key('b') })
+		const result = await commitMigratedMapping(
+			sql,
+			DID,
+			'update_race',
+			{ fileCids: { 'b.css': 'cid_b' }, fileObjects: { 'a.css': key('a') }, recordCid: 'cid_2', updatedAt: 1000 },
+			{ 'b.css': key('b') },
+		)
 		expect(result).toBe('committed')
 		expect(await refs(key('b'))).toBe(1)
 		expect(await refs(key('a'))).toBe(0)
@@ -478,7 +521,12 @@ suite('migration queries (postgres)', () => {
 
 	test('refuses to overwrite a mapping that a concurrent CAS writer produced during migration', async () => {
 		await insertSite('cas_writer_race', { 'b.css': 'cid_b' })
-		const snapshot = { fileCids: { 'b.css': 'cid_b' }, recordCid: 'cid', updatedAt: 1000 }
+		const snapshot: ExpectedSiteState = {
+			fileCids: { 'b.css': 'cid_b' },
+			fileObjects: null,
+			recordCid: 'cid',
+			updatedAt: 1000,
+		}
 
 		// Concurrent CAS writer finishes while migration is running:
 		await sql`
@@ -502,7 +550,7 @@ suite('migration queries (postgres)', () => {
 			sql,
 			DID,
 			'same_path_update',
-			{ 'index.html': 'cid_1' },
+			{ fileCids: { 'index.html': 'cid_1' }, fileObjects: null, recordCid: 'cid', updatedAt: 1000 },
 			{ 'index.html': key('a') },
 		)
 		expect(first).toBe('committed')
@@ -521,7 +569,12 @@ suite('migration queries (postgres)', () => {
 			sql,
 			DID,
 			'same_path_update',
-			{ 'index.html': 'cid_2' },
+			{
+				fileCids: { 'index.html': 'cid_2' },
+				fileObjects: { 'index.html': key('a') },
+				recordCid: 'cid_2',
+				updatedAt: 1000,
+			},
 			{ 'index.html': key('b') },
 		)
 		expect(second).toBe('committed')
@@ -540,7 +593,7 @@ suite('migration queries (postgres)', () => {
 			sql,
 			DID,
 			'variant_update',
-			{ fileCids: { 'index.html': cid('a') }, recordCid: 'cid', updatedAt: 1000 },
+			{ fileCids: { 'index.html': cid('a') }, fileObjects: null, recordCid: 'cid', updatedAt: 1000 },
 			{ 'index.html': keyV1 },
 		)
 		expect(first).toBe('committed')
@@ -555,10 +608,38 @@ suite('migration queries (postgres)', () => {
 		`
 
 		// Migration pass 2 scans the site after old writer updated it:
-		const snapshot = { fileCids: { 'index.html': cid('a') }, recordCid: 'cid_v2', updatedAt: 2000 }
+		const snapshot: ExpectedSiteState = {
+			fileCids: { 'index.html': cid('a') },
+			fileObjects: { 'index.html': keyV1 },
+			recordCid: 'cid_v2',
+			updatedAt: 2000,
+		}
 		const second = await commitMigratedMapping(sql, DID, 'variant_update', snapshot, { 'index.html': keyV2 })
 		expect(second).toBe('committed')
 		expect(await refs(keyV2)).toBe(1)
 		expect(await refs(keyV1)).toBe(0) // Old variant key refcount was decremented
+	})
+
+	test('refuses commit if a concurrent CAS writer changed file_objects within the same second/record', async () => {
+		// Scanned snapshot had fileObjects A, record_cid 'cid', updated_at 1000:
+		await insertSite('same_sec_race', { 'index.html': 'cid_1' }, { fileObjects: { 'index.html': key('a') } })
+		const snapshot: ExpectedSiteState = {
+			fileCids: { 'index.html': 'cid_1' },
+			fileObjects: { 'index.html': key('a') },
+			recordCid: 'cid',
+			updatedAt: 1000,
+		}
+
+		// Concurrent CAS writer repairs/rewrites the mapping to key('writer'), but within the same second and same record_cid:
+		await sql`
+			UPDATE site_cache
+			SET file_objects = ${sql.json({ 'index.html': key('writer') })}
+			WHERE did = ${DID} AND rkey = 'same_sec_race'
+		`
+
+		// Migration tries to commit mapping { 'index.html': key('b') } with the snapshot:
+		const result = await commitMigratedMapping(sql, DID, 'same_sec_race', snapshot, { 'index.html': key('b') })
+		// Must fail closed as stale!
+		expect(result).toBe('stale')
 	})
 })
