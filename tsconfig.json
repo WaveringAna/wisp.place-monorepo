@@ -117,6 +117,8 @@
 		"apps/hosting-service/cache",
 		"**/dist",
 		"**/node_modules",
-		"deploy"
+		"deploy",
+		"repos",
+		".research"
 	]
 }
