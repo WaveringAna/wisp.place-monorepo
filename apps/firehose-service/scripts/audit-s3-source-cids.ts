@@ -15,6 +15,7 @@ import { validateRecord as validateFsRecord } from '@wispplace/lexicons/types/pl
 import { safeFetch, safeFetchJson } from '@wispplace/safe-fetch'
 import { S3StorageTier } from '@wispplace/tiered-storage'
 import { auditCasObject, type CasAuditFinding } from '../src/lib/cas-audit'
+import { resolveS3Prefix } from '../src/lib/s3-prefix'
 
 const DEFAULT_MAX_SITES = 50
 const DEFAULT_MAX_OBJECTS = 2_000
@@ -212,7 +213,7 @@ const tier = new S3StorageTier({
 	bucket: requiredEnvironment('S3_BUCKET'),
 	region: process.env.S3_REGION || 'us-east-1',
 	endpoint: process.env.S3_ENDPOINT,
-	prefix: process.env.S3_PREFIX,
+	prefix: resolveS3Prefix(process.env.S3_PREFIX),
 	forcePathStyle: parseBooleanEnvironment(process.env.S3_FORCE_PATH_STYLE, true),
 	credentials:
 		process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY

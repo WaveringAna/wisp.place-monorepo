@@ -11,6 +11,7 @@ import {
 	DEFAULT_REVALIDATE_STREAM,
 	resolveCacheInvalidationStreamMaxLen,
 } from '@wispplace/constants'
+import { resolveS3Prefix } from './lib/s3-prefix'
 
 export type ConfigEnv = Readonly<Record<string, string | undefined>>
 
@@ -115,20 +116,6 @@ function validateS3Region(value: string | undefined): string {
 	const region = value ?? 'us-east-1'
 	if (!S3_REGION_PATTERN.test(region)) throw new Error('Invalid S3_REGION')
 	return region
-}
-
-function validateS3Prefix(value: string | undefined): string {
-	const prefix = value ?? 'sites/'
-	const segments = prefix.split('/')
-	if (
-		prefix.length > 512 ||
-		prefix.startsWith('/') ||
-		hasUnsafeConfigText(prefix, true) ||
-		segments.some((segment) => segment === '.' || segment === '..')
-	) {
-		throw new Error('Invalid S3_PREFIX')
-	}
-	return prefix
 }
 
 function validateS3Credentials(accessKeyId: string | undefined, secretAccessKey: string | undefined): void {
@@ -306,7 +293,7 @@ function resolveStorageConfig(env: ConfigEnv, context: EnvironmentContext): Reso
 	const s3Bucket = validateS3Bucket(env.S3_BUCKET)
 	const s3Region = validateS3Region(env.S3_REGION)
 	const s3Endpoint = validateS3Endpoint(env.S3_ENDPOINT, context.production)
-	const s3Prefix = validateS3Prefix(env.S3_PREFIX)
+	const s3Prefix = resolveS3Prefix(env.S3_PREFIX)
 	const awsAccessKeyId = env.AWS_ACCESS_KEY_ID
 	const awsSecretAccessKey = env.AWS_SECRET_ACCESS_KEY
 	validateS3Credentials(awsAccessKeyId, awsSecretAccessKey)

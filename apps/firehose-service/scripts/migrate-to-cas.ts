@@ -28,6 +28,7 @@ import {
 	type MigrationSiteRow,
 	recordCasObject,
 } from '../src/lib/cas-objects'
+import { resolveS3Prefix } from '../src/lib/s3-prefix'
 
 const PAGE_SIZE = 200
 const MAX_REPORTED_SITES = 500
@@ -73,7 +74,7 @@ const tier = new S3StorageTier({
 	bucket: required('S3_BUCKET'),
 	region: process.env.S3_REGION || 'us-east-1',
 	endpoint: process.env.S3_ENDPOINT,
-	prefix: process.env.S3_PREFIX,
+	prefix: resolveS3Prefix(process.env.S3_PREFIX),
 	forcePathStyle: !['0', 'false', 'no'].includes((process.env.S3_FORCE_PATH_STYLE ?? 'true').toLowerCase()),
 	credentials:
 		process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY

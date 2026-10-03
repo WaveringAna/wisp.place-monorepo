@@ -111,6 +111,15 @@ describe('resolveConfig', () => {
 		expect(staticCredentials.awsAccessKeyId).toBe('access-key')
 	})
 
+	test('reads and writes under the prefix hosting reads from, which treats an empty value as the default', () => {
+		const prefixOf = (S3_PREFIX?: string) => resolveConfig(productionEnv({ S3_PREFIX })).s3Prefix
+
+		expect(prefixOf()).toBe('sites/')
+		expect(prefixOf('')).toBe('sites/')
+		expect(prefixOf('previews/')).toBe('previews/')
+		expect(prefixOf('previews')).toBe('previews/')
+	})
+
 	test('rejects relay secrets and insecure production relays without logging raw URLs', () => {
 		for (const firehoseService of [
 			'wss://user:secret@example.invalid',
