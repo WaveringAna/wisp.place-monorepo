@@ -253,4 +253,43 @@ describe('CAS reads', () => {
 		expect(storageReads).toContain(objectKey)
 		expect(storageReads).not.toContain(legacyKey('index.html'))
 	})
+
+	test('unconverted site with null file_objects triggers 503 repair, then serves 200 from CAS once repaired', async () => {
+		site(RKEY, { 'index.html': CID('a') })
+
+		const missResponse = await serveFromCache(DID, RKEY, 'index.html', url('index.html'))
+		expect(missResponse.status).toBe(503)
+		expect(missResponse.headers.get('Retry-After')).toBe('5')
+		expect(revalidateCalls).toEqual([{ did: DID, rkey: RKEY, reason: 'storage-miss:index.html' }])
+
+		// Repair simulates firehose-service downloading blob, storing CAS object, and updating site_cache
+		const objectKey = key(CID('a'), 'index.html')
+		storeAt(objectKey, '<h1>repaired from pds</h1>', CID('a'))
+		site(RKEY, { 'index.html': CID('a') }, { 'index.html': objectKey })
+		cache.clear('siteCache')
+		cache.clear('siteFiles')
+
+		const repairedResponse = await serveFromCache(DID, RKEY, 'index.html', url('index.html'))
+		expect(repairedResponse.status).toBe(200)
+		expect(await repairedResponse.text()).toBe('<h1>repaired from pds</h1>')
+		expect(storageReads).toContain(objectKey)
+		expect(storageReads).not.toContain(legacyKey('index.html'))
+	})
+
+	test('missing CAS object triggers 503 repair, then serves 200 once body is materialized', async () => {
+		const objectKey = key(CID('a'), 'index.html')
+		site(RKEY, { 'index.html': CID('a') }, { 'index.html': objectKey })
+
+		const missResponse = await serveFromCache(DID, RKEY, 'index.html', url('index.html'))
+		expect(missResponse.status).toBe(503)
+		expect(revalidateCalls).toEqual([{ did: DID, rkey: RKEY, reason: 'storage-miss:index.html' }])
+
+		// Worker materializes the missing body to its CAS key
+		storeAt(objectKey, '<h1>materialized</h1>', CID('a'))
+		cache.clear('siteFiles')
+
+		const okResponse = await serveFromCache(DID, RKEY, 'index.html', url('index.html'))
+		expect(okResponse.status).toBe(200)
+		expect(await okResponse.text()).toBe('<h1>materialized</h1>')
+	})
 })

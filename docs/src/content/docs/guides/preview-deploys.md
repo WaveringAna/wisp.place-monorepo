@@ -9,7 +9,7 @@ A preview deploy publishes a pull request's build as a site in **your own PDS**,
 
 - Each pull request round deploys a site named `pr-<sha7>`, where `<sha7>` is the first seven characters of the pull request's head commit.
 - The hosting service serves it at `https://pr-<sha7>-<claim>.<preview host>/`. `<claim>` is a wisp subdomain you already claimed (the `alice` in `alice.wisp.place`). Without the claim, nothing in the host would say whose site it is, and anyone could write the same site name into their own repo and answer for someone else's commit.
-- Preview URLs use `pr-<sha7>-<claim>.preview.wisp.place`. Operators enable this routing with `PREVIEW_HOST=preview.wisp.place` on the hosting service and DNS/TLS for `*.preview.wisp.place`. The environment variable has no default; unset means previews are off. These are separate origins, not a separate registrable domain: cookies scoped to `.wisp.place` can also reach preview hosts.
+- Preview URLs use `pr-<sha7>-<claim>.preview.wisp.place`. Operators set `PREVIEW_HOST=preview.wisp.place` on both the hosting service and main app, with DNS for `*.preview.wisp.place`. Caddy uses the existing on-demand TLS permission endpoint; valid preview names are authorized through the owner's registered wisp claim, just like ordinary wisp subdomains. The environment variable has no default; unset means previews are off. These are separate origins, not a separate registrable domain: cookies scoped to `.wisp.place` can also reach preview hosts.
 - Every preview carries `X-Robots-Tag: noindex`, set through the site's settings record.
 
 Because each round is a new commit, each round gets its own URL. Earlier rounds stay up, so you can compare them, until they are pruned.

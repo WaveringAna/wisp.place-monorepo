@@ -5209,7 +5209,7 @@ dependencies = [
 
 [[package]]
 name = "wispctl"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "anyhow",
  "base64",
@@ -5245,7 +5245,7 @@ dependencies = [
 
 [[package]]
 name = "wispplace-core"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "data-encoding",
  "flate2",
@@ -5263,7 +5263,7 @@ dependencies = [
 
 [[package]]
 name = "wispplace-lexicons"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "jacquard-common",
  "jacquard-derive",
@@ -5275,7 +5275,7 @@ dependencies = [
 
 [[package]]
 name = "wispplace-ui"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "crossterm",
  "ratatui",

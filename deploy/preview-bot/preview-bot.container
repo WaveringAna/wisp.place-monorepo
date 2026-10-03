@@ -1,0 +1,25 @@
+[Unit]
+Description=Wisp preview comment bot
+Wants=network-online.target
+After=network-online.target wg-quick@wg0.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Container]
+Image=valefar.mesh.wisp.place:5000/wisp/preview-bot@sha256:86077a4f29f17daf656480cd9fe812981d618f112549bdf053eea15f503a4722
+Pull=never
+ContainerName=preview-bot
+PublishPort=127.0.0.1:3004:3004
+EnvironmentFile=/opt/preview-bot/secrets.env
+ReadOnly=true
+NoNewPrivileges=true
+DropCapability=all
+PodmanArgs=--memory=256m
+LogDriver=journald
+
+[Service]
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

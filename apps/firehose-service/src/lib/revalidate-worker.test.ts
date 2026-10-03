@@ -385,6 +385,42 @@ describe('absent site marking', () => {
 
 		expect(marks).toEqual([])
 	})
+
+	test('storage-miss revalidation runs with forceDownload and ACKs on success', async () => {
+		const { redis, acks, streamDeletes } = createRedis()
+		const updates: Array<{ did: string; rkey: string; forceDownload?: boolean }> = []
+		const dependencies = createDependencies({
+			fetchSiteRecord: async () => ({ record: reappearedRecord, cid: 'cid-1' }),
+			handleSiteCreateOrUpdate: async (did, rkey, _record, _cid, options) => {
+				updates.push({ did, rkey, forceDownload: options?.forceDownload })
+			},
+		})
+
+		await processRevalidationMessage(MESSAGE_ID, messageFields('storage-miss:index.html'), redis, dependencies)
+
+		expect(updates).toEqual([{ did: DID, rkey: RKEY, forceDownload: true }])
+		expect(acks).toEqual([MESSAGE_ID])
+		expect(streamDeletes).toEqual([MESSAGE_ID])
+	})
+
+	test('keeps a storage-miss message pending when repair hits blob backoff', async () => {
+		const { redis, acks, sets, streamDeletes } = createRedis()
+		const dependencies = createDependencies({
+			fetchSiteRecord: async () => ({ record: reappearedRecord, cid: 'cid-1' }),
+			handleSiteCreateOrUpdate: async () => {
+				throw new SiteBlobBackoffError(DID, RKEY, Date.now() + 60_000, 1)
+			},
+		})
+
+		await processRevalidationMessage(MESSAGE_ID, messageFields('storage-miss:index.html'), redis, dependencies)
+
+		expect(sets.map(([key]) => key)).toEqual([
+			`revalidate:site:failure-backoff:${DID}:${RKEY}`,
+			`revalidate:retry:${MESSAGE_ID}`,
+		])
+		expect(acks).toEqual([])
+		expect(streamDeletes).toEqual([])
+	})
 })
 
 describe('delete tombstone revalidation', () => {

@@ -332,6 +332,44 @@ describe('CAS cache writer', () => {
 		expect(bodyWrites()).toEqual([keyOf(record, 'index.html')])
 	})
 
+	test('repairs an unconverted site with null file_objects under forceDownload', async () => {
+		const record = await recordOf(
+			{ name: 'index.html', content: '<h1>unconverted</h1>' },
+			{ name: 'app.css', content: 'body{}', mimeType: 'text/css' },
+		)
+		const indexCid = cidOf(record, 'index.html')
+		const cssCid = cidOf(record, 'app.css')
+		siteRows.set(`${did}/unconverted`, {
+			file_cids: { 'index.html': indexCid, 'app.css': cssCid },
+			file_objects: null,
+			cold_synced: false,
+		})
+
+		await update('unconverted', record, { forceDownload: true })
+
+		const indexKey = keyOf(record, 'index.html')
+		const cssKey = keyOf(record, 'app.css', 'text/css')
+		expect(bodyWrites().sort()).toEqual([indexKey, cssKey].sort())
+		expect(touched).toEqual([])
+		expect(lastCommit()?.fileObjects).toEqual({ 'index.html': indexKey, 'app.css': cssKey })
+		expect(registered.map((r) => r.key).sort()).toEqual([indexKey, cssKey].sort())
+	})
+
+	test('blob download failure during repair does not commit mapping or partial state', async () => {
+		const record = await recordOf({ name: 'missing.bin', content: 'lost' })
+		const missingCid = cidOf(record, 'missing.bin')
+		bodies.delete(missingCid) // safeFetch will 404
+		siteRows.set(`${did}/unconverted`, {
+			file_cids: { 'missing.bin': missingCid },
+			file_objects: null,
+			cold_synced: false,
+		})
+
+		await expect(update('unconverted', record, { forceDownload: true })).rejects.toThrow()
+		expect(commits).toHaveLength(0)
+		expect(siteRows.get(`${did}/unconverted`)?.file_objects).toBeNull()
+	})
+
 	test('a stored body with unusable accounting metadata is fetched again instead of trusted', async () => {
 		const record = await recordOf({ name: 'index.html', content: '<h1>home</h1>' })
 		await update('site-a', record)

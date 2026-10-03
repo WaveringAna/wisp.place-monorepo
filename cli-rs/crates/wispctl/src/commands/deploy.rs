@@ -100,6 +100,17 @@ pub fn normalize_preview_host(host: &str) -> Result<String> {
     Ok(host)
 }
 
+pub fn preview_site_from_sha(sha: &str) -> Result<String> {
+    if !matches!(sha.len(), 7 | 40)
+        || !sha
+            .bytes()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+    {
+        bail!("SHA must be 7 or 40 lowercase hexadecimal characters");
+    }
+    Ok(format!("pr-{}", &sha[..7]))
+}
+
 /// Whether `site` is `pr-` plus the seven lowercase hex characters of a commit.
 fn is_preview_site(site: &str) -> bool {
     site.len() == 10
@@ -151,6 +162,7 @@ fn valid_site(site: &str) -> bool {
 }
 
 pub async fn run(mut args: DeployArgs) -> Result<()> {
+    args.site = args.preview_site.or(args.site);
     let known = if args.handle.is_none() && args.password.is_none() {
         auth::resolve_account_for_cwd(args.db.db.as_deref()).await
     } else {
@@ -593,6 +605,17 @@ mod tests {
 #[cfg(test)]
 mod preview_tests {
     use super::*;
+
+    #[test]
+    fn sha_derived_sites_use_the_canonical_preview_url() {
+        for sha in ["abcdef0", "abcdef0123456789abcdef0123456789abcdef01"] {
+            let site = preview_site_from_sha(sha).unwrap();
+            assert_eq!(
+                build_preview_url(&site, "alice", "preview.wisp.place").unwrap(),
+                "https://pr-abcdef0-alice.preview.wisp.place/"
+            );
+        }
+    }
 
     #[test]
     fn preview_urls_validate_and_normalize() {

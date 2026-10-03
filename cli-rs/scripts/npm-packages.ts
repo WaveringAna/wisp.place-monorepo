@@ -82,10 +82,15 @@ const manifestOf = (dir: string) => JSON.parse(readFileSync(join(dir, 'package.j
 const published = (name: string, version: string) =>
 	spawnSync('npm', ['view', `${name}@${version}`, 'version'], { encoding: 'utf8' }).stdout.trim() === version
 
+const otpArg = process.argv.find((arg) => arg.startsWith('--otp='))
+const otp = otpArg ? otpArg.split('=')[1] : undefined
+
 const publish = (dir: string) => {
 	const { name, version } = manifestOf(dir)
 	if (published(name, version)) return console.log(`${name}@${version} is already on npm`)
-	const { status } = spawnSync('npm', ['publish'], { cwd: dir, stdio: 'inherit' })
+	const args = ['publish']
+	if (otp) args.push(`--otp=${otp}`)
+	const { status } = spawnSync('npm', args, { cwd: dir, stdio: 'inherit' })
 	if (status !== 0) throw new Error(`npm publish failed for ${name}@${version}`)
 }
 

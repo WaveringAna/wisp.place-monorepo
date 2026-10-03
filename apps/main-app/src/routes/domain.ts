@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { Agent } from '@atproto/api'
 import type { NodeOAuthClient } from '@atproto/oauth-client-node'
+import { isPreviewHostname, parsePreviewHostname } from '@wispplace/constants'
 import { createLogger } from '@wispplace/observability'
 import { isValidSiteId, siteIdFromHostname } from '@wispplace/private-sites'
 import { Elysia } from 'elysia'
@@ -96,6 +97,21 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 
 					set.status = 200
 					return { registered: true, type: 'private' as const, domain }
+				}
+
+				const previewHost = normalizeDomain(process.env.PREVIEW_HOST || '')
+				if (previewHost && isPreviewHostname(domain, previewHost)) {
+					const preview = parsePreviewHostname(domain, previewHost)
+					if (!preview) {
+						set.status = 404
+						return { registered: false }
+					}
+					const claim = await isDomainRegistered(toDomain(preview.claim))
+					if (!claim.registered || claim.type !== 'wisp') {
+						set.status = 404
+						return { registered: false }
+					}
+					return { ...claim, domain, rkey: preview.rkey }
 				}
 
 				const result = await isDomainRegistered(domain)

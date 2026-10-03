@@ -168,3 +168,4 @@ const reportPath = values.report ?? `/tmp/wisp-cas-${mode}-${new Date().toISOStr
 await writeFile(reportPath, JSON.stringify({ mode, totals, notable: notable.slice(0, MAX_REPORTED_SITES) }, null, 2))
 console.log(JSON.stringify(totals, null, 2))
 console.log(`report: ${reportPath}`)
+process.exit(0)

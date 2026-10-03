@@ -3,6 +3,7 @@
  * Handles routing and request dispatching
  */
 
+import { isPreviewHostname, parsePreviewHostname } from '@wispplace/constants'
 import { normalizeSitePath } from '@wispplace/fs-utils'
 import { createLogger } from '@wispplace/observability'
 import { observabilityErrorHandler, observabilityMiddleware } from '@wispplace/observability/middleware/hono'
@@ -13,7 +14,6 @@ import { type CacheInvalidationHealthSnapshot, getCacheInvalidationHealthSnapsho
 import { cache } from './lib/cache-manager'
 import { getCustomDomain, getCustomDomainByHash, getWispDomain } from './lib/db'
 import { serveFromCache, serveFromCacheWithRewrite } from './lib/file-serving'
-import { isPreviewHostname, parsePreviewHostname } from './lib/preview-host'
 import { privateNotFound, servePrivateSite } from './lib/private-serving'
 import { decodeRequestPathname, extractHeaders, isValidRkey } from './lib/request-utils'
 import { recordSiteResponse } from './lib/site-metrics'

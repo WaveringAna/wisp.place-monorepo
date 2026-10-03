@@ -1,4 +1,5 @@
 import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test'
+import { BASE_HOST } from '@wispplace/constants'
 import { signCookie } from 'elysia/utils'
 
 const COOKIE_SECRET = 'test-cookie-secret'
@@ -7,9 +8,11 @@ const SENTINEL = 'SENTINEL_ACCESS_TOKEN_SHOULD_NOT_ESCAPE'
 const PRIVATE_HOST = 'priv.wisp.test:3001'
 const PRIVATE_HOSTNAME = 'priv.wisp.test'
 const LIVE_SITE_ID = 'bright-brook-fox-1234'
+const originalPreviewHost = process.env.PREVIEW_HOST
 const originalPrivateHost = process.env.PRIVATE_HOST
 
 let failPrivateLookup = false
+let failPublicLookup = false
 const liveSiteIds = new Set<string>()
 const expiredSiteIds = new Set<string>()
 const privateLookups: string[] = []
@@ -67,6 +70,7 @@ mock.module('../lib/db', () => ({
 	isDomainAvailable: async () => false,
 	isDomainRegistered: async (domain: string) => {
 		publicLookups.push(domain)
+		if (failPublicLookup) throw new Error(SENTINEL)
 		return publicRegistrations.get(domain) ?? { registered: false }
 	},
 	getSitesByDid: async () => [],
@@ -147,6 +151,8 @@ const safeJson = async (response: Response): Promise<unknown> => {
 
 beforeEach(() => {
 	process.env.PRIVATE_HOST = PRIVATE_HOST
+	delete process.env.PREVIEW_HOST
+	failPublicLookup = false
 	failPrivateLookup = false
 	liveSiteIds.clear()
 	expiredSiteIds.clear()
@@ -158,6 +164,8 @@ beforeEach(() => {
 })
 
 afterAll(() => {
+	if (originalPreviewHost === undefined) delete process.env.PREVIEW_HOST
+	else process.env.PREVIEW_HOST = originalPreviewHost
 	if (originalPrivateHost === undefined) {
 		delete process.env.PRIVATE_HOST
 	} else {
@@ -420,5 +428,74 @@ describe('Caddy domain registration ask for private sites', () => {
 		const text = await response.text()
 		expect(text).not.toContain(SENTINEL)
 		expect(JSON.parse(text)).toEqual({ error: 'Failed to check domain' })
+	})
+})
+
+describe('Caddy domain registration ask for previews', () => {
+	const previewHost = 'preview.wisp.place'
+	const claimDomain = `alice.${BASE_HOST}`
+	const previewDomain = `pr-ab12cd3-alice.${previewHost}`
+	const registration = { registered: true, type: 'wisp', domain: claimDomain, did: DID, rkey: 'blog' }
+
+	test('uses the existing wisp claim registration, not the production site mapping', async () => {
+		process.env.PREVIEW_HOST = previewHost
+		publicRegistrations.set(claimDomain, registration)
+		const response = await ask(`${previewDomain.toUpperCase()}.`)
+		expect(response.status).toBe(200)
+		expect(await response.json()).toEqual({ ...registration, domain: previewDomain, rkey: 'pr-ab12cd3' })
+		expect(publicLookups).toEqual([claimDomain])
+	})
+
+	test('denies a preview after its claim is removed', async () => {
+		process.env.PREVIEW_HOST = previewHost
+		publicRegistrations.set(claimDomain, registration)
+		expect((await ask(previewDomain)).status).toBe(200)
+		publicRegistrations.delete(claimDomain)
+		expect((await ask(previewDomain)).status).toBe(404)
+	})
+
+	test('fails closed with a generic error when the claim lookup fails', async () => {
+		process.env.PREVIEW_HOST = previewHost
+		failPublicLookup = true
+		const response = await ask(previewDomain)
+		expect(response.status).toBe(500)
+		expect(await safeJson(response)).toEqual({ error: 'Failed to check domain' })
+	})
+
+	test('denies an unclaimed preview', async () => {
+		process.env.PREVIEW_HOST = previewHost
+		const response = await ask(previewDomain)
+		expect(response.status).toBe(404)
+		expect(await response.json()).toEqual({ registered: false })
+		expect(publicLookups).toEqual([claimDomain])
+	})
+
+	test('reserves malformed preview hosts rather than using exact public-domain records', async () => {
+		process.env.PREVIEW_HOST = previewHost
+		for (const domain of [
+			previewHost,
+			`blog-alice.${previewHost}`,
+			`x.${previewDomain}`,
+			`pr-ab12cd3-.${previewHost}`,
+		]) {
+			publicRegistrations.set(domain, registration)
+			const response = await ask(domain)
+			expect(response.status).toBe(404)
+			expect(await response.json()).toEqual({ registered: false })
+		}
+		expect(publicLookups).toEqual([])
+	})
+
+	test('does not treat a custom-domain row as a wisp claim', async () => {
+		process.env.PREVIEW_HOST = previewHost
+		publicRegistrations.set(claimDomain, { ...registration, type: 'custom' })
+		expect((await ask(previewDomain)).status).toBe(404)
+	})
+
+	test('keeps previews disabled when PREVIEW_HOST is unset', async () => {
+		delete process.env.PREVIEW_HOST
+		publicRegistrations.set(claimDomain, registration)
+		expect((await ask(previewDomain)).status).toBe(404)
+		expect(publicLookups).toEqual([previewDomain])
 	})
 })

@@ -52,6 +52,15 @@ moves it. `scripts/lexgen.sh` runs the fork's `jacquard-codegen` from a local
 checkout (`JACQUARD_DIR`, default `../../jacquard`); unlike 0.12 it also accepts
 the permission-set lexicons (`aud: "*"`).
 
+## Preview deploys
+
+`deploy --sha <sha>` derives the site name `pr-<sha7>` from a seven-character
+or full 40-character lowercase hexadecimal commit SHA. It conflicts with
+`--site` and is validated before authentication or upload. Preview URL routing
+still uses `--preview-host preview.wisp.place` and the owner's wisp claim;
+this flag does not establish a pull-request association for the comment bot.
+The flag is available in 2.0.2+ builds.
+
 ## Releasing
 
 1. `scripts/build-cli-binaries.sh` builds every target into `binaries/` with

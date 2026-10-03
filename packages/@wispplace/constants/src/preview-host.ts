@@ -1,6 +1,6 @@
 /**
- * Preview hosts share a wildcard cert, which covers a single label, so one label
- * carries both the site and its owner's wisp subdomain:
+ * Preview hostnames carry both the site and its owner's wisp subdomain in one
+ * label. Routing and on-demand certificate permission checks share this grammar:
  *
  *   pr-<sha7>-<claim>.<PREVIEW_HOST>
  *

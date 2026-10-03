@@ -91,6 +91,14 @@ pub struct DeployArgs {
     /// Site name (prompted for when omitted)
     #[arg(short, long, value_name = "name")]
     pub site: Option<String>,
+    /// Commit SHA (7 or 40 lowercase hex characters); deploy as pr-<sha7>
+    #[arg(
+        long = "sha",
+        value_name = "sha",
+        conflicts_with = "site",
+        value_parser = crate::commands::deploy::preview_site_from_sha
+    )]
+    pub preview_site: Option<String>,
     /// Enable directory listing
     #[arg(long)]
     pub directory: bool,
@@ -119,7 +127,7 @@ pub struct DeployArgs {
     /// Skip confirmation prompts
     #[arg(short, long)]
     pub yes: bool,
-    /// Registrable host for pull-request preview URLs
+    /// Hostname suffix for pull-request preview URLs
     #[arg(long, env = "WISPCTL_PREVIEW_HOST", value_name = "host")]
     pub preview_host: Option<String>,
     /// Wisp subdomain claim for pull-request preview URLs
@@ -456,6 +464,58 @@ mod tests {
         assert_eq!(cli.deploy.handle.as_deref(), Some("alice.bsky.social"));
         assert_eq!(cli.deploy.site.as_deref(), Some("blog"));
         assert_eq!(cli.deploy.concurrency, 3);
+    }
+
+    #[test]
+    fn deploy_sha_accepts_short_and_full_commits() {
+        for sha in ["abcdef0", "abcdef0123456789abcdef0123456789abcdef01"] {
+            for prefix in [vec!["wispctl"], vec!["wispctl", "deploy"]] {
+                let args = prefix
+                    .into_iter()
+                    .chain(["alice.test", "--path", ".", "--sha", sha]);
+                let cli = Cli::try_parse_from(args).unwrap();
+                let deploy = match cli.command {
+                    Some(Command::Deploy(args)) => args,
+                    None => cli.deploy,
+                    _ => panic!("expected deploy"),
+                };
+                assert_eq!(deploy.preview_site.as_deref(), Some("pr-abcdef0"));
+                assert!(deploy.site.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn deploy_sha_rejects_invalid_commits() {
+        for sha in [
+            "",
+            "abcdef",
+            "abcdef01",
+            "ABCDEF0",
+            "abcdeg0",
+            "abcdef0/",
+            "éabcdef",
+            "abcdef0123456789abcdef0123456789abcdef0",
+            "abcdef0123456789abcdef0123456789abcdef012",
+        ] {
+            let error = Cli::try_parse_from(["wispctl", "deploy", "--sha", sha]).unwrap_err();
+            assert_eq!(
+                error.kind(),
+                clap::error::ErrorKind::ValueValidation,
+                "{sha}"
+            );
+        }
+    }
+
+    #[test]
+    fn deploy_sha_conflicts_with_site() {
+        for prefix in [vec!["wispctl"], vec!["wispctl", "deploy"]] {
+            let args = prefix
+                .into_iter()
+                .chain(["--sha", "abcdef0", "--site", "blog"]);
+            let error = Cli::try_parse_from(args).unwrap_err();
+            assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+        }
     }
 
     #[test]
