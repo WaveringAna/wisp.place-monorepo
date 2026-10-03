@@ -478,6 +478,53 @@ export class S3StorageTier implements StorageTier {
 		}
 	}
 
+	/**
+	 * Copy an object to another key inside the bucket, giving the copy its own metadata. The stored
+	 * metadata embeds the object's key, so a plain copy would carry the old one; `metadata` replaces it.
+	 *
+	 * @param fromKey - The source key
+	 * @param toKey - The destination key
+	 * @param metadata - The destination's complete metadata
+	 * @param expectedChecksum - The source checksum the caller based `metadata` on
+	 * @returns true when copied; false when the source is absent or is no longer the object the caller
+	 * saw (its checksum or ETag changed), in which case nothing was copied
+	 *
+	 * @remarks
+	 * The copy is fenced on the source's ETag (`CopySourceIfMatch`), so a source overwritten after the
+	 * check cannot be copied under metadata that describes the old content. A backend that returns no
+	 * ETag cannot give that guarantee and is treated as changed.
+	 */
+	async copyObject(
+		fromKey: string,
+		toKey: string,
+		metadata: StorageMetadata,
+		expectedChecksum: string,
+	): Promise<boolean> {
+		const sourceKey = this.getS3Key(fromKey)
+		try {
+			const observed = await this.client.send(new HeadObjectCommand({ Bucket: this.config.bucket, Key: sourceKey }))
+			const current = observed.Metadata
+				? this.s3ToMetadata(observed.Metadata)
+				: this.metadataFromObjectResponse(fromKey, observed.ContentLength, observed)
+			if (current.checksum !== expectedChecksum || !observed.ETag) return false
+
+			await this.client.send(
+				new CopyObjectCommand({
+					Bucket: this.config.bucket,
+					Key: this.getS3Key(toKey),
+					CopySource: this.getEncodedCopySource(sourceKey),
+					CopySourceIfMatch: observed.ETag,
+					Metadata: this.metadataToS3(metadata),
+					MetadataDirective: 'REPLACE',
+				}),
+			)
+			return true
+		} catch (error) {
+			if (this.isNoSuchKeyError(error) || this.isConditionalCopyFailure(error)) return false
+			throw error
+		}
+	}
+
 	async getStats(): Promise<TierStats> {
 		let bytes = 0
 		let items = 0

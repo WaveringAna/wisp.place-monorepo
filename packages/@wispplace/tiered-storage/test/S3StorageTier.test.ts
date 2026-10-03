@@ -411,3 +411,100 @@ describe('S3StorageTier conditional metadata', () => {
 		expect(await tier.setMetadataIfChecksumMatches('absent', 'sum', updated)).toBe(false)
 	})
 })
+
+describe('S3StorageTier copyObject', () => {
+	const sourceHead = {
+		Metadata: {
+			key: 'did%3Aplc%3Aabc%2Fsite%2Fa.css',
+			size: '19',
+			createdat: '2024-01-01T00:00:00.000Z',
+			lastaccessed: '2024-01-01T00:00:00.000Z',
+			accesscount: '3',
+			compressed: 'false',
+			checksum: 'sum-1',
+		},
+		ETag: '"source-etag"',
+	}
+	const metadata = {
+		key: 'cas/bafkreiabc.ebb2ee7b.css',
+		size: 19,
+		createdAt: new Date('2024-01-01T00:00:00Z'),
+		lastAccessed: new Date('2024-02-01T00:00:00Z'),
+		accessCount: 0,
+		compressed: false,
+		checksum: 'sum-1',
+		customMetadata: { sourceCid: 'bafkreiabc', base64: 'false', uncompressedSize: '19' },
+	}
+
+	function tierWith(send: (command: unknown) => Promise<unknown>, prefix?: string) {
+		const tier = new S3StorageTier({ bucket: 'test-bucket', region: 'us-east-1', prefix })
+		;(tier as any).client = { send }
+		return tier
+	}
+
+	test('copies inside the bucket, replacing metadata so it names the new key, fenced on the source ETag', async () => {
+		const commands: unknown[] = []
+		const tier = tierWith(async (command) => {
+			commands.push(command)
+			return command instanceof CopyObjectCommand ? {} : sourceHead
+		}, 'sites/')
+
+		expect(await tier.copyObject('did:plc:abc/site/a.css', 'cas/bafkreiabc.ebb2ee7b.css', metadata, 'sum-1')).toBe(true)
+
+		const copy = commands.find((command) => command instanceof CopyObjectCommand) as CopyObjectCommand
+		expect(copy.input.Bucket).toBe('test-bucket')
+		expect(copy.input.Key).toBe('sites/cas/bafkreiabc.ebb2ee7b.css')
+		expect(copy.input.CopySource).toBe('test-bucket/sites/did%3Aplc%3Aabc/site/a.css')
+		expect(copy.input.CopySourceIfMatch).toBe('"source-etag"')
+		expect(copy.input.MetadataDirective).toBe('REPLACE')
+		expect(copy.input.Metadata?.key).toBe(encodeURIComponent('cas/bafkreiabc.ebb2ee7b.css'))
+		expect(JSON.parse(copy.input.Metadata?.custom ?? '{}')).toEqual(metadata.customMetadata)
+	})
+
+	test('copies nothing when the source no longer has the checksum that was classified', async () => {
+		const commands: unknown[] = []
+		const tier = tierWith(async (command) => {
+			commands.push(command)
+			return sourceHead
+		})
+
+		expect(await tier.copyObject('a', 'b', metadata, 'a-different-sum')).toBe(false)
+		expect(commands.some((command) => command instanceof CopyObjectCommand)).toBe(false)
+	})
+
+	test.each([
+		['a source that is gone', 'NoSuchKey'],
+		['a source that changed between the check and the copy', 'PreconditionFailed'],
+	])('returns false for %s', async (_name, errorName) => {
+		const tier = tierWith(async (command) => {
+			if (command instanceof CopyObjectCommand) {
+				const error = new Error(errorName)
+				;(error as any).name = errorName
+				throw error
+			}
+			return sourceHead
+		})
+
+		expect(await tier.copyObject('a', 'b', metadata, 'sum-1')).toBe(false)
+	})
+
+	test('does not attempt an unfenced copy when the backend returns no ETag', async () => {
+		const commands: unknown[] = []
+		const tier = tierWith(async (command) => {
+			commands.push(command)
+			return { Metadata: sourceHead.Metadata }
+		})
+
+		expect(await tier.copyObject('a', 'b', metadata, 'sum-1')).toBe(false)
+		expect(commands.some((command) => command instanceof CopyObjectCommand)).toBe(false)
+	})
+
+	test('lets an unexpected failure through instead of reporting it as a changed source', async () => {
+		const tier = tierWith(async (command) => {
+			if (command instanceof CopyObjectCommand) throw new Error('connection reset')
+			return sourceHead
+		})
+
+		await expect(tier.copyObject('a', 'b', metadata, 'sum-1')).rejects.toThrow('connection reset')
+	})
+})
