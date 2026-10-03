@@ -1,4 +1,6 @@
+import type { FileObjects } from '@wispplace/fs-utils'
 import { createLogger } from '@wispplace/observability'
+import { resolveStorageKey } from './site-storage-keys'
 import { storage } from './storage'
 
 const logger = createLogger('html-prewarm')
@@ -40,14 +42,16 @@ async function loadSiteHtmlKeysIntoHotTier(
 	did: string,
 	rkey: string,
 	manifestPaths: readonly string[],
+	fileObjects: FileObjects | null,
 ): Promise<{ scannedKeys: number; warmedHtmlKeys: number; failedKeys: number }> {
-	const prefix = `${did}/${rkey}/`
 	const htmlKeys = new Set<string>()
 	for (const manifestPath of manifestPaths) {
 		if (htmlKeys.size >= MAX_HTML_PREWARM_KEYS) break
 		if (typeof manifestPath !== 'string' || !isPrewarmEligiblePath(manifestPath)) continue
 		const normalizedPath = manifestPath.startsWith('/') ? manifestPath.slice(1) : manifestPath
-		if (isHtmlStorageKey(normalizedPath)) htmlKeys.add(`${prefix}${normalizedPath}`)
+		if (!isHtmlStorageKey(normalizedPath)) continue
+		const key = resolveStorageKey(did, rkey, normalizedPath, fileObjects)
+		if (key !== null) htmlKeys.add(key)
 	}
 
 	let warmedHtmlKeys = 0
@@ -68,7 +72,12 @@ async function loadSiteHtmlKeysIntoHotTier(
 	return { scannedKeys: htmlKeys.size, warmedHtmlKeys, failedKeys }
 }
 
-export function triggerSiteHtmlHotCacheWarmup(did: string, rkey: string, manifestPaths?: readonly string[]): void {
+export function triggerSiteHtmlHotCacheWarmup(
+	did: string,
+	rkey: string,
+	manifestPaths?: readonly string[],
+	fileObjects: FileObjects | null = null,
+): void {
 	const siteKey = getSiteKey(did, rkey)
 	// A manifest is authoritative and already loaded on the request path. Legacy
 	// callers without one intentionally do nothing: never start an unbounded cold
@@ -83,7 +92,12 @@ export function triggerSiteHtmlHotCacheWarmup(did: string, rkey: string, manifes
 	const entry: { promise: Promise<void> } = {
 		promise: Promise.resolve().then(async () => {
 			try {
-				const { scannedKeys, warmedHtmlKeys, failedKeys } = await loadSiteHtmlKeysIntoHotTier(did, rkey, manifestPaths)
+				const { scannedKeys, warmedHtmlKeys, failedKeys } = await loadSiteHtmlKeysIntoHotTier(
+					did,
+					rkey,
+					manifestPaths,
+					fileObjects,
+				)
 				if (prewarmEpoch !== epoch || prewarmInFlight.get(siteKey) !== entry) return
 
 				// Remember a completed warmup even when there are no matching keys so repeated

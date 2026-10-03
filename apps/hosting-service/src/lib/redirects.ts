@@ -1,5 +1,11 @@
-import { MAX_REDIRECT_FILE_BYTES, parseRedirectsFileBytes, type RedirectRule } from '@wispplace/fs-utils'
+import {
+	type FileObjects,
+	MAX_REDIRECT_FILE_BYTES,
+	parseRedirectsFileBytes,
+	type RedirectRule,
+} from '@wispplace/fs-utils'
 import { createLogger } from '@wispplace/observability'
+import { resolveStorageKey } from './site-storage-keys'
 import { isStorageUnavailableError, storage } from './storage'
 
 const logger = createLogger('redirects')
@@ -18,8 +24,13 @@ export {
 /**
  * Load redirect rules from a cached site.
  */
-export async function loadRedirectRules(did: string, rkey: string): Promise<RedirectRule[]> {
-	const key = `${did}/${rkey}/_redirects`
+export async function loadRedirectRules(
+	did: string,
+	rkey: string,
+	fileObjects: FileObjects | null,
+): Promise<RedirectRule[]> {
+	const key = resolveStorageKey(did, rkey, '_redirects', fileObjects)
+	if (key === null) return []
 	try {
 		const data = await storage.get(key)
 		if (!data) return []

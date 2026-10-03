@@ -7,7 +7,7 @@ import { Readable } from 'node:stream'
 import { computeCID } from '@wispplace/atproto-utils'
 import { shouldCompressMimeType } from '@wispplace/atproto-utils/compression'
 import { MAX_BLOB_SIZE } from '@wispplace/constants'
-import { normalizeFileCids } from '@wispplace/fs-utils'
+import { type FileObjects, normalizeFileCids, normalizeFileObjects } from '@wispplace/fs-utils'
 import { isHtmlContent, rewriteHtmlPaths } from '@wispplace/fs-utils/html-rewriter'
 import type { Record as WispSettings } from '@wispplace/lexicons/types/place/wisp/settings'
 import { createLogger } from '@wispplace/observability'
@@ -40,6 +40,7 @@ import { loadRedirectRules, matchRedirectRule, parseCookies, parseQueryString } 
 import { applyCustomHeaders, getIndexFiles } from './request-utils'
 import { recordStorageMiss } from './revalidate-metrics'
 import { enqueueRevalidate } from './revalidate-queue'
+import { resolveStorageKey, type SiteManifest } from './site-storage-keys'
 import { addPublicSourceCidIfChecksumMatches, evictPublicCacheKey, isStorageUnavailableError, storage } from './storage'
 import { createTrace, logTrace, type RequestTrace, span } from './trace'
 import { getCachedSettings } from './utils'
@@ -250,9 +251,11 @@ async function getFileWithMetadata(
 	did: string,
 	rkey: string,
 	filePath: string,
+	fileObjects: FileObjects | null,
 	expectedSourceCid?: string,
 ): Promise<FileStorageResult | null> {
-	const key = `${did}/${rkey}/${filePath}`
+	const key = resolveStorageKey(did, rkey, filePath, fileObjects)
+	if (key === null) return null
 	if (expectedSourceCid === undefined) {
 		const result = await storage.getWithMetadata(key)
 		if (!result) return null
@@ -261,7 +264,7 @@ async function getFileWithMetadata(
 		return result
 	}
 
-	const sourceCidMismatchKey = `${did}:${rkey}:${filePath}:${expectedSourceCid}`
+	const sourceCidMismatchKey = `${did}:${rkey}:${filePath}:${expectedSourceCid}:${key}`
 	// Dedupe the initial read, eviction, and one cold retry. Concurrent requests
 	// may all arrive while the upper tier still contains the same stale object;
 	// getOrFetch ensures that burst performs one complete validation attempt.
@@ -326,11 +329,6 @@ async function getFileWithMetadata(
 	return lookupResult.result
 }
 
-function buildStorageKey(did: string, rkey: string, filePath: string): string {
-	const normalized = filePath.startsWith('/') ? filePath.slice(1) : filePath
-	return `${did}/${rkey}/${normalized}`
-}
-
 function normalizeFilePath(filePath: string): string {
 	return filePath.startsWith('/') ? filePath.slice(1) : filePath
 }
@@ -378,11 +376,12 @@ async function getFallbackFile(
 	did: string,
 	rkey: string,
 	filePath: string,
-	fileCids: Record<string, string> | null,
+	manifest: SiteManifest | null,
 	strategy: FileServingStrategy,
 	trace?: RequestTrace | null,
 	signal?: AbortSignal,
 ): Promise<FileForRequestResult | null> {
+	const fileCids = manifest?.fileCids ?? null
 	const expectedSourceCid = getExpectedSourceCid(fileCids, filePath)
 	if (fileCids !== null && expectedSourceCid === undefined) return null
 
@@ -392,7 +391,7 @@ async function getFallbackFile(
 	if (negativeCached === null) return null
 
 	const result = await span(trace, `storage:${filePath}`, () =>
-		getFileForRequest(did, rkey, filePath, strategy, fileCids, signal),
+		getFileForRequest(did, rkey, filePath, strategy, manifest, signal),
 	)
 	if (result === null) {
 		cache.set('siteFiles', cacheKey, null)
@@ -400,17 +399,19 @@ async function getFallbackFile(
 	return result
 }
 
-async function getExpectedFileCidsForSite(
-	did: string,
-	rkey: string,
-	trace?: RequestTrace | null,
-): Promise<Record<string, string> | null> {
+async function getSiteManifest(did: string, rkey: string, trace?: RequestTrace | null): Promise<SiteManifest | null> {
 	const siteCache = await span(trace, 'db:siteCache', () => getSiteCache(did, rkey))
 	if (!siteCache) return null
 	// The owner's PDS confirmed the record is gone: serve it like a deleted site
 	// (an empty manifest, so every path 404s) while the files await the sweeper.
-	if (siteCache.absent_since !== null && siteCache.absent_since !== undefined) return {}
-	return normalizeFileCids(siteCache.file_cids).value
+	if (siteCache.absent_since !== null && siteCache.absent_since !== undefined) {
+		return { fileCids: {}, fileObjects: null }
+	}
+	return {
+		fileCids: normalizeFileCids(siteCache.file_cids).value,
+		// One snapshot with the CIDs: a body is only read from the key its own manifest names.
+		fileObjects: normalizeFileObjects(siteCache.file_objects),
+	}
 }
 
 function shouldServeUpdatingPage(requestHeaders?: Record<string, string>): boolean {
@@ -476,36 +477,17 @@ function collectManifestDirectoryEntries(
 	}
 }
 
-async function collectStoredDirectoryEntries(
-	entries: DirectoryEntryMap,
-	did: string,
-	rkey: string,
-	requestPath: string,
-): Promise<void> {
-	const prefix = buildStorageKey(did, rkey, directoryPrefix(requestPath))
-	for await (const key of storage.listKeys(prefix)) {
-		addDirectoryEntry(entries, key.slice(prefix.length))
-	}
-}
-
 function toDirectoryEntries(entries: DirectoryEntryMap): Array<{ name: string; isDirectory: boolean }> {
 	return Array.from(entries.entries()).map(([name, isDirectory]) => ({ name, isDirectory }))
 }
 
-async function listDirectoryEntries(
-	did: string,
-	rkey: string,
+/** Directory entries come from the manifest alone: storage keys carry no path structure any more. */
+function listDirectoryEntries(
 	requestPath: string,
-	manifestPaths?: string[] | null,
-): Promise<Array<{ name: string; isDirectory: boolean }>> {
+	manifestPaths: readonly string[] | null,
+): Array<{ name: string; isDirectory: boolean }> {
 	const entries: DirectoryEntryMap = new Map()
-	if (manifestPaths != null) {
-		collectManifestDirectoryEntries(entries, requestPath, manifestPaths)
-	} else {
-		// Internal fallback when no manifest was supplied. Public cached requests
-		// return a bounded repair response before reaching this path.
-		await collectStoredDirectoryEntries(entries, did, rkey, requestPath)
-	}
+	if (manifestPaths !== null) collectManifestDirectoryEntries(entries, requestPath, manifestPaths)
 	return toDirectoryEntries(entries)
 }
 
@@ -521,12 +503,12 @@ async function hasFileForNonForcedRedirect(
 		checkPath += indexFiles[0] || 'index.html'
 	}
 
-	const fileCids = await getExpectedFileCidsForSite(did, rkey, trace)
-	if (fileCids !== null) {
-		return manifestHasPath(fileCids, checkPath)
+	const manifest = await getSiteManifest(did, rkey, trace)
+	if (manifest !== null) {
+		return manifestHasPath(manifest.fileCids, checkPath)
 	}
 
-	const fileInStorage = await span(trace, `storage:${checkPath}`, () => getFileWithMetadata(did, rkey, checkPath))
+	const fileInStorage = await span(trace, `storage:${checkPath}`, () => getFileWithMetadata(did, rkey, checkPath, null))
 	return fileInStorage !== null
 }
 
@@ -534,13 +516,15 @@ async function getVerifiedFileStream(
 	did: string,
 	rkey: string,
 	filePath: string,
+	fileObjects: FileObjects | null,
 	expectedSourceCid: string | undefined,
 	signal?: AbortSignal,
 ): Promise<StreamResult | null> {
 	if (typeof storage.getStream !== 'function') return null
-	const key = buildStorageKey(did, rkey, filePath)
+	const key = resolveStorageKey(did, rkey, filePath, fileObjects)
+	if (key === null) return null
 	const read = () => storage.getStream(key, { signal, borrowChunks: true })
-	const mismatchKey = `stream:${did}:${rkey}:${filePath}:${expectedSourceCid}`
+	const mismatchKey = `stream:${did}:${rkey}:${filePath}:${expectedSourceCid}:${key}`
 	if (
 		expectedSourceCid &&
 		cache.get<StreamCidMismatchResolution>(SOURCE_CID_MISMATCH_NAMESPACE, mismatchKey)?.kind === 'mismatched'
@@ -630,16 +614,18 @@ async function getFileForRequest(
 	rkey: string,
 	filePath: string,
 	strategy: FileServingStrategy,
-	fileCids: Record<string, string> | null,
+	manifest: SiteManifest | null,
 	signal?: AbortSignal,
 ): Promise<FileForRequestResult | null> {
+	const fileCids = manifest?.fileCids ?? null
+	const fileObjects = manifest?.fileObjects ?? null
 	const expectedSourceCid = getExpectedSourceCid(fileCids, filePath)
 	if (fileCids !== null && expectedSourceCid === undefined) return null
 
 	let sourceCidValidationFailed = false
 	const readCandidate = async (candidatePath: string): Promise<FileStorageResult | null> => {
 		try {
-			return await getFileWithMetadata(did, rkey, candidatePath, expectedSourceCid)
+			return await getFileWithMetadata(did, rkey, candidatePath, fileObjects, expectedSourceCid)
 		} catch (error) {
 			if (error instanceof SourceCidValidationError) {
 				sourceCidValidationFailed = true
@@ -664,6 +650,7 @@ async function getFileForRequest(
 				did,
 				rkey,
 				candidatePath,
+				fileObjects,
 				getExpectedSourceCid(fileCids, candidatePath),
 				signal,
 			)
@@ -1242,11 +1229,11 @@ interface FileResolverOptions {
 	trace?: RequestTrace | null
 	strategy: FileServingStrategy
 	/** Preloaded manifest for top-level requests; avoids a second database read. */
-	expectedFileCids?: Record<string, string> | null
+	manifest?: SiteManifest | null
 }
 
 interface FileResolver {
-	getExpectedFileCids(): Promise<Record<string, string> | null>
+	getManifest(): Promise<SiteManifest | null>
 	findFirstExpectedFile(paths: Iterable<string>): Promise<FileForRequestResult | null>
 	findFallbackFile(filePath: string): Promise<FileForRequestResult | null>
 	markExpectedMiss(filePath: string): Promise<void>
@@ -1276,6 +1263,7 @@ interface FileRequestOptions extends FileResolverOptions {
 interface RedirectRequestOptions extends CachedRequestOptions {
 	indexFiles: string[]
 	redirectsPresent: boolean
+	fileObjects: FileObjects | null
 	trace: RequestTrace | null
 	resolveFile(filePath: string): Promise<Response>
 }
@@ -1359,7 +1347,7 @@ function createExpectedManifestMissTracker(
 	did: string,
 	rkey: string,
 	requestHeaders: Record<string, string> | undefined,
-	getExpectedFileCids: () => Promise<Record<string, string> | null>,
+	getManifest: () => Promise<SiteManifest | null>,
 	strategy: FileServingStrategy,
 ) {
 	let expectedMissPath: string | null = null
@@ -1367,13 +1355,13 @@ function createExpectedManifestMissTracker(
 	return {
 		async mark(filePath: string): Promise<void> {
 			if (expectedMissPath) return
-			const fileCids = await getExpectedFileCids()
-			if (!fileCids) return
+			const manifest = await getManifest()
+			if (!manifest) return
 
 			// A pre-rewritten cache entry is still derived from its original
 			// manifest path. If that original CID is absent, fail closed and
 			// request repair rather than falling through to a styled 404.
-			if (manifestLookupPaths(filePath, strategy).some((path) => manifestHasPath(fileCids, path))) {
+			if (manifestLookupPaths(filePath, strategy).some((path) => manifestHasPath(manifest.fileCids, path))) {
 				expectedMissPath = sourceManifestPath(filePath)
 			}
 		},
@@ -1393,39 +1381,39 @@ function manifestLookupPaths(filePath: string, strategy: FileServingStrategy): s
 }
 
 function manifestMayContainFile(
-	fileCids: Record<string, string> | null,
+	manifest: SiteManifest | null,
 	filePath: string,
 	strategy: FileServingStrategy,
 ): boolean {
-	return manifestLookupPaths(filePath, strategy).some((path) => manifestHasPath(fileCids, path))
+	return manifestLookupPaths(filePath, strategy).some((path) => manifestHasPath(manifest?.fileCids ?? null, path))
 }
 
 function createFileResolver(options: FileResolverOptions): FileResolver {
 	const { did, rkey, requestHeaders, strategy, trace } = options
-	let expectedFileCids = options.expectedFileCids
-	let manifestLoaded = options.expectedFileCids !== undefined
+	let loadedManifest = options.manifest
+	let manifestLoaded = options.manifest !== undefined
 	const attemptedPaths = new Set<string>()
 
-	const getExpectedFileCids = async (): Promise<Record<string, string> | null> => {
+	const getManifest = async (): Promise<SiteManifest | null> => {
 		if (!manifestLoaded) {
-			expectedFileCids = await getExpectedFileCidsForSite(did, rkey, trace)
+			loadedManifest = await getSiteManifest(did, rkey, trace)
 			manifestLoaded = true
 		}
-		return expectedFileCids ?? null
+		return loadedManifest ?? null
 	}
 
-	const missTracker = createExpectedManifestMissTracker(did, rkey, requestHeaders, getExpectedFileCids, strategy)
+	const missTracker = createExpectedManifestMissTracker(did, rkey, requestHeaders, getManifest, strategy)
 
 	const getExpectedFile = async (filePath: string): Promise<FileForRequestResult | null> => {
-		const fileCids = await getExpectedFileCids()
-		if (!manifestMayContainFile(fileCids, filePath, strategy)) return null
+		const manifest = await getManifest()
+		if (!manifestMayContainFile(manifest, filePath, strategy)) return null
 		return await span(trace, `storage:${filePath}`, () =>
-			getFileForRequest(did, rkey, filePath, strategy, fileCids, options.signal),
+			getFileForRequest(did, rkey, filePath, strategy, manifest, options.signal),
 		)
 	}
 
 	return {
-		getExpectedFileCids,
+		getManifest,
 		async findFirstExpectedFile(paths: Iterable<string>): Promise<FileForRequestResult | null> {
 			for (const filePath of orderedUniquePaths(paths)) {
 				if (attemptedPaths.has(filePath)) continue
@@ -1438,7 +1426,7 @@ function createFileResolver(options: FileResolverOptions): FileResolver {
 			return null
 		},
 		findFallbackFile: async (filePath) =>
-			getFallbackFile(did, rkey, filePath, await getExpectedFileCids(), strategy, trace, options.signal),
+			getFallbackFile(did, rkey, filePath, await getManifest(), strategy, trace, options.signal),
 		markExpectedMiss: (filePath) => missTracker.mark(filePath),
 		expectedMissResponse: () => missTracker.response(),
 	}
@@ -1583,13 +1571,8 @@ async function serveDirectoryListing(
 ): Promise<Response | null> {
 	if (!options.settings?.directoryListing) return null
 
-	const fileCids = await resolver.getExpectedFileCids()
-	const entries = await listDirectoryEntries(
-		options.did,
-		options.rkey,
-		requestPath,
-		fileCids ? Object.keys(fileCids) : null,
-	)
+	const manifest = await resolver.getManifest()
+	const entries = listDirectoryEntries(requestPath, manifest ? Object.keys(manifest.fileCids) : null)
 	if (entries.length === 0) return null
 
 	const storageMissResponse = await resolver.expectedMissResponse()
@@ -1692,7 +1675,7 @@ async function serveRedirectResponse(options: RedirectRequestOptions): Promise<R
 	const { did, rkey, filePath, fullUrl, indexFiles, requestHeaders, resolveFile, strategy, trace } = options
 	if (!options.redirectsPresent) return null
 	const redirectRules = await cache.getOrFetch('redirectRules', `${did}:${rkey}`, () =>
-		span(trace, 'storage:redirectRules', () => loadRedirectRules(did, rkey)),
+		span(trace, 'storage:redirectRules', () => loadRedirectRules(did, rkey, options.fileObjects)),
 	)
 	if (redirectRules.length === 0) return null
 
@@ -1766,8 +1749,8 @@ async function resolveFileRequest(options: FileRequestOptions): Promise<Response
 
 async function resolveCachedRequest(options: CachedRequestOptions, trace: RequestTrace | null): Promise<Response> {
 	const { did, filePath, requestHeaders, rkey, strategy } = options
-	const siteFileCids = await getExpectedFileCidsForSite(did, rkey, trace)
-	if (siteFileCids === null) {
+	const manifest = await getSiteManifest(did, rkey, trace)
+	if (manifest === null) {
 		recordStorageMiss('manifest')
 		await enqueueRevalidate(did, rkey, 'storage-miss:manifest')
 		return buildStorageMissResponse(requestHeaders)
@@ -1785,20 +1768,21 @@ async function resolveCachedRequest(options: CachedRequestOptions, trace: Reques
 			signal: options.signal,
 			trace,
 			strategy,
-			expectedFileCids: siteFileCids,
+			manifest,
 		})
 
 	const redirectResponse = await serveRedirectResponse({
 		...options,
 		indexFiles,
-		redirectsPresent: siteFileCids._redirects !== undefined,
+		redirectsPresent: manifest.fileCids._redirects !== undefined,
+		fileObjects: manifest.fileObjects,
 		resolveFile,
 		trace,
 	})
 	const response = redirectResponse ?? (await resolveFile(filePath))
 	// Start the manifest-backed warmup only after the requested response has
 	// resolved, so unrelated HTML reads cannot delay this request.
-	triggerSiteHtmlHotCacheWarmup(did, rkey, Object.keys(siteFileCids))
+	triggerSiteHtmlHotCacheWarmup(did, rkey, Object.keys(manifest.fileCids), manifest.fileObjects)
 	return response
 }
 

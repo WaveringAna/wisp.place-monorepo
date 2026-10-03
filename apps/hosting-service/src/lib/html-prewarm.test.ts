@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test'
+import { casKey } from '@wispplace/fs-utils'
 
 const promotedKeys: string[] = []
 const failingKeys = new Set<string>()
@@ -54,14 +55,25 @@ const {
 
 const DID = 'did:plc:test'
 const RKEY = 'site'
-const key = (path: string) => `${DID}/${RKEY}/${path}`
+// Each manifest path is stored under its own CAS key; the CID is derived from the path so paths never collide.
+const key = (path: string) =>
+	casKey({ cid: `bafkrei${Buffer.from(path).toString('hex')}`, path, mimeType: 'text/html' })
+const objectsFor = (paths: readonly string[]) =>
+	Object.fromEntries(
+		paths.map((path) => {
+			const manifestPath = path.startsWith('/') ? path.slice(1) : path
+			return [manifestPath, key(manifestPath)]
+		}),
+	)
+const trigger = (did: string, rkey: string, paths: readonly string[]) =>
+	triggerSiteHtmlHotCacheWarmup(did, rkey, paths, objectsFor(paths))
 
 function warmup(paths: readonly string[]): Promise<void> {
 	return warmupSite(DID, RKEY, paths)
 }
 
 function warmupSite(did: string, rkey: string, paths: readonly string[]): Promise<void> {
-	triggerSiteHtmlHotCacheWarmup(did, rkey, paths)
+	trigger(did, rkey, paths)
 	return waitForSiteHtmlHotCacheWarmupForTests(did, rkey)
 }
 
@@ -124,8 +136,8 @@ describe('HTML prewarm', () => {
 
 	test('bounds concurrent warmups and reset cannot bypass admission', async () => {
 		blockWarmupReads = true
-		triggerSiteHtmlHotCacheWarmup(DID, 'active-0', ['index.html'])
-		triggerSiteHtmlHotCacheWarmup(DID, 'active-1', ['index.html'])
+		trigger(DID, 'active-0', ['index.html'])
+		trigger(DID, 'active-1', ['index.html'])
 		await Promise.resolve()
 		expect(blockedWarmupReads).toBe(2)
 
@@ -133,9 +145,9 @@ describe('HTML prewarm', () => {
 		resetSiteHtmlHotCacheWarmup(DID, 'active-0')
 
 		// Forgetting active work must not release its admission slot.
-		triggerSiteHtmlHotCacheWarmup(DID, 'skipped', ['index.html'])
+		trigger(DID, 'skipped', ['index.html'])
 		resetSiteHtmlHotCacheWarmup(DID, 'skipped')
-		triggerSiteHtmlHotCacheWarmup(DID, 'skipped', ['index.html'])
+		trigger(DID, 'skipped', ['index.html'])
 		await Promise.resolve()
 		expect(promotedKeys).toHaveLength(2)
 
@@ -149,13 +161,13 @@ describe('HTML prewarm', () => {
 
 	test('stale warmup completion cannot mark a reset site warm or clear newer work', async () => {
 		blockWarmupReads = true
-		triggerSiteHtmlHotCacheWarmup(DID, RKEY, ['index.html'])
+		trigger(DID, RKEY, ['index.html'])
 		await Promise.resolve()
 		expect(blockedWarmupReads).toBe(1)
 		const stale = waitForSiteHtmlHotCacheWarmupForTests(DID, RKEY)
 
 		resetSiteHtmlHotCacheWarmup(DID, RKEY)
-		triggerSiteHtmlHotCacheWarmup(DID, RKEY, ['index.html'])
+		trigger(DID, RKEY, ['index.html'])
 		await Promise.resolve()
 		expect(blockedWarmupReads).toBe(2)
 		const fresh = waitForSiteHtmlHotCacheWarmupForTests(DID, RKEY)
@@ -165,7 +177,7 @@ describe('HTML prewarm', () => {
 		releaseWarmupReads.shift()!()
 		await stale
 		expect(promotedKeys).toHaveLength(2)
-		triggerSiteHtmlHotCacheWarmup(DID, RKEY, ['index.html'])
+		trigger(DID, RKEY, ['index.html'])
 		await Promise.resolve()
 		expect(promotedKeys).toHaveLength(2)
 

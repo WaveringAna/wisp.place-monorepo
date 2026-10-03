@@ -2,6 +2,7 @@ import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { casKey } from '@wispplace/fs-utils'
 import { logCollector } from '@wispplace/observability'
 import { MemoryStorageTier, type StorageMetadata, type StorageTier } from '@wispplace/tiered-storage'
 
@@ -112,6 +113,45 @@ describe('hosting storage configuration', () => {
 		} finally {
 			internals.config.tiers.warm = originalWarm
 		}
+	})
+})
+
+describe('placement of content-addressed bodies', () => {
+	// CAS keys have no directory structure, only a trailing extension, so placement has to match on that.
+	const cid = `bafkrei${'a'.repeat(52)}`
+	const keyFor = (path: string, mimeType: string) => casKey({ cid, path, mimeType })
+	const data = new Uint8Array([1, 2, 3])
+
+	test.each([
+		['html', 'page.html', 'text/html'],
+		['htm', 'old.htm', 'text/html'],
+		['css', 'style.css', 'text/css'],
+		['js', 'app.js', 'text/javascript'],
+	])('puts a %s body in the hot tier', async (_name, path, mimeType) => {
+		const key = keyFor(path, mimeType)
+		await storage.set(key, data)
+
+		expect(await hotTier.get(key)).toEqual(data)
+	})
+
+	test.each([
+		['an image', 'logo.png', 'image/png'],
+		['a font', 'face.woff2', 'font/woff2'],
+		['a file with no extension', 'LICENSE', 'text/plain'],
+		['json', 'data.json', 'application/json'],
+	])('keeps %s out of the hot tier', async (_name, path, mimeType) => {
+		const key = keyFor(path, mimeType)
+		await storage.set(key, data)
+
+		expect(await hotTier.get(key)).toBeNull()
+		expect(await (storage as unknown as StorageInternals).config.tiers.cold.get(key)).toEqual(data)
+	})
+
+	test('still keeps per-site pre-rewritten HTML hot', async () => {
+		const key = 'did:plc:x/site/.rewritten/page.html'
+		await storage.set(key, data)
+
+		expect(await hotTier.get(key)).toEqual(data)
 	})
 })
 

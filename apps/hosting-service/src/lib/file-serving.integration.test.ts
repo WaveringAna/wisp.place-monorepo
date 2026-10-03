@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import { gunzipSync, gzipSync } from 'node:zlib'
 import { computeCID } from '@wispplace/atproto-utils'
 import { MAX_BLOB_SIZE } from '@wispplace/constants'
+import { casKey } from '@wispplace/fs-utils'
 
 const previousGzipProcessingConcurrency = process.env.HOSTING_GZIP_PROCESSING_CONCURRENCY
 process.env.HOSTING_GZIP_PROCESSING_CONCURRENCY = '2'
@@ -119,6 +120,38 @@ function isTestGzip(data: Uint8Array): boolean {
 	return data.length >= 2 && data[0] === 0x1f && data[1] === 0x8b
 }
 
+// Every manifest path is stored at its own CAS key; the synthetic CID encodes the path, so a key maps
+// back to its path and never depends on the CID a test puts in the manifest. Pre-rewritten HTML keeps
+// its per-site key.
+const REWRITTEN = '.rewritten/'
+function storageKey(path: string, did = DID, rkey = RKEY): string {
+	if (path.startsWith(REWRITTEN)) return `${did}/${rkey}/${path}`
+	return casKey({ cid: `bafkrei${Buffer.from(path).toString('hex')}`, path })
+}
+
+function manifestPathOfKey(key: string): string {
+	const match = /^cas\/bafkrei([0-9a-f]*)\./.exec(key)
+	if (match) return Buffer.from(match[1] ?? '', 'hex').toString()
+	const relative = key.slice(key.indexOf('/', key.indexOf('/') + 1) + 1)
+	return relative.startsWith(REWRITTEN) ? relative.slice(REWRITTEN.length) : relative
+}
+
+// Tests that never declare a manifest rely on storage alone ("whatever is stored is addressable"):
+// derive one from the stored CAS keys. A test that sets `siteFileCids` gets exactly that manifest.
+function currentFileCids(): Record<string, string> | null {
+	if (siteFileCids) return siteFileCids
+	const paths = [...storageData.keys()].filter((key) => key.startsWith('cas/')).map(manifestPathOfKey)
+	return paths.length > 0 ? Object.fromEntries(paths.map((path) => [path, `cid-of-${path}`])) : null
+}
+
+function siteFileObjects(fileCids: Record<string, string>): Record<string, string> {
+	return Object.fromEntries(
+		Object.keys(fileCids)
+			.filter((path) => !path.startsWith(REWRITTEN))
+			.map((path) => [path, storageKey(path)]),
+	)
+}
+
 const fakeStorage = {
 	async get(key: string) {
 		storageGetKeys.push(key)
@@ -139,9 +172,8 @@ const fakeStorage = {
 		if (entry instanceof Error) throw entry
 		if (!entry) return null
 
-		const relativePath = key.slice(`${DID}/${RKEY}/`.length)
-		const sourcePath = relativePath.startsWith('.rewritten/') ? relativePath.slice('.rewritten/'.length) : relativePath
-		const manifestSourceCid = entry.useManifestSourceCid === false ? undefined : siteFileCids?.[sourcePath]
+		const sourcePath = manifestPathOfKey(key)
+		const manifestSourceCid = entry.useManifestSourceCid === false ? undefined : currentFileCids()?.[sourcePath]
 		return {
 			data: entry.data,
 			metadata: {
@@ -211,18 +243,21 @@ mock.module('./storage', () => ({
 	getStorageConfig: () => ({}),
 }))
 mock.module('./db', () => ({
-	getSiteCache: async () =>
-		siteFileCids
+	getSiteCache: async () => {
+		const fileCids = currentFileCids()
+		return fileCids
 			? {
 					did: DID,
 					rkey: RKEY,
 					record_cid: 'record-cid',
-					file_cids: siteFileCids,
+					file_cids: fileCids,
+					file_objects: siteFileObjects(fileCids),
 					cached_at: 0,
 					updated_at: 0,
 					absent_since: siteAbsentSince,
 				}
-			: null,
+			: null
+	},
 	getSiteSettingsCache: async () => null,
 }))
 mock.module('./utils', () => ({
@@ -287,18 +322,18 @@ const DID = 'did:plc:test'
 const RKEY = 'hydrant-docs'
 
 function storeFile(path: string, body: string, mimeType = 'text/html') {
-	storageData.set(`${DID}/${RKEY}/${path}`, {
+	storageData.set(storageKey(path), {
 		data: new TextEncoder().encode(body),
 		mimeType,
 	})
 }
 
 function queueStorageReads(path: string, entries: FakeReadOutcome[]) {
-	storageReadSequences.set(`${DID}/${RKEY}/${path}`, [...entries])
+	storageReadSequences.set(storageKey(path), [...entries])
 }
 
 function failStorageGet(path: string, error: Error): void {
-	storageGetFailures.set(`${DID}/${RKEY}/${path}`, error)
+	storageGetFailures.set(storageKey(path), error)
 }
 
 function resetServingState() {
@@ -410,11 +445,14 @@ describe('serveFileInternal directory-index fallback for extensioned paths', () 
 	})
 
 	test('does not re-probe failed direct and index candidates after directory fallback', async () => {
+		// The manifest names both candidates but storage has neither body.
+		siteFileCids = { missing: 'missing-cid', 'missing/index.html': 'missing-index-cid' }
+
 		const response = await serveFileInternal(DID, RKEY, 'missing')
 
-		expect(response.status).toBe(404)
-		expect(storageGetWithMetadataKeys.filter((key) => key === `${DID}/${RKEY}/missing`)).toHaveLength(1)
-		expect(storageGetWithMetadataKeys.filter((key) => key === `${DID}/${RKEY}/missing/index.html`)).toHaveLength(1)
+		expect(response.status).toBe(503)
+		expect(storageGetWithMetadataKeys.filter((key) => key === storageKey('missing'))).toHaveLength(1)
+		expect(storageGetWithMetadataKeys.filter((key) => key === storageKey('missing/index.html'))).toHaveLength(1)
 	})
 
 	test('queues asynchronous repair for a missing manifest without probing storage', async () => {
@@ -438,8 +476,8 @@ describe('serveFileInternal directory-index fallback for extensioned paths', () 
 
 		expect(response.status).toBe(200)
 		expect(await response.text()).toBe('<html>index</html>')
-		expect(storageGetKeys).not.toContain(`${DID}/${RKEY}/_redirects`)
-		expect(storageGetWithMetadataKeys).not.toContain(`${DID}/${RKEY}/_redirects`)
+		expect(storageGetKeys).not.toContain(storageKey('_redirects'))
+		expect(storageGetWithMetadataKeys).not.toContain(storageKey('_redirects'))
 	})
 
 	test('starts manifest prewarm only after the requested file resolves', async () => {
@@ -454,19 +492,19 @@ describe('serveFileInternal directory-index fallback for extensioned paths', () 
 		const requestedReadStarted = new Promise<void>((resolve) => {
 			gatedStorageReadStarted = resolve
 		})
-		gatedStorageReadKey = `${DID}/${RKEY}/index.html`
+		gatedStorageReadKey = storageKey('index.html')
 		gatedStorageReadGate = requestedRead
 
 		const responsePromise = serveFromCache(DID, RKEY, 'index.html', 'https://example.com/index.html')
 		await requestedReadStarted
-		expect(storageGetWithMetadataKeys).toEqual([`${DID}/${RKEY}/index.html`])
+		expect(storageGetWithMetadataKeys).toEqual([storageKey('index.html')])
 
 		releaseRequestedRead()
 		const response = await responsePromise
 		expect(response.status).toBe(200)
 		await response.text()
 		await new Promise<void>((resolve) => queueMicrotask(resolve))
-		expect(storageGetWithMetadataKeys).toContain(`${DID}/${RKEY}/other.html`)
+		expect(storageGetWithMetadataKeys).toContain(storageKey('other.html'))
 	})
 
 	test('skips storage miss before redirect when manifest says extensioned direct file is absent', async () => {
@@ -485,7 +523,7 @@ describe('serveFileInternal directory-index fallback for extensioned paths', () 
 
 		expect(response.status).toBe(301)
 		expect(response.headers.get('Location')).toBe('/docs/getting-started')
-		expect(storageGetWithMetadataKeys).not.toContain(`${DID}/${RKEY}/getting-started.md`)
+		expect(storageGetWithMetadataKeys).not.toContain(storageKey('getting-started.md'))
 	})
 
 	test('serves a direct file once before non-forced redirect when manifest says it exists', async () => {
@@ -500,7 +538,7 @@ describe('serveFileInternal directory-index fallback for extensioned paths', () 
 
 		expect(response.status).toBe(200)
 		expect(await response.text()).toBe('direct markdown')
-		expect(storageGetWithMetadataKeys.filter((key) => key === `${DID}/${RKEY}/direct.md`)).toHaveLength(1)
+		expect(storageGetWithMetadataKeys.filter((key) => key === storageKey('direct.md'))).toHaveLength(1)
 	})
 
 	test('serves decoded file names containing spaces', async () => {
@@ -512,7 +550,7 @@ describe('serveFileInternal directory-index fallback for extensioned paths', () 
 
 		expect(response.status).toBe(200)
 		expect(await response.text()).toBe('image bytes')
-		expect(storageGetWithMetadataKeys).toContain(`${DID}/${RKEY}/${path}`)
+		expect(storageGetWithMetadataKeys).toContain(storageKey(path))
 	})
 
 	test('skips manifest-absent storage probes before clean URL html fallback', async () => {
@@ -529,9 +567,9 @@ describe('serveFileInternal directory-index fallback for extensioned paths', () 
 
 		expect(response.status).toBe(200)
 		expect(await response.text()).toBe('<html>model app</html>')
-		expect(storageGetWithMetadataKeys).not.toContain(`${DID}/${RKEY}/modelapp`)
-		expect(storageGetWithMetadataKeys).not.toContain(`${DID}/${RKEY}/modelapp/index.html`)
-		expect(storageGetWithMetadataKeys).toContain(`${DID}/${RKEY}/modelapp.html`)
+		expect(storageGetWithMetadataKeys).not.toContain(storageKey('modelapp'))
+		expect(storageGetWithMetadataKeys).not.toContain(storageKey('modelapp/index.html'))
+		expect(storageGetWithMetadataKeys).toContain(storageKey('modelapp.html'))
 	})
 
 	test('keeps fingerprinted javascript assets on the standard cache policy', async () => {
@@ -583,7 +621,7 @@ describe('serveFileInternal directory-index fallback for extensioned paths', () 
 		expect(response.status).toBe(400)
 		expect(await response.text()).toBe('Absolute URL rewrites are not supported')
 		expect(storageGetWithMetadataKeys).not.toContain(
-			`${DID}/${RKEY}/https://webfinger.madoka-winter.workers.dev/?resource=acct%3Aana%40example.com`,
+			storageKey('https://webfinger.madoka-winter.workers.dev/?resource=acct%3Aana%40example.com'),
 		)
 	})
 })
@@ -628,8 +666,8 @@ describe('storage availability responses', () => {
 
 		expect(response.status).toBe(503)
 		expect(response.headers.get('Cache-Control')).toBe('no-store')
-		expect(evictedPublicCacheKeys).toEqual([`${DID}/${RKEY}/retry-unavailable.txt`])
-		expect(storageGetWithMetadataKeys.filter((key) => key === `${DID}/${RKEY}/retry-unavailable.txt`)).toHaveLength(2)
+		expect(evictedPublicCacheKeys).toEqual([storageKey('retry-unavailable.txt')])
+		expect(storageGetWithMetadataKeys.filter((key) => key === storageKey('retry-unavailable.txt'))).toHaveLength(2)
 		expect(revalidateCalls).toEqual([])
 		expect(recordedStorageMisses).toEqual([])
 	})
@@ -649,7 +687,7 @@ describe('storage availability responses', () => {
 		const unavailable = await serveFromCache(DID, RKEY, 'retry-recovery.txt', 'https://example.com/retry-recovery.txt')
 		expect(unavailable.status).toBe(503)
 
-		storageData.set(`${DID}/${RKEY}/retry-recovery.txt`, {
+		storageData.set(storageKey('retry-recovery.txt'), {
 			data: new TextEncoder().encode('fresh cold bytes'),
 			mimeType: 'text/plain',
 			source: 'cold',
@@ -657,7 +695,7 @@ describe('storage availability responses', () => {
 		const recovered = await serveFromCache(DID, RKEY, 'retry-recovery.txt', 'https://example.com/retry-recovery.txt')
 		expect(recovered.status).toBe(200)
 		expect(await recovered.text()).toBe('fresh cold bytes')
-		expect(storageGetWithMetadataKeys.filter((key) => key === `${DID}/${RKEY}/retry-recovery.txt`)).toHaveLength(3)
+		expect(storageGetWithMetadataKeys.filter((key) => key === storageKey('retry-recovery.txt'))).toHaveLength(3)
 		expect(evictedPublicCacheKeys).toHaveLength(1)
 	})
 
@@ -744,7 +782,7 @@ describe('shared-origin file-serving strategy', () => {
 
 	test('serves one byte range and reports an unsatisfiable range without the full entity', async () => {
 		const body = Buffer.from('0123456789abcdef')
-		storageData.set(`${DID}/${RKEY}/range.txt`, { data: body, mimeType: 'text/plain' })
+		storageData.set(storageKey('range.txt'), { data: body, mimeType: 'text/plain' })
 
 		const partial = await serveFileInternal(DID, RKEY, 'range.txt', null, { range: 'bytes=3-7' })
 		expect(partial.status).toBe(206)
@@ -762,7 +800,7 @@ describe('shared-origin file-serving strategy', () => {
 
 	test('honors gzip q=0, varies by Accept-Encoding, and uses representation-specific ETags', async () => {
 		const body = 'body { color: rebeccapurple; }'
-		storageData.set(`${DID}/${RKEY}/styles.css`, {
+		storageData.set(storageKey('styles.css'), {
 			data: gzipSync(Buffer.from(body)),
 			mimeType: 'text/css',
 			encoding: 'gzip',
@@ -816,7 +854,7 @@ describe('shared-origin file-serving strategy', () => {
 
 	test('negotiates gzip-magic text content even when legacy metadata omits encoding', async () => {
 		const body = 'body { display: grid; }'
-		storageData.set(`${DID}/${RKEY}/legacy.css`, {
+		storageData.set(storageKey('legacy.css'), {
 			data: gzipSync(Buffer.from(body)),
 			mimeType: 'text/css',
 		})
@@ -838,7 +876,7 @@ describe('shared-origin file-serving strategy', () => {
 
 	test('measures legacy gzip passthrough and rejects oversized or malformed compressed bytes', async () => {
 		const legacyBomb = gzipSync(Buffer.from('legacy compressed payload'))
-		storageData.set(`${DID}/${RKEY}/legacy-bomb.css`, {
+		storageData.set(storageKey('legacy-bomb.css'), {
 			data: legacyBomb,
 			mimeType: 'text/css',
 		})
@@ -854,7 +892,7 @@ describe('shared-origin file-serving strategy', () => {
 		expect(gzipWorkState.measureCalls).toBe(1)
 
 		gzipWorkState.forceMeasureLimitError = false
-		storageData.set(`${DID}/${RKEY}/legacy-malformed.css`, {
+		storageData.set(storageKey('legacy-malformed.css'), {
 			data: Buffer.from([0x1f, 0x8b, 0x00]),
 			mimeType: 'text/css',
 		})
@@ -869,7 +907,7 @@ describe('shared-origin file-serving strategy', () => {
 
 	test('uses valid firehose uncompressed-size metadata without remeasuring gzip passthrough', async () => {
 		const body = 'body { display: contents; }'
-		storageData.set(`${DID}/${RKEY}/accounted.css`, {
+		storageData.set(storageKey('accounted.css'), {
 			data: gzipSync(Buffer.from(body)),
 			mimeType: 'text/css',
 			encoding: 'gzip',
@@ -885,7 +923,7 @@ describe('shared-origin file-serving strategy', () => {
 		expect(gzipWorkState.measureCalls).toBe(0)
 		expect(gzipWorkState.decompressCalls).toBe(0)
 
-		storageData.set(`${DID}/${RKEY}/over-accounted.css`, {
+		storageData.set(storageKey('over-accounted.css'), {
 			data: gzipSync(Buffer.from(body)),
 			mimeType: 'text/css',
 			encoding: 'gzip',
@@ -898,7 +936,7 @@ describe('shared-origin file-serving strategy', () => {
 		expect(overLimitResponse.headers.get('Content-Encoding')).toBeNull()
 		expect(gzipWorkState.measureCalls).toBe(0)
 
-		storageData.set(`${DID}/${RKEY}/invalid-accounted.css`, {
+		storageData.set(storageKey('invalid-accounted.css'), {
 			data: gzipSync(Buffer.from(body)),
 			mimeType: 'text/css',
 			encoding: 'gzip',
@@ -913,7 +951,7 @@ describe('shared-origin file-serving strategy', () => {
 	})
 
 	test('returns a safe error instead of falling back after gzip decode or limit failures during HTML rewrite', async () => {
-		storageData.set(`${DID}/${RKEY}/broken-rewrite.html`, {
+		storageData.set(storageKey('broken-rewrite.html'), {
 			data: Buffer.from([0x1f, 0x8b, 0x00]),
 			mimeType: 'text/html',
 			encoding: 'gzip',
@@ -928,7 +966,7 @@ describe('shared-origin file-serving strategy', () => {
 		expect(await response.text()).toBe('Stored file could not be decompressed safely')
 
 		gzipWorkState.forceDecompressLimitError = true
-		storageData.set(`${DID}/${RKEY}/limited-rewrite.html`, {
+		storageData.set(storageKey('limited-rewrite.html'), {
 			data: gzipSync(Buffer.from('<html>within source limit</html>')),
 			mimeType: 'text/html',
 			encoding: 'gzip',
@@ -946,7 +984,7 @@ describe('shared-origin file-serving strategy', () => {
 		const body = 'body { color: slateblue; }'
 		const compressed = gzipSync(Buffer.from(body))
 		for (const filePath of ['first.css', 'second.css', 'third.css']) {
-			storageData.set(`${DID}/${RKEY}/${filePath}`, {
+			storageData.set(storageKey(filePath), {
 				data: compressed,
 				mimeType: 'text/css',
 				encoding: 'gzip',
@@ -975,7 +1013,7 @@ describe('shared-origin file-serving strategy', () => {
 
 	test('rewrites gzip HTML with asynchronous recompression and still honors q=0', async () => {
 		const body = '<html><body><a href="/docs">Docs</a></body></html>'
-		storageData.set(`${DID}/${RKEY}/rewrite.html`, {
+		storageData.set(storageKey('rewrite.html'), {
 			data: gzipSync(Buffer.from(body)),
 			mimeType: 'text/html',
 			encoding: 'gzip',
@@ -998,7 +1036,7 @@ describe('shared-origin file-serving strategy', () => {
 
 	test('varies dynamically rewritten identity HTML by Accept-Encoding', async () => {
 		const body = '<html><body><a href="/docs">Docs</a></body></html>'
-		storageData.set(`${DID}/${RKEY}/identity-rewrite.html`, {
+		storageData.set(storageKey('identity-rewrite.html'), {
 			data: Buffer.from(body),
 			mimeType: 'text/html',
 		})
@@ -1026,7 +1064,7 @@ describe('shared-origin file-serving strategy', () => {
 	})
 
 	test('rejects malformed gzip metadata instead of serving raw bytes as gzip', async () => {
-		storageData.set(`${DID}/${RKEY}/broken.css`, {
+		storageData.set(storageKey('broken.css'), {
 			data: Buffer.from('not actually gzip'),
 			mimeType: 'text/css',
 			encoding: 'gzip',
@@ -1069,15 +1107,15 @@ describe('manifest source CID validation', () => {
 		)
 
 		expect(responses.map((response) => response.status)).toEqual([503, 503, 503, 503, 503])
-		expect(evictedPublicCacheKeys).toEqual([`${DID}/${RKEY}/burst.txt`])
-		expect(storageGetWithMetadataKeys.filter((key) => key === `${DID}/${RKEY}/burst.txt`)).toHaveLength(2)
+		expect(evictedPublicCacheKeys).toEqual([storageKey('burst.txt')])
+		expect(storageGetWithMetadataKeys.filter((key) => key === storageKey('burst.txt'))).toHaveLength(2)
 		expect(revalidateCalls).toHaveLength(5)
 
 		// The marker is checked before storage, so later requests do not repeat the
 		// hot/warm read, cold retry, eviction, or mismatch logging.
 		const repeated = await serveFromCache(DID, RKEY, 'burst.txt', 'https://example.com/burst.txt')
 		expect(repeated.status).toBe(503)
-		expect(storageGetWithMetadataKeys.filter((key) => key === `${DID}/${RKEY}/burst.txt`)).toHaveLength(2)
+		expect(storageGetWithMetadataKeys.filter((key) => key === storageKey('burst.txt'))).toHaveLength(2)
 		expect(evictedPublicCacheKeys).toHaveLength(1)
 	})
 
@@ -1105,10 +1143,10 @@ describe('manifest source CID validation', () => {
 
 			const failed = await serveFromCache(DID, RKEY, 'ttl.txt', 'https://example.com/ttl.txt')
 			expect(failed.status).toBe(503)
-			const readsBeforeExpiry = storageGetWithMetadataKeys.filter((key) => key === `${DID}/${RKEY}/ttl.txt`)
+			const readsBeforeExpiry = storageGetWithMetadataKeys.filter((key) => key === storageKey('ttl.txt'))
 			expect(readsBeforeExpiry).toHaveLength(2)
 
-			storageData.set(`${DID}/${RKEY}/ttl.txt`, {
+			storageData.set(storageKey('ttl.txt'), {
 				data: new TextEncoder().encode('fresh cold bytes'),
 				mimeType: 'text/plain',
 				source: 'cold',
@@ -1118,7 +1156,7 @@ describe('manifest source CID validation', () => {
 			const recovered = await serveFromCache(DID, RKEY, 'ttl.txt', 'https://example.com/ttl.txt')
 			expect(recovered.status).toBe(200)
 			expect(await recovered.text()).toBe('fresh cold bytes')
-			expect(storageGetWithMetadataKeys.filter((key) => key === `${DID}/${RKEY}/ttl.txt`)).toHaveLength(3)
+			expect(storageGetWithMetadataKeys.filter((key) => key === storageKey('ttl.txt'))).toHaveLength(3)
 		} finally {
 			Date.now = originalNow
 		}
@@ -1144,7 +1182,7 @@ describe('manifest source CID validation', () => {
 		const failed = await serveFromCache(DID, RKEY, 'invalidated.txt', 'https://example.com/invalidated.txt')
 		expect(failed.status).toBe(503)
 
-		storageData.set(`${DID}/${RKEY}/invalidated.txt`, {
+		storageData.set(storageKey('invalidated.txt'), {
 			data: new TextEncoder().encode('fresh cold bytes'),
 			mimeType: 'text/plain',
 			source: 'cold',
@@ -1161,7 +1199,7 @@ describe('manifest source CID validation', () => {
 		const recovered = await serveFromCache(DID, RKEY, 'invalidated.txt', 'https://example.com/invalidated.txt')
 		expect(recovered.status).toBe(200)
 		expect(await recovered.text()).toBe('fresh cold bytes')
-		expect(storageGetWithMetadataKeys.filter((key) => key === `${DID}/${RKEY}/invalidated.txt`)).toHaveLength(3)
+		expect(storageGetWithMetadataKeys.filter((key) => key === storageKey('invalidated.txt'))).toHaveLength(3)
 	})
 
 	test('fences a pending mismatch retry when site invalidation arrives', async () => {
@@ -1199,7 +1237,7 @@ describe('manifest source CID validation', () => {
 		// Prefix invalidation fences the pending getOrFetch, so its stale result
 		// cannot repopulate the marker after this update.
 		await applyCacheInvalidationForTests({ did: DID, rkey: RKEY, action: 'settings' })
-		storageData.set(`${DID}/${RKEY}/pending-invalidation.txt`, {
+		storageData.set(storageKey('pending-invalidation.txt'), {
 			data: new TextEncoder().encode('fresh cold bytes'),
 			mimeType: 'text/plain',
 			source: 'cold',
@@ -1217,9 +1255,7 @@ describe('manifest source CID validation', () => {
 		)
 		expect(recovered.status).toBe(200)
 		expect(await recovered.text()).toBe('fresh cold bytes')
-		expect(storageGetWithMetadataKeys.filter((key) => key === `${DID}/${RKEY}/pending-invalidation.txt`)).toHaveLength(
-			3,
-		)
+		expect(storageGetWithMetadataKeys.filter((key) => key === storageKey('pending-invalidation.txt'))).toHaveLength(3)
 	})
 
 	test('evicts a stale warm object and serves the matching cold object', async () => {
@@ -1243,8 +1279,8 @@ describe('manifest source CID validation', () => {
 
 		expect(response.status).toBe(200)
 		expect(await response.text()).toBe('fresh cold bytes')
-		expect(evictedPublicCacheKeys).toEqual([`${DID}/${RKEY}/asset.txt`])
-		expect(storageGetWithMetadataKeys.filter((key) => key === `${DID}/${RKEY}/asset.txt`)).toHaveLength(2)
+		expect(evictedPublicCacheKeys).toEqual([storageKey('asset.txt')])
+		expect(storageGetWithMetadataKeys.filter((key) => key === storageKey('asset.txt'))).toHaveLength(2)
 		expect(revalidateCalls).toHaveLength(0)
 	})
 
@@ -1298,7 +1334,7 @@ describe('manifest source CID validation', () => {
 		const failureDid = `${DID}:legacy-heal-failure`
 		siteFileCids = { 'legacy-heal-failure.txt': computeCID(Buffer.from(body)) }
 		legacyMetadataHealResult = false
-		storageData.set(`${failureDid}/${RKEY}/legacy-heal-failure.txt`, {
+		storageData.set(storageKey('legacy-heal-failure.txt', failureDid), {
 			data: body,
 			mimeType: 'text/plain',
 			useManifestSourceCid: false,
@@ -1324,12 +1360,12 @@ describe('manifest source CID validation', () => {
 			'legacy-first.txt': computeCID(Buffer.from(first)),
 			'legacy-second.txt': computeCID(Buffer.from(second)),
 		}
-		storageData.set(`${DID}/${RKEY}/legacy-first.txt`, {
+		storageData.set(storageKey('legacy-first.txt'), {
 			data: first,
 			mimeType: 'text/plain',
 			useManifestSourceCid: false,
 		})
-		storageData.set(`${DID}/${RKEY}/legacy-second.txt`, {
+		storageData.set(storageKey('legacy-second.txt'), {
 			data: second,
 			mimeType: 'text/plain',
 			useManifestSourceCid: false,
@@ -1343,8 +1379,8 @@ describe('manifest source CID validation', () => {
 		expect(responses.map((response) => response.status)).toEqual([200, 200, 200])
 		await Promise.resolve()
 		expect(legacyMetadataHealCalls.map((call) => call.key).sort()).toEqual([
-			`${DID}/${RKEY}/legacy-first.txt`,
-			`${DID}/${RKEY}/legacy-second.txt`,
+			storageKey('legacy-first.txt'),
+			storageKey('legacy-second.txt'),
 		])
 	})
 
@@ -1371,7 +1407,7 @@ describe('manifest source CID validation', () => {
 		const body = new TextEncoder().encode('deduped legacy bytes')
 		siteFileCids = { 'legacy-dedupe.txt': computeCID(Buffer.from(body)) }
 		const dedupeDid = `${DID}:legacy-dedupe`
-		storageData.set(`${dedupeDid}/${RKEY}/legacy-dedupe.txt`, {
+		storageData.set(storageKey('legacy-dedupe.txt', dedupeDid), {
 			data: body,
 			mimeType: 'text/plain',
 			useManifestSourceCid: false,
@@ -1409,8 +1445,8 @@ describe('manifest source CID validation', () => {
 		expect(response.status).toBe(503)
 		expect(response.headers.get('Cache-Control')).toBe('no-store')
 		expect(await response.text()).not.toContain('legacy')
-		expect(evictedPublicCacheKeys).toEqual([`${DID}/${RKEY}/legacy.txt`])
-		expect(storageGetWithMetadataKeys.filter((key) => key === `${DID}/${RKEY}/legacy.txt`)).toHaveLength(2)
+		expect(evictedPublicCacheKeys).toEqual([storageKey('legacy.txt')])
+		expect(storageGetWithMetadataKeys.filter((key) => key === storageKey('legacy.txt'))).toHaveLength(2)
 		expect(revalidateCalls).toEqual([{ did: DID, rkey: RKEY, reason: 'storage-miss:legacy.txt' }])
 	})
 
@@ -1439,8 +1475,8 @@ describe('manifest source CID validation', () => {
 		expect(response.status).toBe(200)
 		expect(await response.text()).toBe('<html>pre-rewritten</html>')
 		expect(evictedPublicCacheKeys).toHaveLength(0)
-		const rewrittenRead = storageGetWithMetadataKeys.indexOf(`${DID}/${RKEY}/.rewritten/page.html`)
-		const originalRead = storageGetWithMetadataKeys.indexOf(`${DID}/${RKEY}/page.html`)
+		const rewrittenRead = storageGetWithMetadataKeys.indexOf(storageKey('.rewritten/page.html'))
+		const originalRead = storageGetWithMetadataKeys.indexOf(storageKey('page.html'))
 		// The requested preferred representation must win before background prewarm
 		// starts its independent read of the original HTML.
 		expect(rewrittenRead).toBeGreaterThanOrEqual(0)
@@ -1477,7 +1513,7 @@ describe('manifest source CID validation', () => {
 
 		expect(response.status).toBe(503)
 		expect(await response.text()).not.toContain('SPA fallback')
-		expect(storageGetWithMetadataKeys).not.toContain(`${DID}/${RKEY}/index.html`)
+		expect(storageGetWithMetadataKeys).not.toContain(storageKey('index.html'))
 		expect(revalidateCalls).toEqual([{ did: DID, rkey: RKEY, reason: 'storage-miss:asset.js' }])
 	})
 
@@ -1515,8 +1551,8 @@ describe('manifest source CID validation', () => {
 		expect(response.status).toBe(503)
 		expect(response.headers.get('Cache-Control')).toBe('no-store')
 		expect(await response.text()).not.toContain('stale bytes')
-		expect(evictedPublicCacheKeys).toEqual([`${DID}/${RKEY}/eviction-failure.txt`])
-		expect(storageGetWithMetadataKeys.filter((key) => key === `${DID}/${RKEY}/eviction-failure.txt`)).toHaveLength(1)
+		expect(evictedPublicCacheKeys).toEqual([storageKey('eviction-failure.txt')])
+		expect(storageGetWithMetadataKeys.filter((key) => key === storageKey('eviction-failure.txt'))).toHaveLength(1)
 		expect(revalidateCalls).toEqual([{ did: DID, rkey: RKEY, reason: 'storage-miss:eviction-failure.txt' }])
 	})
 
@@ -1570,8 +1606,8 @@ describe('manifest source CID validation', () => {
 		expect(response.status).toBe(503)
 		expect(response.headers.get('Cache-Control')).toBe('no-store')
 		expect(await response.text()).not.toContain('wrong bytes')
-		expect(evictedPublicCacheKeys).toEqual([`${DID}/${RKEY}/mismatched.txt`])
-		expect(storageGetWithMetadataKeys.filter((key) => key === `${DID}/${RKEY}/mismatched.txt`)).toHaveLength(2)
+		expect(evictedPublicCacheKeys).toEqual([storageKey('mismatched.txt')])
+		expect(storageGetWithMetadataKeys.filter((key) => key === storageKey('mismatched.txt'))).toHaveLength(2)
 		expect(revalidateCalls).toEqual([{ did: DID, rkey: RKEY, reason: 'storage-miss:mismatched.txt' }])
 	})
 })

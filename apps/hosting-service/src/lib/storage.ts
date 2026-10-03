@@ -878,6 +878,13 @@ function initializeStorage(): TieredStorage<Uint8Array> {
 				tiers: ['hot', 'warm', 'cold'],
 			},
 
+			// Content-addressed HTML bodies have no index.html name to match on; they are the originals
+			// served on custom domains, so they get the same placement index.html always had
+			{
+				pattern: 'cas/*.{html,htm}',
+				tiers: ['hot', 'warm', 'cold'],
+			},
+
 			// CSS and JS: eligible for hot tier if accessed frequently
 			{
 				pattern: '**/*.{css,js}',

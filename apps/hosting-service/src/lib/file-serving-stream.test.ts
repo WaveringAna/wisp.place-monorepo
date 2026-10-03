@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { gzipSync } from 'node:zlib'
 import { computeCID } from '@wispplace/atproto-utils'
+import { casKey } from '@wispplace/fs-utils'
 
 const DID = 'did:plc:stream-test'
 const RKEY = 'site'
@@ -26,6 +27,7 @@ let sourceCidSequence: Array<string | null> = []
 let evictions = 0
 let legacyCidRepairs = 0
 let streamMissing = false
+let activeFileObjects: unknown
 
 function nextSourceCidMetadata(): { sourceCid?: string } {
 	if (!sourceCidSequence.length) return { sourceCid: activeCid }
@@ -107,6 +109,10 @@ mock.module('./db', () => ({
 		rkey: RKEY,
 		record_cid: 'record-cid',
 		file_cids: { [activeFilePath]: activeCid },
+		// Default: the active file is stored at the CAS key its manifest entry implies.
+		file_objects: activeFileObjects ?? {
+			[activeFilePath]: casKey({ cid: activeCid, path: activeFilePath, mimeType: activeMimeType }),
+		},
 		cached_at: 0,
 		updated_at: 0,
 		absent_since: null,
@@ -140,6 +146,7 @@ describe('file serving streams', () => {
 		activeMimeType = 'application/octet-stream'
 		activeEncoding = undefined
 		activeFilePath = 'asset.bin'
+		activeFileObjects = undefined
 		cache.clear('sourceCidMismatches')
 	})
 
@@ -153,8 +160,25 @@ describe('file serving streams', () => {
 		expect(response.status).toBe(200)
 		expect(await response.text()).toBe('streamed binary content')
 		expect(bufferedReads).toBe(0)
-		expect(streamReads).toEqual([{ key: `${DID}/${RKEY}/asset.bin`, signal, borrowChunks: true }])
+		expect(streamReads).toEqual([
+			{ key: casKey({ cid, path: 'asset.bin', mimeType: 'application/octet-stream' }), signal, borrowChunks: true },
+		])
 		expect(response.headers.get('Content-Length')).toBe(`${body.byteLength}`)
+	})
+
+	test('streams a mapped file from its CAS key, and reads nothing for an unmapped one', async () => {
+		const objectKey = casKey({ cid, path: 'asset.bin', mimeType: 'application/octet-stream' })
+		activeFileObjects = { 'asset.bin': objectKey }
+
+		const mapped = await serveFileInternal(DID, RKEY, 'asset.bin', null, {})
+		expect(await mapped.text()).toBe('streamed binary content')
+		expect(streamReads.map((read) => read.key)).toEqual([objectKey])
+
+		streamReads.length = 0
+		activeFileObjects = { 'other.bin': objectKey }
+		const unmapped = await serveFileInternal(DID, RKEY, 'asset.bin', null, {})
+		expect(unmapped.status).not.toBe(200)
+		expect(streamReads).toEqual([])
 	})
 
 	test('streams pre-rewritten HTML without materializing it', async () => {
