@@ -8,7 +8,7 @@
     "apps/hosting-service",
     "apps/firehose-service",
     "apps/webhook-service",
-    "cli"
+    "apps/preview-bot"
   ],
   "dependencies": {
     "@tailwindcss/cli": "^4.3.2",
