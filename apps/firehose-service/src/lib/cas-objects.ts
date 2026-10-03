@@ -114,6 +114,8 @@ export interface MigrationSiteRow {
 	rkey: string
 	fileCids: Record<string, string>
 	fileObjects: FileObjects | null
+	recordCid: string
+	updatedAt: number
 }
 
 /** A page of live sites after `after`, in (did, rkey) order. Tombstones and absent sites are not migrated. */
@@ -123,8 +125,17 @@ export async function listSitesForMigration(
 	limit: number,
 	deletedRecordCid: string,
 ): Promise<MigrationSiteRow[]> {
-	const rows = await sql<Array<{ did: string; rkey: string; file_cids: unknown; file_objects: unknown }>>`
-		SELECT did, rkey, file_cids, file_objects FROM site_cache
+	const rows = await sql<
+		Array<{
+			did: string
+			rkey: string
+			file_cids: unknown
+			file_objects: unknown
+			record_cid: string
+			updated_at: number | string
+		}>
+	>`
+		SELECT did, rkey, file_cids, file_objects, record_cid, updated_at FROM site_cache
 		WHERE record_cid <> ${deletedRecordCid} AND absent_since IS NULL
 			AND (${after === null} OR (did, rkey) > (${after?.did ?? ''}, ${after?.rkey ?? ''}))
 		ORDER BY did, rkey
@@ -135,6 +146,8 @@ export async function listSitesForMigration(
 		rkey: row.rkey,
 		fileCids: normalizeFileCids(row.file_cids).value,
 		fileObjects: normalizeFileObjects(row.file_objects),
+		recordCid: row.record_cid,
+		updatedAt: Number(row.updated_at),
 	}))
 }
 
@@ -148,23 +161,46 @@ function sameFileCids(a: Record<string, string>, b: Record<string, string>): boo
  * site is exactly as it was when scanned, and only if it does not contradict a mapping already there:
  * a site the cache writer has since rewritten is the writer's, and the migration leaves it alone.
  */
+export interface ExpectedSiteState {
+	fileCids: Record<string, string>
+	recordCid?: string
+	updatedAt?: number
+}
+
+/**
+ * Store a migrated mapping for one site, atomically with its references.
+ *
+ * Fencing:
+ * 1. The site's file_cids must match the snapshot scanned by the migration pass.
+ * 2. If recordCid/updatedAt are provided, they must also match the scanned snapshot.
+ *    Any concurrent writer (legacy or CAS) changes record_cid / updated_at, causing a race to fail closed as 'stale'.
+ * 3. Any mapping already present for existing paths is replaced, with references safely diffed and adjusted.
+ */
 export async function commitMigratedMapping(
 	sql: Sql,
 	did: string,
 	rkey: string,
-	expectedFileCids: Record<string, string>,
+	expected: ExpectedSiteState | Record<string, string>,
 	mapping: FileObjects,
 ): Promise<'committed' | 'stale'> {
+	const expectedState: ExpectedSiteState =
+		'fileCids' in expected && typeof expected.fileCids === 'object' && expected.fileCids !== null
+			? (expected as ExpectedSiteState)
+			: { fileCids: expected as Record<string, string> }
+
 	return await sql.begin(async (tx) => {
-		const rows = await tx<Array<{ file_cids: unknown; file_objects: unknown }>>`
-			SELECT file_cids, file_objects FROM site_cache WHERE did = ${did} AND rkey = ${rkey} FOR UPDATE
+		const rows = await tx<
+			Array<{ file_cids: unknown; file_objects: unknown; record_cid: string; updated_at: number | string }>
+		>`
+			SELECT file_cids, file_objects, record_cid, updated_at FROM site_cache WHERE did = ${did} AND rkey = ${rkey} FOR UPDATE
 		`
 		const row = rows[0]
-		if (!row || !sameFileCids(normalizeFileCids(row.file_cids).value, expectedFileCids)) return 'stale' as const
-		const existing = normalizeFileObjects(row.file_objects) ?? {}
-		for (const [path, key] of Object.entries(existing)) {
-			if (mapping[path] !== undefined && mapping[path] !== key) return 'stale' as const
-		}
+		if (!row) return 'stale' as const
+		if (!sameFileCids(normalizeFileCids(row.file_cids).value, expectedState.fileCids)) return 'stale' as const
+		if (expectedState.recordCid !== undefined && row.record_cid !== expectedState.recordCid) return 'stale' as const
+		if (expectedState.updatedAt !== undefined && Number(row.updated_at) !== expectedState.updatedAt)
+			return 'stale' as const
+
 		await applyCasReferences(tx as unknown as Sql, did, rkey, mapping)
 		return 'committed' as const
 	})

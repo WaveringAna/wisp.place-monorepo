@@ -339,9 +339,9 @@ suite('migration queries (postgres)', () => {
 		extra: { did?: string; fileObjects?: FileObjects; absent?: boolean; recordCid?: string } = {},
 	) =>
 		sql`
-			INSERT INTO site_cache (did, rkey, record_cid, file_cids, file_objects, absent_since)
+			INSERT INTO site_cache (did, rkey, record_cid, file_cids, file_objects, absent_since, updated_at)
 			VALUES (${extra.did ?? DID}, ${rkey}, ${extra.recordCid ?? 'cid'}, ${sql.json(fileCids)},
-				${extra.fileObjects ? sql.json(extra.fileObjects) : null}, ${extra.absent ? 1 : null})
+				${extra.fileObjects ? sql.json(extra.fileObjects) : null}, ${extra.absent ? 1 : null}, 1000)
 		`
 
 	beforeAll(async () => {
@@ -350,7 +350,7 @@ suite('migration queries (postgres)', () => {
 		await sql.unsafe(`
 			CREATE TABLE site_cache (
 				did TEXT NOT NULL, rkey TEXT NOT NULL, record_cid TEXT NOT NULL,
-				file_cids JSONB NOT NULL DEFAULT '{}', absent_since BIGINT, PRIMARY KEY (did, rkey)
+				file_cids JSONB NOT NULL DEFAULT '{}', absent_since BIGINT, updated_at BIGINT NOT NULL DEFAULT (EXTRACT(EPOCH FROM NOW())), PRIMARY KEY (did, rkey)
 			)
 		`)
 		for (const statement of CAS_SCHEMA_STATEMENTS) await sql.unsafe(statement)
@@ -433,9 +433,20 @@ suite('migration queries (postgres)', () => {
 	})
 
 	test('never overwrites a mapping the cache writer produced for the same path', async () => {
-		await insertSite('one', { 'a.css': 'x' }, { fileObjects: { 'a.css': key('writer') } })
+		// Scanned snapshot before CAS writer runs:
+		await insertSite('one', { 'a.css': 'x' })
+		const snapshot = { fileCids: { 'a.css': 'x' }, recordCid: 'cid', updatedAt: 1000 }
 
-		const result = await commitMigratedMapping(sql, DID, 'one', { 'a.css': 'x' }, { 'a.css': key('a') })
+		// Concurrent CAS writer completes an update, updating record_cid and updated_at and file_objects:
+		await sql`
+			UPDATE site_cache
+			SET file_objects = ${sql.json({ 'a.css': key('writer') })},
+			    record_cid = 'cid_writer',
+			    updated_at = 2000
+			WHERE did = ${DID} AND rkey = 'one'
+		`
+
+		const result = await commitMigratedMapping(sql, DID, 'one', snapshot, { 'a.css': key('a') })
 
 		expect(result).toBe('stale')
 		expect(await refs(key('a'))).toBeUndefined()
@@ -466,15 +477,88 @@ suite('migration queries (postgres)', () => {
 	})
 
 	test('refuses to overwrite a mapping that a concurrent CAS writer produced during migration', async () => {
-		await insertSite('cas_writer_race', { 'b.css': 'cid_b' }, { fileObjects: { 'b.css': key('writer') } })
+		await insertSite('cas_writer_race', { 'b.css': 'cid_b' })
+		const snapshot = { fileCids: { 'b.css': 'cid_b' }, recordCid: 'cid', updatedAt: 1000 }
 
-		const result = await commitMigratedMapping(
+		// Concurrent CAS writer finishes while migration is running:
+		await sql`
+			UPDATE site_cache
+			SET file_objects = ${sql.json({ 'b.css': key('writer') })},
+			    record_cid = 'cid_cas_writer',
+			    updated_at = 3000
+			WHERE did = ${DID} AND rkey = 'cas_writer_race'
+		`
+
+		const result = await commitMigratedMapping(sql, DID, 'cas_writer_race', snapshot, { 'b.css': key('migration') })
+		expect(result).toBe('stale')
+	})
+
+	test('allows migrating when same path updated by old writer, but rejects concurrent CAS writer', async () => {
+		// Pass 1: site had 'index.html' -> cid_1, mapped to key('a')
+		await insertSite('same_path_update', { 'index.html': 'cid_1' })
+		await recordCasObject(sql, key('a'), 100)
+		await recordCasObject(sql, key('b'), 200)
+		const first = await commitMigratedMapping(
 			sql,
 			DID,
-			'cas_writer_race',
-			{ 'b.css': 'cid_b' },
-			{ 'b.css': key('migration') },
+			'same_path_update',
+			{ 'index.html': 'cid_1' },
+			{ 'index.html': key('a') },
 		)
-		expect(result).toBe('stale')
+		expect(first).toBe('committed')
+		expect(await refs(key('a'))).toBe(1)
+
+		// Old writer updates 'index.html' to 'cid_2', but leaves file_objects untouched as { 'index.html': key('a') }
+		await sql`
+			UPDATE site_cache
+			SET file_cids = ${sql.json({ 'index.html': 'cid_2' })},
+			    record_cid = 'cid_2'
+			WHERE did = ${DID} AND rkey = 'same_path_update'
+		`
+
+		// Migration pass 2 scanned the updated file_cids ({ 'index.html': 'cid_2' }) and computed mapping { 'index.html': key('b') }
+		const second = await commitMigratedMapping(
+			sql,
+			DID,
+			'same_path_update',
+			{ 'index.html': 'cid_2' },
+			{ 'index.html': key('b') },
+		)
+		expect(second).toBe('committed')
+		expect(await refs(key('b'))).toBe(1)
+		expect(await refs(key('a'))).toBe(0)
+	})
+
+	test('allows migrating when same path has variant-only change (same CID, different CAS key) by old writer', async () => {
+		// Pass 1: site had 'index.html' -> cid('a'), mapped to variant 1 (e.g. uncompressed)
+		const keyV1 = casKey({ cid: cid('a'), path: 'index.html', mimeType: 'text/html' })
+		const keyV2 = casKey({ cid: cid('a'), path: 'index.html', mimeType: 'text/html', encoding: 'gzip' })
+		await insertSite('variant_update', { 'index.html': cid('a') })
+		await recordCasObject(sql, keyV1, 100)
+		await recordCasObject(sql, keyV2, 80)
+		const first = await commitMigratedMapping(
+			sql,
+			DID,
+			'variant_update',
+			{ fileCids: { 'index.html': cid('a') }, recordCid: 'cid', updatedAt: 1000 },
+			{ 'index.html': keyV1 },
+		)
+		expect(first).toBe('committed')
+		expect(await refs(keyV1)).toBe(1)
+
+		// Old writer processes updated record with same CID but new manifest flags / record_cid / updated_at
+		await sql`
+			UPDATE site_cache
+			SET record_cid = 'cid_v2',
+			    updated_at = 2000
+			WHERE did = ${DID} AND rkey = 'variant_update'
+		`
+
+		// Migration pass 2 scans the site after old writer updated it:
+		const snapshot = { fileCids: { 'index.html': cid('a') }, recordCid: 'cid_v2', updatedAt: 2000 }
+		const second = await commitMigratedMapping(sql, DID, 'variant_update', snapshot, { 'index.html': keyV2 })
+		expect(second).toBe('committed')
+		expect(await refs(keyV2)).toBe(1)
+		expect(await refs(keyV1)).toBe(0) // Old variant key refcount was decremented
 	})
 })

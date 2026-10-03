@@ -101,7 +101,7 @@ export interface MigrationPorts {
 	commitMapping(
 		did: string,
 		rkey: string,
-		expectedFileCids: Record<string, string>,
+		expected: { fileCids: Record<string, string>; recordCid?: string; updatedAt?: number },
 		mapping: FileObjects,
 	): Promise<'committed' | 'stale'>
 	deleteObject(key: string): Promise<void>
@@ -112,6 +112,8 @@ export interface SiteToMigrate {
 	did: string
 	rkey: string
 	fileCids: Record<string, string>
+	recordCid?: string
+	updatedAt?: number
 }
 
 export interface SiteMigrationReport {
@@ -200,7 +202,12 @@ export async function migrateSite(
 
 	// Idempotent: objects the writer or an earlier run registered keep their row.
 	for (const [key, size] of sizes) await ports.registerObject(key, size)
-	const outcome = await ports.commitMapping(site.did, site.rkey, site.fileCids, mapping)
+	const outcome = await ports.commitMapping(
+		site.did,
+		site.rkey,
+		{ fileCids: site.fileCids, recordCid: site.recordCid, updatedAt: site.updatedAt },
+		mapping,
+	)
 	const skippedTotal = Object.values(report.skipped).reduce((sum, count) => sum + count, 0)
 	return { ...report, status: outcome === 'stale' ? 'stale' : skippedTotal > 0 ? 'partial' : 'migrated' }
 }
