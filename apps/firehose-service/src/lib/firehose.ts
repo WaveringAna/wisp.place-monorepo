@@ -808,6 +808,8 @@ function handleError(error: Error, onTooManyFailures?: () => void): void {
 
 function handleStall(onTooManyFailures?: () => void): void {
 	if (!acceptingEvents || durableReplayController.pending || relaySwitchPromise) return
+	// A local development PDS is quiet between deploys. Its liveness is checked by ping/pong.
+	if (config.firehoseSourceMode === 'dev-pds') return
 
 	const silenceMs = Date.now() - lastEventTime
 	if (silenceMs < STALL_THRESHOLD_MS) return
@@ -855,6 +857,7 @@ function connect(onTooManyFailures: (() => void) | undefined = activeFailureCall
 				if (isCurrentRelay()) handleError(error, onTooManyFailures)
 			},
 			getCursor: () => getCurrentSeq(),
+			maxSilenceMs: config.firehoseSourceMode === 'dev-pds' ? null : undefined,
 			onConnect: () => {
 				if (!acceptingEvents || !isCurrentRelay()) return
 				isConnected = true
@@ -874,6 +877,9 @@ function connect(onTooManyFailures: (() => void) | undefined = activeFailureCall
 		return
 	}
 
+	if (config.firehoseSourceMode === 'dev-pds') {
+		throw new Error('FIREHOSE_SOURCE_MODE dev-pds needs the Bun runtime')
+	}
 	const nodeFirehose = new Firehose({
 		idResolver,
 		service: activeService,

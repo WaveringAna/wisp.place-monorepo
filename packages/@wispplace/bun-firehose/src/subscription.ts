@@ -46,9 +46,19 @@ export interface BunSubscriptionOptions<T> {
 	onConnect?: () => void
 	onDisconnect?: () => void
 	maxReconnectSeconds?: number
-	/** Force reconnect if no messages received within this many ms (default: 15000 = 15s) */
-	maxSilenceMs?: number
+	/**
+	 * Force reconnect if no messages received within this many ms (default: 15000 = 15s). `null`
+	 * says silence is normal for this source (a quiet local PDS): liveness is then checked with
+	 * websocket ping/pong instead, and pongs never count as messages.
+	 */
+	maxSilenceMs?: number | null
+	/** Ping interval when `maxSilenceMs` is null (default: 5000) */
+	heartbeatIntervalMs?: number
+	/** How long a ping may go unanswered before the connection is dropped (default: 5000) */
+	heartbeatTimeoutMs?: number
 }
+
+type PingWebSocket = WebSocket & { ping(data: string): unknown }
 
 export class BunSubscription<T = unknown> {
 	private ws: WebSocket | null = null
@@ -78,7 +88,7 @@ export class BunSubscription<T = unknown> {
 	}
 
 	async *[Symbol.asyncIterator](): AsyncGenerator<T> {
-		const maxSilenceMs = this.opts.maxSilenceMs ?? 15_000
+		const maxSilenceMs = this.opts.maxSilenceMs === undefined ? 15_000 : this.opts.maxSilenceMs
 
 		while (!this.aborted) {
 			let silenceTimer: ReturnType<typeof setTimeout> | null = null
@@ -93,16 +103,33 @@ export class BunSubscription<T = unknown> {
 				let wsOpen = false
 				let wsClosed = false
 
+				const dropSilentConnection = (reason: string) => {
+					if (!wsClosed && !this.aborted) {
+						console.warn(`[BunSubscription] ${reason}, forcing reconnect`)
+						wsClosed = true
+						this.ws?.close()
+						resolveMessage?.()
+					}
+				}
+
 				const resetSilenceTimer = () => {
+					if (maxSilenceMs === null) return
+					if (silenceTimer) clearTimeout(silenceTimer)
+					silenceTimer = setTimeout(() => dropSilentConnection(`No messages for ${maxSilenceMs / 1000}s`), maxSilenceMs)
+				}
+
+				let pingNonce: string | undefined
+				const scheduleHeartbeat = () => {
 					if (silenceTimer) clearTimeout(silenceTimer)
 					silenceTimer = setTimeout(() => {
-						if (!wsClosed && !this.aborted) {
-							console.warn(`[BunSubscription] No messages for ${maxSilenceMs / 1000}s, forcing reconnect`)
-							wsClosed = true
-							this.ws?.close()
-							resolveMessage?.()
+						pingNonce = crypto.randomUUID()
+						silenceTimer = setTimeout(() => dropSilentConnection('No pong'), this.opts.heartbeatTimeoutMs ?? 5_000)
+						try {
+							;(this.ws as PingWebSocket).ping(pingNonce)
+						} catch {
+							dropSilentConnection('Ping failed')
 						}
-					}, maxSilenceMs)
+					}, this.opts.heartbeatIntervalMs ?? 5_000)
 				}
 
 				this.ws = new WebSocket(url)
@@ -112,7 +139,14 @@ export class BunSubscription<T = unknown> {
 					wsOpen = true
 					this.reconnectAttempts = 0
 					this.opts.onConnect?.()
-					resetSilenceTimer()
+					if (maxSilenceMs === null) scheduleHeartbeat()
+					else resetSilenceTimer()
+				})
+
+				this.ws.addEventListener('pong', (event) => {
+					if (pingNonce === undefined || decodePong((event as MessageEvent).data) !== pingNonce) return
+					pingNonce = undefined
+					scheduleHeartbeat()
 				})
 
 				this.ws.addEventListener('message', (event) => {
@@ -218,6 +252,14 @@ export class BunSubscription<T = unknown> {
 		this.aborted = true
 		this.ws?.close()
 	}
+}
+
+function decodePong(data: unknown): string | undefined {
+	if (typeof data === 'string') return data
+	if (data instanceof ArrayBuffer) return new TextDecoder().decode(data)
+	if (ArrayBuffer.isView(data))
+		return new TextDecoder().decode(new Uint8Array(data.buffer, data.byteOffset, data.byteLength))
+	return undefined
 }
 
 function encodeQueryParams(obj: Record<string, unknown>): string {

@@ -123,8 +123,8 @@ export interface BunFirehoseOptions {
 	filterCollections?: string[]
 	unauthenticatedCommits?: boolean
 	getCursor?: () => number | undefined | Promise<number | undefined>
-	/** Force reconnect if no messages received within this many ms (default: 15000) */
-	maxSilenceMs?: number
+	/** Force reconnect if no messages received within this many ms (default: 15000); null checks liveness with ping/pong */
+	maxSilenceMs?: number | null
 }
 
 export class BunFirehose {

@@ -20,6 +20,8 @@ export interface FirehoseConfig {
 	databaseUrl: string
 
 	// Firehose
+	/** `dev-pds`: silence is normal (a quiet local PDS), so liveness uses ping/pong, not a message timeout. */
+	firehoseSourceMode: 'relay' | 'dev-pds'
 	firehoseService: string
 	firehoseServiceSecondary: string | undefined
 	firehoseMaxConcurrency: number
@@ -232,6 +234,7 @@ type ResolvedLeaderConfig = Pick<
 >
 type ResolvedFirehoseConfig = Pick<
 	FirehoseConfig,
+	| 'firehoseSourceMode'
 	| 'firehoseService'
 	| 'firehoseServiceSecondary'
 	| 'firehoseMaxConcurrency'
@@ -373,10 +376,30 @@ function resolveLeaderConfig(env: ConfigEnv, production: boolean, redisUrl: stri
 	}
 }
 
-function resolveFirehoseConfig(env: ConfigEnv, production: boolean): ResolvedFirehoseConfig {
+function resolveSourceMode(
+	env: ConfigEnv,
+	service: string,
+	context: EnvironmentContext,
+): FirehoseConfig['firehoseSourceMode'] {
+	const mode = env.FIREHOSE_SOURCE_MODE ?? 'relay'
+	if (mode !== 'relay' && mode !== 'dev-pds') throw new Error('Invalid FIREHOSE_SOURCE_MODE')
+	if (mode === 'relay') return mode
+	if (!context.developmentOrTest) throw new Error('FIREHOSE_SOURCE_MODE dev-pds requires development or test')
+	const hostname = parseUrl(service, 'FIREHOSE_SERVICE').hostname
+	if (!(isLocalDevelopmentHost(hostname) || hostname === 'pds' || hostname === 'host.docker.internal')) {
+		throw new Error('FIREHOSE_SOURCE_MODE dev-pds requires a local PDS')
+	}
+	if (env.FIREHOSE_SERVICE_SECONDARY) throw new Error('FIREHOSE_SOURCE_MODE dev-pds cannot use a secondary relay')
+	return mode
+}
+
+function resolveFirehoseConfig(env: ConfigEnv, context: EnvironmentContext): ResolvedFirehoseConfig {
+	const { production } = context
 	const secondary = env.FIREHOSE_SERVICE_SECONDARY
+	const service = validateRelayUrl(env.FIREHOSE_SERVICE ?? DEFAULT_FIREHOSE_SERVICE, 'FIREHOSE_SERVICE', production)
 	return {
-		firehoseService: validateRelayUrl(env.FIREHOSE_SERVICE ?? DEFAULT_FIREHOSE_SERVICE, 'FIREHOSE_SERVICE', production),
+		firehoseSourceMode: resolveSourceMode(env, service, context),
+		firehoseService: service,
 		firehoseServiceSecondary: secondary
 			? validateRelayUrl(secondary, 'FIREHOSE_SERVICE_SECONDARY', production)
 			: undefined,
@@ -436,7 +459,7 @@ export function resolveConfig(env: ConfigEnv = {}, args: readonly string[] = [])
 	const storage = resolveStorageConfig(env, context)
 	const queue = resolveQueueConfig(env)
 	const leader = resolveLeaderConfig(env, context.production, queue.redisUrl)
-	const firehose = resolveFirehoseConfig(env, context.production)
+	const firehose = resolveFirehoseConfig(env, context)
 	const mode = resolveModeConfig(env, args, context.production)
 
 	return {

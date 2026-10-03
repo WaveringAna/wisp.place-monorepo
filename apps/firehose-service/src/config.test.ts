@@ -120,6 +120,26 @@ describe('resolveConfig', () => {
 		expect(prefixOf('previews')).toBe('previews/')
 	})
 
+	test('treats a quiet source as normal only for an explicit local development PDS', () => {
+		const devPds = (overrides: Record<string, string | undefined> = {}) =>
+			developmentEnv({ FIREHOSE_SOURCE_MODE: 'dev-pds', FIREHOSE_SERVICE: 'ws://localhost:3300', ...overrides })
+
+		expect(resolveConfig(developmentEnv()).firehoseSourceMode).toBe('relay')
+		expect(resolveConfig(devPds()).firehoseSourceMode).toBe('dev-pds')
+		expect(resolveConfig(developmentEnv({ FIREHOSE_SOURCE_MODE: 'relay' })).firehoseSourceMode).toBe('relay')
+
+		expect(() => resolveConfig(devPds({ FIREHOSE_SOURCE_MODE: 'jetstream' }))).toThrow('Invalid FIREHOSE_SOURCE_MODE')
+		expect(() => resolveConfig(devPds({ FIREHOSE_SERVICE: 'wss://bsky.network' }))).toThrow(
+			'FIREHOSE_SOURCE_MODE dev-pds requires a local PDS',
+		)
+		expect(() => resolveConfig(devPds({ FIREHOSE_SERVICE_SECONDARY: 'wss://relay.example.invalid' }))).toThrow(
+			'FIREHOSE_SOURCE_MODE dev-pds cannot use a secondary relay',
+		)
+		expect(() => resolveConfig(productionEnv({ FIREHOSE_SOURCE_MODE: 'dev-pds' }))).toThrow(
+			'FIREHOSE_SOURCE_MODE dev-pds requires development or test',
+		)
+	})
+
 	test('rejects relay secrets and insecure production relays without logging raw URLs', () => {
 		for (const firehoseService of [
 			'wss://user:secret@example.invalid',
