@@ -418,6 +418,16 @@
 		border-top: 2px dashed var(--rule);
 	}
 
+	/* A strip that stays on one line on a phone and scrolls sideways instead of wrapping. */
+	.scroll-x {
+		overflow-x: auto;
+		scrollbar-width: none;
+	}
+
+	.scroll-x::-webkit-scrollbar {
+		display: none;
+	}
+
 	/* The only scrolling region: the page stays put around it. */
 	.pane-body {
 		scrollbar-gutter: stable;

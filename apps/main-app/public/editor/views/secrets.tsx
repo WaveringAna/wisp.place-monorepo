@@ -98,7 +98,7 @@ export function Secrets() {
 							<TextField
 								label={<AddLabel>new secret</AddLabel>}
 								inline
-								className="min-w-0 flex-1"
+								className="flex-1"
 								name="name"
 								required
 								maxLength={64}

@@ -139,14 +139,14 @@ export function App() {
 		// The page itself never scrolls: header, key hints, tabs and footer stay put and only the pane's body scrolls.
 		<div className="flex h-dvh flex-col overflow-hidden">
 			<Header user={user.data} />
-			<div className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col px-6 pt-4 pb-5">
+			<div className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col px-3 pt-4 pb-5 sm:px-6">
 				<KeyHints hints={hints} />
 				{/* One terminal pane: the tabs are its title strip, the rows live inside. The fairy holds its left edge. */}
 				<div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border-2 border-rail bg-pane">
 					<div
 						role="tablist"
 						aria-label="dashboard"
-						className="grid grid-cols-3 gap-1.5 border-b-2 border-rail bg-paper-2 px-4 py-2 sm:grid-cols-5"
+						className="scroll-x flex gap-0.5 border-b-2 border-rail bg-paper-2 px-1.5 py-2 sm:grid sm:grid-cols-5 sm:gap-1.5 sm:px-4"
 					>
 						{TABS.map((entry, index) => (
 							<button
@@ -159,13 +159,13 @@ export function App() {
 								tabIndex={tab === entry.id ? 0 : -1}
 								onClick={() => select(entry.id)}
 								className={cx(
-									'rounded-full border-2 px-3.5 py-0.5 text-center transition-colors',
+									'shrink-0 whitespace-nowrap rounded-full border-2 px-2 py-0.5 text-center text-xs transition-colors sm:px-3.5 sm:text-sm',
 									tab === entry.id
 										? 'border-line bg-pink font-bold text-on-pastel shadow-[2px_2px_0_var(--shadow)]'
 										: 'border-transparent text-ink-soft hover:text-ink',
 								)}
 							>
-								<span className="mr-1.5 opacity-70">{index + 1}</span>
+								<span className="mr-1.5 opacity-70 max-sm:hidden">{index + 1}</span>
 								{'label' in entry ? entry.label : entry.id}
 							</button>
 						))}
@@ -265,14 +265,19 @@ const Mascot = () => (
 /** The bottom bar: its top edge is the rail the fairy sits on. */
 const Footer = () => (
 	<footer className="border-t-2 border-rail bg-paper-2">
-		<div className="relative mx-auto flex max-w-6xl flex-wrap gap-x-5 gap-y-1 px-6 py-3 text-xs text-ink-soft">
+		{/* The fairy sits outside the scrolling strip, which would clip her. */}
+		<div className="relative mx-auto max-w-6xl">
 			<Mascot />
-			<span>built with ♡ by @nekomimi.pet</span>
-			{FOOTER_LINKS.map((link) => (
-				<a key={link.href} href={link.href} className="text-ink-soft hover:text-rose">
-					{link.label}
-				</a>
-			))}
+			<div className="scroll-x flex gap-x-4 whitespace-nowrap px-3 py-3 text-xs text-ink-soft sm:flex-wrap sm:gap-x-5 sm:gap-y-1 sm:px-6">
+				<span>
+					<span className="max-sm:hidden">built with </span>♡<span className="max-sm:hidden"> by</span> @nekomimi.pet
+				</span>
+				{FOOTER_LINKS.map((link) => (
+					<a key={link.href} href={link.href} className="text-ink-soft hover:text-rose">
+						{link.label}
+					</a>
+				))}
+			</div>
 		</div>
 	</footer>
 )

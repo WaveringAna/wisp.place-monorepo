@@ -41,8 +41,11 @@ const HOSTING_NODES = [
 
 const openDomain = (domain: string) => openInNewTab(`https://${domain}`)
 
-/** Marque's nameservers pick up a zone write within a second or so; give them a little more before checking. */
-const MARQUE_SETTLE_MS = 2000
+/**
+ * When to check dns after writing a marque zone. Its nameservers usually answer
+ * within a second or two, but not always, so a slow one gets a few more tries.
+ */
+const MARQUE_CHECKS_MS = [2000, 6000, 15_000] as const
 
 /** `?dns=<id>`, left by the sign-in that let wisp edit marque dns, reopens that domain's dialog. */
 const dnsParam = (): string | null => new URLSearchParams(window.location.search).get('dns')
@@ -299,7 +302,7 @@ function ClaimForm() {
 			<TextField
 				label={<AddLabel>claim a subdomain</AddLabel>}
 				inline
-				className="min-w-0 flex-1"
+				className="flex-1"
 				suffix=".wisp.place"
 				value={handle}
 				onChange={(event) => setHandle(event.target.value)}
@@ -347,7 +350,7 @@ function AddDomainForm({ onAdded }: { onAdded: (id: string) => void }) {
 			<TextField
 				label={<AddLabel>add a domain you own</AddLabel>}
 				inline
-				className="min-w-0 flex-1"
+				className="flex-1"
 				name="domain"
 				placeholder="example.com"
 				autoCapitalize="none"
@@ -484,9 +487,22 @@ function MarqueSetup({ domain, status, onVerify }: MarqueSetupProps) {
 		success: `added ${domain.domain} to your marque dns ✦`,
 		failure: 'could not set up marque dns',
 	})
+	// Checks stop once the domain verifies, since the dialog then drops this panel.
+	// The latest domain and callback are read through a ref: every check refetches
+	// the domain list, and restarting the timers on that would check forever.
+	const latest = useRef({ domain, onVerify })
+	latest.current = { domain, onVerify }
+	const [written, setWritten] = useState(false)
+	useEffect(() => {
+		if (!written) return
+		const check = () => latest.current.onVerify(latest.current.domain)
+		const timers = MARQUE_CHECKS_MS.map((delay) => setTimeout(check, delay))
+		return () => timers.forEach(clearTimeout)
+	}, [written])
+
 	const apply = (replace: boolean) =>
 		setUp.mutate(replace, {
-			onSuccess: () => setTimeout(() => onVerify(domain), MARQUE_SETTLE_MS),
+			onSuccess: () => setWritten(true),
 			// A conflict that appeared since the dialog opened is shown from a fresh status.
 			onError: () => client.invalidateQueries({ queryKey: keys.marque(domain.id) }),
 		})
