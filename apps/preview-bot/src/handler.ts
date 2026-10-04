@@ -30,7 +30,6 @@ const STATUS: Record<Rejection, number> = {
 	'pull-repo-mismatch': 422,
 	'pull-has-no-rounds': 422,
 	'claim-not-owned': 422,
-	'not-a-collaborator': 422,
 	'label-too-long': 422,
 	// The deploy may simply not be served yet; the workflow can retry.
 	'preview-not-serving': 409,

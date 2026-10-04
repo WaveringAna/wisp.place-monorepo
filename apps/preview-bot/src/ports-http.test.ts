@@ -306,31 +306,6 @@ describe('findPullForBranch', () => {
 	})
 })
 
-describe('isCollaborator', () => {
-	const REPO_DID = `did:plc:${'r'.repeat(24)}`
-	const SUBJECT = `did:plc:${'s'.repeat(24)}`
-	const listed = () =>
-		json({
-			items: [
-				{
-					uri: `at://${REPO_DID}/sh.tangled.bobbin.knotCollaborator/${SUBJECT}`,
-					value: { $type: 'sh.tangled.repo.collaborator', repo: REPO_DID, subject: SUBJECT },
-				},
-			],
-		})
-
-	test("asks the appview for the repo's collaborators", async () => {
-		const { fetch, requested } = fakeFetch({ 'https://appview.example/xrpc/sh.tangled.repo.listCollaborators': listed })
-		expect(await build({ fetch }).isCollaborator(REPO_DID, SUBJECT)).toBe(true)
-		expect(requested[0]).toContain(`subject=${encodeURIComponent(REPO_DID)}`)
-	})
-
-	test('someone not listed is not a collaborator', async () => {
-		const { fetch } = fakeFetch({ 'https://appview.example/xrpc/sh.tangled.repo.listCollaborators': listed })
-		expect(await build({ fetch }).isCollaborator(REPO_DID, OWNER)).toBe(false)
-	})
-})
-
 describe('bot comments', () => {
 	function fakeAgent(existing: Array<{ uri: string; value: unknown }> = []) {
 		const calls: Array<{ op: string; input: Json }> = []

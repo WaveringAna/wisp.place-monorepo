@@ -182,19 +182,6 @@ export function createHttpPorts(options: HttpPortsOptions): Ports {
 		) as { uri?: unknown } | undefined
 		return typeof match?.uri === 'string' ? getPull(match.uri) : null
 	}
-	/** Tangled keeps collaborators on the repo's knot; the appview lists them by repo DID. */
-	const isCollaborator = async (repoDid: string, subjectDid: string): Promise<boolean> => {
-		const query = new URLSearchParams({ subject: repoDid })
-		const listed = await fetchJson<{ items?: unknown[] }>(
-			fetcher,
-			`https://${options.appviewHost}/xrpc/sh.tangled.repo.listCollaborators?${query}`,
-			{ timeout: 5000, maxRedirects: 0 },
-		)
-		return (listed.items ?? []).some(
-			(item) =>
-				isObject(item) && isObject(item.value) && item.value.repo === repoDid && item.value.subject === subjectDid,
-		)
-	}
 	const getPull = async (uri: string): Promise<Pull | null> => {
 		const parsed = recordUri(uri)
 		if (!parsed) return null
@@ -273,7 +260,6 @@ export function createHttpPorts(options: HttpPortsOptions): Ports {
 		claimOwner,
 		previewServes,
 		findPullForBranch,
-		isCollaborator,
 		findComment,
 		createComment: (input) => writeComment(undefined, input, new Date().toISOString()),
 		updateComment: (rkey, input) => writeComment(rkey, input, new Date().toISOString()),

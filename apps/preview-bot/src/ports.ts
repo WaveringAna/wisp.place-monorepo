@@ -69,8 +69,6 @@ export interface Ports {
 	findPipelineForCommit(spindleHost: string, repoDid: string, sha7: string): Promise<string | null>
 	/** The pull record from its author's PDS; null when it does not exist. */
 	getPull(uri: string): Promise<Pull | null>
-	/** Whether `subjectDid` is a collaborator on the repo, as its knot reports through the appview. */
-	isCollaborator(repoDid: string, subjectDid: string): Promise<boolean>
 	/** The open pull from `sourceBranch` into the repo, by any author, for spindles that leave the pull URI out. */
 	findPullForBranch(targetRepoDid: string, sourceBranch: string): Promise<Pull | null>
 	/** DID that claimed the wisp subdomain `<claim>.<base host>`, or null when unclaimed. */

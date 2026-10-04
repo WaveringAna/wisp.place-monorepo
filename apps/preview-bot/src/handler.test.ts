@@ -33,7 +33,6 @@ function world(overrides: Partial<Ports> = {}): World {
 		getPipeline: async () => ({ repo: REPO_DID, pullRequest: { pull: PULL_URI, sourceSha: sha } }),
 		findPipelineForCommit: async () => '3kpipelineabc',
 		findPullForBranch: async () => null,
-		isCollaborator: async () => false,
 		getPull: async () => ({
 			uri: PULL_URI,
 			cid: 'bafypull',
@@ -130,7 +129,6 @@ describe('POST /v1/preview', () => {
 	})
 
 	test.each([
-		['not-a-collaborator', { claimOwner: async () => D('x') }, 422],
 		['claim-not-owned', { claimOwner: async () => null }, 422],
 		['pipeline-not-found', { getPipeline: async () => null }, 422],
 		['preview-not-serving', { previewServes: async () => false }, 409],
@@ -305,7 +303,6 @@ describe('POST /v1/hook', () => {
 				return world().ports.listRepoRecords(owner)
 			},
 			claimOwner: async () => collaborator,
-			isCollaborator: async (_repo, subject) => subject === collaborator,
 		})
 		const response = await handlerFor(w)(hook({ ...event, did: collaborator }, `repo=blog&claim=alice&owner=${OWNER}`))
 		expect(response.status).toBe(200)

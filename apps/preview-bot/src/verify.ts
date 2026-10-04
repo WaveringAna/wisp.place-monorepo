@@ -25,7 +25,6 @@ export type Rejection =
 	| 'pull-repo-mismatch'
 	| 'pull-has-no-rounds'
 	| 'claim-not-owned'
-	| 'not-a-collaborator'
 	| 'label-too-long'
 	| 'preview-not-serving'
 
@@ -150,8 +149,6 @@ async function verifyFromPipeline(
 
 	const claimant = await ports.claimOwner(request.claim)
 	if (!claimant || (request.deployer && claimant !== request.deployer)) return reject('claim-not-owned')
-	if (claimant !== request.owner && !(await ports.isCollaborator(record.repoDid, claimant)))
-		return reject('not-a-collaborator')
 
 	const sha7 = trigger.sourceSha.slice(0, 7)
 	const label = `pr-${sha7}-${request.claim}`
