@@ -18,8 +18,8 @@
     "dev": "tsx --watch src/index.ts",
     "example": "tsx example.ts",
     "serve": "tsx serve-example.ts",
-    "test": "vitest",
-    "test:watch": "vitest --watch",
+    "test": "bun test",
+    "test:watch": "bun test --watch",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -34,8 +34,7 @@
     "@types/mime-types": "^3.0.1",
     "@types/node": "^24.13.3",
     "tsx": "^4.23.1",
-    "typescript": "^5.9.3",
-    "vitest": "^4.1.10"
+    "typescript": "^5.9.3"
   },
   "engines": {
     "node": ">=18.0.0"
