@@ -160,6 +160,24 @@ export interface SecretMeta {
 	lastRotatedAt?: string
 }
 
+export interface PreviewRepo {
+	rkey: string
+	name: string
+	spindle?: string
+	knot?: string
+	preview: { claim: string; hookRkey: string } | null
+	blocked: 'no-spindle' | null
+	secret: 'set' | 'missing' | 'unknown'
+}
+
+export interface PreviewsInfo {
+	/** Null when this deployment has previews turned off. */
+	previewHost: string | null
+	repos: PreviewRepo[]
+	claims: string[]
+	canSetSecrets: boolean
+}
+
 export interface UploadStarted {
 	jobId?: string
 }
@@ -207,6 +225,11 @@ export const api = {
 	createSecret: (name: string) => post<{ token: string }>('/api/secret', { name }),
 	rotateSecret: (name: string) => post<{ token: string }>(`/api/secret/${segment(name)}/rotate`),
 	deleteSecret: (name: string) => remove(`/api/secret/${segment(name)}`),
+
+	previews: () => request<PreviewsInfo>('/api/previews/'),
+	enablePreview: (repo: string, input: { claim: string; appPassword?: string }) =>
+		request(`/api/previews/${segment(repo)}`, { method: 'PUT', json: input }),
+	disablePreview: (repo: string) => remove(`/api/previews/${segment(repo)}`),
 
 	uploadSite: (form: FormData) => request<UploadStarted>('/wisp/upload-files', { method: 'POST', body: form }),
 	/** Private uploads are stored synchronously, so they never return a job to follow. */

@@ -127,6 +127,38 @@ export function createHttpPorts(options: HttpPortsOptions): Ports {
 			return null
 		}
 	}
+	const findPipelineForCommit = async (spindleHost: string, repoDid: string, sha7: string): Promise<string | null> => {
+		if (
+			!validHost(spindleHost) ||
+			!/^[a-f0-9]{7}$/.test(sha7) ||
+			!/^did:(plc:[a-z2-7]{24}|web:[a-z0-9.-]{1,253})$/.test(repoDid)
+		)
+			return null
+		try {
+			const query = new URLSearchParams({ repo: repoDid, kinds: 'pull_request', limit: '25' })
+			const value = await fetchJson<any>(fetcher, `https://${spindleHost}/xrpc/sh.tangled.ci.queryPipelines?${query}`, {
+				timeout: 5000,
+				maxRedirects: 0,
+			})
+			if (!isObject(value) || !Array.isArray(value.pipelines)) return null
+			for (const pipeline of value.pipelines) {
+				if (!isObject(pipeline) || typeof pipeline.id !== 'string' || !validId(pipeline.id)) continue
+				if (pipeline.repo !== repoDid) continue
+				const trigger = pipeline.trigger
+				if (
+					isObject(trigger) &&
+					trigger.$type === 'sh.tangled.ci.trigger#pullRequest' &&
+					typeof trigger.sourceSha === 'string' &&
+					trigger.sourceSha.startsWith(sha7)
+				)
+					return pipeline.id
+			}
+			return null
+		} catch (error) {
+			if (error instanceof HttpStatusError && error.status >= 500) throw error
+			return null
+		}
+	}
 	const findPullForBranch = async (
 		ownerDid: string,
 		targetRepoDid: string,
@@ -236,6 +268,7 @@ export function createHttpPorts(options: HttpPortsOptions): Ports {
 	return {
 		listRepoRecords,
 		getPipeline,
+		findPipelineForCommit,
 		getPull,
 		claimOwner,
 		previewServes,

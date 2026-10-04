@@ -21,8 +21,8 @@ const TABS = [
 	{ id: 'domains', hints: [MOVE, ['⏎', 'visit · dns'], ['o', 'open'], ['v', 'verify'], ['d', 'remove']] },
 	{ id: 'upload', hints: [['tab', 'next field']] },
 	{ id: 'webhooks', hints: [MOVE, ['⏎', 'expand'], ['n', 'new'], ['r', 'rotate'], ['d', 'delete']] },
-	{ id: 'cli', hints: [['tab', 'next link']] },
-] as const satisfies readonly { id: string; hints: readonly Hint[] }[]
+	{ id: 'cli', label: 'cli & ci', hints: [MOVE, ['⏎', 'set up'], ['tab', 'next field']] },
+] as const satisfies readonly { id: string; label?: string; hints: readonly Hint[] }[]
 
 type TabId = (typeof TABS)[number]['id']
 
@@ -57,7 +57,7 @@ const panelFor = (tab: TabId, user: UserInfo | undefined, select: (tab: TabId) =
 		case 'webhooks':
 			return <WebhooksView user={user} />
 		case 'cli':
-			return <CliView />
+			return <CliView user={user} />
 	}
 }
 
@@ -166,7 +166,7 @@ export function App() {
 								)}
 							>
 								<span className="mr-1.5 opacity-70">{index + 1}</span>
-								{entry.id}
+								{'label' in entry ? entry.label : entry.id}
 							</button>
 						))}
 					</div>

@@ -109,6 +109,16 @@ export const WISP_SECRET_LXMS = [
 	'place.wisp.v2.secret.rotate',
 ] as const
 
+/**
+ * Spindle methods the dashboard calls on the user's behalf while setting up
+ * pull-request previews: store the deploy secret and confirm it is there.
+ * Any spindle can be the audience, since each repo names its own.
+ */
+export const TANGLED_PREVIEW_SETUP_LXMS = ['sh.tangled.repo.addSecret', 'sh.tangled.repo.listSecrets'] as const
+
+/** Requested on top of the usual sets only when a user connects tangled CI. */
+export const TANGLED_PREVIEW_SETUP_SCOPES = TANGLED_PREVIEW_SETUP_LXMS.map((lxm) => `rpc:${lxm}?aud=*`)
+
 export const WISP_PERMISSION_SET_SITES = 'place.wisp.authSites'
 export const WISP_PERMISSION_SET_WEBHOOKS = 'place.wisp.authWebhooks'
 export const WISP_PERMISSION_SET_HOSTING = 'place.wisp.authHosting'
@@ -382,6 +392,11 @@ const BLOB_CAPABILITY: WispCapability = { resource: 'blob', mime: '*/*' }
 /** What main-app must actually be able to do for the editor to work. */
 export function wispAppRequiredCapabilities(): WispCapability[] {
 	return [...WISP_APP_PERMISSION_SETS.flatMap(permissionSetCapabilities), BLOB_CAPABILITY]
+}
+
+/** What main-app needs to set a repo's deploy secret on its spindle. */
+export function previewSetupCapabilities(): WispCapability[] {
+	return TANGLED_PREVIEW_SETUP_LXMS.map((lxm): WispCapability => ({ resource: 'rpc', lxm, aud: '*' }))
 }
 
 /**

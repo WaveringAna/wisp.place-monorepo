@@ -65,9 +65,12 @@ export interface Ports {
 	listRepoRecords(ownerDid: string): Promise<RepoRecord[]>
 	/** `sh.tangled.ci.getPipeline` on the given spindle host; null when it has no such pipeline. */
 	getPipeline(spindleHost: string, pipelineId: string): Promise<Pipeline | null>
+	/** Find the newest pull-request pipeline whose source commit starts with sha7. */
+	findPipelineForCommit(spindleHost: string, repoDid: string, sha7: string): Promise<string | null>
 	/** The pull record from its author's PDS; null when it does not exist. */
 	getPull(uri: string): Promise<Pull | null>
-	findPullForBranch?(ownerDid: string, targetRepoDid: string, sourceBranch: string): Promise<Pull | null>
+	/** The owner's open pull record from `sourceBranch` into the repo, for spindles that leave the pull URI out. */
+	findPullForBranch(ownerDid: string, targetRepoDid: string, sourceBranch: string): Promise<Pull | null>
 	/** DID that claimed the wisp subdomain `<claim>.<base host>`, or null when unclaimed. */
 	claimOwner(claim: string): Promise<string | null>
 	/** Whether the preview URL answers 200 right now. */

@@ -236,6 +236,12 @@ export const Notice = ({ tone = 'info', children }: { tone?: 'info' | 'warn' | '
 	</div>
 )
 
+export const CodeBlock = ({ code }: { code: string }) => (
+	<pre className="terminal overflow-x-auto p-4 text-[0.8rem] leading-relaxed">
+		<code>{code}</code>
+	</pre>
+)
+
 export function CopyButton({ text, label = 'copy' }: { text: string; label?: string }) {
 	const [copied, setCopied] = useState(false)
 

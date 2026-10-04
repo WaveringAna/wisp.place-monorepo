@@ -1,4 +1,4 @@
-import type { Ports } from './ports'
+import type { Ports, RepoRecord } from './ports'
 
 /** What the workflow sends: only identifiers, never facts. Everything else is looked up. */
 export interface PreviewRequest {
@@ -43,6 +43,7 @@ const REPO_NAME = /^[A-Za-z0-9._-]{1,100}$/
 const PIPELINE_ID = /^[a-z0-9]{1,64}$/
 const CLAIM = /^[a-z0-9]+(-[a-z0-9]+)*$/
 const HEX40 = /^[0-9a-f]{40}$/
+const SHA7 = /^[0-9a-f]{7}$/
 const MAX_LABEL_LENGTH = 63
 
 const reject = (reason: Rejection): Verification => ({ ok: false, reason })
@@ -74,14 +75,55 @@ export async function verifyPreview(
 	config: { previewHost: string },
 ): Promise<Verification> {
 	if (!isWellFormed(request)) return reject('bad-request')
+	const record = await findRepo(ports, request.owner, request.repo)
+	if (typeof record === 'string') return reject(record)
+	return verifyFromPipeline(request, record, request.pipeline, ports, config)
+}
 
-	const named = (await ports.listRepoRecords(request.owner)).filter((record) => record.name === request.repo)
-	if (named.length === 0) return reject('repo-not-found')
+/** What a webhook delivery for a `place.wisp.fs/pr-<sha7>` write names: the commit, not the pipeline. */
+export interface HookRequest {
+	owner: string
+	repo: string
+	claim: string
+	sha7: string
+}
+
+export const isHookWellFormed = (request: HookRequest): boolean =>
+	DID.test(request.owner) && REPO_NAME.test(request.repo) && CLAIM.test(request.claim) && SHA7.test(request.sha7)
+
+/** Same chain as {@link verifyPreview}, starting from the spindle's newest pull-request run of that commit. */
+export async function verifyHook(
+	request: HookRequest,
+	ports: Ports,
+	config: { previewHost: string },
+): Promise<Verification> {
+	if (!isHookWellFormed(request)) return reject('bad-request')
+	const record = await findRepo(ports, request.owner, request.repo)
+	if (typeof record === 'string') return reject(record)
+	const pipeline = await ports.findPipelineForCommit(record.spindle, record.repoDid, request.sha7)
+	if (!pipeline) return reject('pipeline-not-found')
+	return verifyFromPipeline(request, record, pipeline, ports, config)
+}
+
+type UsableRepo = RepoRecord & { spindle: string; repoDid: string }
+
+async function findRepo(ports: Ports, owner: string, repo: string): Promise<UsableRepo | Rejection> {
+	const named = (await ports.listRepoRecords(owner)).filter((record) => record.name === repo)
+	if (named.length === 0) return 'repo-not-found'
 	const [record] = named
-	if (!record || new Set(named.map((candidate) => candidate.repoDid)).size > 1) return reject('repo-ambiguous')
-	if (!record.spindle || !record.repoDid) return reject('repo-unusable')
+	if (!record || new Set(named.map((candidate) => candidate.repoDid)).size > 1) return 'repo-ambiguous'
+	if (!record.spindle || !record.repoDid) return 'repo-unusable'
+	return { ...record, spindle: record.spindle, repoDid: record.repoDid }
+}
 
-	const pipeline = await ports.getPipeline(record.spindle, request.pipeline)
+async function verifyFromPipeline(
+	request: { owner: string; claim: string },
+	record: UsableRepo,
+	pipelineId: string,
+	ports: Ports,
+	config: { previewHost: string },
+): Promise<Verification> {
+	const pipeline = await ports.getPipeline(record.spindle, pipelineId)
 	if (!pipeline) return reject('pipeline-not-found')
 	const trigger = pipeline.pullRequest
 	if (!trigger || !HEX40.test(trigger.sourceSha) || (!trigger.pull && !trigger.sourceBranch))
@@ -91,7 +133,7 @@ export async function verifyPreview(
 
 	const pull = trigger.pull
 		? await ports.getPull(trigger.pull)
-		: trigger.sourceBranch && ports.findPullForBranch
+		: trigger.sourceBranch
 			? await ports.findPullForBranch(request.owner, record.repoDid, trigger.sourceBranch)
 			: null
 	if (!pull) return reject('pull-not-found')

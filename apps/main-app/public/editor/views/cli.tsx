@@ -1,6 +1,8 @@
-import { CopyButton, ExternalLink, Section } from '../ui'
+import type { UserInfo } from '../api'
+import { WISPCTL_VERSION as VERSION } from '../recipes'
+import { CodeBlock, CopyButton, ExternalLink, Section } from '../ui'
+import { PreviewsSection } from './previews'
 
-const VERSION = '2.0.0'
 const BINARY_BASE = 'https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries'
 
 // Checksums are duplicated in binaries/index.html and docs/src/content/docs/cli.md; keep them in step.
@@ -43,12 +45,13 @@ const LINKS = [
 	{ label: 'spindle ci', href: 'https://blog.tangled.org/ci' },
 ] as const
 
-const DEPLOY_STEP = `curl ${BINARY_BASE}/wisp-cli-x86_64-linux -o wisp-cli
-      chmod +x wisp-cli
-      ./wisp-cli deploy "$WISP_HANDLE" \\
+const DEPLOY_STEP = `npm install --global --prefix "$HOME/.local" wispctl@${VERSION}
+      export PATH="$HOME/.local/bin:$PATH"
+      wispctl deploy "$WISP_HANDLE" \\
         --path "$SITE_PATH" \\
         --site "$SITE_NAME" \\
-        --password "$WISP_APP_PASSWORD"`
+        --password "$WISP_APP_PASSWORD" \\
+        --yes`
 
 const RECIPES = [
 	{
@@ -56,7 +59,7 @@ const RECIPES = [
 		snippets: [
 			{
 				label: 'deploy',
-				code: `./wisp-cli deploy your-handle.bsky.social \\
+				code: `wispctl deploy your-handle.bsky.social \\
   --path ./dist \\
   --site my-site
 
@@ -64,14 +67,14 @@ const RECIPES = [
 			},
 			{
 				label: 'pull',
-				code: `./wisp-cli pull your-handle.bsky.social \\
+				code: `wispctl pull your-handle.bsky.social \\
   --site my-site --path ./my-site`,
 			},
 			{
 				label: 'serve with live updates',
-				code: `./wisp-cli serve your-handle.bsky.social --site my-site
-./wisp-cli serve your-handle.bsky.social --site my-site --port 3000
-./wisp-cli serve your-handle.bsky.social --site my-site --spa`,
+				code: `wispctl serve your-handle.bsky.social --site my-site
+wispctl serve your-handle.bsky.social --site my-site --port 3000
+wispctl serve your-handle.bsky.social --site my-site --spa`,
 			},
 		],
 	},
@@ -80,19 +83,19 @@ const RECIPES = [
 		snippets: [
 			{
 				label: 'manage',
-				code: `./wisp-cli domain claim your-handle.bsky.social --domain example.com
-./wisp-cli domain claim-subdomain your-handle.bsky.social --subdomain alice
-./wisp-cli domain status your-handle.bsky.social --domain example.com
-./wisp-cli domain add-site your-handle.bsky.social --domain example.com --site mysite
-./wisp-cli domain delete your-handle.bsky.social --domain example.com
-./wisp-cli site delete your-handle.bsky.social --site mysite
-./wisp-cli list domains your-handle.bsky.social
-./wisp-cli list sites your-handle.bsky.social`,
+				code: `wispctl domain claim your-handle.bsky.social --domain example.com
+wispctl domain claim-subdomain your-handle.bsky.social --subdomain alice
+wispctl domain status your-handle.bsky.social --domain example.com
+wispctl domain add-site your-handle.bsky.social --domain example.com --site mysite
+wispctl domain delete your-handle.bsky.social --domain example.com
+wispctl site delete your-handle.bsky.social --site mysite
+wispctl list domains your-handle.bsky.social
+wispctl list sites your-handle.bsky.social`,
 			},
 		],
 	},
 	{
-		title: 'ci · tangled spindle',
+		title: 'deploy on push · tangled spindle',
 		snippets: [
 			{
 				label: 'deploy on push',
@@ -128,17 +131,11 @@ steps:
       ${DEPLOY_STEP}`,
 			},
 		],
-		note: 'set WISP_APP_PASSWORD as a secret in your spindle repo settings',
+		note: "add WISP_APP_PASSWORD (an app password) to the repo's spindle secrets on tangled",
 	},
 ]
 
-const Code = ({ code }: { code: string }) => (
-	<pre className="terminal overflow-x-auto p-4 text-[0.8rem] leading-relaxed">
-		<code>{code}</code>
-	</pre>
-)
-
-export function CliView() {
+export function CliView({ user }: { user: UserInfo | undefined }) {
 	return (
 		<>
 			<Section
@@ -169,6 +166,28 @@ export function CliView() {
 				</ul>
 			</Section>
 
+			<PreviewsSection user={user} />
+
+			<Section title="recipes">
+				{RECIPES.map((recipe) => (
+					<details key={recipe.title} className="group border-b border-dashed border-rule">
+						<summary className="cursor-pointer list-none py-2.5 pl-6 font-bold marker:hidden hover:bg-paper-2 [&::-webkit-details-marker]:hidden">
+							<span className="mr-2 inline-block text-rose transition-transform group-open:rotate-90">▸</span>
+							{recipe.title}
+						</summary>
+						<div className="space-y-4 pb-5 pl-6">
+							{recipe.snippets.map((snippet) => (
+								<div key={snippet.label}>
+									<p className="field-label">{snippet.label}</p>
+									<CodeBlock code={snippet.code} />
+								</div>
+							))}
+							{recipe.note && <p className="hint">{recipe.note}</p>}
+						</div>
+					</details>
+				))}
+			</Section>
+
 			<Section title="binaries" meta={`v${VERSION} · static builds, no runtime needed`}>
 				<ul className="rows">
 					{BINARIES.map(({ platform, filename, sha256 }) => (
@@ -184,26 +203,6 @@ export function CliView() {
 						</li>
 					))}
 				</ul>
-			</Section>
-
-			<Section title="recipes">
-				{RECIPES.map((recipe) => (
-					<details key={recipe.title} className="group border-b border-dashed border-rule">
-						<summary className="cursor-pointer list-none py-2.5 pl-6 font-bold marker:hidden hover:bg-paper-2 [&::-webkit-details-marker]:hidden">
-							<span className="mr-2 inline-block text-rose transition-transform group-open:rotate-90">▸</span>
-							{recipe.title}
-						</summary>
-						<div className="space-y-4 pb-5 pl-6">
-							{recipe.snippets.map((snippet) => (
-								<div key={snippet.label}>
-									<p className="field-label">{snippet.label}</p>
-									<Code code={snippet.code} />
-								</div>
-							))}
-							{recipe.note && <p className="hint">{recipe.note}</p>}
-						</div>
-					</details>
-				))}
 			</Section>
 		</>
 	)

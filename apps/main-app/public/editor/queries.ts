@@ -20,6 +20,7 @@ export const keys = {
 	webhooks: ['webhooks'],
 	deliveries: ['webhook-deliveries'],
 	secrets: ['secrets'],
+	previews: ['previews'],
 	shares: (siteId: string) => ['shares', siteId],
 	settings: (rkey: string) => ['settings', rkey],
 	wispAvailability: (handle: string) => ['wisp-availability', handle],
@@ -75,6 +76,8 @@ export const useDeliveries = () =>
 
 export const useSecrets = () =>
 	useQuery({ queryKey: keys.secrets, queryFn: async () => (await api.secrets()).secrets ?? [] })
+
+export const usePreviews = () => useQuery({ queryKey: keys.previews, queryFn: api.previews })
 
 export const useShares = (siteId: string) =>
 	useQuery({ queryKey: keys.shares(siteId), queryFn: async () => (await api.shares(siteId)).shares ?? [] })

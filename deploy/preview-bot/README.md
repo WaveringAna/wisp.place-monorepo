@@ -70,6 +70,8 @@ There is **no health endpoint** at this revision. `GET /health` returns
 405 `{"error":"method-not-allowed"}` and proves the handler is listening, not
 DB readiness. Do not describe either as a 200 health check.
 
+There is **no inbound bearer-token authentication** for webhook delivery either. POST `/v1/hook` accepts the webhook service's JSON envelope, but trusts no event facts: it validates the DID, collection, event, and pull rkey, then resolves the owner's repo record and matching pull-request pipeline from the configured authorities before running the same preview verification and comment path. Ordinary site rkeys and deletes return 200 `{"status":"ignored"}` so they are not retried. A pipeline that has not appeared yet, or a preview not serving yet, returns 409 for webhook retry; upstream failures return 502 and permanent validation/ownership failures return 422.
+
 There is **no inbound bearer-token authentication**. POST `/v1/preview` accepts
 JSON identifiers only, independently verifies repo/pipeline/pull/claim ownership,
 and only then checks preview serving and writes a comment. Bad JSON/identifier

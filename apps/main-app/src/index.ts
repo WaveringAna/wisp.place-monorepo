@@ -42,6 +42,7 @@ import type { Config } from './lib/types'
 import { SESSION_COOKIE_NAME } from './lib/wisp-auth'
 import { authRoutes } from './routes/auth'
 import { domainRoutes } from './routes/domain'
+import { previewRoutes } from './routes/previews'
 import { privateRedeemRoutes } from './routes/private-redeem'
 import { privateSiteApiRoutes } from './routes/private-site-api'
 import { secretRoutes } from './routes/secret'
@@ -316,6 +317,7 @@ export const app = new Elysia({
 	.use(privateSiteApiRoutes(client, cookieSecret))
 	.use(webhookRoutes(client, cookieSecret))
 	.use(secretRoutes(client, cookieSecret))
+	.use(previewRoutes(client, cookieSecret))
 	.use(
 		await staticPlugin({
 			assets: './apps/main-app/public',

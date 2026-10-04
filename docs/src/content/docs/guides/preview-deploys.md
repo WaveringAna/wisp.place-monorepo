@@ -14,11 +14,14 @@ A preview deploy publishes a pull request's build as a site in **your own PDS**,
 
 Because each round is a new commit, each round gets its own URL. Earlier rounds stay up, so you can compare them, until they are pruned.
 
+- After each deploy, the preview bot comments the link on the pull request. It is woken by a webhook in your PDS, not by the workflow, and checks the repository, pipeline, pull request, claim and URL itself before it writes anything.
+
 ## One-time setup
 
 1. Claim a wisp subdomain for the account that will own the previews.
 2. Create an app password for that account. Use a dedicated one and never your main login.
-3. In the repository's settings on Tangled, add it as a secret named `WISP_APP_PASSWORD`.
+3. In the dashboard, open **cli & ci**, pick the repository under **pull-request previews**, choose the subdomain, paste the app password and turn previews on. The first time, wisp asks you to sign in again so it may store secrets on your spindle. It stores the app password there as `WISP_APP_PASSWORD` and creates the webhook that wakes the bot. To keep the password away from wisp entirely, add the secret in the repository's settings on Tangled yourself and turn previews on without one.
+4. Copy the workflow the dashboard shows into `.tangled/workflows/preview.yml`. It is the one below, filled in for your repository.
 
 Spindle never passes secrets to pipelines that run code from a fork, so a pull request from a fork builds but does not deploy. The workflow below skips the deploy step in that case.
 
@@ -58,27 +61,33 @@ steps:
       fi
       npm install --global --prefix "$HOME/.local" wispctl@2.0.2
       export PATH="$HOME/.local/bin:$PATH"
-
-      deploy_help="$(wispctl deploy --help)"
-      if [[ "$deploy_help" != *--preview-host* || "$deploy_help" != *--header* ]]; then
-        echo "wispctl is missing preview support; install a release with --preview-host and --header" >&2
-        exit 1
-      fi
-      sha7="${TANGLED_COMMIT_SHA:0:7}"
       wispctl deploy "$WISP_HANDLE" \
         --password "$WISP_APP_PASSWORD" \
         --path ./dist \
-        --site "pr-$sha7" \
+        --sha "$TANGLED_COMMIT_SHA" \
         --header "X-Robots-Tag: noindex" \
         --preview-host "$PREVIEW_HOST" \
         --preview-claim "$PREVIEW_CLAIM" \
         --yes
-
 ```
 
-`--preview-host` makes `wispctl` check that the site is named `pr-<sha7>` before it uploads anything, then print the preview URL once the deploy succeeds. Set `PREVIEW_CLAIM` to your claimed wisp subdomain label; it is required when your account has more than one claim.
+`--sha` names the site `pr-<sha7>`, and `--preview-host` makes `wispctl` check that name before it uploads anything, then print the preview URL once the deploy succeeds. Set `PREVIEW_CLAIM` to your claimed wisp subdomain label; it is required when your account has more than one claim.
 
 Replace the build commands and `./dist` with your own. The workflow pins `wispctl@2.0.2` and installs it under `$HOME/.local`, not into the read-only Nix store.
+
+## How the comment is triggered
+
+Turning a repository on creates one `place.wisp.v2.wh` record in your PDS:
+
+```json
+{
+  "scope": { "aturi": "at://<your did>/place.wisp.fs" },
+  "events": ["create", "update"],
+  "url": "https://preview-bot.wisp.place/v1/hook?repo=<repository name>&claim=<subdomain>"
+}
+```
+
+Every site write fires it; the bot ignores anything not named `pr-<sha7>`. Turning the repository off deletes the record. Earlier previews and the spindle secret stay where they are.
 
 ## Cleaning up
 

@@ -1,5 +1,11 @@
 import type { NodeOAuthClient, OAuthSession } from '@atproto/oauth-client-node'
-import { describeCapability, missingCapabilities, wispAppRequiredCapabilities } from '@wispplace/constants'
+import {
+	describeCapability,
+	missingCapabilities,
+	previewSetupCapabilities,
+	TANGLED_PREVIEW_SETUP_SCOPES,
+	wispAppRequiredCapabilities,
+} from '@wispplace/constants'
 import { createLogger } from '@wispplace/observability'
 import { OAUTH_LEGACY_SCOPE, OAUTH_SCOPE, recentGrantedScope } from './oauth-client'
 
@@ -13,6 +19,9 @@ const logger = createLogger('main-app')
  * there — a share redemption still resolves after a retry.
  */
 const LEGACY_SCOPE_MARK = 'wispLegacyScope'
+
+/** Marks a sign-in started to connect tangled CI: it asks for more and lands back on that tab. */
+const CI_SETUP_MARK = 'wispCiSetup'
 
 const parseState = (state: string | null | undefined): Record<string, unknown> | null => {
 	if (!state) return null
@@ -30,6 +39,14 @@ export const isLegacyScopeState = (state: string | null | undefined): boolean =>
 
 const markLegacyScopeState = (state: string | null | undefined): string =>
 	JSON.stringify({ ...(parseState(state) ?? {}), [LEGACY_SCOPE_MARK]: true })
+
+export const isCiSetupState = (state: string | null | undefined): boolean => parseState(state)?.[CI_SETUP_MARK] === true
+
+/** State for a sign-in that connects tangled CI; the nonce keeps every request's state distinct. */
+export const ciSetupState = (): string => JSON.stringify({ [CI_SETUP_MARK]: true, nonce: crypto.randomUUID() })
+
+const withCiSetup = (scope: string, state: string | null | undefined): string =>
+	isCiSetupState(state) ? [scope, ...TANGLED_PREVIEW_SETUP_SCOPES].join(' ') : scope
 
 /**
  * Strip the retry marker before handing `state` to code that expects the
@@ -58,11 +75,11 @@ export const authorizeWisp = async (
 	options: { state?: string } = {},
 ): Promise<URL> => {
 	if (isLegacyScopeState(options.state)) {
-		return await client.authorize(identifier, { ...options, scope: OAUTH_LEGACY_SCOPE })
+		return await client.authorize(identifier, { ...options, scope: withCiSetup(OAUTH_LEGACY_SCOPE, options.state) })
 	}
 
 	try {
-		return await client.authorize(identifier, { ...options, scope: OAUTH_SCOPE })
+		return await client.authorize(identifier, { ...options, scope: withCiSetup(OAUTH_SCOPE, options.state) })
 	} catch (err) {
 		logger.warn('[Auth] Permission set scope rejected, retrying with granular scopes', {
 			identifier,
@@ -71,7 +88,7 @@ export const authorizeWisp = async (
 		return await client.authorize(identifier, {
 			...options,
 			state: markLegacyScopeState(options.state),
-			scope: OAUTH_LEGACY_SCOPE,
+			scope: withCiSetup(OAUTH_LEGACY_SCOPE, options.state),
 		})
 	}
 }
@@ -84,7 +101,21 @@ export const authorizeWispLegacy = async (
 	client: NodeOAuthClient,
 	identifier: string,
 	state: string | null | undefined,
-): Promise<URL> => await client.authorize(identifier, { state: markLegacyScopeState(state), scope: OAUTH_LEGACY_SCOPE })
+): Promise<URL> =>
+	await client.authorize(identifier, {
+		state: markLegacyScopeState(state),
+		scope: withCiSetup(OAUTH_LEGACY_SCOPE, state),
+	})
+
+/** Whether this session may set a deploy secret on a spindle. Never throws: unknown means no. */
+export const canSetSpindleSecrets = async (session: OAuthSession): Promise<boolean> => {
+	try {
+		const scope = recentGrantedScope(session.did) ?? (await session.getTokenInfo(false)).scope
+		return missingCapabilities(scope, previewSetupCapabilities()).length === 0
+	} catch {
+		return false
+	}
+}
 
 /**
  * What main-app still can not do with the session it was just handed.

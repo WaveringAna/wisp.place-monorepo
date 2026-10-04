@@ -1,5 +1,5 @@
 import type { ClientMetadata } from '@atproto/oauth-client-node'
-import { buildWispScopes, WISP_APP_PERMISSION_SETS } from '@wispplace/constants'
+import { buildWispScopes, TANGLED_PREVIEW_SETUP_SCOPES, WISP_APP_PERMISSION_SETS } from '@wispplace/constants'
 
 // `OAUTH_SCOPE` names the published `place.wisp.*` permission sets, so the
 // consent screen reads "Manage your wisp.place sites" rather than listing six
@@ -7,11 +7,12 @@ import { buildWispScopes, WISP_APP_PERMISSION_SETS } from '@wispplace/constants'
 // same sets, used when an authorization server does not resolve permission
 // sets. `OAUTH_CLIENT_SCOPE` is the union: a server rejects any requested scope
 // value the client did not declare in its metadata, so both strategies have to
-// be declared up front.
+// be declared up front. Connecting tangled CI asks for the spindle secret
+// methods on top, so those are declared here too.
 const wispScopes = buildWispScopes([...WISP_APP_PERMISSION_SETS])
 export const OAUTH_SCOPE = wispScopes.preferred
 export const OAUTH_LEGACY_SCOPE = wispScopes.legacy
-const OAUTH_CLIENT_SCOPE = wispScopes.metadata
+const OAUTH_CLIENT_SCOPE = [wispScopes.metadata, ...TANGLED_PREVIEW_SETUP_SCOPES].join(' ')
 
 /**
  * Builds static OAuth client metadata without opening a database connection.

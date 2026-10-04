@@ -5,6 +5,8 @@ import { eventualRead } from '../lib/db'
 import {
 	authorizeWisp,
 	authorizeWispLegacy,
+	ciSetupState,
+	isCiSetupState,
 	isLegacyScopeState,
 	missingGrantedCapabilities,
 	unmarkLegacyScopeState,
@@ -53,6 +55,22 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 			} catch (err) {
 				logger.error('Login error', err)
 				return c.redirect('/?error=auth_failed')
+			}
+		})
+		/**
+		 * GET /api/auth/ci-setup
+		 * Signs the current user in again, also asking to manage secrets on
+		 * tangled spindles, and lands back on the dashboard's cli & ci tab.
+		 */
+		.get('/api/auth/ci-setup', async (c) => {
+			const auth = await authenticateRequest(client, c.cookie, c.request.headers.get('cookie'))
+			if (!auth) return c.redirect('/')
+			try {
+				const url = await authorizeWisp(client, auth.did, { state: ciSetupState() })
+				return c.redirect(url.toString())
+			} catch (err) {
+				logger.error('[Auth] CI setup authorization failed', err)
+				return c.redirect('/editor?error=ci_setup_failed#cli')
 			}
 		})
 		/**
@@ -123,6 +141,8 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 					}
 					logger.error('[Auth] Session is missing required permissions', { did: session.did, missing })
 				}
+
+				if (isCiSetupState(state)) return c.redirect('/editor#cli')
 
 				// Revalidate the OAuth state token before returning a share visitor to its site.
 				const redeem = await resolvePrivateShareState(unmarkLegacyScopeState(state), session.did)

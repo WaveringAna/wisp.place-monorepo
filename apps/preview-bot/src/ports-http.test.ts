@@ -316,3 +316,49 @@ describe('bot comments', () => {
 		expect(calls[0]?.input.rkey).toBe('mine')
 	})
 })
+
+describe('findPipelineForCommit', () => {
+	test('selects the newest matching pull-request pipeline', async () => {
+		const repoDid = `did:plc:${'r'.repeat(24)}`
+		const { fetch, requested } = fakeFetch({
+			'https://spindle.example/': () =>
+				json({
+					pipelines: [
+						{
+							id: '3knewerpipeline',
+							repo: repoDid,
+							trigger: { $type: 'sh.tangled.ci.trigger#pullRequest', sourceSha: `${SHA}00` },
+						},
+						{
+							id: '3kolderpipeline',
+							repo: repoDid,
+							trigger: {
+								$type: 'sh.tangled.ci.trigger#pullRequest',
+								sourceSha: 'fffffff000000000000000000000000000000000',
+							},
+						},
+					],
+				}),
+		})
+		expect(await build({ fetch }).findPipelineForCommit('spindle.example', repoDid, SHA.slice(0, 7))).toBe(
+			'3knewerpipeline',
+		)
+		expect(requested[0]).toContain('kinds=pull_request')
+	})
+
+	test('rejects invalid spindle hosts before fetching', async () => {
+		const fetch = async () => {
+			throw new Error('must not fetch')
+		}
+		expect(await build({ fetch }).findPipelineForCommit('Spindle.example', OWNER, SHA.slice(0, 7))).toBeNull()
+	})
+})
+
+test('findPipelineForCommit maps upstream statuses', async () => {
+	const five = async () => json({}, 503)
+	await expect(
+		build({ fetch: five }).findPipelineForCommit('spindle.example', OWNER, SHA.slice(0, 7)),
+	).rejects.toThrow()
+	const four = async () => json({}, 404)
+	expect(await build({ fetch: four }).findPipelineForCommit('spindle.example', OWNER, SHA.slice(0, 7))).toBeNull()
+})

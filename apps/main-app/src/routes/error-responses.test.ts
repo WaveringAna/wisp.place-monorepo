@@ -106,6 +106,9 @@ mock.module('../lib/private-sites-db', () => ({
 mock.module('../lib/oauth-authorize', () => ({
 	authorizeWisp: fail,
 	authorizeWispLegacy: fail,
+	canSetSpindleSecrets: async () => false,
+	ciSetupState: () => '{}',
+	isCiSetupState: () => false,
 	isLegacyScopeState: () => false,
 	missingGrantedCapabilities: async () => [],
 	unmarkLegacyScopeState: () => undefined,

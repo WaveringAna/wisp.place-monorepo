@@ -10,13 +10,16 @@ const workflows = [...guide.matchAll(/```yaml\n([\s\S]*?)```/g)].map(
 const deploy = workflows[0]!.steps.find((step) => step.name === 'deploy preview')!.command
 const prune = workflows[1]!.steps[0]!.command
 
-const exercise = async (command: string, supported = true, secret = 'fixture-password') => {
+// The CI runner is NixOS: no /bin/bash, and /usr/bin holds only env.
+const bash = Bun.which('bash') ?? 'bash'
+
+const exercise = async (command: string, secret = 'fixture-password') => {
 	const dir = await mkdtemp(join(tmpdir(), 'wisp-preview-workflow-'))
 	try {
 		const npm = join(dir, 'npm')
 		await writeFile(
 			npm,
-			`#!/bin/bash
+			`#!/usr/bin/env bash
 set -eu
 [ "$1" = install ] && [ "$2" = --global ] && [ "$3" = --prefix ]
 [ "$4" = "$HOME/.local" ] && [ "$5" = wispctl@2.0.2 ]
@@ -27,31 +30,22 @@ cp "$FAKE_CLI" "$4/bin/wispctl"
 		const cli = join(dir, 'fixture-wispctl')
 		await writeFile(
 			cli,
-			`#!/bin/bash
+			`#!/usr/bin/env bash
 set -eu
-if [ "\${2:-}" = --help ]; then
-  ${supported ? "echo '--header --preview-host'" : "echo '--path --site'"}
-  exit 0
-fi
 printf '%s\n' "$*" >> "$HOME/invocations"
 `,
 		)
-		const curl = join(dir, 'curl')
-		await writeFile(curl, '#!/bin/bash\nexit 0\n')
-		await Promise.all([npm, cli, curl].map((path) => chmod(path, 0o755)))
-		const child = Bun.spawn(['/bin/bash', '-c', command], {
+		await Promise.all([npm, cli].map((path) => chmod(path, 0o755)))
+		const child = Bun.spawn([bash, '-c', command], {
 			env: {
 				HOME: dir,
-				PATH: `${dir}:/usr/bin:/bin`,
+				PATH: `${dir}:${process.env.PATH}`,
 				FAKE_CLI: cli,
 				WISP_APP_PASSWORD: secret,
 				WISP_HANDLE: 'fixture.test',
 				PREVIEW_HOST: 'preview.example',
 				PREVIEW_CLAIM: 'fixture',
-				TANGLED_COMMIT_SHA: 'abc123456789',
-				TANGLED_PIPELINE_ID: 'at://did:plc:fixture/sh.tangled.pipeline/fixture',
-				TANGLED_REPO_DID: 'did:plc:fixture',
-				TANGLED_REPO_NAME: 'fixture',
+				TANGLED_COMMIT_SHA: 'abc1234567890abcdef1234567890abcdef12345',
 			},
 			stdout: 'ignore',
 			stderr: 'pipe',
@@ -71,16 +65,10 @@ describe('preview workflow installation', () => {
 		expect(result.invocations).toContain('--preview-host preview.example')
 		expect(result.invocations).toContain('--preview-claim fixture')
 		expect(result.invocations).toContain('--header X-Robots-Tag: noindex')
-		expect(result.invocations).toContain('--site pr-abc1234')
-	})
-	test('unsupported published CLI fails before uploading', async () => {
-		const result = await exercise(deploy, false)
-		expect(result.exit).not.toBe(0)
-		expect(result.stderr).toContain('preview')
-		expect(result.invocations).toBe('')
+		expect(result.invocations).toContain('--sha abc1234567890abcdef1234567890abcdef12345')
 	})
 	test('fork without a secret skips before installation', async () => {
-		const result = await exercise(deploy, true, '')
+		const result = await exercise(deploy, '')
 		expect(result.exit).toBe(0)
 		expect(result.invocations).toBe('')
 	})

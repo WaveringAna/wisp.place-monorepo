@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { Pipeline, Ports, Pull, RepoRecord } from './ports'
-import { type PreviewRequest, type Rejection, verifyPreview } from './verify'
+import { type PreviewRequest, type Rejection, verifyHook, verifyPreview } from './verify'
 
 const OWNER = 'did:plc:mmmmmmmmmmmmmmmmmmmmmmmm'
 const ATTACKER = 'did:plc:xxxxxxxxxxxxxxxxxxxxxxxx'
@@ -29,6 +29,8 @@ function fakePorts(overrides: Partial<Ports> = {}): { ports: Ports; calls: Calls
 	const calls: Calls = { pipelines: [], probes: [] }
 	const ports: Ports = {
 		listRepoRecords: async () => [repoRecord],
+		findPipelineForCommit: async () => '3kpipelineabc',
+		findPullForBranch: async () => null,
 		getPipeline: async (host, id) => {
 			calls.pipelines.push([host, id])
 			return pipeline
@@ -150,5 +152,48 @@ describe('verifyPreview', () => {
 
 		expect(result).toEqual({ ok: false, reason: 'bad-request' })
 		expect(lookups).toBe(0)
+	})
+})
+
+describe('verifyHook', () => {
+	const hook = { owner: OWNER, repo: 'blog', claim: 'alice', sha7: 'ab12cd3' }
+
+	test("finds the pull-request run of the deployed commit on the repo's own spindle, then verifies it", async () => {
+		const asked: string[][] = []
+		const { ports, calls } = fakePorts({
+			findPipelineForCommit: async (host, repoDid, sha7) => {
+				asked.push([host, repoDid, sha7])
+				return '3kpipeline'
+			},
+		})
+
+		const result = await verifyHook(hook, ports, config)
+
+		expect(result.ok && result.url).toBe('https://pr-ab12cd3-alice.preview.wisp.place/')
+		expect(asked).toEqual([['spindle.example', REPO_DID, 'ab12cd3']])
+		expect(calls.pipelines).toEqual([['spindle.example', '3kpipeline']])
+	})
+
+	test('waits for a run the spindle does not list yet', async () => {
+		const { ports } = fakePorts({ findPipelineForCommit: async () => null })
+		expect(await verifyHook(hook, ports, config)).toEqual({ ok: false, reason: 'pipeline-not-found' })
+	})
+
+	test.each([
+		{ sha7: 'ABC1234' },
+		{ sha7: 'ab12cd' },
+		{ repo: '../x' },
+		{ claim: 'Alice' },
+		{ owner: 'alice' },
+	])('refuses %p before any lookup', async (overrides) => {
+		let looked = false
+		const { ports } = fakePorts({
+			listRepoRecords: async () => {
+				looked = true
+				return []
+			},
+		})
+		expect(await verifyHook({ ...hook, ...overrides }, ports, config)).toEqual({ ok: false, reason: 'bad-request' })
+		expect(looked).toBe(false)
 	})
 })

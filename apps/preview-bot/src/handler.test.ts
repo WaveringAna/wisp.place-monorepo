@@ -31,6 +31,8 @@ function world(overrides: Partial<Ports> = {}): World {
 			return [{ rkey: 'blog', name: 'blog', spindle: 'spindle.example', repoDid: REPO_DID }]
 		},
 		getPipeline: async () => ({ repo: REPO_DID, pullRequest: { pull: PULL_URI, sourceSha: sha } }),
+		findPipelineForCommit: async () => '3kpipelineabc',
+		findPullForBranch: async () => null,
 		getPull: async () => ({
 			uri: PULL_URI,
 			cid: 'bafypull',
@@ -231,5 +233,77 @@ describe('rate limits', () => {
 
 		expect((await handle(post('{nope'))).status).toBe(400)
 		expect((await handle(post(body))).status).toBe(200)
+	})
+})
+
+describe('POST /v1/hook', () => {
+	const hook = (payload: Record<string, unknown>, query = 'repo=blog&claim=alice') =>
+		new Request(`https://bot.example/v1/hook?${query}`, {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify(payload),
+		})
+	const event = { did: OWNER, collection: 'place.wisp.fs', event: 'create', rkey: 'pr-ab12cd3' }
+
+	test('ignores ordinary and delete events without port calls', async () => {
+		const w = world({
+			listRepoRecords: async () => {
+				throw new Error('must not call')
+			},
+		})
+		const handle = handlerFor(w)
+		expect((await handle(hook({ ...event, rkey: 'site' }))).status).toBe(200)
+		expect((await handle(hook({ ...event, event: 'delete' }))).status).toBe(200)
+	})
+
+	test.each([
+		['bad query', event, 'repo=bad%20name&claim=alice'],
+		['bad body', { ...event, did: 'not-a-did' }, undefined],
+		['bad collection', { ...event, collection: 'other' }, undefined],
+	] as Array<
+		[string, Record<string, unknown>, string | undefined]
+	>)('%s returns 400', async (_name, payload, query) => {
+		expect((await handlerFor(world())(hook(payload, query))).status).toBe(400)
+	})
+
+	test.each([
+		['pipeline-not-found', { findPipelineForCommit: async () => null }, 409],
+		['preview-not-serving', { previewServes: async () => false }, 409],
+		['claim-not-owned', { claimOwner: async () => D('x') }, 422],
+	] as Array<[string, Partial<Ports>, number]>)('%s maps to the webhook status', async (_reason, overrides, status) => {
+		const response = await handlerFor(world(overrides))(hook(event))
+		expect(response.status).toBe(status)
+	})
+
+	test('maps upstream failures to 502', async () => {
+		const response = await handlerFor(
+			world({
+				findPipelineForCommit: async () => {
+					throw new Error('upstream')
+				},
+			}),
+		)(hook(event))
+		expect(response.status).toBe(502)
+	})
+
+	test('writes a comment on success', async () => {
+		const w = world()
+		const response = await handlerFor(w)(hook(event))
+		expect(response.status).toBe(200)
+		expect(await response.json()).toEqual({ status: 'created', url: 'https://pr-ab12cd3-alice.preview.wisp.place/' })
+		expect(w.creates).toHaveLength(1)
+	})
+
+	test('reads a delivery that carries a large site record', async () => {
+		const record = { site: 'pr-ab12cd3', root: { entries: 'x'.repeat(200_000) } }
+		const response = await handlerFor(world())(hook({ ...event, record }))
+		expect(response.status).toBe(200)
+	})
+
+	test('rate limits before lookups', async () => {
+		const w = world()
+		const handle = handlerFor(w, { capacity: 1 })
+		await handle(hook(event))
+		expect((await handle(hook(event))).status).toBe(429)
 	})
 })
