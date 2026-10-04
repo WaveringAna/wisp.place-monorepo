@@ -9,21 +9,40 @@ A preview deploy publishes a pull request's build as a site in **your own PDS**,
 
 - Each pull request round deploys a site named `pr-<sha7>`, where `<sha7>` is the first seven characters of the pull request's head commit.
 - The hosting service serves it at `https://pr-<sha7>-<claim>.<preview host>/`. `<claim>` is a wisp subdomain you already claimed (the `alice` in `alice.wisp.place`). Without the claim, nothing in the host would say whose site it is, and anyone could write the same site name into their own repo and answer for someone else's commit.
-- Preview URLs use `pr-<sha7>-<claim>.preview.wisp.place`. Operators set `PREVIEW_HOST=preview.wisp.place` on both the hosting service and main app, with DNS for `*.preview.wisp.place`. Caddy uses the existing on-demand TLS permission endpoint; valid preview names are authorized through the owner's registered wisp claim, just like ordinary wisp subdomains. The environment variable has no default; unset means previews are off. These are separate origins, not a separate registrable domain: cookies scoped to `.wisp.place` can also reach preview hosts.
+- On wisp.place that is `pr-<sha7>-<claim>.preview.wisp.place`. These are separate origins, but not a separate registrable domain: cookies scoped to `.wisp.place` can also reach them.
 - Every preview carries `X-Robots-Tag: noindex`, set through the site's settings record.
 
 Because each round is a new commit, each round gets its own URL. Earlier rounds stay up, so you can compare them, until they are pruned.
 
-- After each deploy, the preview bot comments the link on the pull request. It is woken by a webhook in your PDS, not by the workflow, and checks the repository, pipeline, pull request, claim and URL itself before it writes anything.
+## Setup
 
-## One-time setup
+You need a claimed wisp subdomain (the `alice` in `alice.wisp.place`) and two things:
 
-1. Claim a wisp subdomain for the account that will own the previews.
-2. Create an app password for that account. Use a dedicated one and never your main login.
-3. In the dashboard, open **cli & ci**, pick the repository under **pull-request previews**, choose the subdomain, paste the app password and turn previews on. The first time, wisp asks you to sign in again so it may store secrets on your spindle. It stores the app password there as `WISP_APP_PASSWORD` and creates the webhook that wakes the bot. To keep the password away from wisp entirely, add the secret in the repository's settings on Tangled yourself and turn previews on without one.
-4. Copy the workflow the dashboard shows into `.tangled/workflows/preview.yml`. It is the one below, filled in for your repository.
+### 1. A webhook record in your PDS
 
-Spindle never passes secrets to pipelines that run code from a fork, so a pull request from a fork builds but does not deploy. The workflow below skips the deploy step in that case.
+This tells the preview bot about your deploys. Create a `place.wisp.v2.wh` record with record key `preview-<repo>`:
+
+```json
+{
+  "$type": "place.wisp.v2.wh",
+  "scope": { "aturi": "at://<your did>/place.wisp.fs" },
+  "events": ["create", "update"],
+  "url": "https://preview-bot.wisp.place/v1/hook?repo=<repo name>&claim=<subdomain>",
+  "enabled": true,
+  "createdAt": "2026-10-04T00:00:00.000Z"
+}
+```
+
+The dashboard's **cli & ci** tab writes it when you turn previews on for a repo; any AT Protocol client can write it too (`com.atproto.repo.putRecord`). Every site write you make fires it, and the bot ignores anything not named `pr-<sha7>`. It needs no secret: the bot checks the repository, pipeline, pull request, claim and preview URL itself before it comments. Delete the record to turn previews off.
+
+### 2. The workflow on your spindle
+
+- Add an app password for your account as the repo secret `WISP_APP_PASSWORD` in the repo's spindle settings on Tangled. Use a dedicated one, never your main login. (The dashboard can store it for you.)
+- Commit the workflow below as `.tangled/workflows/preview.yml`.
+
+That's it: open a pull request, and once the deploy finishes the bot comments the preview link. Each new round updates the same comment.
+
+Spindle never passes secrets to pipelines that run code from a fork, so a pull request from a fork builds but does not deploy. The workflow skips the deploy step in that case.
 
 ## The workflow
 
@@ -75,20 +94,6 @@ steps:
 
 Replace the build commands and `./dist` with your own. The workflow pins `wispctl@2.0.2` and installs it under `$HOME/.local`, not into the read-only Nix store.
 
-## How the comment is triggered
-
-Turning a repository on creates one `place.wisp.v2.wh` record in your PDS:
-
-```json
-{
-  "scope": { "aturi": "at://<your did>/place.wisp.fs" },
-  "events": ["create", "update"],
-  "url": "https://preview-bot.wisp.place/v1/hook?repo=<repository name>&claim=<subdomain>"
-}
-```
-
-Every site write fires it; the bot ignores anything not named `pr-<sha7>`. Turning the repository off deletes the record. Earlier previews and the spindle secret stay where they are.
-
 ## Cleaning up
 
 Previews are ordinary site records, so they accumulate until you remove them. Spindle runs workflows when a pull request is opened or updated, not when it closes, so there is no "on close" workflow. Sweep them on a schedule instead. Save as `.tangled/workflows/preview-prune.yml`:
@@ -132,3 +137,4 @@ wispctl site delete alice.example.com --site pr-ab12cd3 --site pr-9e0f451 --reco
 ## Storage
 
 On the hosting side, files are stored once per distinct content, so a round that changes a few files only stores those. On your side, `wispctl` reuses blobs from the existing record with the same site name, and every round has a new name, so each round uploads its files to your PDS again.
+
