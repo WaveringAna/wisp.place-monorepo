@@ -71,8 +71,8 @@ export interface Ports {
 	getPull(uri: string): Promise<Pull | null>
 	/** An accepted collaborator: the owner's `sh.tangled.repo.collaborator` offer and the subject's acceptance. */
 	isCollaborator(ownerDid: string, repoDid: string, subjectDid: string): Promise<boolean>
-	/** The author's open pull record from `sourceBranch` into the repo, for spindles that leave the pull URI out. */
-	findPullForBranch(ownerDid: string, targetRepoDid: string, sourceBranch: string): Promise<Pull | null>
+	/** The open pull from `sourceBranch` into the repo, by any author, for spindles that leave the pull URI out. */
+	findPullForBranch(targetRepoDid: string, sourceBranch: string): Promise<Pull | null>
 	/** DID that claimed the wisp subdomain `<claim>.<base host>`, or null when unclaimed. */
 	claimOwner(claim: string): Promise<string | null>
 	/** Whether the preview URL answers 200 right now. */

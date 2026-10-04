@@ -227,18 +227,16 @@ describe('verifyHook', () => {
 		})
 	})
 
-	test('finds a branch pull request opened by the collaborator', async () => {
-		const authors: string[] = []
+	test('finds the pull request a branch run belongs to, whoever opened it', async () => {
+		const asked: string[][] = []
 		const { ports } = fakePorts({
-			claimOwner: async () => ATTACKER,
-			isCollaborator: async () => true,
 			getPipeline: async () => ({ repo: REPO_DID, pullRequest: { sourceSha: SHA, sourceBranch: 'fix' } }),
-			findPullForBranch: async (author) => {
-				authors.push(author)
-				return author === ATTACKER ? pull : null
+			findPullForBranch: async (repoDid, branch) => {
+				asked.push([repoDid, branch])
+				return pull
 			},
 		})
-		expect((await verifyHook({ ...hook, deployer: ATTACKER }, ports, config)).ok).toBe(true)
-		expect(authors).toEqual([OWNER, ATTACKER])
+		expect((await verifyHook(hook, ports, config)).ok).toBe(true)
+		expect(asked).toEqual([[REPO_DID, 'fix']])
 	})
 })

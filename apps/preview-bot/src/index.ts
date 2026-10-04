@@ -49,6 +49,7 @@ const sql = postgres(config.databaseUrl, { max: 5, idle_timeout: 20 })
 const ports = createHttpPorts({
 	sql,
 	baseHost: config.baseHost,
+	appviewHost: config.appviewHost,
 	bot: { agent, did },
 })
 

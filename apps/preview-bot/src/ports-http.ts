@@ -11,6 +11,8 @@ export interface HttpPortsOptions {
 	fetch?: Fetcher
 	sql: Sql
 	baseHost: string
+	/** Tangled appview, used only to find which pull a branch belongs to. */
+	appviewHost: string
 	identity?: Identity
 	bot: { agent: unknown; did: string }
 }
@@ -159,41 +161,26 @@ export function createHttpPorts(options: HttpPortsOptions): Ports {
 			return null
 		}
 	}
-	const findPullForBranch = async (
-		ownerDid: string,
-		targetRepoDid: string,
-		sourceBranch: string,
-	): Promise<Pull | null> => {
-		try {
-			const pds = await identity(ownerDid)
-			const query = new URLSearchParams({ repo: ownerDid, collection: 'sh.tangled.repo.pull', limit: '100' })
-			const response = await fetchJson<any>(fetcher, `${pds}/xrpc/com.atproto.repo.listRecords?${query}`)
-			for (const item of response.records ?? []) {
-				const value = item.value
-				if (
-					isObject(value) &&
-					isObject(value.target) &&
-					value.target.repo === targetRepoDid &&
-					isObject(value.source) &&
-					value.source.branch === sourceBranch &&
-					Array.isArray(value.rounds)
-				) {
-					const cid = typeof item.cid === 'string' ? item.cid : null
-					const uri = typeof item.uri === 'string' ? item.uri : null
-					if (!cid || !uri) continue
-					return {
-						uri,
-						cid,
-						authorDid: ownerDid,
-						targetRepoDid,
-						roundCount: value.rounds.length,
-					}
-				}
-			}
-			return null
-		} catch {
-			return null
-		}
+	/**
+	 * The appview indexes pulls from every author, so it finds a collaborator's too. Only the URI is
+	 * taken from it: the record itself is read from its author's PDS.
+	 */
+	const findPullForBranch = async (repoDid: string, sourceBranch: string): Promise<Pull | null> => {
+		const query = new URLSearchParams({ subject: repoDid, status: 'open', limit: '100' })
+		const listed = await fetchJson<{ items?: unknown[] }>(
+			fetcher,
+			`https://${options.appviewHost}/xrpc/sh.tangled.repo.listPulls?${query}`,
+			{ timeout: 5000, maxRedirects: 0 },
+		)
+		const match = (listed.items ?? []).find(
+			(item) =>
+				isObject(item) &&
+				isObject(item.value) &&
+				isObject(item.value.source) &&
+				item.value.source.branch === sourceBranch &&
+				(item.value.source.repo === undefined || item.value.source.repo === repoDid),
+		) as { uri?: unknown } | undefined
+		return typeof match?.uri === 'string' ? getPull(match.uri) : null
 	}
 	const isCollaborator = async (ownerDid: string, repoDid: string, subjectDid: string): Promise<boolean> => {
 		const offered = await (async () => {

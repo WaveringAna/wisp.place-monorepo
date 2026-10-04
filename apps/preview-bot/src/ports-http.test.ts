@@ -27,6 +27,7 @@ function build(options: { fetch?: (url: string) => Promise<Response>; sql?: unkn
 		fetch: options.fetch ?? (async () => new Response('no', { status: 404 })),
 		sql: (options.sql ?? (async () => [])) as never,
 		baseHost: 'wisp.place',
+		appviewHost: 'appview.example',
 		identity: async () => PDS,
 		bot: { agent: options.agent ?? {}, did: 'did:plc:bot' },
 	})
@@ -262,6 +263,46 @@ describe('previewServes', () => {
 		}
 
 		expect(await build({ fetch }).previewServes('https://p.example/')).toBe(false)
+	})
+})
+
+describe('findPullForBranch', () => {
+	const REPO_DID = `did:plc:${'r'.repeat(24)}`
+	const AUTHOR = `did:plc:${'a'.repeat(24)}`
+	const pullUri = (rkey: string) => `at://${AUTHOR}/sh.tangled.repo.pull/${rkey}`
+	const listed = (items: unknown[]) => () => json({ items })
+	const item = (rkey: string, source: Json) => ({ uri: pullUri(rkey), value: { source, target: { repo: REPO_DID } } })
+	const record = () =>
+		json({ uri: pullUri('3kpull'), cid: 'bafypull', value: { target: { repo: REPO_DID }, rounds: [{}, {}] } })
+
+	test('asks the appview for open pulls on the repo, then reads the match from its author', async () => {
+		const { fetch, requested } = fakeFetch({
+			'https://appview.example/xrpc/sh.tangled.repo.listPulls': listed([
+				item('3kother', { branch: 'main' }),
+				item('3kpull', { branch: 'fix' }),
+			]),
+			[`${PDS}/xrpc/com.atproto.repo.getRecord`]: record,
+		})
+		const pull = await build({ fetch }).findPullForBranch(REPO_DID, 'fix')
+		expect(pull).toEqual({
+			uri: pullUri('3kpull'),
+			cid: 'bafypull',
+			authorDid: AUTHOR,
+			targetRepoDid: REPO_DID,
+			roundCount: 2,
+		})
+		expect(requested[0]).toContain(`subject=${encodeURIComponent(REPO_DID)}`)
+		expect(requested[0]).toContain('status=open')
+		expect(requested[1]).toContain('rkey=3kpull')
+	})
+
+	test('skips pulls from a fork', async () => {
+		const { fetch } = fakeFetch({
+			'https://appview.example/xrpc/sh.tangled.repo.listPulls': listed([
+				item('3kfork', { branch: 'fix', repo: `did:plc:${'f'.repeat(24)}` }),
+			]),
+		})
+		expect(await build({ fetch }).findPullForBranch(REPO_DID, 'fix')).toBeNull()
 	})
 })
 

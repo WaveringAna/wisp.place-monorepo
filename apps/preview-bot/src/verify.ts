@@ -142,7 +142,7 @@ async function verifyFromPipeline(
 	const pull = trigger.pull
 		? await ports.getPull(trigger.pull)
 		: trigger.sourceBranch
-			? await findPullForBranch(ports, [request.owner, request.deployer], record.repoDid, trigger.sourceBranch)
+			? await ports.findPullForBranch(record.repoDid, trigger.sourceBranch)
 			: null
 	if (!pull) return reject('pull-not-found')
 	if (pull.targetRepoDid !== record.repoDid) return reject('pull-repo-mismatch')
@@ -160,13 +160,4 @@ async function verifyFromPipeline(
 	if (!(await ports.previewServes(url))) return reject('preview-not-serving')
 
 	return { ok: true, url, sha7, pull: { uri: pull.uri, cid: pull.cid }, roundIdx: pull.roundCount - 1 }
-}
-
-/** A branch pull request is written by whoever opened it: the repo owner or the collaborator who deployed. */
-async function findPullForBranch(ports: Ports, authors: (string | undefined)[], repoDid: string, sourceBranch: string) {
-	for (const author of new Set(authors.filter((did): did is string => Boolean(did)))) {
-		const pull = await ports.findPullForBranch(author, repoDid, sourceBranch)
-		if (pull) return pull
-	}
-	return null
 }

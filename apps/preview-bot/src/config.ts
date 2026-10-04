@@ -4,6 +4,7 @@ export interface Config {
 	databaseUrl: string
 	previewHost: string
 	baseHost: string
+	appviewHost: string
 	port: number
 }
 
@@ -37,7 +38,10 @@ export function resolveConfig(env: Record<string, string | undefined>): Config {
 
 	const previewHost = requireHost(env.PREVIEW_HOST, 'PREVIEW_HOST')
 	const baseHost = env.BASE_HOST ? requireHost(env.BASE_HOST, 'BASE_HOST') : 'wisp.place'
+	const appviewHost = env.TANGLED_APPVIEW_HOST
+		? requireHost(env.TANGLED_APPVIEW_HOST, 'TANGLED_APPVIEW_HOST')
+		: 'api.tangled.org'
 	const port = resolvePort(env.PORT, 3004)
 
-	return { botHandle, botPassword, databaseUrl, previewHost, baseHost, port }
+	return { botHandle, botPassword, databaseUrl, previewHost, baseHost, appviewHost, port }
 }
