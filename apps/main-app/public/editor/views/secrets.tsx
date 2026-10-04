@@ -4,7 +4,7 @@ import { confirmAction } from '../confirm'
 import { timeAgo } from '../format'
 import { type RowProps, rowActions, useRovingList } from '../keys'
 import { keys, useAction, useSecrets, useWebhooks } from '../queries'
-import { Button, CopyButton, Notice, Section, SkeletonRows, TextField } from '../ui'
+import { AddLabel, Button, CopyButton, Notice, Section, SkeletonRows, TextField } from '../ui'
 
 export function Secrets() {
 	const secrets = useSecrets()
@@ -75,41 +75,46 @@ export function Secrets() {
 				</Notice>
 			)}
 			{secrets.isPending && <SkeletonRows count={1} />}
-			<ul className="rows">
-				{list.map((secret, index) => (
-					<SecretRow
-						key={secret.name}
-						secret={secret}
-						usedBy={(webhooks.data ?? [])
-							.filter((webhook) => webhook.secretId === secret.name)
-							.map((webhook) => webhook.url)}
-						expanded={expanded === secret.name}
-						onToggle={() => setExpanded((current) => (current === secret.name ? null : secret.name))}
-						rowProps={rowProps(index)}
-						rotating={rotate.isPending && rotate.variables?.name === secret.name}
-						deleting={remove.isPending && remove.variables?.name === secret.name}
-						onRotate={() => askRotate(secret)}
-						onDelete={() => askRemove(secret)}
-					/>
-				))}
-			</ul>
-			<form onSubmit={submit} className="mt-4 flex flex-wrap items-end gap-2">
-				<TextField
-					label="new secret"
-					className="w-full max-w-sm"
-					name="name"
-					required
-					maxLength={64}
-					pattern="[A-Za-z0-9._\-]+"
-					title="1–64 letters, digits, dots, underscores or hyphens"
-					placeholder="my-server"
-					autoComplete="off"
-					spellCheck={false}
-				/>
-				<Button variant="primary" type="submit" busy={create.isPending}>
-					create
-				</Button>
-			</form>
+			{secrets.isSuccess && (
+				<ul className="rows">
+					{list.map((secret, index) => (
+						<SecretRow
+							key={secret.name}
+							secret={secret}
+							usedBy={(webhooks.data ?? [])
+								.filter((webhook) => webhook.secretId === secret.name)
+								.map((webhook) => webhook.url)}
+							expanded={expanded === secret.name}
+							onToggle={() => setExpanded((current) => (current === secret.name ? null : secret.name))}
+							rowProps={rowProps(index)}
+							rotating={rotate.isPending && rotate.variables?.name === secret.name}
+							deleting={remove.isPending && remove.variables?.name === secret.name}
+							onRotate={() => askRotate(secret)}
+							onDelete={() => askRemove(secret)}
+						/>
+					))}
+					<li className="row-form">
+						<form onSubmit={submit} className="flex flex-wrap items-center gap-x-3 gap-y-2">
+							<TextField
+								label={<AddLabel>new secret</AddLabel>}
+								inline
+								className="min-w-0 flex-1"
+								name="name"
+								required
+								maxLength={64}
+								pattern="[A-Za-z0-9._\-]+"
+								title="1–64 letters, digits, dots, underscores or hyphens"
+								placeholder="my-server"
+								autoComplete="off"
+								spellCheck={false}
+							/>
+							<Button variant="primary" type="submit" busy={create.isPending}>
+								create
+							</Button>
+						</form>
+					</li>
+				</ul>
+			)}
 		</Section>
 	)
 }

@@ -58,8 +58,7 @@ export function PreviewsSection({ user }: { user: UserInfo | undefined }) {
 			}
 		>
 			<p className="hint my-2">
-				pick a repo and every pull request gets its own live site, with a comment linking to it. wisp keeps the deploy
-				secret on your spindle and wakes the preview bot after each deploy; you add one workflow file.
+				pick a repo and every pull request gets its own live site, with a comment linking to it.
 			</p>
 			{previews.isPending && <SkeletonRows count={3} />}
 			{previews.isError && <Notice tone="bad">could not load your tangled repos: {previews.error.message}</Notice>}

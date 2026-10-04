@@ -103,11 +103,23 @@ const FieldText = ({ label, hint, children }: Omit<FieldProps, 'className'> & { 
 interface TextFieldProps extends FieldProps, Omit<InputHTMLAttributes<HTMLInputElement>, 'className'> {
 	/** Fixed text shown inside the right edge of the input, like a domain suffix. */
 	suffix?: string
+	/** Label beside the input instead of above it, for a form that sits on one row. */
+	inline?: boolean
 }
 
+/** Label for the form on a list's last row: a rose `+` before the words. */
+export const AddLabel = ({ children }: { children: string }) => (
+	<>
+		<span className="text-rose" aria-hidden="true">
+			+
+		</span>{' '}
+		{children}
+	</>
+)
+
 /** A labelled input; the label wraps the control so the two are linked without ids. */
-export const TextField = ({ label, hint, className, suffix, ...input }: TextFieldProps) => (
-	<label className={cx('block', className)}>
+export const TextField = ({ label, hint, className, suffix, inline = false, ...input }: TextFieldProps) => (
+	<label className={cx(inline ? 'field-inline' : 'block', className)}>
 		<FieldText label={label} hint={hint}>
 			<span className="relative block">
 				<input {...input} className={cx('input', suffix && 'pr-28')} />
@@ -188,7 +200,7 @@ export function Section({ title, meta, actions, children }: SectionProps) {
 	return (
 		<section aria-labelledby={id} className="mb-12">
 			{/* Tall enough for a button, so every section's heading sits at the same height with or without actions. */}
-			<header className="mb-1 flex min-h-[2.875rem] flex-wrap items-center gap-x-3 gap-y-2 border-b-2 border-dashed border-rule pb-2">
+			<header className="mb-3 flex min-h-[2.875rem] flex-wrap items-center gap-x-3 gap-y-2 border-b-2 border-dashed border-rule pb-2">
 				<h2 id={id} className="font-bold">
 					<span className="text-rose" aria-hidden="true">
 						#{' '}
