@@ -3,6 +3,7 @@ import { type FormEvent, useEffect, useRef, useState } from 'react'
 import {
 	api,
 	type CustomDomain,
+	errorText,
 	type MarqueEntry,
 	type MarqueStatus,
 	type UserInfo,
@@ -385,6 +386,8 @@ function DnsDialog({ domain, did, verifying, verdict, onVerify, onClose }: DnsDi
 		staleTime: 0,
 	})
 	const onMarque = domain?.verified === false && marque.data?.managed ? marque.data : null
+	// Showing the copy-it-yourself steps first and swapping them out a moment later reads as a glitch.
+	const checkingMarque = domain?.verified === false && marque.isPending
 
 	const records = domain && (
 		<>
@@ -434,7 +437,9 @@ function DnsDialog({ domain, did, verifying, verdict, onVerify, onClose }: DnsDi
 		>
 			{domain && (
 				<div className="space-y-5">
-					{onMarque ? (
+					{checkingMarque ? (
+						<p className="hint">checking where its dns lives…</p>
+					) : onMarque ? (
 						<>
 							<MarqueSetup key={domain.id} domain={domain} status={onMarque} onVerify={onVerify} />
 							<details>
@@ -519,9 +524,12 @@ function MarqueSetup({ domain, status, onVerify }: MarqueSetupProps) {
 			)}
 			{ready &&
 				(setUp.isError ? (
-					<Button variant="primary" onClick={() => apply(false)}>
-						try again
-					</Button>
+					<>
+						<Notice tone="bad">{errorText(setUp.error)}</Notice>
+						<Button variant="primary" onClick={() => apply(false)}>
+							try again
+						</Button>
+					</>
 				) : (
 					<p className="hint">adding the records…</p>
 				))}

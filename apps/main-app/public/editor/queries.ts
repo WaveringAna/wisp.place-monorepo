@@ -56,11 +56,20 @@ export const usePdsSync = () =>
 
 export const useSites = () => useQuery({ queryKey: keys.sites, queryFn: fetchSites })
 
+/**
+ * When the dashboard last changed a domain. The list is normally read from a
+ * nearby replica, which can lag that change, so for a while afterwards it is
+ * read from the primary instead.
+ */
+let domainsChangedAt = Number.NEGATIVE_INFINITY
+const FRESH_DOMAINS_MS = 60_000
+
 export const useDomains = () =>
 	useQuery({
 		queryKey: keys.domains,
 		queryFn: async () => {
-			const { wispDomains = [], customDomains = [] } = await api.domains()
+			const fresh = Date.now() - domainsChangedAt < FRESH_DOMAINS_MS
+			const { wispDomains = [], customDomains = [] } = await api.domains(fresh)
 			return { wisp: wispDomains, custom: customDomains }
 		},
 	})
@@ -101,6 +110,7 @@ export function useAction<V, R>(run: (variables: V) => Promise<R>, options: Acti
 	return useMutation({
 		mutationFn: run,
 		onSuccess: async (result, variables) => {
+			if (options.invalidates?.includes(keys.domains)) domainsChangedAt = Date.now()
 			await Promise.all((options.invalidates ?? []).map((queryKey) => client.invalidateQueries({ queryKey })))
 			const { success } = options
 			if (success) notify.ok(typeof success === 'function' ? success(result, variables) : success)

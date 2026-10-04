@@ -33,6 +33,10 @@ mock.module('../lib/db', () => ({
 		getSupporterStatus: async () => true,
 		getUserStatus: async () => ({ domain: null, sites: [] }),
 	},
+	getDomainsForDid: async () => ({
+		customDomains: [{ id: 'fresh', domain: 'just-added.example' }],
+		wispDomains: [],
+	}),
 	getSitesByDid: async () => [],
 }))
 
@@ -89,5 +93,17 @@ describe('user identity lookup transport', () => {
 		expect(await responseJson(response)).toEqual({ did: DID, handle: 'unknown', isSupporter: true })
 		expect(logs.some((entry) => JSON.stringify(entry).includes('token:secret'))).toBe(false)
 		expect(logs.some((entry) => entry.level === 'error')).toBe(false)
+	})
+})
+
+describe('domain list', () => {
+	test('reads the primary when asked for a fresh list', async () => {
+		const app = userRoutes({} as never, 'test-cookie-secret', async () => new Response('{}'))
+		const list = async (path: string) =>
+			(await responseJson(await app.handle(new Request(`http://localhost${path}`)))) as { customDomains: unknown[] }
+		expect((await list('/api/user/domains')).customDomains).toEqual([])
+		expect((await list('/api/user/domains?fresh=1')).customDomains).toEqual([
+			{ id: 'fresh', domain: 'just-added.example' },
+		])
 	})
 })

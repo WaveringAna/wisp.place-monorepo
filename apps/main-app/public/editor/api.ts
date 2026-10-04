@@ -218,7 +218,10 @@ export const api = {
 	resolveHandle: (handle: string) =>
 		request<{ found: boolean; did?: string }>(`/api/user/private-sites/resolve-handle?handle=${segment(handle)}`),
 
-	domains: () => request<{ wispDomains?: WispDomain[]; customDomains?: CustomDomain[] }>('/api/user/domains'),
+	domains: (fresh = false) =>
+		request<{ wispDomains?: WispDomain[]; customDomains?: CustomDomain[] }>(
+			`/api/user/domains${fresh ? '?fresh=1' : ''}`,
+		),
 	checkWispDomain: (handle: string) =>
 		request<{ available: boolean; reason?: string }>(`/api/domain/check?handle=${segment(handle)}`),
 	claimWispDomain: (handle: string) => post('/api/domain/claim', { handle }),

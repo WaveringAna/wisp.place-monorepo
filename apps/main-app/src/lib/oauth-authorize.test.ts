@@ -6,7 +6,8 @@ mock.module('./oauth-client', () => ({
 	recentGrantedScope: (did: string) =>
 		({
 			'did:plc:granted': 'atproto rpc:sh.tangled.repo.addSecret?aud=* rpc:sh.tangled.repo.listSecrets?aud=*',
-			'did:plc:marque': 'atproto repo:place.wisp.fs repo:at.marque.dns?action=update',
+			'did:plc:marque': 'atproto repo:place.wisp.fs repo:at.marque.dns?action=create&action=update',
+			'did:plc:marque-update-only': 'atproto repo:at.marque.dns?action=update',
 		})[did] ?? 'atproto repo:place.wisp.fs',
 }))
 
@@ -56,14 +57,16 @@ describe('letting wisp edit marque dns', () => {
 	test('asks for the zone record on top of the usual scope', async () => {
 		const { client, requests } = recordingClient()
 		await authorizeWisp(client, 'did:plc:alice', { state: setupState('marque', []) })
-		expect(requests[0]?.scope).toBe('atproto include:place.wisp.authSites repo:at.marque.dns?action=update')
+		expect(requests[0]?.scope).toBe(
+			'atproto include:place.wisp.authSites repo:at.marque.dns?action=create&action=update',
+		)
 	})
 
 	test('keeps the add-ons the session already holds, since the new grant replaces it', async () => {
 		const { client, requests } = recordingClient()
 		await authorizeWisp(client, 'did:plc:alice', { state: setupState('marque', ['ci']) })
 		expect(requests[0]?.scope).toBe(
-			'atproto include:place.wisp.authSites rpc:sh.tangled.repo.addSecret?aud=* rpc:sh.tangled.repo.listSecrets?aud=* repo:at.marque.dns?action=update',
+			'atproto include:place.wisp.authSites rpc:sh.tangled.repo.addSecret?aud=* rpc:sh.tangled.repo.listSecrets?aud=* repo:at.marque.dns?action=create&action=update',
 		)
 		expect(setupAddOn(requests[0]?.state)).toBe('marque')
 	})
@@ -76,6 +79,8 @@ describe('letting wisp edit marque dns', () => {
 		expect(await grantedAddOns({ did: 'did:plc:marque' } as never)).toEqual(['marque'])
 		expect(await grantedAddOns({ did: 'did:plc:granted' } as never)).toEqual(['ci'])
 		expect(await grantedAddOns({ did: 'did:plc:other' } as never)).toEqual([])
+		// putRecord needs create as well, so a grant from before that was known asks again.
+		expect(await grantedAddOns({ did: 'did:plc:marque-update-only' } as never)).toEqual([])
 	})
 
 	test('ignores state that names no add-on', () => {

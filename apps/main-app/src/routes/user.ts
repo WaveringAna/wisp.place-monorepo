@@ -7,7 +7,7 @@ import {
 } from '@wispplace/atproto-utils'
 import { createLogger } from '@wispplace/observability'
 import { Elysia } from 'elysia'
-import { eventualRead } from '../lib/db'
+import { eventualRead, getDomainsForDid } from '../lib/db'
 import { backfillSitesFromPds } from '../lib/pds-backfill'
 import { requireAuth, SESSION_COOKIE_NAME } from '../lib/wisp-auth'
 
@@ -105,10 +105,12 @@ export const userRoutes = (
 		/**
 		 * GET /api/user/domains
 		 * Success: { wispDomains: [{ domain, rkey }], customDomains }
+		 * `?fresh=1` reads the primary: a replica can still lag a change the user just made.
 		 */
-		.get('/domains', async ({ auth }) => {
+		.get('/domains', async ({ auth, query }) => {
 			try {
-				const { wispDomains, customDomains } = await eventualRead.getDomainsForDid(auth.did)
+				const read = query.fresh === '1' ? getDomainsForDid : eventualRead.getDomainsForDid
+				const { wispDomains, customDomains } = await read(auth.did)
 
 				return {
 					wispDomains: wispDomains.map((d) => ({

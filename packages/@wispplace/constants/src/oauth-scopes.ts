@@ -125,8 +125,12 @@ export const TANGLED_PREVIEW_SETUP_SCOPES = TANGLED_PREVIEW_SETUP_LXMS.map((lxm)
  */
 export const MARQUE_DNS_COLLECTION = 'at.marque.dns'
 
-/** Requested on top of the usual sets only when a user lets wisp edit their marque dns. */
-export const MARQUE_DNS_SETUP_SCOPES = [`repo:${MARQUE_DNS_COLLECTION}?action=update`]
+/**
+ * Requested on top of the usual sets only when a user lets wisp edit their
+ * marque dns. The zone record always exists already, but `putRecord` is an
+ * upsert and the PDS asserts both actions for it.
+ */
+export const MARQUE_DNS_SETUP_SCOPES = [`repo:${MARQUE_DNS_COLLECTION}?action=create&action=update`]
 
 export const WISP_PERMISSION_SET_SITES = 'place.wisp.authSites'
 export const WISP_PERMISSION_SET_WEBHOOKS = 'place.wisp.authWebhooks'
@@ -414,7 +418,9 @@ export function previewSetupCapabilities(): WispCapability[] {
 
 /** What main-app needs to add a domain's records to its marque.at zone. */
 export function marqueDnsCapabilities(): WispCapability[] {
-	return [{ resource: 'repo', collection: MARQUE_DNS_COLLECTION, action: 'update' }]
+	return (['create', 'update'] as const).map(
+		(action): WispCapability => ({ resource: 'repo', collection: MARQUE_DNS_COLLECTION, action }),
+	)
 }
 
 /**

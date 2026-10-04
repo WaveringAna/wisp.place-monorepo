@@ -386,6 +386,9 @@ export const deleteWispDomain = async (domain: string): Promise<void> => {
 
 export const getCustomDomainsByDid = primaryPresentationRead.getCustomDomainsByDid
 
+/** Both domain lists from the primary, for a dashboard that just changed them and has to see it. */
+export const getDomainsForDid = primaryPresentationRead.getDomainsForDid
+
 export const getCustomDomainInfo = primaryPresentationRead.getCustomDomainInfo
 
 export const getCustomDomainByHash = async (hash: string) => {
