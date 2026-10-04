@@ -17,13 +17,11 @@ Visit [https://wisp.place](https://wisp.place) and sign in with your AT Protocol
 
 ### Using the CLI
 ```bash
-# Download the CLI binary for your platform
-curl -L https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-x86_64-linux -o wisp-cli
-chmod +x wisp-cli
-
-# Deploy your site
-./wisp-cli your-handle.bsky.social --path ./my-site --site my-site
+npm install -g wispctl
+wispctl your-handle.bsky.social --path ./my-site --site my-site
 ```
+
+Static binaries for every platform are listed in the [CLI reference](/cli).
 
 Your site will be available at:
 ```
@@ -44,6 +42,7 @@ Your PDS is the source of truth. Hosting services are read-only caches — they 
 ## Next steps
 
 - [CLI reference](/cli) — deploy, pull, and serve sites from the command line
+- [Preview deploys](/guides/preview-deploys/) — a live site and a comment for every pull request
 - [Private sites](/private-sites) — upload and share access-controlled sites
 - [Architecture](/architecture) — how the firehose, hosting, and storage tiers fit together
 - [Self-hosting](/deployment) — run your own Wisp instance

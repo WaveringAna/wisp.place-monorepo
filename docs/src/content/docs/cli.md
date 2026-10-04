@@ -98,7 +98,7 @@ A few things a script might notice:
 
 - Progress and status lines (`✓ Deployed successfully!` and friends) go to stderr. stdout carries only
   results: the `URI:`/`URL:` lines after a deploy, `--json` output, listings and `--version`.
-- `--version` prints `2.0.0`.
+- `--version` prints a 2.x version.
 - Without a terminal, a missing `--site` or `--path` is an error (exit 1) instead of a silent no-op.
 - OAuth sessions saved by 1.x can't be reused. Run `wispctl login` once; app passwords saved by 1.x
   still work.
@@ -107,68 +107,52 @@ A few things a script might notice:
 
 ## CI/CD Integration
 
-Deploy automatically on every push using Tangled Spindle:
+Deploy on every push to `main` with Tangled Spindle. Save as `.tangled/workflows/deploy.yml`:
 
 ```yaml
 when:
-  - event: ['push']
-    branch: ['main']
-  - event: ['manual']
+  - event: ["push"]
+    branch: ["main"]
+  - event: ["manual"]
 
-engine: 'nixery'
+engine: microvm
+image: nixos
 
 dependencies:
-  nixpkgs:
-    - nodejs
-    - coreutils
-    - curl
-    - glibc
-  github:NixOS/nixpkgs/nixpkgs-unstable:
-    - bun
+  - nodejs
 
 environment:
-  SITE_PATH: 'dist'
-  SITE_NAME: 'my-site'
-  WISP_HANDLE: 'your-handle.bsky.social'
+  WISP_HANDLE: "your-handle.bsky.social"
+  SITE_NAME: "my-site"
+  SITE_PATH: "./dist"
 
 steps:
-  - name: build site
+  - name: build
     command: |
-      export PATH="$HOME/.nix-profile/bin:$PATH"
-      
-      # you may need to regenerate the lockfile due to nixery being weird
-      # rm package-lock.json bun.lock
-      bun install
+      npm ci
+      npm run build
 
-      bun run build
-
-  - name: deploy to wisp
+  - name: deploy
     command: |
-      # Download Wisp CLI
-      curl https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-x86_64-linux -o wisp-cli
-      chmod +x wisp-cli
-
-      # Deploy to Wisp
-      ./wisp-cli \
-        "$WISP_HANDLE" \
-        --path "$SITE_PATH" \
-        --site "$SITE_NAME"
+      npm install --global --prefix "$HOME/.local" wispctl@2.0.2
+      export PATH="$HOME/.local/bin:$PATH"
+      wispctl deploy "$WISP_HANDLE" --path "$SITE_PATH" --site "$SITE_NAME" --yes
 ```
 
-**Note:** Set `WISPCTL_APP_PASSWORD` as a secret in your Tangled Spindle repository settings.
-The CLI reads it directly from the environment, keeping the app password out of the process
-arguments. Generate an app password from your AT Protocol account settings.
+Add an app password as the secret `WISPCTL_APP_PASSWORD` in the repository's spindle settings on Tangled.
+The CLI reads it from the environment, so it never appears in the process arguments. `wispctl` is
+installed under `$HOME/.local` because the Nix store is read-only.
+
+For a live preview of every pull request, with a comment linking to it, see
+[Preview deploys](/guides/preview-deploys/).
 
 ## Basic Usage
 
 ### Deploy a Site
 
 ```bash
-# Download and make executable
-curl -O https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-aarch64-darwin
-chmod +x wisp-cli-aarch64-darwin
+npm install -g wispctl
 
-# Deploy your site
 wispctl deploy your-handle.bsky.social \
   --path ./dist \
   --site my-site
