@@ -285,6 +285,31 @@ describe('public error responses', () => {
 		}
 	})
 
+	test('lists webhooks through a session whose fetchHandler depends on this', async () => {
+		// Mirrors OAuthSession: fetchHandler is a prototype method that reads the instance.
+		// Its own DID, so the session cache cannot hand back an earlier test's session.
+		const did = 'did:example:session-this'
+		class Session {
+			readonly did = did
+			readonly records = [
+				{
+					uri: `at://${did}/place.wisp.v2.wh/a`,
+					cid: 'bafyreienifw4f34h7so3aat72qivk523js2shu7hzfpw2u4jnex7rns4qm',
+					value: {},
+				},
+			]
+			async fetchHandler(): Promise<Response> {
+				return Response.json({ records: this.records })
+			}
+		}
+		const app = webhookRoutes({ restore: async () => new Session() } as never, COOKIE_SECRET)
+		const cookie = await signedCookie('did', did)
+
+		const response = await app.handle(new Request('http://localhost/api/webhook', { headers: { cookie } }))
+		expect(response.status).toBe(200)
+		expect(await response.json()).toMatchObject({ success: true, records: [{ uri: `at://${did}/place.wisp.v2.wh/a` }] })
+	})
+
 	test('rejects invalid secret IDs before database access with one generic 400 response', async () => {
 		const app = secretRoutes(pdsFailureClient as never, COOKIE_SECRET)
 		const cookie = await signedCookie('did', DID)

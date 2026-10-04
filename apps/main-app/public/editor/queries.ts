@@ -71,7 +71,8 @@ export const useDeliveries = () =>
 	useQuery({
 		queryKey: keys.deliveries,
 		queryFn: async () => (await api.webhookDeliveries()).events ?? [],
-		refetchInterval: 60_000,
+		// Polling stops while the endpoint fails; refresh or refocusing the window tries again.
+		refetchInterval: (query) => (query.state.status === 'error' ? false : 60_000),
 	})
 
 export const useSecrets = () =>

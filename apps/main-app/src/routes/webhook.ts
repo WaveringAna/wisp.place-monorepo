@@ -5,6 +5,7 @@ import { MAX_WEBHOOK_SECRET_ID_LENGTH, WEBHOOK_SECRET_ID_PATTERN } from '@wisppl
 import { createLogger } from '@wispplace/observability'
 import { Elysia, t } from 'elysia'
 import { consumeWebhookMutationRateLimit, getWebhookEventHistory, withWebhookOwnerMutationLock } from '../lib/db'
+import { sqlStateFromError } from '../lib/migration-runner'
 import {
 	isWebhookOwnerAtCapacity,
 	MAX_WEBHOOK_LIST_LIMIT,
@@ -26,8 +27,10 @@ class WebhookRequestError extends Error {
 	}
 }
 
-const createWebhookAgent = (fetchHandler: (pathname: string, init?: RequestInit) => Promise<Response>) =>
-	new Agent((url, init) => fetchHandler(url, init))
+type PdsSession = { fetchHandler(pathname: string, init?: RequestInit): Promise<Response> }
+
+// OAuthSession.fetchHandler reads `this`, so it is called on the session rather than passed around detached.
+const createWebhookAgent = (session: PdsSession) => new Agent((url, init) => session.fetchHandler(url, init))
 
 const createResponseError = (kind: WebhookRequestErrorKind) =>
 	kind === 'rate_limited' ? 'Webhook mutation rate limit exceeded' : 'Webhook limit reached'
@@ -77,7 +80,7 @@ export const webhookRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 							throw new WebhookRequestError('rate_limited')
 						}
 
-						const agent = createWebhookAgent(auth.session.fetchHandler)
+						const agent = createWebhookAgent(auth.session)
 						// Fetch one more than the cap while holding the primary owner lock.
 						// Direct PDS writes still bypass this best-effort API protection and
 						// are enforced independently by firehose intake.
@@ -145,7 +148,7 @@ export const webhookRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 						if (!(await consumeWebhookMutationRateLimit(auth.did, 'delete'))) {
 							throw new WebhookRequestError('rate_limited')
 						}
-						const agent = createWebhookAgent(auth.session.fetchHandler)
+						const agent = createWebhookAgent(auth.session)
 						await agent.com.atproto.repo.deleteRecord({
 							repo: auth.did,
 							collection: 'place.wisp.v2.wh',
@@ -171,7 +174,7 @@ export const webhookRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 			'/',
 			async ({ auth, query, set }) => {
 				try {
-					const agent = createWebhookAgent(auth.session.fetchHandler)
+					const agent = createWebhookAgent(auth.session)
 					const result = await agent.com.atproto.repo.listRecords({
 						repo: auth.did,
 						collection: 'place.wisp.v2.wh',
@@ -213,8 +216,8 @@ export const webhookRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 					deliveredAt: r.delivered_at,
 				}))
 				return { success: true, events }
-			} catch {
-				logger.error('[Webhook] Events list failed')
+			} catch (error) {
+				logger.error('[Webhook] Events list failed', undefined, { sqlState: sqlStateFromError(error) ?? 'none' })
 				set.status = 500
 				return { success: false, error: 'Failed to fetch events' }
 			}
