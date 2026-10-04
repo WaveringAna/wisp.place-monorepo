@@ -4,7 +4,7 @@ FROM oven/bun:1.4.2-alpine AS build
 WORKDIR /app
 
 # Copy workspace configuration
-COPY package.json bunfig.toml tsconfig.json bun.lock* ./
+COPY package.json tsconfig.json bun.lock* ./
 COPY patches ./patches
 
 # Copy all workspace package.json files first (for dependency resolution)
