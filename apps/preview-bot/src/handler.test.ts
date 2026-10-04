@@ -305,7 +305,7 @@ describe('POST /v1/hook', () => {
 				return world().ports.listRepoRecords(owner)
 			},
 			claimOwner: async () => collaborator,
-			isCollaborator: async (_owner, _repo, subject) => subject === collaborator,
+			isCollaborator: async (_repo, subject) => subject === collaborator,
 		})
 		const response = await handlerFor(w)(hook({ ...event, did: collaborator }, `repo=blog&claim=alice&owner=${OWNER}`))
 		expect(response.status).toBe(200)

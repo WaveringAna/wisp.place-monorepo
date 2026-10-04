@@ -201,14 +201,14 @@ describe('verifyHook', () => {
 		const asked: string[][] = []
 		const { ports } = fakePorts({
 			claimOwner: async () => ATTACKER,
-			isCollaborator: async (owner, repoDid, subject) => {
-				asked.push([owner, repoDid, subject])
+			isCollaborator: async (repoDid, subject) => {
+				asked.push([repoDid, subject])
 				return true
 			},
 		})
 		const result = await verifyHook({ ...hook, deployer: ATTACKER }, ports, config)
 		expect(result.ok).toBe(true)
-		expect(asked).toEqual([[OWNER, REPO_DID, ATTACKER]])
+		expect(asked).toEqual([[REPO_DID, ATTACKER]])
 	})
 
 	test('refuses a deployer who is not a collaborator on the repo', async () => {

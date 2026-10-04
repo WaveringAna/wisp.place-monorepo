@@ -309,30 +309,25 @@ describe('findPullForBranch', () => {
 describe('isCollaborator', () => {
 	const REPO_DID = `did:plc:${'r'.repeat(24)}`
 	const SUBJECT = `did:plc:${'s'.repeat(24)}`
-	const offer = () =>
-		json({ records: [{ uri: 'at://x/sh.tangled.repo.collaborator/1', value: { repo: REPO_DID, subject: SUBJECT } }] })
-
-	test("needs the owner's offer and the subject's acceptance", async () => {
-		const { fetch, requested } = fakeFetch({
-			[`${PDS}/xrpc/com.atproto.repo.listRecords`]: offer,
-			[`${PDS}/xrpc/com.atproto.repo.getRecord`]: () => json({ value: {} }),
+	const listed = () =>
+		json({
+			items: [
+				{
+					uri: `at://${REPO_DID}/sh.tangled.bobbin.knotCollaborator/${SUBJECT}`,
+					value: { $type: 'sh.tangled.repo.collaborator', repo: REPO_DID, subject: SUBJECT },
+				},
+			],
 		})
-		expect(await build({ fetch }).isCollaborator(OWNER, REPO_DID, SUBJECT)).toBe(true)
-		expect(requested[1]).toContain('collection=sh.tangled.repo.collaboratorAcceptance')
+
+	test("asks the appview for the repo's collaborators", async () => {
+		const { fetch, requested } = fakeFetch({ 'https://appview.example/xrpc/sh.tangled.repo.listCollaborators': listed })
+		expect(await build({ fetch }).isCollaborator(REPO_DID, SUBJECT)).toBe(true)
+		expect(requested[0]).toContain(`subject=${encodeURIComponent(REPO_DID)}`)
 	})
 
-	test('an offer nobody accepted is not enough', async () => {
-		const { fetch } = fakeFetch({ [`${PDS}/xrpc/com.atproto.repo.listRecords`]: offer })
-		expect(await build({ fetch }).isCollaborator(OWNER, REPO_DID, SUBJECT)).toBe(false)
-	})
-
-	test('an offer for another repo or person does not count', async () => {
-		const { fetch, requested } = fakeFetch({
-			[`${PDS}/xrpc/com.atproto.repo.listRecords`]: offer,
-			[`${PDS}/xrpc/com.atproto.repo.getRecord`]: () => json({ value: {} }),
-		})
-		expect(await build({ fetch }).isCollaborator(OWNER, REPO_DID, OWNER)).toBe(false)
-		expect(requested).toHaveLength(1)
+	test('someone not listed is not a collaborator', async () => {
+		const { fetch } = fakeFetch({ 'https://appview.example/xrpc/sh.tangled.repo.listCollaborators': listed })
+		expect(await build({ fetch }).isCollaborator(REPO_DID, OWNER)).toBe(false)
 	})
 })
 

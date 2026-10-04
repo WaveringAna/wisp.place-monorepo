@@ -65,7 +65,7 @@ export function isWellFormed(request: PreviewRequest): boolean {
  *   owner's repo record (owner's PDS)  ->  names the spindle and the repo's DID
  *   pipeline (that spindle)            ->  same repo, a pull request run, names the pull
  *   pull record (author's PDS)         ->  targets that same repo
- *   wisp subdomain claim (our db)      ->  owned by the repo's owner or an accepted collaborator
+ *   wisp subdomain claim (our db)      ->  owned by the repo's owner or a collaborator on it
  *
  * The last link is what stops someone from naming a site `pr-<sha7>` under their own claim and
  * having the bot advertise it on a repo they do not work on.
@@ -150,7 +150,7 @@ async function verifyFromPipeline(
 
 	const claimant = await ports.claimOwner(request.claim)
 	if (!claimant || (request.deployer && claimant !== request.deployer)) return reject('claim-not-owned')
-	if (claimant !== request.owner && !(await ports.isCollaborator(request.owner, record.repoDid, claimant)))
+	if (claimant !== request.owner && !(await ports.isCollaborator(record.repoDid, claimant)))
 		return reject('not-a-collaborator')
 
 	const sha7 = trigger.sourceSha.slice(0, 7)

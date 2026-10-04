@@ -35,7 +35,7 @@ This tells the preview bot about your deploys. Create a `place.wisp.v2.wh` recor
 
 The dashboard's **cli & ci** tab writes it when you turn previews on for a repo; any AT Protocol client can write it too (`com.atproto.repo.putRecord`). Every site write you make fires it, and the bot ignores anything not named `pr-<sha7>`. It needs no secret: the bot checks the repository, pipeline, pull request, claim and preview URL itself before it comments. Delete the record to turn previews off.
 
-The claim has to belong to whoever deploys, and that account has to be the repo's owner or an accepted collaborator on it. For a repo you collaborate on, the record goes in your own PDS and the URL names the owner too: `...?repo=<repo name>&claim=<your subdomain>&owner=<owner did>`.
+The claim has to belong to whoever deploys, and that account has to be the repo's owner or one of its collaborators on Tangled. For a repo you collaborate on, the record goes in your own PDS and the URL names the owner too: `...?repo=<repo name>&claim=<your subdomain>&owner=<owner did>`.
 
 With the CLI: `wispctl preview enable <handle> --repo <repo name> --claim <subdomain>` (add `--owner <owner did>` as a collaborator), and `wispctl preview disable <handle> --repo <repo name>`.
 
