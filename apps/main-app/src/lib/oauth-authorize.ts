@@ -1,9 +1,12 @@
 import type { NodeOAuthClient, OAuthSession } from '@atproto/oauth-client-node'
 import {
 	describeCapability,
+	MARQUE_DNS_SETUP_SCOPES,
+	marqueDnsCapabilities,
 	missingCapabilities,
 	previewSetupCapabilities,
 	TANGLED_PREVIEW_SETUP_SCOPES,
+	type WispCapability,
 	wispAppRequiredCapabilities,
 } from '@wispplace/constants'
 import { createLogger } from '@wispplace/observability'
@@ -20,8 +23,26 @@ const logger = createLogger('main-app')
  */
 const LEGACY_SCOPE_MARK = 'wispLegacyScope'
 
-/** Marks a sign-in started to connect tangled CI: it asks for more and lands back on that tab. */
-const CI_SETUP_MARK = 'wispCiSetup'
+/**
+ * Permissions a user grants on top of the usual sets, one feature at a time,
+ * so an ordinary sign-in never asks for them.
+ */
+const ADD_ONS = {
+	/** Set deploy secrets on tangled spindles for pull-request previews. */
+	ci: { scopes: TANGLED_PREVIEW_SETUP_SCOPES, capabilities: previewSetupCapabilities, tab: 'cli' },
+	/** Add a custom domain's records to its marque.at zone. */
+	marque: { scopes: MARQUE_DNS_SETUP_SCOPES, capabilities: marqueDnsCapabilities, tab: 'domains' },
+} as const satisfies Record<string, { scopes: readonly string[]; capabilities: () => WispCapability[]; tab: string }>
+
+export type ScopeAddOn = keyof typeof ADD_ONS
+
+const SCOPE_ADD_ONS = Object.keys(ADD_ONS) as ScopeAddOn[]
+
+export const isScopeAddOn = (value: unknown): value is ScopeAddOn => SCOPE_ADD_ONS.includes(value as ScopeAddOn)
+
+/** Marks a sign-in started to grant an add-on: it names the add-on and every one the request asks for. */
+const SETUP_MARK = 'wispSetup'
+const ADD_ONS_MARK = 'wispAddOns'
 
 const parseState = (state: string | null | undefined): Record<string, unknown> | null => {
 	if (!state) return null
@@ -40,13 +61,45 @@ export const isLegacyScopeState = (state: string | null | undefined): boolean =>
 const markLegacyScopeState = (state: string | null | undefined): string =>
 	JSON.stringify({ ...(parseState(state) ?? {}), [LEGACY_SCOPE_MARK]: true })
 
-export const isCiSetupState = (state: string | null | undefined): boolean => parseState(state)?.[CI_SETUP_MARK] === true
+/** The add-on a sign-in was started to grant, if any. */
+export const setupAddOn = (state: string | null | undefined): ScopeAddOn | null => {
+	const addOn = parseState(state)?.[SETUP_MARK]
+	return isScopeAddOn(addOn) ? addOn : null
+}
 
-/** State for a sign-in that connects tangled CI; the nonce keeps every request's state distinct. */
-export const ciSetupState = (): string => JSON.stringify({ [CI_SETUP_MARK]: true, nonce: crypto.randomUUID() })
+/** The dashboard tab a sign-in for this add-on lands back on. */
+export const setupTab = (addOn: ScopeAddOn): string => ADD_ONS[addOn].tab
 
-const withCiSetup = (scope: string, state: string | null | undefined): string =>
-	isCiSetupState(state) ? [scope, ...TANGLED_PREVIEW_SETUP_SCOPES].join(' ') : scope
+/**
+ * State for a sign-in that grants `addOn`. A new grant replaces the old one, so
+ * it asks again for the add-ons the session already holds. `extra` rides along
+ * for the callback; the nonce keeps every request's state distinct.
+ */
+export const setupState = (
+	addOn: ScopeAddOn,
+	held: readonly ScopeAddOn[],
+	extra: Record<string, string> = {},
+): string =>
+	JSON.stringify({
+		...extra,
+		[SETUP_MARK]: addOn,
+		[ADD_ONS_MARK]: [...new Set([...held, addOn])],
+		nonce: crypto.randomUUID(),
+	})
+
+/** A string value carried in `state` by {@link setupState}. */
+export const stateValue = (state: string | null | undefined, key: string): string | undefined => {
+	const value = parseState(state)?.[key]
+	return typeof value === 'string' ? value : undefined
+}
+
+const requestedAddOns = (state: string | null | undefined): ScopeAddOn[] => {
+	const addOns = parseState(state)?.[ADD_ONS_MARK]
+	return Array.isArray(addOns) ? addOns.filter(isScopeAddOn) : []
+}
+
+const withAddOns = (scope: string, state: string | null | undefined): string =>
+	[scope, ...requestedAddOns(state).flatMap((addOn) => ADD_ONS[addOn].scopes)].join(' ')
 
 /**
  * Strip the retry marker before handing `state` to code that expects the
@@ -75,11 +128,11 @@ export const authorizeWisp = async (
 	options: { state?: string } = {},
 ): Promise<URL> => {
 	if (isLegacyScopeState(options.state)) {
-		return await client.authorize(identifier, { ...options, scope: withCiSetup(OAUTH_LEGACY_SCOPE, options.state) })
+		return await client.authorize(identifier, { ...options, scope: withAddOns(OAUTH_LEGACY_SCOPE, options.state) })
 	}
 
 	try {
-		return await client.authorize(identifier, { ...options, scope: withCiSetup(OAUTH_SCOPE, options.state) })
+		return await client.authorize(identifier, { ...options, scope: withAddOns(OAUTH_SCOPE, options.state) })
 	} catch (err) {
 		logger.warn('[Auth] Permission set scope rejected, retrying with granular scopes', {
 			identifier,
@@ -88,7 +141,7 @@ export const authorizeWisp = async (
 		return await client.authorize(identifier, {
 			...options,
 			state: markLegacyScopeState(options.state),
-			scope: withCiSetup(OAUTH_LEGACY_SCOPE, options.state),
+			scope: withAddOns(OAUTH_LEGACY_SCOPE, options.state),
 		})
 	}
 }
@@ -104,18 +157,25 @@ export const authorizeWispLegacy = async (
 ): Promise<URL> =>
 	await client.authorize(identifier, {
 		state: markLegacyScopeState(state),
-		scope: withCiSetup(OAUTH_LEGACY_SCOPE, state),
+		scope: withAddOns(OAUTH_LEGACY_SCOPE, state),
 	})
 
-/** Whether this session may set a deploy secret on a spindle. Never throws: unknown means no. */
-export const canSetSpindleSecrets = async (session: OAuthSession): Promise<boolean> => {
+const grantedScope = async (session: OAuthSession): Promise<string | undefined> =>
+	recentGrantedScope(session.did) ?? (await session.getTokenInfo(false)).scope
+
+/** The add-ons this session was granted. Never throws: unknown means none. */
+export const grantedAddOns = async (session: OAuthSession): Promise<ScopeAddOn[]> => {
 	try {
-		const scope = recentGrantedScope(session.did) ?? (await session.getTokenInfo(false)).scope
-		return missingCapabilities(scope, previewSetupCapabilities()).length === 0
+		const scope = await grantedScope(session)
+		return SCOPE_ADD_ONS.filter((addOn) => missingCapabilities(scope, ADD_ONS[addOn].capabilities()).length === 0)
 	} catch {
-		return false
+		return []
 	}
 }
+
+/** Whether this session may set a deploy secret on a spindle. */
+export const canSetSpindleSecrets = async (session: OAuthSession): Promise<boolean> =>
+	(await grantedAddOns(session)).includes('ci')
 
 /**
  * What main-app still can not do with the session it was just handed.
@@ -130,7 +190,7 @@ export const missingGrantedCapabilities = async (session: OAuthSession): Promise
 		// already known. Asking the session for it instead would take the
 		// cluster-wide advisory lock and read the primary to recover a value that
 		// never changes for the life of the grant.
-		const scope = recentGrantedScope(session.did) ?? (await session.getTokenInfo(false)).scope
+		const scope = await grantedScope(session)
 		return missingCapabilities(scope, wispAppRequiredCapabilities()).map(describeCapability)
 	} catch (err) {
 		// Never block a login on an introspection failure.

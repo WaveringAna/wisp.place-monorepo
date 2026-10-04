@@ -5,10 +5,14 @@ import { eventualRead } from '../lib/db'
 import {
 	authorizeWisp,
 	authorizeWispLegacy,
-	ciSetupState,
-	isCiSetupState,
+	grantedAddOns,
 	isLegacyScopeState,
+	isScopeAddOn,
 	missingGrantedCapabilities,
+	setupAddOn,
+	setupState,
+	setupTab,
+	stateValue,
 	unmarkLegacyScopeState,
 } from '../lib/oauth-authorize'
 import { backfillSitesFromPds } from '../lib/pds-backfill'
@@ -16,6 +20,9 @@ import { authenticateRequest, invalidateSessionCache, SESSION_COOKIE_NAME } from
 import { resolvePrivateShareState } from './private-redeem'
 
 const logger = createLogger('main-app')
+
+/** A custom domain id, as carried through `state` back into the dashboard's url. */
+const DOMAIN_ID = /^[\w-]{1,64}$/
 
 export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 	new Elysia({
@@ -58,19 +65,26 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 			}
 		})
 		/**
-		 * GET /api/auth/ci-setup
-		 * Signs the current user in again, also asking to manage secrets on
-		 * tangled spindles, and lands back on the dashboard's cli & ci tab.
+		 * GET /api/auth/setup/:addOn
+		 * Signs the current user in again, also asking for an add-on permission
+		 * (`ci`: secrets on tangled spindles, `marque`: their marque.at dns), and
+		 * lands back on the dashboard tab that needed it. `?domain=<id>` reopens
+		 * that custom domain's dns dialog.
 		 */
-		.get('/api/auth/ci-setup', async (c) => {
+		.get('/api/auth/setup/:addOn', async (c) => {
+			const { addOn } = c.params
+			if (!isScopeAddOn(addOn)) return c.redirect('/editor')
 			const auth = await authenticateRequest(client, c.cookie, c.request.headers.get('cookie'))
 			if (!auth) return c.redirect('/')
+			const domain = (c.query as { domain?: string }).domain
+			const extra: Record<string, string> = domain && DOMAIN_ID.test(domain) ? { domain } : {}
 			try {
-				const url = await authorizeWisp(client, auth.did, { state: ciSetupState() })
+				const state = setupState(addOn, await grantedAddOns(auth.session), extra)
+				const url = await authorizeWisp(client, auth.did, { state })
 				return c.redirect(url.toString())
 			} catch (err) {
-				logger.error('[Auth] CI setup authorization failed', err)
-				return c.redirect('/editor?error=ci_setup_failed#cli')
+				logger.error('[Auth] Add-on authorization failed', err, { addOn })
+				return c.redirect(`/editor?error=setup_failed#${setupTab(addOn)}`)
 			}
 		})
 		/**
@@ -142,7 +156,12 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 					logger.error('[Auth] Session is missing required permissions', { did: session.did, missing })
 				}
 
-				if (isCiSetupState(state)) return c.redirect('/editor#cli')
+				const addOn = setupAddOn(state)
+				if (addOn) {
+					const domain = stateValue(state, 'domain')
+					const query = domain && DOMAIN_ID.test(domain) ? `?dns=${domain}` : ''
+					return c.redirect(`/editor${query}#${setupTab(addOn)}`)
+				}
 
 				// Revalidate the OAuth state token before returning a share visitor to its site.
 				const redeem = await resolvePrivateShareState(unmarkLegacyScopeState(state), session.did)

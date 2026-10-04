@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { Agent } from '@atproto/api'
 import type { NodeOAuthClient } from '@atproto/oauth-client-node'
-import { isPreviewHostname, parsePreviewHostname } from '@wispplace/constants'
+import { isPreviewHostname, MARQUE_DNS_COLLECTION, parsePreviewHostname } from '@wispplace/constants'
 import { createLogger } from '@wispplace/observability'
 import { isValidSiteId, siteIdFromHostname } from '@wispplace/private-sites'
 import { Elysia } from 'elysia'
@@ -22,13 +22,77 @@ import {
 	updateWispDomainSite,
 	waitForSiteCache,
 } from '../lib/db'
-import { verifyCustomDomain } from '../lib/dns-verify'
+import { lookupNameservers, verifyCustomDomain } from '../lib/dns-verify'
 import { extractWispHandle, isValidHandle, normalizeDomain, toDomain, validateCustomDomain } from '../lib/domain-utils'
+import {
+	applyMarqueDns,
+	MARQUE_DOMAIN_COLLECTION,
+	type MarquePorts,
+	marqueStatus,
+	type StoredZone,
+} from '../lib/marque-dns'
+import { grantedAddOns } from '../lib/oauth-authorize'
 import { privateHostname } from '../lib/private-site-origin'
 import { hasLivePrivateSite } from '../lib/private-sites-db'
-import { requireAuth, SESSION_COOKIE_NAME } from '../lib/wisp-auth'
+import { type AuthenticatedContext, requireAuth, SESSION_COOKIE_NAME } from '../lib/wisp-auth'
 
 const logger = createLogger('main-app')
+
+/** The records a custom domain needs, in the shape marque setup takes. */
+const marqueTarget = (domainInfo: { id: string; domain: string }, did: string) => ({
+	domain: domainInfo.domain.toLowerCase(),
+	did,
+	target: `${domainInfo.id}.dns.wisp.place`,
+})
+
+/** Marque setup against the signed-in user's own repo and live dns. */
+const marquePorts = ({ did, session }: AuthenticatedContext): MarquePorts => {
+	const agent = new Agent((url, init) => session.fetchHandler(url, init))
+	return {
+		ownedDomains: async () => {
+			const { data } = await agent.com.atproto.repo.listRecords({
+				repo: did,
+				collection: MARQUE_DOMAIN_COLLECTION,
+				limit: 100,
+			})
+			return data.records.flatMap(({ value }) => {
+				const record = value as { domain?: unknown; nameServers?: unknown }
+				if (typeof record.domain !== 'string' || !Array.isArray(record.nameServers)) return []
+				return [{ domain: record.domain, nameServers: record.nameServers.filter((ns) => typeof ns === 'string') }]
+			})
+		},
+		liveNameservers: lookupNameservers,
+		getZone: async (apex) => {
+			try {
+				const { data } = await agent.com.atproto.repo.getRecord({
+					repo: did,
+					collection: MARQUE_DNS_COLLECTION,
+					rkey: apex,
+				})
+				const value = data.value as StoredZone['value']
+				return data.cid && Array.isArray(value.records) ? { cid: data.cid, value } : null
+			} catch (err) {
+				if ((err as { error?: string }).error === 'RecordNotFound') return null
+				throw err
+			}
+		},
+		putZone: async (apex, value, swapCid) => {
+			try {
+				await agent.com.atproto.repo.putRecord({
+					repo: did,
+					collection: MARQUE_DNS_COLLECTION,
+					rkey: apex,
+					record: value,
+					swapRecord: swapCid,
+				})
+				return true
+			} catch (err) {
+				if ((err as { error?: string }).error === 'InvalidSwap') return false
+				throw err
+			}
+		},
+	}
+}
 
 export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 	new Elysia({
@@ -477,5 +541,58 @@ export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 			} catch (err) {
 				logger.error('[Domain] Custom domain map error', err)
 				throw new Error(`Failed to map site: ${err instanceof Error ? err.message : 'Unknown error'}`)
+			}
+		})
+		/**
+		 * GET /api/domain/custom/:id/marque
+		 * Whether marque.at serves this domain's dns, and whether wisp may add its records there.
+		 * Success: { managed: false } or { managed: true, apex, state: 'ready' | 'done' | 'conflict', conflicts, canWrite }
+		 */
+		.get('/custom/:id/marque', async ({ params, auth, set }) => {
+			try {
+				const domainInfo = await getCustomDomainById(params.id)
+				if (!domainInfo || domainInfo.did !== auth.did) {
+					set.status = 404
+					throw new Error('Domain not found')
+				}
+				const [status, addOns] = await Promise.all([
+					marqueStatus(marquePorts(auth), marqueTarget(domainInfo, auth.did)),
+					grantedAddOns(auth.session),
+				])
+				return { ...status, canWrite: addOns.includes('marque') }
+			} catch (err) {
+				logger.error('[Domain] Marque status error', err)
+				throw new Error(`Failed to check marque: ${err instanceof Error ? err.message : 'Unknown error'}`)
+			}
+		})
+		/**
+		 * POST /api/domain/custom/:id/marque
+		 * Adds the domain's CNAME and ownership TXT to its marque.at zone. Records
+		 * already in the way are only replaced when `replace` is true.
+		 * Success: { state: 'done' }
+		 * 409: { state: 'conflict', conflicts }
+		 */
+		.post('/custom/:id/marque', async ({ params, body, auth, set }) => {
+			try {
+				const domainInfo = await getCustomDomainById(params.id)
+				if (!domainInfo || domainInfo.did !== auth.did) {
+					set.status = 404
+					throw new Error('Domain not found')
+				}
+				if (!(await grantedAddOns(auth.session)).includes('marque')) {
+					set.status = 403
+					throw new Error('Wisp has not been allowed to edit your marque dns')
+				}
+				const { replace } = (body ?? {}) as { replace?: boolean }
+				const result = await applyMarqueDns(marquePorts(auth), marqueTarget(domainInfo, auth.did), replace === true)
+				if (result.state === 'unmanaged') {
+					set.status = 409
+					throw new Error('This domain is not on marque.at')
+				}
+				if (result.state === 'conflict') set.status = 409
+				return result
+			} catch (err) {
+				logger.error('[Domain] Marque setup error', err)
+				throw new Error(`Failed to set up marque dns: ${err instanceof Error ? err.message : 'Unknown error'}`)
 			}
 		})

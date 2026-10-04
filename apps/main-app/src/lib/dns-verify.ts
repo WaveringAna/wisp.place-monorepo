@@ -78,6 +78,16 @@ function extractNSFromAnswer(response: dnsPacket.Packet): string[] {
 		.map((record) => record.data.toLowerCase().replace(/\.$/, ''))
 }
 
+/** The nameservers a zone apex delegates to, lowercased; empty when no resolver answers. */
+export async function lookupNameservers(apex: string): Promise<string[]> {
+	try {
+		const response = await Promise.any(PUBLIC_RESOLVERS.map((r) => queryDNS(apex, 'NS', r, 53, true)))
+		return extractNSFromAnswer(response)
+	} catch {
+		return []
+	}
+}
+
 /**
  * Discover authoritative nameserver IPs for a given name.
  *

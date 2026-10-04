@@ -119,6 +119,15 @@ export const TANGLED_PREVIEW_SETUP_LXMS = ['sh.tangled.repo.addSecret', 'sh.tang
 /** Requested on top of the usual sets only when a user connects tangled CI. */
 export const TANGLED_PREVIEW_SETUP_SCOPES = TANGLED_PREVIEW_SETUP_LXMS.map((lxm) => `rpc:${lxm}?aud=*`)
 
+/**
+ * marque.at serves a domain's zone from this record in the owner's repo (rkey
+ * is the apex), so writing it is how wisp points a marque domain at itself.
+ */
+export const MARQUE_DNS_COLLECTION = 'at.marque.dns'
+
+/** Requested on top of the usual sets only when a user lets wisp edit their marque dns. */
+export const MARQUE_DNS_SETUP_SCOPES = [`repo:${MARQUE_DNS_COLLECTION}?action=update`]
+
 export const WISP_PERMISSION_SET_SITES = 'place.wisp.authSites'
 export const WISP_PERMISSION_SET_WEBHOOKS = 'place.wisp.authWebhooks'
 export const WISP_PERMISSION_SET_HOSTING = 'place.wisp.authHosting'
@@ -401,6 +410,11 @@ export function wispAppRequiredCapabilities(): WispCapability[] {
 /** What main-app needs to set a repo's deploy secret on its spindle. */
 export function previewSetupCapabilities(): WispCapability[] {
 	return TANGLED_PREVIEW_SETUP_LXMS.map((lxm): WispCapability => ({ resource: 'rpc', lxm, aud: '*' }))
+}
+
+/** What main-app needs to add a domain's records to its marque.at zone. */
+export function marqueDnsCapabilities(): WispCapability[] {
+	return [{ resource: 'repo', collection: MARQUE_DNS_COLLECTION, action: 'update' }]
 }
 
 /**

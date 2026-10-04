@@ -1,6 +1,14 @@
-import { useQuery } from '@tanstack/react-query'
-import { type FormEvent, useEffect, useState } from 'react'
-import { api, type CustomDomain, type UserInfo, type VerifyResult, type WispDomain } from '../api'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { type FormEvent, useEffect, useRef, useState } from 'react'
+import {
+	api,
+	type CustomDomain,
+	type MarqueEntry,
+	type MarqueStatus,
+	type UserInfo,
+	type VerifyResult,
+	type WispDomain,
+} from '../api'
 import { confirmAction } from '../confirm'
 import { plural } from '../format'
 import { type RowProps, rowActions, useRovingList } from '../keys'
@@ -31,6 +39,12 @@ const HOSTING_NODES = [
 ] as const
 
 const openDomain = (domain: string) => openInNewTab(`https://${domain}`)
+
+/** Marque's nameservers pick up a zone write within a second or so; give them a little more before checking. */
+const MARQUE_SETTLE_MS = 2000
+
+/** `?dns=<id>`, left by the sign-in that let wisp edit marque dns, reopens that domain's dialog. */
+const dnsParam = (): string | null => new URLSearchParams(window.location.search).get('dns')
 
 interface DomainLineProps {
 	domain: string
@@ -67,8 +81,15 @@ const DomainLine = ({ domain, site, verified = true, rowProps, onClick }: Domain
 
 export function DomainsView({ user }: { user: UserInfo | undefined }) {
 	const domains = useDomains()
-	const [dnsFor, setDnsFor] = useState<string | null>(null)
+	const [dnsFor, setDnsFor] = useState<string | null>(dnsParam)
 	const [verdicts, setVerdicts] = useState<Record<string, VerifyResult>>({})
+
+	useEffect(() => {
+		const url = new URL(window.location.href)
+		if (!url.searchParams.has('dns')) return
+		url.searchParams.delete('dns')
+		window.history.replaceState(null, '', url)
+	}, [])
 
 	const verify = useAction((domain: CustomDomain) => api.verifyCustomDomain(domain.id), {
 		invalidates: [keys.domains],
@@ -216,6 +237,18 @@ function CustomDomains({ verdicts, onVerify, onShowDns }: CustomDomainsProps) {
 					</li>
 				</ul>
 			)}
+			<p className="hint mt-3">
+				no domain yet?{' '}
+				<a
+					href="https://marque.at"
+					target="_blank"
+					rel="noopener"
+					className="text-rose underline-offset-2 hover:underline"
+				>
+					marque.at ↗
+				</a>{' '}
+				is a registrar on atproto: sign in with this same account, and it'll integrate seamlessly with wisp.
+			</p>
 		</Section>
 	)
 }
@@ -345,6 +378,39 @@ interface DnsDialogProps {
 }
 
 function DnsDialog({ domain, did, verifying, verdict, onVerify, onClose }: DnsDialogProps) {
+	const marque = useQuery({
+		queryKey: keys.marque(domain?.id ?? ''),
+		queryFn: () => api.marqueStatus(domain?.id ?? ''),
+		enabled: domain !== undefined && !domain.verified,
+		staleTime: 0,
+	})
+	const onMarque = domain?.verified === false && marque.data?.managed ? marque.data : null
+
+	const records = domain && (
+		<>
+			<section>
+				<h3 className="font-bold">1 · prove it is yours</h3>
+				<p className="hint mb-1">add a TXT record</p>
+				<Record name="name" value={`_wisp.${domain.domain}`} />
+				<Record name="value" value={did ?? '…'} />
+			</section>
+			<section>
+				<h3 className="font-bold">2 · point it here</h3>
+				<p className="hint mb-1">add a CNAME record, which keeps GeoDNS routing visitors to the nearest node</p>
+				<Record name="name" value={domain.domain} />
+				<Record name="value" value={`${domain.id}.dns.wisp.place`} />
+				<p className="hint mt-1">providers that flatten CNAMEs into A records (like cloudflare) are fine</p>
+			</section>
+			<details>
+				<summary className="cursor-pointer text-ink-soft hover:text-ink">or use an A record instead</summary>
+				<Notice tone="warn">A records skip GeoDNS: every visitor is served from the one region you pick.</Notice>
+				{HOSTING_NODES.map((node) => (
+					<Record key={node.ip} name={node.region} value={node.ip} />
+				))}
+			</details>
+		</>
+	)
+
 	return (
 		<Dialog
 			open={domain !== undefined}
@@ -368,30 +434,109 @@ function DnsDialog({ domain, did, verifying, verdict, onVerify, onClose }: DnsDi
 		>
 			{domain && (
 				<div className="space-y-5">
-					<section>
-						<h3 className="font-bold">1 · prove it is yours</h3>
-						<p className="hint mb-1">add a TXT record</p>
-						<Record name="name" value={`_wisp.${domain.domain}`} />
-						<Record name="value" value={did ?? '…'} />
-					</section>
-					<section>
-						<h3 className="font-bold">2 · point it here</h3>
-						<p className="hint mb-1">add a CNAME record, which keeps GeoDNS routing visitors to the nearest node</p>
-						<Record name="name" value={domain.domain} />
-						<Record name="value" value={`${domain.id}.dns.wisp.place`} />
-						<p className="hint mt-1">providers that flatten CNAMEs into A records (like cloudflare) are fine</p>
-					</section>
-					<details>
-						<summary className="cursor-pointer text-ink-soft hover:text-ink">or use an A record instead</summary>
-						<Notice tone="warn">A records skip GeoDNS: every visitor is served from the one region you pick.</Notice>
-						{HOSTING_NODES.map((node) => (
-							<Record key={node.ip} name={node.region} value={node.ip} />
-						))}
-					</details>
+					{onMarque ? (
+						<>
+							<MarqueSetup key={domain.id} domain={domain} status={onMarque} onVerify={onVerify} />
+							<details>
+								<summary className="cursor-pointer text-ink-soft hover:text-ink">or add the records yourself</summary>
+								<div className="mt-3 space-y-5">{records}</div>
+							</details>
+						</>
+					) : (
+						records
+					)}
 					<Verdict result={verdict} />
 					<p className="hint">dns changes can take a few minutes to show up</p>
 				</div>
 			)}
 		</Dialog>
+	)
+}
+
+const ZoneEntry = ({ entry }: { entry: MarqueEntry }) => (
+	<div className="grid grid-cols-[minmax(4rem,auto)_auto_1fr] gap-x-3 border-b border-dashed border-rule py-1.5 last:border-0">
+		<span className="text-ink-soft">{entry.name}</span>
+		<span className="text-ink-soft">{entry.recordType}</span>
+		<code className="break-all">{entry.value}</code>
+	</div>
+)
+
+interface MarqueSetupProps {
+	domain: CustomDomain
+	status: MarqueStatus & { managed: true }
+	onVerify: (domain: CustomDomain) => void
+}
+
+/**
+ * A domain marque.at serves gets its records written straight into its zone:
+ * as soon as the dialog opens once wisp is allowed to, and only after asking
+ * when something already sits at those names.
+ */
+function MarqueSetup({ domain, status, onVerify }: MarqueSetupProps) {
+	const client = useQueryClient()
+	const setUp = useAction((replace: boolean) => api.setUpMarque(domain.id, replace), {
+		invalidates: [keys.marque(domain.id)],
+		success: `added ${domain.domain} to your marque dns ✦`,
+		failure: 'could not set up marque dns',
+	})
+	const apply = (replace: boolean) =>
+		setUp.mutate(replace, {
+			onSuccess: () => setTimeout(() => onVerify(domain), MARQUE_SETTLE_MS),
+			// A conflict that appeared since the dialog opened is shown from a fresh status.
+			onError: () => client.invalidateQueries({ queryKey: keys.marque(domain.id) }),
+		})
+
+	const ready = status.canWrite && status.state === 'ready'
+	const applied = useRef(false)
+	useEffect(() => {
+		if (!ready || applied.current) return
+		applied.current = true
+		apply(false)
+	})
+
+	const askReplace = async () => {
+		const confirmed = await confirmAction({
+			title: `replace ${plural(status.conflicts.length, 'record')}?`,
+			body: `They stop answering for ${domain.domain}. Everything else in ${status.apex}'s dns stays as it is.`,
+			action: 'replace',
+		})
+		if (confirmed) apply(true)
+	}
+
+	return (
+		<section>
+			<h3 className="font-bold">{status.apex} is on marque.at</h3>
+			{!status.canWrite && (
+				<>
+					<p className="hint mb-2">wisp can add both records to its dns for you, no copying needed.</p>
+					<Button
+						variant="primary"
+						onClick={() => window.location.assign(`/api/auth/setup/marque?domain=${encodeURIComponent(domain.id)}`)}
+					>
+						let wisp edit its dns
+					</Button>
+				</>
+			)}
+			{ready &&
+				(setUp.isError ? (
+					<Button variant="primary" onClick={() => apply(false)}>
+						try again
+					</Button>
+				) : (
+					<p className="hint">adding the records…</p>
+				))}
+			{status.canWrite && status.state === 'done' && <p className="hint text-ok">✓ both records are in its dns</p>}
+			{status.canWrite && status.state === 'conflict' && (
+				<>
+					<p className="hint mb-1">these records are already at those names, so wisp left the dns alone:</p>
+					{status.conflicts.map((entry) => (
+						<ZoneEntry key={`${entry.name} ${entry.recordType} ${entry.value}`} entry={entry} />
+					))}
+					<Button variant="danger" className="mt-2" busy={setUp.isPending} onClick={askReplace}>
+						replace them
+					</Button>
+				</>
+			)}
+		</section>
 	)
 }

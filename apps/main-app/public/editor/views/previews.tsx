@@ -277,7 +277,7 @@ function ConnectCiDialog({ open, onClose }: { open: boolean; onClose: () => void
 			title="connect tangled ci"
 			footer={
 				<>
-					<Button variant="primary" data-autofocus onClick={() => window.location.assign('/api/auth/ci-setup')}>
+					<Button variant="primary" data-autofocus onClick={() => window.location.assign('/api/auth/setup/ci')}>
 						sign in again
 					</Button>
 					<Button variant="ghost" onClick={onClose}>

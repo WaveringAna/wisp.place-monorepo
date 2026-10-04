@@ -116,6 +116,20 @@ export interface CustomDomain {
 	created_at: number
 }
 
+/** One record in a marque.at zone. */
+export interface MarqueEntry {
+	name: string
+	recordType: string
+	value: string
+	ttl: number
+}
+
+/** Whether marque.at serves a custom domain's dns, and whether wisp may add its records there. */
+export type MarqueStatus = { canWrite: boolean } & (
+	| { managed: false }
+	| { managed: true; apex: string; state: 'ready' | 'done' | 'conflict'; conflicts: MarqueEntry[] }
+)
+
 export interface VerifyResult {
 	verified: boolean
 	error?: string
@@ -213,6 +227,8 @@ export const api = {
 	addCustomDomain: (domain: string) => post<{ id: string }>('/api/domain/custom/add', { domain }),
 	verifyCustomDomain: (id: string) => post<VerifyResult>('/api/domain/custom/verify', { id }),
 	deleteCustomDomain: (id: string) => remove(`/api/domain/custom/${segment(id)}`),
+	marqueStatus: (id: string) => request<MarqueStatus>(`/api/domain/custom/${segment(id)}/marque`),
+	setUpMarque: (id: string, replace = false) => post(`/api/domain/custom/${segment(id)}/marque`, { replace }),
 	mapCustomDomain: (id: string, siteRkey: string | null) =>
 		post(`/api/domain/custom/${segment(id)}/map-site`, { siteRkey }),
 

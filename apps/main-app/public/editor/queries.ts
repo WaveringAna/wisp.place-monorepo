@@ -24,6 +24,7 @@ export const keys = {
 	shares: (siteId: string) => ['shares', siteId],
 	settings: (rkey: string) => ['settings', rkey],
 	wispAvailability: (handle: string) => ['wisp-availability', handle],
+	marque: (domainId: string) => ['marque', domainId],
 } as const
 
 export const useUser = () =>

@@ -92,6 +92,7 @@ mock.module('../lib/cache-invalidation', () => ({
 }))
 
 mock.module('../lib/dns-verify', () => ({
+	lookupNameservers: async () => [],
 	verifyCustomDomain: async () => ({ verified: false }),
 }))
 
@@ -107,8 +108,12 @@ mock.module('../lib/oauth-authorize', () => ({
 	authorizeWisp: fail,
 	authorizeWispLegacy: fail,
 	canSetSpindleSecrets: async () => false,
-	ciSetupState: () => '{}',
-	isCiSetupState: () => false,
+	grantedAddOns: async () => [],
+	isScopeAddOn: () => false,
+	setupAddOn: () => null,
+	setupState: () => '{}',
+	setupTab: () => 'sites',
+	stateValue: () => undefined,
 	isLegacyScopeState: () => false,
 	missingGrantedCapabilities: async () => [],
 	unmarkLegacyScopeState: () => undefined,
