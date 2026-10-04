@@ -271,7 +271,8 @@ describe('bot comments', () => {
 		const repo = {
 			createRecord: async (input: Json) => calls.push({ op: 'create', input }),
 			putRecord: async (input: Json) => calls.push({ op: 'put', input }),
-			listRecords: async () => ({ records: existing }),
+			// @atproto/api answers with the XRPC body under `data`.
+			listRecords: async () => ({ data: { records: existing } }),
 		}
 		return { agent: { com: { atproto: { repo } } }, calls }
 	}

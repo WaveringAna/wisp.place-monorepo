@@ -236,7 +236,7 @@ export function createHttpPorts(options: HttpPortsOptions): Ports {
 		let cursor: string | undefined
 		let count = 0
 		while (count < 1000) {
-			const page = await repo().listRecords({
+			const { data: page } = await repo().listRecords({
 				repo: options.bot.did,
 				collection: 'sh.tangled.feed.comment',
 				limit: Math.min(100, 1000 - count),
