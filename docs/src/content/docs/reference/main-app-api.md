@@ -76,8 +76,13 @@ single request.
 ```
 
 ### `POST /api/user/sync`
+Lists the caller's `place.wisp.fs` records on their PDS. Sites missing from
+`site_cache` get a placeholder row (no files, `cold_synced = false`) so they are
+listed immediately, and every missing, stale or not-yet-downloaded site is queued
+for the firehose service's revalidation worker. `synced` counts records found on
+the PDS, `queued` the sites handed to the worker. The dashboard calls this on load and sign-in runs it too.
 ```json
-{ "success": true, "synced": 2, "errors": [] }
+{ "success": true, "synced": 2, "queued": 1, "errors": [] }
 ```
 
 ### `GET /api/user/site/:rkey/domains`

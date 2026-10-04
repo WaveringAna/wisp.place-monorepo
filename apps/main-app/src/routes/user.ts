@@ -7,7 +7,8 @@ import {
 } from '@wispplace/atproto-utils'
 import { createLogger } from '@wispplace/observability'
 import { Elysia } from 'elysia'
-import { eventualRead, getSitesByDid } from '../lib/db'
+import { eventualRead } from '../lib/db'
+import { backfillSitesFromPds } from '../lib/pds-backfill'
 import { requireAuth, SESSION_COOKIE_NAME } from '../lib/wisp-auth'
 
 const logger = createLogger('main-app')
@@ -123,22 +124,17 @@ export const userRoutes = (
 		})
 		/**
 		 * POST /api/user/sync
-		 * Success: { success: true, synced, errors }
+		 * Queues every place.wisp.fs record on the user's PDS that site_cache is
+		 * missing or holds at an older CID for the firehose revalidation worker.
+		 * Success: { success: true, synced, queued, errors }
 		 */
 		.post('/sync', async ({ auth }) => {
 			try {
-				logger.debug('[User] Manual site refresh requested; site availability is firehose-driven', { did: auth.did })
-				// Keep this POST path strongly consistent for callers polling after an action.
-				const sites = await getSitesByDid(auth.did)
-
-				return {
-					success: true,
-					synced: sites.length,
-					errors: [],
-				}
-			} catch {
-				logger.error('[User] Sync error')
-				throw new Error('Failed to sync sites')
+				const { found, queued } = await backfillSitesFromPds(auth.did, auth.session)
+				return { success: true, synced: found, queued, errors: [] }
+			} catch (err) {
+				logger.error('[User] Sync error', err)
+				throw new Error('Failed to sync sites from your PDS')
 			}
 		})
 		/**

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import { enqueueRevalidateWithRedis, REVALIDATE_ENQUEUE_SCRIPT, type RevalidateQueueClient } from './revalidate-queue'
+import { REVALIDATE_ENQUEUE_SCRIPT, type RevalidateQueueClient } from '@wispplace/constants'
+import { enqueueRevalidateWithRedis } from './revalidate-queue'
 
 describe('enqueueRevalidateWithRedis', () => {
 	test('atomically releases NX dedupe when XADD fails', async () => {

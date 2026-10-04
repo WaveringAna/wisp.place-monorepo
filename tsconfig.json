@@ -105,9 +105,6 @@
 		"allowImportingTsExtensions": true,
 		"noEmit": true,
 		"paths": {
-			"@server": ["./apps/main-app/src/index.ts"],
-			"@server/*": ["./apps/main-app/src/*"],
-			"@public/*": ["./apps/main-app/public/*"],
 			"@wispplace/*": ["./packages/@wispplace/*/src"]
 		}
 	},

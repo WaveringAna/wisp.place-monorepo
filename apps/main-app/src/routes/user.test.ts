@@ -12,6 +12,10 @@ mock.module('@wispplace/observability', () => ({
 	}),
 }))
 
+mock.module('../lib/pds-backfill', () => ({
+	backfillSitesFromPds: async () => ({ found: 0, queued: 0 }),
+}))
+
 mock.module('../lib/db', () => ({
 	eventualRead: {
 		getDomainsForDid: async () => ({ customDomains: [], wispDomains: [] }),

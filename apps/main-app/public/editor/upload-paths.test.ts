@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { rootedUploadPaths } from './upload-paths'
+import { rootedUploadPaths, uploadRoot } from './upload-paths'
 
 describe('rootedUploadPaths', () => {
 	test('keeps individually selected files at the site root', () => {
@@ -20,5 +20,21 @@ describe('rootedUploadPaths', () => {
 			'first/index.html',
 			'second/index.html',
 		])
+	})
+})
+
+describe('uploadRoot', () => {
+	test('names the folder a picked directory came from', () => {
+		expect(
+			uploadRoot([
+				{ name: 'index.html', webkitRelativePath: 'zine/index.html' },
+				{ name: 'cat.png', webkitRelativePath: 'zine/img/cat.png' },
+			]),
+		).toBe('zine')
+	})
+
+	test('is null for loose files or several dropped roots', () => {
+		expect(uploadRoot([{ name: 'index.html' }])).toBeNull()
+		expect(uploadRoot([{ name: 'first/index.html' }, { name: 'second/index.html' }])).toBeNull()
 	})
 })

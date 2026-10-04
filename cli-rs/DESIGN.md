@@ -66,7 +66,7 @@ The flag is available in 2.0.2+ builds.
 1. `scripts/build-cli-binaries.sh` builds every target into `binaries/` with
    `SHA256SUMS`, under the legacy `wisp-cli-*` names that CI pipelines curl.
 2. Copy the new checksums into `binaries/index.html`, `docs/src/content/docs/cli.md`
-   and `apps/main-app/public/editor/tabs/CLITab.tsx`, then deploy `binaries/` as
+   and `apps/main-app/public/editor/views/cli.tsx`, then deploy `binaries/` as
    `nekomimi.pet/wisp-cli-binaries` without `--spa`/`--directory` (keeps its settings).
 3. `bun cli-rs/scripts/npm-packages.ts` stages `wispctl` (a node shim) and the
    `@wispplace/wispctl-<os>-<cpu>` binary packages in `target/npm/`. Publish the

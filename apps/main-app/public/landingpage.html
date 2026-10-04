@@ -556,17 +556,6 @@
             overflow: hidden;
             touch-action: none;
         }
-        .board-hint {
-            position: absolute;
-            left: 1.25rem;
-            bottom: 0.9rem;
-            font-family: var(--hand);
-            font-size: 1.35rem;
-            color: var(--ink-soft);
-            pointer-events: none;
-            z-index: 0;
-        }
-
         .polaroid {
             position: absolute;
             width: 250px;
@@ -773,18 +762,14 @@
         @keyframes blink { 50% { opacity: 0; } }
 
         /* ------------------------------------------------------------------
-           Final CTA
+           Sign-off: the fairy floating among the sparkles before the footer
            ------------------------------------------------------------------ */
         .final {
-            text-align: center;
-            padding: 7rem 1.5rem 7rem;
+            padding: 4rem 1.5rem;
             position: relative;
             overflow: hidden;
         }
-        .final h2 { font-size: clamp(2.4rem, 6vw, 4.5rem); font-weight: 800; margin-bottom: 1rem; }
-        .final p { color: var(--ink-soft); margin: 0 auto 2.25rem; max-width: 30rem; }
-        .final .cta-row { justify-content: center; }
-        .final .fairy-mini { width: 70px; margin: 0 auto 1rem; display: block; animation: bob 3.4s ease-in-out infinite; }
+        .final .fairy-mini { width: 70px; margin: 0 auto; display: block; animation: bob 3.4s ease-in-out infinite; }
 
         footer { border-top: 2px dashed var(--border-light); }
         .footer-brand p:first-child { font-family: var(--display); font-size: 1.3rem; }
@@ -930,7 +915,6 @@
                     <div>
                         <span class="kicker">the neighborhood</span>
                         <h2 class="section-title">People are putting<br>their stuff here</h2>
-                        <p class="lede">Real sites, living on wisp.place right now. Drag them around, click one to visit.</p>
                     </div>
                     <div class="hood-tools">
                         <button type="button" class="btn-pop mint small" id="shuffle">shuffle ⟳</button>
@@ -938,7 +922,6 @@
                     </div>
                 </div>
                 <div class="board" id="board">
-                    <span class="board-hint">← they're sticky, but only a little</span>
                 </div>
             </div>
         </section>
@@ -947,7 +930,7 @@
         <section class="section" style="background: var(--paper-2); border-block: 3px solid var(--line);">
             <div class="section-inner">
                 <span class="kicker">no suits involved</span>
-                <h2 class="section-title">A passion project,<br>not a startup</h2>
+                <h2 class="section-title">A passion project</h2>
                 <div class="stickies">
                     <div class="sticky" style="--c: var(--butter); --r: -3deg"><span class="big">one person</span><p>Run by one person for fun. No investors, no roadmap meetings.</p></div>
                     <div class="sticky" style="--c: var(--pink); --r: 2deg"><span class="big">free!</span><p>Because I want it to be, not as a trial that expires.</p></div>
@@ -1012,12 +995,6 @@
         <section class="final">
             <div class="ambient" id="ambient-2" aria-hidden="true"></div>
             <img class="fairy-mini" src="/fairy.webp" alt="">
-            <h2 class="display">Go on, put your<br><span class="squiggle">stuff</span> somewhere.</h2>
-            <p>Free forever. No credit card. Just sign in with your Bluesky account.</p>
-            <div class="cta-row">
-                <a href="{{ATPROTO_LOGIN_URL}}" class="btn-pop">Start deploying ✦</a>
-                <a href="#neighborhood" class="btn-pop alt">see the neighborhood</a>
-            </div>
         </section>
     </main>
 

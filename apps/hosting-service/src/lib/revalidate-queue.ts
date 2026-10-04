@@ -1,8 +1,10 @@
 import {
 	DEFAULT_REVALIDATE_STREAM,
 	DEFAULT_REVALIDATE_STREAM_CAPACITY,
-	revalidationQuarantineKey,
-	revalidationSiteVersionKey,
+	enqueueSiteRevalidation,
+	type RevalidateQueueClient,
+	type RevalidateReasonCategory,
+	revalidateReasonCategory,
 } from '@wispplace/constants'
 import Redis from 'ioredis'
 import { recordRevalidateResult } from './revalidate-metrics'
@@ -41,7 +43,7 @@ function redisErrorKind(error: unknown): string {
 	return 'UnknownError'
 }
 
-function getDedupeTtlSeconds(reasonCategory: 'storage-miss' | 'rewrite-miss' | 'other'): number {
+function getDedupeTtlSeconds(reasonCategory: RevalidateReasonCategory): number {
 	if (reasonCategory === 'storage-miss') {
 		return storageMissDedupeTtlSeconds
 	}
@@ -78,98 +80,29 @@ function getRedisClient(): Redis | null {
 
 export type EnqueueResult = 'enqueued' | 'deduped' | 'quarantined' | 'disabled' | 'error'
 
-type RevalidateReasonCategory = 'storage-miss' | 'rewrite-miss' | 'other'
-
-export interface RevalidateQueueClient {
-	eval(script: string, keyCount: number, ...keysAndArgs: string[]): PromiseLike<unknown>
-}
-
-// Dedupe and enqueue are one atomic operation. The key stores the exact stream
-// ID and is trusted only while XRANGE proves that entry still exists. Producers
-// never MAXLEN-trim because that can remove pending consumer-group work.
-export const REVALIDATE_ENQUEUE_SCRIPT = `
-local quarantine = redis.call('GET', KEYS[3])
-if quarantine then return {-2, quarantine} end
-local sourceVersion = redis.call('GET', KEYS[4]) or ''
-
-local existing = redis.call('GET', KEYS[1])
-if existing then
-  local found = redis.call('XRANGE', KEYS[2], existing, existing, 'COUNT', 1)
-  if #found == 1 and found[1][1] == existing then return {0, existing} end
-  redis.call('DEL', KEYS[1])
-end
-
-if redis.call('XLEN', KEYS[2]) >= tonumber(ARGV[2]) then return {-1, ''} end
-local streamId = redis.pcall('XADD', KEYS[2], '*', 'did', ARGV[3], 'rkey', ARGV[4], 'reason', ARGV[5], 'ts', ARGV[6])
-if type(streamId) == 'table' and streamId.err then
-  redis.call('DEL', KEYS[1])
-  return redis.error_reply(streamId.err)
-end
-redis.call('SET', KEYS[1], streamId, 'EX', ARGV[1])
-return {1, streamId}
-`
-
-function getReasonCategory(reason: string): RevalidateReasonCategory {
-	if (reason.startsWith('storage-miss')) return 'storage-miss'
-	if (reason.startsWith('rewrite-miss')) return 'rewrite-miss'
-	return 'other'
-}
-
-function parseEnqueueScriptResult(value: unknown): { status: number; streamId: string } | null {
-	if (!Array.isArray(value) || typeof value[0] !== 'number' || typeof value[1] !== 'string') return null
-	return { status: value[0], streamId: value[1] }
-}
-
 export async function enqueueRevalidateWithRedis(
 	redis: RevalidateQueueClient,
 	did: string,
 	rkey: string,
 	reason: string,
 ): Promise<{ enqueued: boolean; result: Exclude<EnqueueResult, 'disabled'> }> {
-	// Separate dedup keys per reason category so a storage-miss is never
-	// silenced by a pending rewrite-miss (which runs with forceDownload=false).
-	const reasonCategory = getReasonCategory(reason)
-	const dedupeKey = `revalidate:site:${reasonCategory}:${did}:${rkey}`
-	const dedupeTtl = getDedupeTtlSeconds(reasonCategory)
-
 	try {
-		const outcome = parseEnqueueScriptResult(
-			await redis.eval(
-				REVALIDATE_ENQUEUE_SCRIPT,
-				4,
-				dedupeKey,
-				streamName,
-				revalidationQuarantineKey(did, rkey),
-				revalidationSiteVersionKey(did, rkey),
-				dedupeTtl.toString(),
-				streamMaxLen.toString(),
-				did,
-				rkey,
-				reason,
-				Date.now().toString(),
-			),
-		)
-		if (!outcome) throw new Error('Unexpected Redis revalidate enqueue script response')
-		if (outcome.status === 0 && outcome.streamId) {
-			recordRevalidateResult('deduped')
-			return { enqueued: false, result: 'deduped' }
-		}
-		if (outcome.status === -2) {
-			recordRevalidateResult('quarantined')
-			return { enqueued: false, result: 'quarantined' }
-		}
-		if (outcome.status === -1) {
+		const outcome = await enqueueSiteRevalidation(redis, {
+			stream: streamName,
+			maxLen: streamMaxLen,
+			dedupeTtlSeconds: getDedupeTtlSeconds(revalidateReasonCategory(reason)),
+			did,
+			rkey,
+			reason,
+		})
+		if (outcome === 'full') {
 			console.warn(`[Revalidate] Queue capacity reached for ${did}/${rkey}`)
 			recordRevalidateResult('error')
 			return { enqueued: false, result: 'error' }
 		}
-		if (outcome.status !== 1 || !outcome.streamId) {
-			throw new Error('Unexpected Redis revalidate enqueue script status')
-		}
-
-		console.log(`[Revalidate] Enqueued ${did}/${rkey} (${reason}) to ${streamName}`)
-		recordRevalidateResult('enqueued')
-		return { enqueued: true, result: 'enqueued' }
+		recordRevalidateResult(outcome)
+		if (outcome === 'enqueued') console.log(`[Revalidate] Enqueued ${did}/${rkey} (${reason}) to ${streamName}`)
+		return { enqueued: outcome === 'enqueued', result: outcome }
 	} catch (err) {
 		recordRevalidateResult('error')
 		console.error('[Revalidate] Failed to enqueue', { did, rkey, reason, errorKind: redisErrorKind(err) })

@@ -9,6 +9,7 @@ import {
 	missingGrantedCapabilities,
 	unmarkLegacyScopeState,
 } from '../lib/oauth-authorize'
+import { backfillSitesFromPds } from '../lib/pds-backfill'
 import { authenticateRequest, invalidateSessionCache, SESSION_COOKIE_NAME } from '../lib/wisp-auth'
 import { resolvePrivateShareState } from './private-redeem'
 
@@ -129,18 +130,23 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 					return c.redirect(redeem.url ?? '/private/denied')
 				}
 
+				// Sites deployed while the firehose was not watching (or before this
+				// account first signed in) only reach site_cache once revalidated.
+				const backfill = backfillSitesFromPds(session.did, session).catch((err) => {
+					logger.error('[Auth] PDS backfill failed', err)
+					return null
+				})
+
 				// Which page to land on is presentation, not authorization, so it reads
 				// the local replica. Both lookups used to go to the primary, which from
 				// a distant region cost two more round trips on the sign-in path than
 				// the choice of redirect is worth.
 				const { sites, domain } = await eventualRead.getUserStatus(session.did)
+				if (sites.length > 0 || domain) return c.redirect('/editor')
 
-				// If no sites and no domain, redirect to onboarding
-				if (sites.length === 0 && !domain) {
-					return c.redirect('/onboarding')
-				}
-
-				return c.redirect('/editor')
+				// Nothing cached yet: only a PDS with no sites at all means a new user.
+				const found = (await backfill)?.found ?? 0
+				return c.redirect(found > 0 ? '/editor' : '/onboarding')
 			} catch (err) {
 				// This catches state validation failures and other OAuth errors
 				logger.error('[Auth] OAuth callback error', err)

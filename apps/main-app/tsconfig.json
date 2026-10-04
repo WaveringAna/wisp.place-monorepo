@@ -3,9 +3,6 @@
   "compilerOptions": {
     "baseUrl": ".",
     "paths": {
-      "@server": ["./src/index.ts"],
-      "@server/*": ["./src/*"],
-      "@public/*": ["./public/*"],
       "@wispplace/*": ["../../packages/@wispplace/*/src"]
     }
   },
