@@ -22,7 +22,7 @@ const exercise = async (command: string, secret = 'fixture-password') => {
 			`#!/usr/bin/env bash
 set -eu
 [ "$1" = install ] && [ "$2" = --global ] && [ "$3" = --prefix ]
-[ "$4" = "$HOME/.local" ] && [ "$5" = wispctl@2.0.2 ]
+[ "$4" = "$HOME/.local" ] && [ "$5" = wispctl@2.0.3 ]
 mkdir -p "$4/bin"
 cp "$FAKE_CLI" "$4/bin/wispctl"
 `,

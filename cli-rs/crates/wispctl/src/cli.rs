@@ -56,6 +56,56 @@ pub enum Command {
     Logout(LogoutArgs),
     /// Manage stored accounts
     Accounts(AccountsArgs),
+    /// Manage pull-request preview webhooks
+    Preview(PreviewArgs),
+}
+
+#[derive(Args, Debug)]
+#[command(args_conflicts_with_subcommands = true)]
+pub struct PreviewArgs {
+    #[command(subcommand)]
+    pub command: PreviewCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum PreviewCommand {
+    /// Enable pull-request previews for a tangled repository
+    Enable {
+        /// Account that deploys the previews
+        handle: Option<String>,
+        /// Repository name on tangled
+        #[arg(long, value_name = "name")]
+        repo: String,
+        /// Wisp subdomain label preview URLs live under; required with more than one claim
+        #[arg(long, value_name = "label")]
+        claim: Option<String>,
+        /// DID that owns the repository when working as a collaborator
+        #[arg(long, value_name = "did")]
+        owner: Option<String>,
+        /// Preview bot the webhook wakes
+        #[arg(
+            long,
+            env = "WISPCTL_PREVIEW_BOT_URL",
+            value_name = "url",
+            default_value = "https://preview-bot.wisp.place"
+        )]
+        bot_url: String,
+        /// Hostname suffix of preview URLs, to print the URL pattern
+        #[arg(long, env = "WISPCTL_PREVIEW_HOST", value_name = "host")]
+        preview_host: Option<String>,
+        #[command(flatten)]
+        xrpc: XrpcOptions,
+    },
+    /// Disable pull-request previews for a tangled repository
+    Disable {
+        /// Account that deploys the previews
+        handle: Option<String>,
+        /// Repository name on tangled
+        #[arg(long, value_name = "name")]
+        repo: String,
+        #[command(flatten)]
+        xrpc: XrpcOptions,
+    },
 }
 
 #[derive(Args, Debug, Clone, Default)]

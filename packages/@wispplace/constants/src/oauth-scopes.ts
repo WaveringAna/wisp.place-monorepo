@@ -385,7 +385,11 @@ export const WISP_APP_PERMISSION_SETS = [WISP_PERMISSION_SET_SITES, WISP_PERMISS
  * The CLI writes records itself but reaches domain/private-site management
  * through proxied XRPC calls to the hosting service.
  */
-export const WISP_CLI_PERMISSION_SETS = [WISP_PERMISSION_SET_SITES, WISP_PERMISSION_SET_HOSTING] as const
+export const WISP_CLI_PERMISSION_SETS = [
+	WISP_PERMISSION_SET_SITES,
+	WISP_PERMISSION_SET_HOSTING,
+	WISP_PERMISSION_SET_WEBHOOKS,
+] as const
 
 const BLOB_CAPABILITY: WispCapability = { resource: 'blob', mime: '*/*' }
 

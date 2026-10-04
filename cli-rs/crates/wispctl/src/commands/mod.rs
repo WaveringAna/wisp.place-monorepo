@@ -4,6 +4,7 @@ pub mod domain;
 pub mod list;
 pub mod login;
 pub mod logout;
+pub mod preview;
 pub mod private;
 pub mod pull;
 pub mod serve;
@@ -26,5 +27,6 @@ pub async fn run(cli: Cli) -> Result<()> {
         Some(Command::Login(args)) => login::run(args).await,
         Some(Command::Logout(args)) => logout::run(args).await,
         Some(Command::Accounts(args)) => accounts::run(args).await,
+        Some(Command::Preview(args)) => preview::run(args).await,
     }
 }

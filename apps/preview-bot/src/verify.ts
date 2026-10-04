@@ -25,6 +25,7 @@ export type Rejection =
 	| 'pull-repo-mismatch'
 	| 'pull-has-no-rounds'
 	| 'claim-not-owned'
+	| 'not-a-collaborator'
 	| 'label-too-long'
 	| 'preview-not-serving'
 
@@ -64,10 +65,10 @@ export function isWellFormed(request: PreviewRequest): boolean {
  *   owner's repo record (owner's PDS)  ->  names the spindle and the repo's DID
  *   pipeline (that spindle)            ->  same repo, a pull request run, names the pull
  *   pull record (author's PDS)         ->  targets that same repo
- *   wisp subdomain claim (our db)      ->  owned by the repo's owner
+ *   wisp subdomain claim (our db)      ->  owned by the repo's owner or an accepted collaborator
  *
  * The last link is what stops someone from naming a site `pr-<sha7>` under their own claim and
- * having the bot advertise it on a repo that is not theirs.
+ * having the bot advertise it on a repo they do not work on.
  */
 export async function verifyPreview(
 	request: PreviewRequest,
@@ -82,14 +83,21 @@ export async function verifyPreview(
 
 /** What a webhook delivery for a `place.wisp.fs/pr-<sha7>` write names: the commit, not the pipeline. */
 export interface HookRequest {
+	/** DID of the repo owner; the deployer themselves unless the hook names someone else. */
 	owner: string
+	/** DID whose site record fired the hook: the preview lives in their repo, under their claim. */
+	deployer: string
 	repo: string
 	claim: string
 	sha7: string
 }
 
 export const isHookWellFormed = (request: HookRequest): boolean =>
-	DID.test(request.owner) && REPO_NAME.test(request.repo) && CLAIM.test(request.claim) && SHA7.test(request.sha7)
+	DID.test(request.owner) &&
+	DID.test(request.deployer) &&
+	REPO_NAME.test(request.repo) &&
+	CLAIM.test(request.claim) &&
+	SHA7.test(request.sha7)
 
 /** Same chain as {@link verifyPreview}, starting from the spindle's newest pull-request run of that commit. */
 export async function verifyHook(
@@ -117,7 +125,7 @@ async function findRepo(ports: Ports, owner: string, repo: string): Promise<Usab
 }
 
 async function verifyFromPipeline(
-	request: { owner: string; claim: string },
+	request: { owner: string; claim: string; deployer?: string },
 	record: UsableRepo,
 	pipelineId: string,
 	ports: Ports,
@@ -134,13 +142,16 @@ async function verifyFromPipeline(
 	const pull = trigger.pull
 		? await ports.getPull(trigger.pull)
 		: trigger.sourceBranch
-			? await ports.findPullForBranch(request.owner, record.repoDid, trigger.sourceBranch)
+			? await findPullForBranch(ports, [request.owner, request.deployer], record.repoDid, trigger.sourceBranch)
 			: null
 	if (!pull) return reject('pull-not-found')
 	if (pull.targetRepoDid !== record.repoDid) return reject('pull-repo-mismatch')
 	if (pull.roundCount < 1) return reject('pull-has-no-rounds')
 
-	if ((await ports.claimOwner(request.claim)) !== request.owner) return reject('claim-not-owned')
+	const claimant = await ports.claimOwner(request.claim)
+	if (!claimant || (request.deployer && claimant !== request.deployer)) return reject('claim-not-owned')
+	if (claimant !== request.owner && !(await ports.isCollaborator(request.owner, record.repoDid, claimant)))
+		return reject('not-a-collaborator')
 
 	const sha7 = trigger.sourceSha.slice(0, 7)
 	const label = `pr-${sha7}-${request.claim}`
@@ -149,4 +160,13 @@ async function verifyFromPipeline(
 	if (!(await ports.previewServes(url))) return reject('preview-not-serving')
 
 	return { ok: true, url, sha7, pull: { uri: pull.uri, cid: pull.cid }, roundIdx: pull.roundCount - 1 }
+}
+
+/** A branch pull request is written by whoever opened it: the repo owner or the collaborator who deployed. */
+async function findPullForBranch(ports: Ports, authors: (string | undefined)[], repoDid: string, sourceBranch: string) {
+	for (const author of new Set(authors.filter((did): did is string => Boolean(did)))) {
+		const pull = await ports.findPullForBranch(author, repoDid, sourceBranch)
+		if (pull) return pull
+	}
+	return null
 }

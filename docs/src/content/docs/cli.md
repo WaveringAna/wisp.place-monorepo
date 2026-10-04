@@ -41,7 +41,7 @@ Or download a binary directly:
 
 <div class="downloads">
 
-<h2>Download v2.0.2</h2>
+<h2>Download v2.0.3</h2>
 
 <a href="https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-aarch64-darwin" class="download-link" download="">
 
@@ -76,12 +76,12 @@ Or download a binary directly:
 <h3 style="margin-top: 1.5rem; margin-bottom: 0.5rem;">SHA-256 Checksums</h3>
 
 <pre style="font-size: 0.75rem; padding: 1rem;" class="language-bash" tabindex="0"><code class="language-bash">
-fd00750c33566ba474543857243a4c5f18d1b750591f71276b06fe4dbca0dae0  wisp-cli-aarch64-darwin
-c3505505287c60e7193208663a89b87ece82cf2c5fb809a84444c63bea99c5f4  wisp-cli-aarch64-linux
-4a026cc9c53b717d86b8cf27f7b4572cd401a2fcb6d463a7878788d8e3ecbc36  wisp-cli-darwin-universal
-3d5259680b3438f98fe6e5701b9e65557aa56ab65aabe44cd54b05402c5641e5  wisp-cli-x86_64-darwin
-f97dcb95a1fb9bcd56c972bc5c44af1f09f53c77a222a28476316a950ee553a6  wisp-cli-x86_64-linux
-9dce3069f43a90cb03204d9175d54e1ea12d19fe371747c24807badeab68d3bd  wisp-cli-x86_64-windows.exe
+a0f92ab9d4f9fcb018e07f948d37135f3fb56236bc424ec76ee4d3d217244881  wisp-cli-aarch64-darwin
+5e4603425d7482cd8530a9c85b9e582a311b7c88c82627e4ab9b463223ae2cfb  wisp-cli-aarch64-linux
+205f582dc27f177db8f49368b9f947452a196723ef8576df5c75819c186f0409  wisp-cli-darwin-universal
+8df5405bc5c370b495a49ad5c4e4aed27e5fb3c146eb86ff1748f3bf4737f256  wisp-cli-x86_64-darwin
+6f2c9799af1d930f579f8f4ef30ae5025061e286375b93957403e37296a39abb  wisp-cli-x86_64-linux
+9c588972bc8fc3074c384b0c618b289b6567c542aebac0cacaeb4f73895c4f36  wisp-cli-x86_64-windows.exe
 </code></pre>
 
 </div>
@@ -134,7 +134,7 @@ steps:
 
   - name: deploy
     command: |
-      npm install --global --prefix "$HOME/.local" wispctl@2.0.2
+      npm install --global --prefix "$HOME/.local" wispctl@2.0.3
       export PATH="$HOME/.local/bin:$PATH"
       wispctl deploy "$WISP_HANDLE" --path "$SITE_PATH" --site "$SITE_NAME" --yes
 ```
@@ -144,7 +144,8 @@ The CLI reads it from the environment, so it never appears in the process argume
 installed under `$HOME/.local` because the Nix store is read-only.
 
 For a live preview of every pull request, with a comment linking to it, see
-[Preview deploys](/guides/preview-deploys/).
+[Preview deploys](/guides/preview-deploys/). `wispctl preview enable <handle> --repo <name> --claim <label>`
+creates the webhook that wakes the preview bot; `wispctl preview disable <handle> --repo <name>` removes it.
 
 ## Basic Usage
 

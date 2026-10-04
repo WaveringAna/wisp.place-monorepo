@@ -265,6 +265,36 @@ describe('previewServes', () => {
 	})
 })
 
+describe('isCollaborator', () => {
+	const REPO_DID = `did:plc:${'r'.repeat(24)}`
+	const SUBJECT = `did:plc:${'s'.repeat(24)}`
+	const offer = () =>
+		json({ records: [{ uri: 'at://x/sh.tangled.repo.collaborator/1', value: { repo: REPO_DID, subject: SUBJECT } }] })
+
+	test("needs the owner's offer and the subject's acceptance", async () => {
+		const { fetch, requested } = fakeFetch({
+			[`${PDS}/xrpc/com.atproto.repo.listRecords`]: offer,
+			[`${PDS}/xrpc/com.atproto.repo.getRecord`]: () => json({ value: {} }),
+		})
+		expect(await build({ fetch }).isCollaborator(OWNER, REPO_DID, SUBJECT)).toBe(true)
+		expect(requested[1]).toContain('collection=sh.tangled.repo.collaboratorAcceptance')
+	})
+
+	test('an offer nobody accepted is not enough', async () => {
+		const { fetch } = fakeFetch({ [`${PDS}/xrpc/com.atproto.repo.listRecords`]: offer })
+		expect(await build({ fetch }).isCollaborator(OWNER, REPO_DID, SUBJECT)).toBe(false)
+	})
+
+	test('an offer for another repo or person does not count', async () => {
+		const { fetch, requested } = fakeFetch({
+			[`${PDS}/xrpc/com.atproto.repo.listRecords`]: offer,
+			[`${PDS}/xrpc/com.atproto.repo.getRecord`]: () => json({ value: {} }),
+		})
+		expect(await build({ fetch }).isCollaborator(OWNER, REPO_DID, OWNER)).toBe(false)
+		expect(requested).toHaveLength(1)
+	})
+})
+
 describe('bot comments', () => {
 	function fakeAgent(existing: Array<{ uri: string; value: unknown }> = []) {
 		const calls: Array<{ op: string; input: Json }> = []

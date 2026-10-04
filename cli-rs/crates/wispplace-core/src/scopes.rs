@@ -66,8 +66,11 @@ pub const WISP_PERMISSION_SETS: &[PermissionSet] = &[
     },
 ];
 
-pub const WISP_CLI_PERMISSION_SETS: &[&str] =
-    &[WISP_PERMISSION_SET_SITES, WISP_PERMISSION_SET_HOSTING];
+pub const WISP_CLI_PERMISSION_SETS: &[&str] = &[
+    WISP_PERMISSION_SET_SITES,
+    WISP_PERMISSION_SET_HOSTING,
+    WISP_PERMISSION_SET_WEBHOOKS,
+];
 pub const WISP_APP_PERMISSION_SETS: &[&str] =
     &[WISP_PERMISSION_SET_SITES, WISP_PERMISSION_SET_WEBHOOKS];
 
@@ -375,7 +378,7 @@ mod tests {
         let scopes = build_wisp_scopes(WISP_CLI_PERMISSION_SETS);
         assert_eq!(
             scopes.preferred,
-            "atproto blob:*/* include:place.wisp.authSites include:place.wisp.authHosting"
+            "atproto blob:*/* include:place.wisp.authSites include:place.wisp.authHosting include:place.wisp.authWebhooks"
         );
         assert!(scopes.legacy.contains("repo:place.wisp.fs"));
         assert!(!scopes.legacy.contains("include:"));

@@ -136,3 +136,10 @@ bun test --isolate scripts/wispctl-nix.test.ts
 - Directory listings sort case-insensitively instead of with ICU collation.
 - Status goes to stderr and results to stdout, so `--json` output is clean.
 
+
+### Pull-request previews
+
+`wispctl preview enable` and `disable` (2.0.3+) write and delete the `place.wisp.v2.wh`
+record `preview-<repo>` that wakes the preview bot, the same record the dashboard writes.
+The CLI asks for the webhooks permission set for this, but does not require it, so older
+sessions still deploy and only `preview` asks them to log in again.

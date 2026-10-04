@@ -28,7 +28,7 @@ describe('previewWorkflow', () => {
 	})
 
 	test('deploys the commit with the pinned cli and never calls the bot itself', () => {
-		expect(workflow).toContain('wispctl@2.0.2')
+		expect(workflow).toContain('wispctl@2.0.3')
 		expect(workflow).toContain('--sha "$TANGLED_COMMIT_SHA"')
 		expect(workflow).toContain('--path ./dist')
 		expect(workflow).not.toContain('curl')

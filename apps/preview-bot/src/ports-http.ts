@@ -195,6 +195,43 @@ export function createHttpPorts(options: HttpPortsOptions): Ports {
 			return null
 		}
 	}
+	const isCollaborator = async (ownerDid: string, repoDid: string, subjectDid: string): Promise<boolean> => {
+		const offered = await (async () => {
+			const pds = await identity(ownerDid)
+			let cursor: string | undefined
+			for (let page = 0; page < 5; page++) {
+				const query = new URLSearchParams({ repo: ownerDid, collection: 'sh.tangled.repo.collaborator', limit: '100' })
+				if (cursor) query.set('cursor', cursor)
+				const response = await fetchJson<{ records?: unknown[]; cursor?: string }>(
+					fetcher,
+					`${pds}/xrpc/com.atproto.repo.listRecords?${query}`,
+				)
+				const match = (response.records ?? []).some(
+					(item) =>
+						isObject(item) && isObject(item.value) && item.value.repo === repoDid && item.value.subject === subjectDid,
+				)
+				if (match) return true
+				if (!response.cursor || !response.records?.length) return false
+				cursor = response.cursor
+			}
+			return false
+		})()
+		if (!offered) return false
+		// The acceptance lives in the collaborator's own repo, keyed by the repo DID.
+		const pds = await identity(subjectDid)
+		const query = new URLSearchParams({
+			repo: subjectDid,
+			collection: 'sh.tangled.repo.collaboratorAcceptance',
+			rkey: repoDid,
+		})
+		try {
+			await fetchJson(fetcher, `${pds}/xrpc/com.atproto.repo.getRecord?${query}`)
+			return true
+		} catch (error) {
+			if (error instanceof HttpStatusError && error.status >= 500) throw error
+			return false
+		}
+	}
 	const getPull = async (uri: string): Promise<Pull | null> => {
 		const parsed = recordUri(uri)
 		if (!parsed) return null
@@ -273,6 +310,7 @@ export function createHttpPorts(options: HttpPortsOptions): Ports {
 		claimOwner,
 		previewServes,
 		findPullForBranch,
+		isCollaborator,
 		findComment,
 		createComment: (input) => writeComment(undefined, input, new Date().toISOString()),
 		updateComment: (rkey, input) => writeComment(rkey, input, new Date().toISOString()),

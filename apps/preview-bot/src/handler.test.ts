@@ -33,6 +33,7 @@ function world(overrides: Partial<Ports> = {}): World {
 		getPipeline: async () => ({ repo: REPO_DID, pullRequest: { pull: PULL_URI, sourceSha: sha } }),
 		findPipelineForCommit: async () => '3kpipelineabc',
 		findPullForBranch: async () => null,
+		isCollaborator: async () => false,
 		getPull: async () => ({
 			uri: PULL_URI,
 			cid: 'bafypull',
@@ -129,7 +130,8 @@ describe('POST /v1/preview', () => {
 	})
 
 	test.each([
-		['claim-not-owned', { claimOwner: async () => D('x') }, 422],
+		['not-a-collaborator', { claimOwner: async () => D('x') }, 422],
+		['claim-not-owned', { claimOwner: async () => null }, 422],
 		['pipeline-not-found', { getPipeline: async () => null }, 422],
 		['preview-not-serving', { previewServes: async () => false }, 409],
 	] as Array<
@@ -292,6 +294,22 @@ describe('POST /v1/hook', () => {
 		expect(response.status).toBe(200)
 		expect(await response.json()).toEqual({ status: 'created', url: 'https://pr-ab12cd3-alice.preview.wisp.place/' })
 		expect(w.creates).toHaveLength(1)
+	})
+
+	test('takes the repo owner from the hook url when a collaborator deploys', async () => {
+		const collaborator = D('c')
+		const owners: string[] = []
+		const w = world({
+			listRepoRecords: async (owner) => {
+				owners.push(owner)
+				return world().ports.listRepoRecords(owner)
+			},
+			claimOwner: async () => collaborator,
+			isCollaborator: async (_owner, _repo, subject) => subject === collaborator,
+		})
+		const response = await handlerFor(w)(hook({ ...event, did: collaborator }, `repo=blog&claim=alice&owner=${OWNER}`))
+		expect(response.status).toBe(200)
+		expect(owners).toEqual([OWNER])
 	})
 
 	test('reads a delivery that carries a large site record', async () => {

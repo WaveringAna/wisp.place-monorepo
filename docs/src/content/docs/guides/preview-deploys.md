@@ -35,6 +35,10 @@ This tells the preview bot about your deploys. Create a `place.wisp.v2.wh` recor
 
 The dashboard's **cli & ci** tab writes it when you turn previews on for a repo; any AT Protocol client can write it too (`com.atproto.repo.putRecord`). Every site write you make fires it, and the bot ignores anything not named `pr-<sha7>`. It needs no secret: the bot checks the repository, pipeline, pull request, claim and preview URL itself before it comments. Delete the record to turn previews off.
 
+The claim has to belong to whoever deploys, and that account has to be the repo's owner or an accepted collaborator on it. For a repo you collaborate on, the record goes in your own PDS and the URL names the owner too: `...?repo=<repo name>&claim=<your subdomain>&owner=<owner did>`.
+
+With the CLI: `wispctl preview enable <handle> --repo <repo name> --claim <subdomain>` (add `--owner <owner did>` as a collaborator), and `wispctl preview disable <handle> --repo <repo name>`.
+
 ### 2. The workflow on your spindle
 
 - Add an app password for your account as the repo secret `WISP_APP_PASSWORD` in the repo's spindle settings on Tangled. Use a dedicated one, never your main login. (The dashboard can store it for you.)
@@ -78,7 +82,7 @@ steps:
         echo "no deploy secret in this pipeline (pull request from a fork); skipping"
         exit 0
       fi
-      npm install --global --prefix "$HOME/.local" wispctl@2.0.2
+      npm install --global --prefix "$HOME/.local" wispctl@2.0.3
       export PATH="$HOME/.local/bin:$PATH"
       wispctl deploy "$WISP_HANDLE" \
         --password "$WISP_APP_PASSWORD" \
@@ -92,7 +96,7 @@ steps:
 
 `--sha` names the site `pr-<sha7>`, and `--preview-host` makes `wispctl` check that name before it uploads anything, then print the preview URL once the deploy succeeds. Set `PREVIEW_CLAIM` to your claimed wisp subdomain label; it is required when your account has more than one claim.
 
-Replace the build commands and `./dist` with your own. The workflow pins `wispctl@2.0.2` and installs it under `$HOME/.local`, not into the read-only Nix store.
+Replace the build commands and `./dist` with your own. The workflow pins `wispctl@2.0.3` and installs it under `$HOME/.local`, not into the read-only Nix store.
 
 ## Cleaning up
 
@@ -117,7 +121,7 @@ steps:
   - name: prune old previews
     command: |
       set -euo pipefail
-      npm install --global --prefix "$HOME/.local" wispctl@2.0.2
+      npm install --global --prefix "$HOME/.local" wispctl@2.0.3
       export PATH="$HOME/.local/bin:$PATH"
       wispctl site prune "$WISP_HANDLE" \
         --password "$WISP_APP_PASSWORD" \

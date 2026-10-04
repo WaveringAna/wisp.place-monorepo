@@ -31,6 +31,7 @@ function fakePorts(overrides: Partial<Ports> = {}): { ports: Ports; calls: Calls
 		listRepoRecords: async () => [repoRecord],
 		findPipelineForCommit: async () => '3kpipelineabc',
 		findPullForBranch: async () => null,
+		isCollaborator: async () => false,
 		getPipeline: async (host, id) => {
 			calls.pipelines.push([host, id])
 			return pipeline
@@ -102,7 +103,7 @@ describe('verifyPreview', () => {
 		['pull-not-found', { getPull: async () => null }],
 		['pull-repo-mismatch', { getPull: async () => ({ ...pull, targetRepoDid: 'did:plc:eeeeeeeeeeeeeeeeeeeeeeee' }) }],
 		['pull-has-no-rounds', { getPull: async () => ({ ...pull, roundCount: 0 }) }],
-		['claim-not-owned', { claimOwner: async () => ATTACKER }],
+		['not-a-collaborator', { claimOwner: async () => ATTACKER }],
 		['claim-not-owned', { claimOwner: async () => null }],
 		['preview-not-serving', { previewServes: async () => false }],
 	] as Array<[Rejection, Partial<Ports>]>)('rejects with %s', async (reason, overrides) => {
@@ -156,7 +157,7 @@ describe('verifyPreview', () => {
 })
 
 describe('verifyHook', () => {
-	const hook = { owner: OWNER, repo: 'blog', claim: 'alice', sha7: 'ab12cd3' }
+	const hook = { owner: OWNER, deployer: OWNER, repo: 'blog', claim: 'alice', sha7: 'ab12cd3' }
 
 	test("finds the pull-request run of the deployed commit on the repo's own spindle, then verifies it", async () => {
 		const asked: string[][] = []
@@ -195,5 +196,49 @@ describe('verifyHook', () => {
 		})
 		expect(await verifyHook({ ...hook, ...overrides }, ports, config)).toEqual({ ok: false, reason: 'bad-request' })
 		expect(looked).toBe(false)
+	})
+	test('comments for an accepted collaborator who deployed under their own claim', async () => {
+		const asked: string[][] = []
+		const { ports } = fakePorts({
+			claimOwner: async () => ATTACKER,
+			isCollaborator: async (owner, repoDid, subject) => {
+				asked.push([owner, repoDid, subject])
+				return true
+			},
+		})
+		const result = await verifyHook({ ...hook, deployer: ATTACKER }, ports, config)
+		expect(result.ok).toBe(true)
+		expect(asked).toEqual([[OWNER, REPO_DID, ATTACKER]])
+	})
+
+	test('refuses a deployer who is not a collaborator on the repo', async () => {
+		const { ports } = fakePorts({ claimOwner: async () => ATTACKER })
+		expect(await verifyHook({ ...hook, deployer: ATTACKER }, ports, config)).toEqual({
+			ok: false,
+			reason: 'not-a-collaborator',
+		})
+	})
+
+	test('refuses a claim that belongs to someone other than the deployer', async () => {
+		const { ports } = fakePorts({ claimOwner: async () => OWNER, isCollaborator: async () => true })
+		expect(await verifyHook({ ...hook, deployer: ATTACKER }, ports, config)).toEqual({
+			ok: false,
+			reason: 'claim-not-owned',
+		})
+	})
+
+	test('finds a branch pull request opened by the collaborator', async () => {
+		const authors: string[] = []
+		const { ports } = fakePorts({
+			claimOwner: async () => ATTACKER,
+			isCollaborator: async () => true,
+			getPipeline: async () => ({ repo: REPO_DID, pullRequest: { sourceSha: SHA, sourceBranch: 'fix' } }),
+			findPullForBranch: async (author) => {
+				authors.push(author)
+				return author === ATTACKER ? pull : null
+			},
+		})
+		expect((await verifyHook({ ...hook, deployer: ATTACKER }, ports, config)).ok).toBe(true)
+		expect(authors).toEqual([OWNER, ATTACKER])
 	})
 })

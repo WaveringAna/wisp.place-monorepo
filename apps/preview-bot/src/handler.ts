@@ -30,6 +30,7 @@ const STATUS: Record<Rejection, number> = {
 	'pull-repo-mismatch': 422,
 	'pull-has-no-rounds': 422,
 	'claim-not-owned': 422,
+	'not-a-collaborator': 422,
 	'label-too-long': 422,
 	// The deploy may simply not be served yet; the workflow can retry.
 	'preview-not-serving': 409,
@@ -176,7 +177,8 @@ export function createHandler(options: HandlerOptions): (request: Request) => Pr
 		// Ordinary deploys and deletions fire the same hook: done, never retried.
 		if (!sha7 || delivery.event === 'delete') return reply(200, { status: 'ignored' })
 		const hook = {
-			owner: delivery.did,
+			owner: url.searchParams.get('owner') ?? delivery.did,
+			deployer: delivery.did,
 			repo: url.searchParams.get('repo') ?? '',
 			claim: url.searchParams.get('claim') ?? '',
 			sha7,

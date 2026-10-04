@@ -69,7 +69,9 @@ export interface Ports {
 	findPipelineForCommit(spindleHost: string, repoDid: string, sha7: string): Promise<string | null>
 	/** The pull record from its author's PDS; null when it does not exist. */
 	getPull(uri: string): Promise<Pull | null>
-	/** The owner's open pull record from `sourceBranch` into the repo, for spindles that leave the pull URI out. */
+	/** An accepted collaborator: the owner's `sh.tangled.repo.collaborator` offer and the subject's acceptance. */
+	isCollaborator(ownerDid: string, repoDid: string, subjectDid: string): Promise<boolean>
+	/** The author's open pull record from `sourceBranch` into the repo, for spindles that leave the pull URI out. */
 	findPullForBranch(ownerDid: string, targetRepoDid: string, sourceBranch: string): Promise<Pull | null>
 	/** DID that claimed the wisp subdomain `<claim>.<base host>`, or null when unclaimed. */
 	claimOwner(claim: string): Promise<string | null>
