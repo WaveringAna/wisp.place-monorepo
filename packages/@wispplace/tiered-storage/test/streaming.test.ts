@@ -599,6 +599,8 @@ describe('Streaming Operations', () => {
 			const result = await tier.getStream(specialKey)
 			expect(result).not.toBeNull()
 			expect(result!.metadata.key).toBe(specialKey)
+			// Reading to the end also closes the file handle the stream owns.
+			expect((await streamToBuffer(result!.stream)).toString()).toBe(testData)
 		})
 	})
 })
