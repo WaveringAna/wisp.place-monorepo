@@ -1,3 +1,4 @@
+import '../test-env'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { MAX_JETSTREAM_SUBSCRIPTION_URL_BYTES } from './admission'
 import { buildJetstreamSubscriptionUrl, JetstreamClient, parseJetstreamEvent } from './jetstream'

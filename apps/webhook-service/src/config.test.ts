@@ -1,3 +1,4 @@
+import './test-env'
 import { describe, expect, test } from 'bun:test'
 import { parseConfig } from './config'
 import {

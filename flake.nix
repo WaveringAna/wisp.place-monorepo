@@ -37,7 +37,14 @@
             };
           };
           cargoBuildFlags = [ "-p" "wispctl" ];
-          cargoTestFlags = [ "--workspace" ];
+          # build-wispctl-rs.yml runs the workspace tests; rerunning them here
+          # rebuilds every dependency in release mode inside a small CI VM.
+          doCheck = false;
+          # cargoInstallPostBuildHook copies the whole release dir before
+          # installing the binary; drop the intermediates so the copy fits.
+          postBuild = ''
+            rm -rf target/*/release/{deps,build,incremental,.fingerprint,examples}
+          '';
           # Lower CI memory use; release binary packaging still uses fat LTO.
           CARGO_PROFILE_RELEASE_LTO = "thin";
           WISPCTL_NO_KEYCHAIN = "1";

@@ -1,3 +1,4 @@
+import '../test-env'
 import { afterEach, describe, expect, mock, test } from 'bun:test'
 import type { Main as WhRecord } from '@wispplace/lexicons/types/place/wisp/v2/wh'
 import type { CursorRepository, PriorReferenceRepository } from './firehose'
