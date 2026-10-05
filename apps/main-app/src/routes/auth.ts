@@ -36,14 +36,18 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		 * 302 redirect to the AT Protocol OAuth authorize URL.
 		 * Accepts login_hint (handle or DID) or pds (server host), and
 		 * prompt=create to open the server's sign-up page instead of its login.
+		 * sso=github asks the server to go straight to GitHub; servers that
+		 * don't know the param ignore it.
 		 * On error, redirects to /?error=missing_handle or /?error=auth_failed.
 		 */
 		.get('/api/auth/login', async (c) => {
 			try {
-				const query = c.query as { login_hint?: string; pds?: string; prompt?: string }
+				const query = c.query as { login_hint?: string; pds?: string; prompt?: string; sso?: string }
 				const handle = query.login_hint || ''
 				const pds = query.pds || ''
 				const prompt = query.prompt === 'create' ? 'create' : undefined
+				// Asks the PDS (tranquil) to skip its own page and start this provider.
+				const sso = query.sso === 'github' ? 'github' : undefined
 
 				// Use login_hint if provided, otherwise use PDS URL
 				const identifier = handle || (pds ? `https://${pds}` : '')
@@ -56,6 +60,7 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 				logger.info('Login attempt', { identifier, prompt })
 				const state = crypto.randomUUID()
 				const url = await authorizeWisp(client, identifier, prompt ? { state, prompt } : { state })
+				if (sso) url.searchParams.set('sso', sso)
 				logger.info('Authorization URL generated', { identifier })
 
 				return c.redirect(url.toString())

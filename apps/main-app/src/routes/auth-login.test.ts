@@ -54,4 +54,13 @@ describe('GET /api/auth/login', () => {
 		await login('login_hint=alice.example&prompt=none')
 		expect(calls[0]?.options).not.toHaveProperty('prompt')
 	})
+	test('passes sso=github through to the authorize URL', async () => {
+		const response = await login('pds=pds.wisp.place&sso=github')
+		expect(response.headers.get('location')).toBe('https://pds.example/oauth/authorize?request_uri=x&sso=github')
+	})
+
+	test('drops sso values other than github', async () => {
+		const response = await login('pds=pds.wisp.place&sso=evil')
+		expect(response.headers.get('location')).toBe('https://pds.example/oauth/authorize?request_uri=x')
+	})
 })
