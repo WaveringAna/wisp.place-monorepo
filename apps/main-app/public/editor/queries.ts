@@ -1,6 +1,7 @@
 import { QueryClient, type QueryKey, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ApiError, api, errorText } from './api'
 import { newestFirst, type Site, toPrivateSite, toPublicSite, toWebhook } from './model'
+import { rememberAccount } from './remembered-accounts'
 import { notify } from './store'
 
 export const queryClient = new QueryClient({
@@ -28,7 +29,12 @@ export const keys = {
 } as const
 
 export const useUser = () =>
-	useQuery({ queryKey: keys.user, queryFn: api.user, retry: false, staleTime: Number.POSITIVE_INFINITY })
+	useQuery({
+		queryKey: keys.user,
+		queryFn: () => api.user().then(rememberAccount),
+		retry: false,
+		staleTime: Number.POSITIVE_INFINITY,
+	})
 
 async function fetchSites(): Promise<Site[]> {
 	// Private sites are an extra; a failure there must not hide the public list.

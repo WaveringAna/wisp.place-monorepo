@@ -125,7 +125,7 @@ export const unmarkLegacyScopeState = (state: string | null | undefined): string
 export const authorizeWisp = async (
 	client: NodeOAuthClient,
 	identifier: string,
-	options: { state?: string } = {},
+	options: { state?: string; prompt?: 'create' } = {},
 ): Promise<URL> => {
 	if (isLegacyScopeState(options.state)) {
 		return await client.authorize(identifier, { ...options, scope: withAddOns(OAUTH_LEGACY_SCOPE, options.state) })

@@ -34,15 +34,16 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 		/**
 		 * GET /api/auth/login
 		 * 302 redirect to the AT Protocol OAuth authorize URL.
+		 * Accepts login_hint (handle or DID) or pds (server host), and
+		 * prompt=create to open the server's sign-up page instead of its login.
 		 * On error, redirects to /?error=missing_handle or /?error=auth_failed.
 		 */
 		.get('/api/auth/login', async (c) => {
-			// GET endpoint for initiating OAuth via atproto.wisp.place entryway
-			// Accepts: login_hint (handle) or pds (server)
 			try {
-				const query = c.query as { login_hint?: string; pds?: string }
+				const query = c.query as { login_hint?: string; pds?: string; prompt?: string }
 				const handle = query.login_hint || ''
 				const pds = query.pds || ''
+				const prompt = query.prompt === 'create' ? 'create' : undefined
 
 				// Use login_hint if provided, otherwise use PDS URL
 				const identifier = handle || (pds ? `https://${pds}` : '')
@@ -52,12 +53,11 @@ export const authRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
 					return c.redirect('/?error=missing_handle')
 				}
 
-				logger.info('Login attempt via entryway', { identifier })
+				logger.info('Login attempt', { identifier, prompt })
 				const state = crypto.randomUUID()
-				const url = await authorizeWisp(client, identifier, { state })
+				const url = await authorizeWisp(client, identifier, prompt ? { state, prompt } : { state })
 				logger.info('Authorization URL generated', { identifier })
 
-				// Redirect to the OAuth authorization URL
 				return c.redirect(url.toString())
 			} catch (err) {
 				logger.error('Login error', err)

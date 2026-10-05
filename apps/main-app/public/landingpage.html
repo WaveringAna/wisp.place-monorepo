@@ -175,6 +175,8 @@
         }
 
         main, header, footer { position: relative; z-index: 1; }
+        /* the tilted marquee is wider than a phone; without this, mobile browsers widen the layout viewport */
+        main { overflow-x: clip; }
 
         header {
             background: color-mix(in oklch, var(--paper) 82%, transparent);
@@ -704,6 +706,164 @@
         .sticky p { font-size: 0.95rem; line-height: 1.55; margin: 0; color: oklch(0.26 0.031 352); font-weight: 500; }
 
         /* ------------------------------------------------------------------
+           Sign-in / sign-up dialog
+           ------------------------------------------------------------------ */
+        .door-dialog {
+            margin: auto;
+            width: min(40rem, calc(100vw - 2rem));
+            max-height: calc(100dvh - 2rem);
+            padding: 1.6rem;
+            border: 3px solid var(--line);
+            border-radius: 22px;
+            background: var(--paper-2);
+            color: var(--ink);
+            box-shadow: 6px 6px 0 var(--shadow);
+            overflow: auto;
+        }
+        .door-dialog [tabindex="-1"] { outline: none; }
+        .door-dialog :focus-visible:not(input, [tabindex="-1"]) { outline: 2px solid var(--rose); outline-offset: 2px; }
+        .door-dialog.narrow { width: min(27rem, calc(100vw - 2rem)); background: var(--paper); }
+        .door-dialog[open] { animation: door-pop 280ms cubic-bezier(.34,1.56,.64,1) both; }
+        .door-dialog::backdrop { background: color-mix(in oklch, oklch(0.26 0.031 352) 30%, transparent); backdrop-filter: blur(3px); }
+        @keyframes door-pop { from { opacity: 0; scale: 0.94; } }
+        .door-dialog .panel { animation: door-panel 320ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+        .door-dialog .panel.from-back { animation-name: door-panel-back; }
+        @keyframes door-panel { from { opacity: 0; transform: translateX(14px); } }
+        @keyframes door-panel-back { from { opacity: 0; transform: translateX(-14px); } }
+
+        .door-close {
+            position: absolute; top: 0.7rem; right: 0.7rem; z-index: 2;
+            width: 2rem; height: 2rem; padding: 0;
+            display: grid; place-items: center;
+            border: 2px solid var(--line); border-radius: 50%;
+            background: var(--card); color: var(--ink); cursor: pointer; font-size: 1rem; line-height: 1;
+        }
+        .door-back {
+            display: inline-flex; align-items: center; gap: 0.3rem;
+            padding: 0.2rem 0.1rem; border: 0; background: none; cursor: pointer;
+            color: var(--ink-soft); font: inherit; font-size: 0.9rem; font-weight: 600;
+        }
+        .door-back:hover { color: var(--ink); }
+        .door-link {
+            padding: 0; border: 0; background: none; cursor: pointer; font: inherit; font-weight: 600;
+            color: var(--rose); text-decoration: underline; text-decoration-thickness: 1.5px; text-underline-offset: 3px;
+        }
+        .door-title {
+            font-family: var(--display); font-variation-settings: "SOFT" 100, "WONK" 1;
+            font-size: 1.75rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1.1; margin: 0.2rem 0 0.6rem;
+        }
+        .door-heading { text-align: center; padding: 0 2rem; }
+        .door-heading .door-title { font-size: clamp(1.6rem, 4vw, 2rem); }
+        .door-dialog .kicker { font-size: 1.45rem; margin: 0; }
+        .door-body { color: var(--ink-soft); font-size: 0.95rem; margin: 0 0 1.1rem; }
+        .door-fine { color: var(--ink-soft); font-size: 0.8rem; margin: 0.8rem 0 0; }
+        .door-center { text-align: center; }
+        .door-stack { display: grid; gap: 0.6rem; }
+        .door-or {
+            display: flex; align-items: center; gap: 0.75rem; margin: 1rem 0;
+            color: var(--ink-soft); font-family: var(--hand); font-size: 1.25rem;
+        }
+        .door-or::before, .door-or::after { content: ""; flex: 1; border-top: 2px dashed var(--border-light); }
+
+        .doors { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem; margin: 1.2rem 0 0.4rem; }
+        .door {
+            display: flex; flex-direction: column; align-items: center; min-height: 11rem; padding: 1.1rem 1.1rem 1rem;
+            text-decoration: none;
+            text-align: left; font: inherit; cursor: pointer; color: oklch(0.26 0.031 352);
+            background: var(--c); border: 2.5px solid var(--line); border-radius: 4px 4px 18px 4px;
+            box-shadow: 4px 5px 0 var(--shadow); rotate: var(--r);
+            transition: rotate 300ms cubic-bezier(.34,1.56,.64,1), transform 300ms cubic-bezier(.34,1.56,.64,1), box-shadow 200ms ease;
+        }
+        .door:hover, .door:focus-visible { rotate: 0deg; transform: translateY(-4px); box-shadow: 6px 8px 0 var(--shadow); }
+        .door .tape {
+            width: 4.5rem; height: 1.1rem; margin: -1.6rem auto 0.5rem; rotate: -3deg;
+            background: color-mix(in oklch, var(--paper) 65%, transparent);
+            border: 1px dashed oklch(0.26 0.031 352 / 0.3);
+        }
+        .door .big { font-family: var(--hand); font-size: 2.1rem; font-weight: 700; line-height: 1; margin-bottom: 0.5rem; }
+        .door p { margin: 0 0 1rem; font-size: 0.95rem; color: oklch(0.32 0.04 352); text-align: center; }
+        .door .go { margin-top: auto; font-weight: 800; font-size: 0.95rem; }
+
+        .door-info {
+            position: relative; display: inline-grid; place-items: center;
+            width: 1.05rem; height: 1.05rem; margin-left: 0.2rem; vertical-align: 0.1em;
+            border: 1.5px solid currentColor; border-radius: 50%;
+            font-family: var(--display); font-style: italic; font-weight: 700; font-size: 0.68rem; line-height: 1;
+            cursor: help;
+        }
+        .door-info::after {
+            content: attr(data-tip);
+            position: absolute; bottom: calc(100% + 0.45rem); left: 50%; translate: -50% 4px; z-index: 3;
+            width: max-content; max-width: 14rem; padding: 0.4rem 0.6rem; white-space: normal; text-align: center;
+            border: 2px solid var(--line); border-radius: 10px; background: var(--card); color: var(--ink);
+            box-shadow: 2px 2px 0 var(--shadow);
+            font-family: var(--hand); font-style: normal; font-weight: 500; font-size: 1.1rem; line-height: 1.15;
+            opacity: 0; pointer-events: none; transition: opacity 150ms ease, translate 150ms ease;
+        }
+        .door-info.end::after { left: auto; right: -0.5rem; translate: 0 4px; }
+        .door-info.end:hover::after, .door-info.end:focus::after { translate: 0 0; }
+        .door-dialog .nowrap { white-space: nowrap; }
+        .door-info:hover::after, .door-info:focus-visible::after, .door-info:focus::after { opacity: 1; translate: -50% 0; }
+        .door-dialog .btn-pop.block { width: 100%; justify-content: center; }
+        .row-card {
+            position: relative; display: flex; align-items: center; gap: 0.8rem; width: 100%; padding: 0.7rem 0.8rem;
+            text-align: left; font: inherit; color: var(--ink); cursor: pointer;
+            border: 2px solid var(--line); border-radius: 14px; background: var(--card); box-shadow: 2px 2px 0 var(--shadow);
+            transition: transform 160ms ease, box-shadow 160ms ease;
+        }
+        .row-card:hover { transform: translate(-1px, -1px); box-shadow: 4px 4px 0 var(--shadow); }
+        .row-card.ghost { border-style: dashed; background: transparent; box-shadow: none; }
+        .row-avatar {
+            flex: none; display: grid; place-items: center; width: 2.4rem; height: 2.4rem;
+            border: 2px solid var(--line); border-radius: 50%; background: var(--c, var(--pink));
+            color: oklch(0.26 0.031 352); font-family: var(--display); font-weight: 800;
+        }
+        .row-main { flex: 1; min-width: 0; display: grid; }
+        .row-main b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .row-forget {
+            flex: none; width: 1.7rem; height: 1.7rem; padding: 0; border: 0; border-radius: 50%;
+            background: transparent; color: var(--ink-soft); cursor: pointer;
+        }
+        .row-forget:hover { background: var(--paper-2); color: var(--ink); }
+        .saved-row { display: flex; align-items: center; gap: 0.3rem; }
+        .saved-row .row-card { flex: 1; }
+
+        .door-label { display: block; margin-bottom: 0.35rem; font-weight: 700; font-size: 0.9rem; }
+        .door-field {
+            display: flex; align-items: center; border: 2px solid var(--line); border-radius: 14px; background: var(--card);
+            box-shadow: inset 2px 2px 0 color-mix(in oklch, var(--shadow) 45%, transparent);
+        }
+        .door-field:focus-within { box-shadow: 0 0 0 3px color-mix(in oklch, var(--pink) 70%, transparent); }
+        .door-field .at { padding-left: 0.85rem; color: var(--ink-soft); font-weight: 600; }
+        .door-field input {
+            flex: 1; min-width: 0; padding: 0.75rem 0.85rem 0.75rem 0.25rem;
+            border: 0; outline: none; background: transparent; color: var(--ink); font: inherit; font-size: 1rem;
+        }
+        .door-field.bad { border-color: oklch(0.55 0.18 25); }
+        .door-error {
+            margin: 0.6rem 0 0; padding: 0.55rem 0.75rem; border-radius: 12px;
+            background: oklch(0.95 0.04 25); color: oklch(0.50 0.18 25); font-size: 0.85rem; font-weight: 600;
+        }
+        :root[data-theme="dark"] .door-error { background: oklch(0.30 0.06 25); color: oklch(0.82 0.11 25); }
+        @media (prefers-color-scheme: dark) {
+            :root:not([data-theme="light"]) .door-error { background: oklch(0.30 0.06 25); color: oklch(0.82 0.11 25); }
+        }
+
+        .door-going { display: grid; justify-items: center; padding: 1.5rem 0.5rem 1rem; text-align: center; }
+        .door-going img { width: 92px; animation: going-bob 1.6s ease-in-out infinite; }
+        @keyframes going-bob { 50% { transform: translateY(-8px) rotate(-6deg); } }
+        .door-going .host { padding: 0.15rem 0.55rem; border-radius: 6px; background: var(--paper-2); font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 0.85em; }
+
+        @media (max-width: 560px) {
+            .doors { grid-template-columns: 1fr; }
+            .door { min-height: 0; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .door-dialog[open], .door-dialog .panel, .door-going img { animation: none; }
+            .door { transition: none; }
+        }
+
+        /* ------------------------------------------------------------------
            CLI
            ------------------------------------------------------------------ */
         .cli-grid { display: grid; grid-template-columns: 1fr 1.1fr; gap: 3.5rem; align-items: center; }
@@ -837,7 +997,7 @@
                 <a href="https://blog.wisp.place" target="_blank">Blog</a>
                 <a href="https://status.wisp.place" target="_blank">Status</a>
                 <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Toggle light and dark">☾</button>
-                <a href="{{ATPROTO_LOGIN_URL}}" class="nav-cta">Sign in ✦</a>
+                <a href="#signin" class="nav-cta" data-signin>Sign in ✦</a>
             </nav>
         </div>
     </header>
@@ -854,7 +1014,7 @@
                         <span class="hand">A folder becomes a website.</span>
                     </p>
                     <div class="cta-row">
-                        <a href="{{ATPROTO_LOGIN_URL}}" class="btn-pop">Upload a folder →</a>
+                        <a href="#signin" class="btn-pop" data-signin>Upload a folder →</a>
                         <a href="https://docs.wisp.place" target="_blank" class="btn-pop alt">Read the docs</a>
                     </div>
                     <p class="hero-note">✿ free, no card, run by one person for fun</p>
@@ -896,7 +1056,7 @@
                             <div class="mb-verdict" id="mb-verdict"></div>
                             <ul class="mb-files" id="mb-files"></ul>
                             <div class="mb-actions">
-                                <a href="{{ATPROTO_LOGIN_URL}}" class="btn-pop small">make it real ✦</a>
+                                <a href="#signin" class="btn-pop small" data-signin>make it real ✦</a>
                                 <button type="button" class="btn-pop alt small" id="again">another one</button>
                             </div>
                         </div>
@@ -997,6 +1157,68 @@
             <img class="fairy-mini" src="/fairy.webp" alt="">
         </section>
     </main>
+
+    <dialog class="door-dialog" id="door-dialog" aria-labelledby="door-heading">
+        <button type="button" class="door-close" data-door-close aria-label="Close">✕</button>
+
+        <div class="panel" data-panel="doors">
+            <div class="door-heading">
+                <span class="kicker">hello ✦</span>
+                <h2 class="door-title" tabindex="-1" id="door-heading">Have you been here before?</h2>
+            </div>
+            <div class="doors">
+                <a class="door" style="--c: var(--pink); --r: -2deg" href="/api/auth/login?pds={{SIGNUP_PDS}}&amp;prompt=create" data-door-leave="{{SIGNUP_PDS}}" data-leave-kind="new">
+                    <span class="tape"></span>
+                    <span class="big">nope, new!</span>
+                    <p>Make a free account. It takes a minute.</p>
+                    <span class="go">Sign up →</span>
+                </a>
+                <button type="button" class="door" style="--c: var(--mint); --r: 1.5deg" data-door-go="returning">
+                    <span class="tape"></span>
+                    <span class="big">yep!</span>
+                    <p>Sign in with your Bluesky or atproto handle.</p>
+                    <span class="go">Sign in →</span>
+                </button>
+            </div>
+            <p class="door-fine door-center">Your account will work on services wisp natively integrates with, like <span class="nowrap"><a class="door-link" href="https://tangled.org" target="_blank" rel="noopener">Tangled</a><span class="door-info" tabindex="0" role="note" aria-label="decentralized git hosting" data-tip="decentralized git hosting">i</span></span>, <span class="nowrap"><a class="door-link" href="https://atcr.io" target="_blank" rel="noopener">ATCR.io</a><span class="door-info" tabindex="0" role="note" aria-label="decentralized docker registry" data-tip="decentralized docker registry">i</span></span> and <span class="nowrap"><a class="door-link" href="https://marque.at" target="_blank" rel="noopener">marque.at</a><span class="door-info end" tabindex="0" role="note" aria-label="open, easy-to-integrate domain registrar" data-tip="open, easy-to-integrate domain registrar">i</span>.</span></p>
+        </div>
+
+        <div class="panel" data-panel="picker" hidden>
+            <button type="button" class="door-back" data-door-go="doors" data-back>← Back</button>
+            <h2 class="door-title" tabindex="-1">Pick an account</h2>
+            <div class="door-stack">
+                <div class="door-stack" id="door-saved"></div>
+                <button type="button" class="row-card ghost" data-door-go="signin">
+                    <span class="row-avatar" style="--c: var(--paper-2)">+</span>
+                    <span class="row-main"><b>Use another account</b></span>
+                </button>
+            </div>
+        </div>
+
+        <div class="panel" data-panel="signin" hidden>
+            <button type="button" class="door-back" data-door-go="returning" data-back>← Back</button>
+            <h2 class="door-title" tabindex="-1">Sign in with your handle</h2>
+            <form id="door-signin-form" novalidate>
+                <label class="door-label" for="door-handle">Your handle</label>
+                <div class="door-field" id="door-handle-field">
+                    <span class="at">@</span>
+                    <input id="door-handle" name="handle" placeholder="you.bsky.social" autocomplete="username" autocapitalize="none" spellcheck="false" inputmode="url" aria-describedby="door-handle-help door-handle-error">
+                </div>
+                <p class="door-fine" id="door-handle-help">It's your username on Bluesky or any other AT Protocol app.</p>
+                <p class="door-error" id="door-handle-error" role="alert" hidden></p>
+                <button class="btn-pop block mint" type="submit" style="margin-top: 1rem">Sign in</button>
+            </form>
+        </div>
+
+        <div class="panel" data-panel="going" hidden>
+            <div class="door-going">
+                <img src="/fairy.webp" alt="">
+                <h2 class="door-title" tabindex="-1"><span id="door-going-title"></span></h2>
+                <p class="door-body" id="door-going-body"></p>
+                <button type="button" class="door-link" data-door-go="doors" data-back>Back</button>
+            </div>
+        </div>
+    </dialog>
 
     <footer>
         <div class="footer-inner">
@@ -1518,6 +1740,154 @@
                 }
                 setTimeout(() => { $('copy-tag').textContent = 'copy'; }, 1800);
             });
+        })();
+    </script>
+    <script>
+        // Sign-in / sign-up dialog. New people go to our own PDS with prompt=create;
+        // everyone else signs in with a handle. Remembered accounts are written by
+        // the dashboard (editor/remembered-accounts.ts) once a sign-in actually worked.
+        (() => {
+            const dialog = document.getElementById('door-dialog');
+            const ACCOUNTS_KEY = 'wisp-accounts';
+            const COLORS = ['var(--pink)', 'var(--mint)', 'var(--lilac)', 'var(--butter)', 'var(--sky)'];
+            const HANDLE = /^(did:[a-z]+:[\w.:%-]+|([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9])$/i;
+            const COPY = {
+                newTitle: (host) => `Off to ${host}`,
+                newBody: "Make your account there, then you'll land right back here.",
+                inTitle: (host) => `Checking with ${host}`,
+                inBody: "Approve wisp.place there and you're in.",
+                badHandle: "We couldn't find that handle. It usually looks like name.bsky.social or a domain you own.",
+                failed: "That sign-in didn't go through. Want to try again?",
+            };
+
+            const readAccounts = () => {
+                try {
+                    const parsed = JSON.parse(localStorage.getItem(ACCOUNTS_KEY) ?? '[]');
+                    return Array.isArray(parsed) ? parsed.filter((a) => a && typeof a.did === 'string' && typeof a.handle === 'string') : [];
+                } catch { return []; }
+            };
+            const forgetAccount = (did) => {
+                try { localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(readAccounts().filter((a) => a.did !== did))); } catch {}
+            };
+
+            const panels = Array.from(dialog.querySelectorAll('[data-panel]'));
+            const show = (name, back = false) => {
+                if (name === 'returning') name = readAccounts().length ? 'picker' : 'signin';
+                if (name === 'picker') renderAccounts();
+                for (const p of panels) {
+                    const on = p.dataset.panel === name;
+                    p.hidden = !on;
+                    if (on) {
+                        p.classList.toggle('from-back', back);
+                        p.style.animation = 'none';
+                        void p.offsetWidth;
+                        p.style.animation = '';
+                    }
+                }
+                dialog.classList.toggle('narrow', name !== 'doors');
+                // The clicked control was just hidden, so move focus into the new panel.
+                const target = name === 'signin' ? document.getElementById('door-handle') : panels.find((p) => !p.hidden).querySelector('h2');
+                target.focus();
+            };
+
+            const open = (name = 'doors') => {
+                if (!dialog.open) dialog.showModal();
+                show(name);
+            };
+
+            const going = (kind, host) => {
+                const title = document.getElementById('door-going-title');
+                const hostEl = Object.assign(document.createElement('span'), { className: 'host', textContent: host });
+                const [before, after] = (kind === 'new' ? COPY.newTitle('\u0000') : COPY.inTitle('\u0000')).split('\u0000');
+                title.replaceChildren(before, hostEl, after);
+                document.getElementById('door-going-body').textContent = kind === 'new' ? COPY.newBody : COPY.inBody;
+                show('going');
+            };
+
+            const setError = (message) => {
+                const error = document.getElementById('door-handle-error');
+                error.textContent = message ?? '';
+                error.hidden = !message;
+                document.getElementById('door-handle-field').classList.toggle('bad', Boolean(message));
+            };
+
+            // POST so a bad handle comes back as an inline error instead of a redirect.
+            const signIn = async (identifier, host) => {
+                going('in', host);
+                try {
+                    const res = await fetch('/api/auth/signin', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ handle: identifier }),
+                    });
+                    const body = await res.json().catch(() => ({}));
+                    if (!res.ok || typeof body.url !== 'string') throw new Error('signin failed');
+                    location.assign(body.url);
+                } catch {
+                    document.getElementById('door-handle').value = identifier.startsWith('did:') ? '' : identifier;
+                    show('signin', true);
+                    setError(COPY.badHandle);
+                }
+            };
+
+            const renderAccounts = () => {
+                const list = document.getElementById('door-saved');
+                list.replaceChildren(...readAccounts().map((account, i) => {
+                    const row = document.createElement('div');
+                    row.className = 'saved-row';
+                    const card = document.createElement('button');
+                    card.type = 'button';
+                    card.className = 'row-card';
+                    const avatar = Object.assign(document.createElement('span'), { className: 'row-avatar', textContent: account.handle[0]?.toUpperCase() ?? '?' });
+                    avatar.style.setProperty('--c', COLORS[i % COLORS.length]);
+                    const main = Object.assign(document.createElement('span'), { className: 'row-main' });
+                    main.append(Object.assign(document.createElement('b'), { textContent: account.handle }));
+                    card.append(avatar, main);
+                    card.addEventListener('click', () => signIn(account.did, account.handle));
+                    const forget = Object.assign(document.createElement('button'), {
+                        type: 'button', className: 'row-forget', textContent: '✕', title: 'Forget this account on this device',
+                    });
+                    forget.setAttribute('aria-label', `Forget ${account.handle} on this device`);
+                    forget.addEventListener('click', () => {
+                        forgetAccount(account.did);
+                        readAccounts().length ? renderAccounts() : show('signin', true);
+                    });
+                    row.append(card, forget);
+                    return row;
+                }));
+            };
+
+            document.querySelectorAll('[data-signin]').forEach((el) => el.addEventListener('click', (e) => {
+                e.preventDefault();
+                open();
+            }));
+            dialog.addEventListener('click', (e) => {
+                if (e.target === dialog || e.target.closest('[data-door-close]')) return dialog.close();
+                const go = e.target.closest('[data-door-go]');
+                if (go) return show(go.dataset.doorGo, go.hasAttribute('data-back'));
+                const leave = e.target.closest('[data-door-leave]');
+                if (leave) going(leave.dataset.leaveKind, leave.dataset.doorLeave);
+            });
+            document.getElementById('door-signin-form').addEventListener('submit', (e) => {
+                e.preventDefault();
+                const value = document.getElementById('door-handle').value.trim().replace(/^@/, '');
+                if (!HANDLE.test(value)) return setError(COPY.badHandle);
+                setError(null);
+                signIn(value, value.startsWith('did:') ? 'your server' : value);
+            });
+            document.getElementById('door-handle').addEventListener('input', () => setError(null));
+            // Coming back from the bfcache must not leave a "going" screen up.
+            window.addEventListener('pageshow', (e) => { if (e.persisted && dialog.open) show('doors'); });
+
+            const params = new URLSearchParams(location.search);
+            if (params.has('error')) {
+                params.delete('error');
+                history.replaceState(null, '', `${location.pathname}${params.size ? `?${params}` : ''}${location.hash}`);
+                open('signin');
+                setError(COPY.failed);
+            } else if (location.hash === '#signin') {
+                open();
+            }
         })();
     </script>
 </body>

@@ -69,6 +69,10 @@ const parsedServiceIds = (Bun.env.SERVICE_IDS ?? '')
 	.filter((id) => id.length > 0 && id.startsWith('#'))
 const didServiceIds = parsedServiceIds.length > 0 ? Array.from(new Set(parsedServiceIds)) : ['#wisp_xrpc']
 const serverPort = Number(Bun.env.PORT ?? (isLocalDev ? '8000' : '80'))
+// New accounts are made here; the landing page's sign-up sends people to it with prompt=create.
+const signupPds = Bun.env.SIGNUP_PDS ?? 'pds.wisp.place'
+const landingPage = async (): Promise<string> =>
+	(await Bun.file('./apps/main-app/public/landingpage.html').text()).replaceAll('{{SIGNUP_PDS}}', signupPds)
 
 const databaseReadHealth = await getDatabaseReadHealth()
 logger.info('[Server] Startup config', {
@@ -286,27 +290,14 @@ export const app = new Elysia({
 	// Private-site subdomains (<siteId>.priv.<host>) legitimately POST /private/redeem
 	// to redeem audience-scoped shares. The middleware scopes this exception to that path.
 	.onBeforeHandle(csrfProtection([`.${process.env.PRIVATE_HOST || `priv.${BASE_HOST}`}`]))
-	.get('/', async ({ request, set }) => {
-		// Build dynamic login URL for AT Protocol OAuth entryway
-		const loginUrl = isLocalDev ? `${new URL(request.url).origin}/api/auth/login` : `${config.domain}/api/auth/login`
-		const atprotoLoginUrl = `https://atproto.wisp.place/?next=${encodeURIComponent(loginUrl)}`
-
+	.get('/', async ({ set }) => {
 		set.headers['Content-Type'] = 'text/html; charset=utf-8'
-
-		const html = await Bun.file('./apps/main-app/public/landingpage.html').text()
-		return html.replaceAll('{{ATPROTO_LOGIN_URL}}', atprotoLoginUrl)
+		return landingPage()
 	})
-	.get('/home', async ({ request, set }) => {
+	.get('/home', async ({ set }) => {
 		// Same as / but without the auto-redirect script for signed-in users
-		const loginUrl = isLocalDev ? `${new URL(request.url).origin}/api/auth/login` : `${config.domain}/api/auth/login`
-		const atprotoLoginUrl = `https://atproto.wisp.place/?next=${encodeURIComponent(loginUrl)}`
-
 		set.headers['Content-Type'] = 'text/html; charset=utf-8'
-
-		const html = await Bun.file('./apps/main-app/public/landingpage.html').text()
-		return html
-			.replaceAll('{{ATPROTO_LOGIN_URL}}', atprotoLoginUrl)
-			.replace(/<script>\s*\/\/ Check if user is already signed in[\s\S]*?<\/script>/, '')
+		return (await landingPage()).replace(/<script>\s*\/\/ Check if user is already signed in[\s\S]*?<\/script>/, '')
 	})
 	.use(authRoutes(client, cookieSecret))
 	.use(wispRoutes(client, cookieSecret))
