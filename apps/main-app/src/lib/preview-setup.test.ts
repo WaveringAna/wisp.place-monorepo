@@ -14,7 +14,7 @@ const repo = (name: string, extra: Partial<TangledRepo> = {}): TangledRepo => ({
 function fakePorts(overrides: Partial<PreviewSetupPorts> = {}) {
 	const calls: string[] = []
 	const ports: PreviewSetupPorts = {
-		listRepos: async () => [repo('blog'), repo('notes', { spindle: undefined })],
+		listRepos: async () => [repo('blog'), repo('notes', { spindle: undefined }), repo('old', { repoDid: undefined })],
 		listHooks: async () => [],
 		claims: async () => ['alice'],
 		canSetSecrets: async () => true,
@@ -36,7 +36,7 @@ function fakePorts(overrides: Partial<PreviewSetupPorts> = {}) {
 
 describe('loadPreviews', () => {
 	test('lists repos with their preview state, claims, and whether secrets can be set', async () => {
-		const hooks: PreviewHook[] = [{ rkey: 'preview-blog', repo: 'blog', claim: 'alice' }]
+		const hooks: PreviewHook[] = [{ rkey: 'preview-blog', repo: 'blog', claim: 'alice', owner: null }]
 		const { ports } = fakePorts({ listHooks: async () => hooks, hasSecret: async (target) => target.name === 'blog' })
 		const view = await loadPreviews(ports)
 		expect(view.claims).toEqual(['alice'])
@@ -44,6 +44,7 @@ describe('loadPreviews', () => {
 		expect(view.repos.map((row) => [row.name, row.preview?.claim ?? null, row.blocked, row.secret])).toEqual([
 			['blog', 'alice', null, 'set'],
 			['notes', null, 'no-spindle', 'unknown'],
+			['old', null, 'no-repo-did', 'unknown'],
 		])
 	})
 
@@ -89,6 +90,12 @@ describe('enablePreview', () => {
 	test.each([
 		['unknown-repo', { repo: 'missing', claim: 'alice' }, {}],
 		['no-spindle', { repo: 'notes', claim: 'alice' }, {}],
+		['no-repo-did', { repo: 'old', claim: 'alice' }, {}],
+		[
+			'hook-slot-taken',
+			{ repo: 'blog', claim: 'alice' },
+			{ listHooks: async () => [{ rkey: 'preview-blog', repo: 'blog', claim: 'alice', owner: 'did:plc:someoneelse' }] },
+		],
 		['claim-not-owned', { repo: 'blog', claim: 'bob' }, {}],
 		['needs-ci-permission', { repo: 'blog', claim: 'alice', appPassword: 'pw' }, { canSetSecrets: async () => false }],
 		['bad-app-password', { repo: 'blog', claim: 'alice', appPassword: 'pw' }, { checkAppPassword: async () => false }],
@@ -115,10 +122,18 @@ describe('enablePreview', () => {
 describe('disablePreview', () => {
 	test("deletes the repo's hook", async () => {
 		const { ports, calls } = fakePorts({
-			listHooks: async () => [{ rkey: 'preview-blog', repo: 'blog', claim: 'alice' }],
+			listHooks: async () => [{ rkey: 'preview-blog', repo: 'blog', claim: 'alice', owner: null }],
 		})
 		expect(await disablePreview(ports, 'blog')).toEqual({ ok: true })
 		expect(calls).toEqual(['delete preview-blog'])
+	})
+
+	test("leaves a collaborator hook for someone else's same-named repo alone", async () => {
+		const { ports, calls } = fakePorts({
+			listHooks: async () => [{ rkey: 'preview-blog', repo: 'blog', claim: 'alice', owner: 'did:plc:someoneelse' }],
+		})
+		expect(await disablePreview(ports, 'blog')).toEqual({ ok: true })
+		expect(calls).toEqual([])
 	})
 
 	test('is a no-op for a repo that was never enabled', async () => {

@@ -22,7 +22,7 @@ const exercise = async (command: string, secret = 'fixture-password') => {
 			`#!/usr/bin/env bash
 set -eu
 [ "$1" = install ] && [ "$2" = --global ] && [ "$3" = --prefix ]
-[ "$4" = "$HOME/.local" ] && [ "$5" = wispctl@2.0.3 ]
+[ "$4" = "$HOME/.local" ] && [ "$5" = wispctl@2.1.0 ]
 mkdir -p "$4/bin"
 cp "$FAKE_CLI" "$4/bin/wispctl"
 `,
@@ -43,9 +43,6 @@ printf '%s\n' "$*" >> "$HOME/invocations"
 				FAKE_CLI: cli,
 				WISP_APP_PASSWORD: secret,
 				WISP_HANDLE: 'fixture.test',
-				PREVIEW_HOST: 'preview.example',
-				PREVIEW_CLAIM: 'fixture',
-				TANGLED_COMMIT_SHA: 'abc1234567890abcdef1234567890abcdef12345',
 			},
 			stdout: 'ignore',
 			stderr: 'pipe',
@@ -59,18 +56,10 @@ printf '%s\n' "$*" >> "$HOME/invocations"
 }
 
 describe('preview workflow installation', () => {
-	test('deploy installs outside the read-only Nix store and preserves preview flags', async () => {
+	test('deploy installs outside the read-only Nix store and leaves the rest to preview deploy', async () => {
 		const result = await exercise(deploy)
 		expect(result.exit).toBe(0)
-		expect(result.invocations).toContain('--preview-host preview.example')
-		expect(result.invocations).toContain('--preview-claim fixture')
-		expect(result.invocations).toContain('--header X-Robots-Tag: noindex')
-		expect(result.invocations).toContain('--sha abc1234567890abcdef1234567890abcdef12345')
-	})
-	test('fork without a secret skips before installation', async () => {
-		const result = await exercise(deploy, '')
-		expect(result.exit).toBe(0)
-		expect(result.invocations).toBe('')
+		expect(result.invocations).toBe('preview deploy --path ./dist\n')
 	})
 	test('prune installs into the same writable prefix', async () => {
 		const result = await exercise(prune)

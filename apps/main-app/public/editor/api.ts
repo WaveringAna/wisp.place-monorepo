@@ -180,7 +180,7 @@ export interface PreviewRepo {
 	spindle?: string
 	knot?: string
 	preview: { claim: string; hookRkey: string } | null
-	blocked: 'no-spindle' | null
+	blocked: 'no-spindle' | 'no-repo-did' | null
 	secret: 'set' | 'missing' | 'unknown'
 }
 

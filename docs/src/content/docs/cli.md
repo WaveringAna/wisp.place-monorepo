@@ -41,7 +41,7 @@ Or download a binary directly:
 
 <div class="downloads">
 
-<h2>Download v2.0.3</h2>
+<h2>Download v2.1.0</h2>
 
 <a href="https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-aarch64-darwin" class="download-link" download="">
 
@@ -76,12 +76,12 @@ Or download a binary directly:
 <h3 style="margin-top: 1.5rem; margin-bottom: 0.5rem;">SHA-256 Checksums</h3>
 
 <pre style="font-size: 0.75rem; padding: 1rem;" class="language-bash" tabindex="0"><code class="language-bash">
-a0f92ab9d4f9fcb018e07f948d37135f3fb56236bc424ec76ee4d3d217244881  wisp-cli-aarch64-darwin
-5e4603425d7482cd8530a9c85b9e582a311b7c88c82627e4ab9b463223ae2cfb  wisp-cli-aarch64-linux
-205f582dc27f177db8f49368b9f947452a196723ef8576df5c75819c186f0409  wisp-cli-darwin-universal
-8df5405bc5c370b495a49ad5c4e4aed27e5fb3c146eb86ff1748f3bf4737f256  wisp-cli-x86_64-darwin
-6f2c9799af1d930f579f8f4ef30ae5025061e286375b93957403e37296a39abb  wisp-cli-x86_64-linux
-9c588972bc8fc3074c384b0c618b289b6567c542aebac0cacaeb4f73895c4f36  wisp-cli-x86_64-windows.exe
+30218d511de9ccefb4933b51f259a6dab1b5ee991d2f7fb72ef90620ac08c2f7  wisp-cli-aarch64-darwin
+183f5ce0719638f26ec61d17f0bfbbe092d1da07dbd691d0b545aace9fc75e5b  wisp-cli-aarch64-linux
+b1a272117d94f47b6e2517b8b5270e2904f22086ba8b8f3cf4cc7192a029ab6d  wisp-cli-darwin-universal
+5b3eb41f698ec912d4721aeed05f2478a7feed1d1196cbcea8af1d0eeef0d500  wisp-cli-x86_64-darwin
+3122cb4b618195c62f8742b05a94f27f6bb0ab6dcf97b7905bf01107b0b8c427  wisp-cli-x86_64-linux
+f20090172b8f931305d608fd40fdec76960296c741889c7f969f895350af30e6  wisp-cli-x86_64-windows.exe
 </code></pre>
 
 </div>
@@ -134,7 +134,7 @@ steps:
 
   - name: deploy
     command: |
-      npm install --global --prefix "$HOME/.local" wispctl@2.0.3
+      npm install --global --prefix "$HOME/.local" wispctl@2.1.0
       export PATH="$HOME/.local/bin:$PATH"
       wispctl deploy "$WISP_HANDLE" --path "$SITE_PATH" --site "$SITE_NAME" --yes
 ```
@@ -146,6 +146,8 @@ installed under `$HOME/.local` because the Nix store is read-only.
 For a live preview of every pull request, with a comment linking to it, see
 [Preview deploys](/guides/preview-deploys/). `wispctl preview enable <handle> --repo <name> --claim <label>`
 creates the webhook that wakes the preview bot; `wispctl preview disable <handle> --repo <name>` removes it.
+In the pull request's pipeline, `wispctl preview deploy --path ./dist` deploys the preview, taking the account,
+repo, commit and subdomain from the spindle and that webhook.
 
 ## Basic Usage
 

@@ -22,9 +22,18 @@ import {
 
 const WORKFLOW_PATH = '.tangled/workflows/preview.yml'
 
+const BLOCKED: Record<NonNullable<PreviewRepo['blocked']>, string> = {
+	'no-spindle':
+		"this repo has no spindle, so nothing builds its pull requests. pick one in the repo's settings on tangled, then come back.",
+	'no-repo-did':
+		'tangled has not given this repo its own did yet. the preview bot needs it to match pull requests to the repo, so previews stay off until it has one.',
+}
+
 const REFUSALS: Record<string, string> = {
 	'unknown-repo': 'that repo is not in your account any more',
-	'no-spindle': 'this repo has no spindle, so nothing would build its pull requests',
+	...BLOCKED,
+	'hook-slot-taken':
+		'an older wispctl stored a collaborator preview for a same-named repo here: run wispctl preview disable --repo <name>, then turn that one on again with --owner',
 	'claim-not-owned': 'that subdomain is not yours',
 	'needs-ci-permission': 'wisp needs the tangled ci permission first',
 	'bad-app-password':
@@ -35,6 +44,9 @@ const REFUSALS: Record<string, string> = {
 const refusalText = (error: unknown) =>
 	error instanceof ApiError ? (REFUSALS[error.message] ?? error.message) : 'unknown error'
 
+/** What a preview url looks like, with a made-up commit: `<commit>` would render as arrows in the mono font. */
+const exampleUrl = (claim: string, previewHost: string) => `pr-1a2b3c4-${claim}.${previewHost}`
+
 export function PreviewsSection({ user }: { user: UserInfo | undefined }) {
 	const previews = usePreviews()
 	const [expanded, setExpanded] = useState<string | null>(null)
@@ -43,11 +55,12 @@ export function PreviewsSection({ user }: { user: UserInfo | undefined }) {
 	const repos = info?.repos ?? []
 	const enabled = repos.filter((repo) => repo.preview).length
 	const rowProps = useRovingList(repos.length)
+	const turnedOff = info !== undefined && !info.previewHost
 
 	return (
 		<Section
 			title="pull-request previews"
-			meta={info && `${plural(enabled, 'repo')} on`}
+			meta={info?.previewHost && `${plural(enabled, 'repo')} on`}
 			actions={
 				info?.previewHost &&
 				!info.canSetSecrets && (
@@ -57,12 +70,14 @@ export function PreviewsSection({ user }: { user: UserInfo | undefined }) {
 				)
 			}
 		>
-			<p className="hint my-2">
-				pick a repo and every pull request gets its own live site, with a comment linking to it.
-			</p>
+			{!turnedOff && (
+				<p className="hint my-2">
+					pick a repo and every pull request gets its own live site, with a comment linking to it.
+				</p>
+			)}
 			{previews.isPending && <SkeletonRows count={3} />}
 			{previews.isError && <Notice tone="bad">could not load your tangled repos: {previews.error.message}</Notice>}
-			{info && !info.previewHost && <Notice tone="warn">previews are turned off on this wisp.place deployment</Notice>}
+			{turnedOff && <Notice tone="warn">previews are turned off on this wisp.place deployment</Notice>}
 			{info?.previewHost && repos.length === 0 && <Empty>no tangled repos on your account yet ✦</Empty>}
 			{info?.previewHost && (
 				<ul className="rows">
@@ -118,10 +133,7 @@ function PreviewRow({ repo, info, user, expanded, onToggle, onConnect, rowProps 
 			{expanded && (
 				<div id={detailId} className="row-detail">
 					{repo.blocked ? (
-						<Notice tone="warn">
-							this repo has no spindle, so nothing builds its pull requests. pick one in the repo&apos;s settings on
-							tangled, then come back.
-						</Notice>
+						<Notice tone="warn">{BLOCKED[repo.blocked]}</Notice>
 					) : (
 						<PreviewSetup repo={repo} info={info} user={user} onConnect={onConnect} />
 					)}
@@ -145,6 +157,7 @@ function PreviewSetup({ repo, info, user, onConnect }: PreviewSetupProps) {
 	const [build, setBuild] = useState('')
 	const [path, setPath] = useState('./dist')
 	const needsPassword = !repo.preview && repo.secret !== 'set'
+	const unchanged = repo.preview !== null && claim === repo.preview.claim && password === ''
 
 	const enable = useAction((input: { claim: string; appPassword?: string }) => api.enablePreview(repo.name, input), {
 		invalidates: [keys.previews],
@@ -165,7 +178,7 @@ function PreviewSetup({ repo, info, user, onConnect }: PreviewSetupProps) {
 	const askDisable = async () => {
 		const confirmed = await confirmAction({
 			title: `turn previews off for ${repo.name}?`,
-			body: 'pull requests stop getting preview comments. the deploy secret and earlier previews stay where they are.',
+			body: `pull requests stop getting previews, and their preview step fails until you remove ${WORKFLOW_PATH}. the deploy secret and earlier previews stay where they are.`,
 			action: 'turn off',
 		})
 		if (confirmed) disable.mutate(undefined)
@@ -177,14 +190,7 @@ function PreviewSetup({ repo, info, user, onConnect }: PreviewSetupProps) {
 		)
 	}
 
-	const workflow = previewWorkflow({
-		handle: user?.handle ?? 'your-handle',
-		claim: repo.preview?.claim ?? claim,
-		previewHost: info.previewHost ?? '',
-		branch,
-		build,
-		path,
-	})
+	const workflow = previewWorkflow({ branch, build, path })
 
 	return (
 		<div className="space-y-6">
@@ -195,7 +201,7 @@ function PreviewSetup({ repo, info, user, onConnect }: PreviewSetupProps) {
 						label="preview urls under"
 						value={claim}
 						onChange={(event) => setClaim(event.target.value)}
-						hint={`pr-<commit>-${claim}.${info.previewHost}`}
+						hint={`like ${exampleUrl(claim, info.previewHost ?? '')}`}
 					>
 						{info.claims.map((label) => (
 							<option key={label} value={label}>
@@ -226,7 +232,7 @@ function PreviewSetup({ repo, info, user, onConnect }: PreviewSetupProps) {
 					)}
 				</div>
 				<div className="flex flex-wrap items-center gap-2">
-					<Button type="submit" variant="primary" busy={enable.isPending}>
+					<Button type="submit" variant="primary" busy={enable.isPending} disabled={unchanged}>
 						{repo.preview ? 'save' : 'turn previews on'}
 					</Button>
 					{repo.preview && (

@@ -96,6 +96,8 @@ pub enum PreviewCommand {
         #[command(flatten)]
         xrpc: XrpcOptions,
     },
+    /// Deploy a pull request's preview from a tangled spindle workflow
+    Deploy(PreviewDeployArgs),
     /// Disable pull-request previews for a tangled repository
     Disable {
         /// Account that deploys the previews
@@ -103,9 +105,65 @@ pub enum PreviewCommand {
         /// Repository name on tangled
         #[arg(long, value_name = "name")]
         repo: String,
+        /// DID that owns the repository, for previews enabled as a collaborator
+        #[arg(long, value_name = "did")]
+        owner: Option<String>,
         #[command(flatten)]
         xrpc: XrpcOptions,
     },
+}
+
+/// Everything but `--path` comes from the spindle's environment and the repo's preview webhook,
+/// so the same workflow works for every repo.
+#[derive(Args, Debug, Clone)]
+pub struct PreviewDeployArgs {
+    /// Account that deploys; defaults to the repo owner
+    pub handle: Option<String>,
+    /// Directory to deploy
+    #[arg(short, long, value_name = "path")]
+    pub path: PathBuf,
+    /// Repository name on tangled
+    #[arg(long, env = "TANGLED_REPO_NAME", value_name = "name")]
+    pub repo: String,
+    /// DID that owns the repository
+    #[arg(long, env = "TANGLED_REPO_DID", value_name = "did")]
+    pub owner: String,
+    /// Pull request head commit; defaults to TANGLED_PR_SOURCE_SHA, then TANGLED_COMMIT_SHA
+    #[arg(long, value_name = "sha")]
+    pub sha: Option<String>,
+    /// Hostname suffix of preview URLs
+    #[arg(
+        long,
+        env = "WISPCTL_PREVIEW_HOST",
+        value_name = "host",
+        default_value = "preview.wisp.place"
+    )]
+    pub preview_host: String,
+    /// Enable SPA mode (serve index.html for all routes)
+    #[arg(long)]
+    pub spa: bool,
+    /// Response header for every file, as "Name: value" (repeatable)
+    #[arg(
+        long = "header",
+        value_name = "header",
+        value_parser = crate::commands::deploy::parse_header,
+        action = clap::ArgAction::Append
+    )]
+    pub headers: Vec<(String, String)>,
+    /// App password; the spindle secret WISP_APP_PASSWORD
+    #[arg(
+        long,
+        env = "WISP_APP_PASSWORD",
+        hide_env_values = true,
+        value_name = "password",
+        allow_hyphen_values = true
+    )]
+    pub password: Option<String>,
+    #[command(flatten)]
+    pub db: DbArg,
+    /// Service DID to proxy through
+    #[arg(long, env = "WISPCTL_SERVICE", value_name = "did:...")]
+    pub service: Option<String>,
 }
 
 #[derive(Args, Debug, Clone, Default)]
@@ -186,6 +244,9 @@ pub struct DeployArgs {
     /// Service DID to proxy through
     #[arg(long, env = "WISPCTL_SERVICE", value_name = "did:...")]
     pub service: Option<String>,
+    /// Set by `preview deploy`: take the preview claim from this repo's preview webhook.
+    #[arg(skip)]
+    pub preview_hook: Option<crate::commands::preview::HookRef>,
 }
 
 #[derive(Args, Debug, Clone)]

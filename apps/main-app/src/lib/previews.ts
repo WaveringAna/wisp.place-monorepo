@@ -66,6 +66,8 @@ export interface PreviewHook {
 	rkey: string
 	repo: string
 	claim: string
+	/** DID of the repo's owner when the hook is for a repo the user collaborates on; null for their own. */
+	owner: string | null
 }
 
 /** A webhook record that wakes the preview bot, or null for anything else. */
@@ -75,22 +77,32 @@ export function parsePreviewHook(botUrl: string, rkey: string, value: unknown): 
 	const params = new URLSearchParams(url.slice(hookPath(botUrl).length + 1))
 	const repo = params.get('repo') ?? ''
 	const claim = params.get('claim') ?? ''
-	return isRepoName(repo) && isClaimLabel(claim) ? { rkey, repo, claim } : null
+	const owner = params.get('owner') || null
+	return isRepoName(repo) && isClaimLabel(claim) ? { rkey, repo, claim, owner } : null
 }
+
+/** The hook for one of the user's own repos; a collaborator hook for a same-named repo is someone else's. */
+export const ownHookFor = (hooks: readonly PreviewHook[], repo: string): PreviewHook | undefined =>
+	hooks.find((hook) => hook.repo === repo && hook.owner === null)
+
+/** Why previews cannot be turned on for a repo: the bot needs its spindle and its own DID. */
+export type PreviewBlock = 'no-spindle' | 'no-repo-did'
 
 export interface PreviewRow extends TangledRepo {
 	preview: { claim: string; hookRkey: string } | null
-	/** Why previews cannot be turned on for this repo. */
-	blocked: 'no-spindle' | null
+	blocked: PreviewBlock | null
 }
+
+export const previewBlock = (repo: TangledRepo): PreviewBlock | null =>
+	!repo.spindle ? 'no-spindle' : !repo.repoDid ? 'no-repo-did' : null
 
 export function previewRows(repos: readonly TangledRepo[], hooks: readonly PreviewHook[]): PreviewRow[] {
 	return repos.map((repo) => {
-		const hook = hooks.find((candidate) => candidate.repo === repo.name)
+		const hook = ownHookFor(hooks, repo.name)
 		return {
 			...repo,
 			preview: hook ? { claim: hook.claim, hookRkey: hook.rkey } : null,
-			blocked: repo.spindle && repo.repoDid ? null : 'no-spindle',
+			blocked: previewBlock(repo),
 		}
 	})
 }

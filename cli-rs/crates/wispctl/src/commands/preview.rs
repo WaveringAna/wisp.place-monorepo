@@ -1,9 +1,10 @@
 use crate::{
-    cli::{PreviewArgs, PreviewCommand, XrpcOptions},
+    cli::{DeployArgs, PreviewArgs, PreviewCommand, PreviewDeployArgs, XrpcOptions},
+    commands::deploy::{self, preview_site_from_sha},
     deploy::repo::{SiteRepo, http_status},
     xrpc,
 };
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use wispplace_lexicons::place_wisp::v2::{domain, wh};
 
@@ -29,9 +30,13 @@ pub async fn run(args: PreviewArgs) -> Result<()> {
             )
             .await
         }
-        PreviewCommand::Disable { handle, repo, xrpc } => {
-            disable(handle.as_deref(), &repo, &xrpc).await
-        }
+        PreviewCommand::Deploy(args) => deploy_preview(args).await,
+        PreviewCommand::Disable {
+            handle,
+            repo,
+            owner,
+            xrpc,
+        } => disable(handle.as_deref(), &repo, owner.as_deref(), &xrpc).await,
     }
 }
 
@@ -51,6 +56,26 @@ fn valid_claim(claim: &str) -> bool {
                     .bytes()
                     .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
         })
+}
+/// The DIDs the preview bot accepts as a repo owner; both are safe inside a record key.
+fn valid_owner(owner: &str) -> bool {
+    let id_bytes = |id: &str, allowed: fn(u8) -> bool| id.bytes().all(allowed);
+    if let Some(id) = owner.strip_prefix("did:plc:") {
+        id.len() == 24 && id_bytes(id, |b| b.is_ascii_lowercase() || (b'2'..=b'7').contains(&b))
+    } else if let Some(id) = owner.strip_prefix("did:web:") {
+        (1..=253).contains(&id.len())
+            && id_bytes(id, |b| {
+                b.is_ascii_lowercase() || b.is_ascii_digit() || b".-".contains(&b)
+            })
+    } else {
+        false
+    }
+}
+fn require_owner(owner: &str) -> Result<()> {
+    if !valid_owner(owner) {
+        bail!("Invalid --owner: expected a did:plc or did:web DID");
+    }
+    Ok(())
 }
 fn bot_url(value: &str) -> Result<String> {
     let value = value.trim_end_matches('/');
@@ -87,8 +112,13 @@ fn hook_url(bot: &str, repo: &str, claim: &str, owner: Option<&str>) -> String {
     }
     url
 }
-fn rkey(repo: &str) -> String {
-    format!("preview-{repo}")
+/// Record key of the hook: a collaborator's names the owner too, so it never replaces the hook
+/// for a repo of their own with the same name. `~` cannot appear in a repo name.
+fn rkey(repo: &str, owner: Option<&str>) -> String {
+    match owner {
+        Some(owner) => format!("preview-{repo}~{owner}"),
+        None => format!("preview-{repo}"),
+    }
 }
 
 async fn enable(
@@ -107,13 +137,7 @@ async fn enable(
         );
     }
     let bot = bot_url(bot)?;
-    if let Some(owner) = owner
-        && (!owner.starts_with("did:")
-            || owner.chars().any(char::is_whitespace)
-            || owner.contains(['/', '?', '#']))
-    {
-        bail!("Invalid --owner: expected a DID");
-    }
+    owner.map(require_owner).transpose()?;
     if let Some(claim) = claim
         && !valid_claim(claim)
     {
@@ -143,7 +167,7 @@ async fn enable(
         extra_data: None,
     };
     agent
-        .put(&rkey(repo), record)
+        .put(&rkey(repo, owner), record)
         .await
         .map_err(|error| scope_error(error, "writing preview webhook"))?;
     wispplace_ui::success(format!("Enabled previews for {repo} (claim {claim})"));
@@ -156,14 +180,113 @@ async fn enable(
     Ok(())
 }
 
-async fn disable(handle: Option<&str>, repo: &str, opts: &XrpcOptions) -> Result<()> {
+/// The repo whose preview webhook names the claim a preview deploys under.
+#[derive(Debug, Clone)]
+pub struct HookRef {
+    pub repo: String,
+    /// DID that owns the repo; the deployer's own for their own repos.
+    pub owner: String,
+}
+
+/// Commit a pull-request pipeline built: the pull request's head, which is what the bot links.
+fn pipeline_sha(read: impl Fn(&str) -> Option<String>) -> Option<String> {
+    ["TANGLED_PR_SOURCE_SHA", "TANGLED_COMMIT_SHA"]
+        .into_iter()
+        .find_map(|name| read(name).filter(|sha| !sha.is_empty()))
+}
+
+async fn deploy_preview(args: PreviewDeployArgs) -> Result<()> {
+    if !valid_repo(&args.repo) {
+        bail!("Invalid repository name: {}", args.repo);
+    }
+    require_owner(&args.owner)?;
+    let Some(password) = args.password.filter(|password| !password.is_empty()) else {
+        // Spindle withholds secrets from pull requests opened from forks.
+        if std::env::var("TANGLED_PIPELINE_KIND").as_deref() == Ok("pull_request") {
+            wispplace_ui::note(
+                "No WISP_APP_PASSWORD in this pipeline (a pull request from a fork?); skipping the preview.",
+            );
+            return Ok(());
+        }
+        bail!("Pass --password or set WISP_APP_PASSWORD");
+    };
+    let sha = args
+        .sha
+        .or_else(|| pipeline_sha(|name| std::env::var(name).ok()))
+        .context("Pass --sha; neither TANGLED_PR_SOURCE_SHA nor TANGLED_COMMIT_SHA is set")?;
+    let mut headers = vec![("X-Robots-Tag".to_owned(), "noindex".to_owned())];
+    headers.extend(args.headers);
+    deploy::run(DeployArgs {
+        handle: Some(args.handle.unwrap_or_else(|| args.owner.clone())),
+        path: Some(args.path),
+        preview_site: Some(preview_site_from_sha(&sha.to_ascii_lowercase())?),
+        spa: args.spa,
+        headers,
+        concurrency: 3,
+        password: Some(password),
+        db: args.db,
+        yes: true,
+        preview_host: Some(args.preview_host),
+        service: args.service,
+        preview_hook: Some(HookRef {
+            repo: args.repo,
+            owner: args.owner,
+        }),
+        ..DeployArgs::default()
+    })
+    .await
+}
+
+/// The claim in the repo's preview webhook, so the claim lives only there and a change made in the
+/// dashboard reaches the next deploy without touching the workflow.
+pub async fn hook_claim(agent: &impl SiteRepo, did: &str, hook: &HookRef) -> Result<String> {
+    let owner = (hook.owner != did).then_some(hook.owner.as_str());
+    let key = rkey(&hook.repo, owner);
+    let record = agent.fetch::<wh::Wh>(did, &key).await.with_context(|| {
+        format!(
+            "previews are not turned on for {}: no webhook record {key}. turn them on in the dashboard or with `wispctl preview enable`",
+            hook.repo
+        )
+    })?;
+    claim_in_hook_url(record.url.as_str(), &hook.repo, owner)
+}
+
+/// The claim a preview hook url names, if the url is for this repo and owner.
+fn claim_in_hook_url(url: &str, repo: &str, owner: Option<&str>) -> Result<String> {
+    let query = url.split_once('?').map_or("", |(_, query)| query);
+    let params: Vec<(String, String)> = serde_html_form::from_str(query).unwrap_or_default();
+    let param = |name: &str| {
+        params
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+    };
+    if param("repo") != Some(repo) || param("owner") != owner {
+        bail!("the preview webhook for {repo} names another repo; turn previews off and on again");
+    }
+    match param("claim") {
+        Some(claim) if valid_claim(claim) => Ok(claim.to_owned()),
+        _ => bail!(
+            "the preview webhook for {repo} names no valid claim; turn previews off and on again"
+        ),
+    }
+}
+
+async fn disable(
+    handle: Option<&str>,
+    repo: &str,
+    owner: Option<&str>,
+    opts: &XrpcOptions,
+) -> Result<()> {
     if !valid_repo(repo) {
         bail!(
             "Invalid repository name: use 1–100 ASCII letters, digits, dots, underscores, or hyphens"
         );
     }
-    let (agent, _service, _did) = xrpc::authenticate_for_xrpc(handle, opts).await?;
-    match agent.delete::<wh::Wh>(&rkey(repo)).await {
+    owner.map(require_owner).transpose()?;
+    let (agent, _service, did) = xrpc::authenticate_for_xrpc(handle, opts).await?;
+    let owner = owner.filter(|owner| *owner != did);
+    match agent.delete::<wh::Wh>(&rkey(repo, owner)).await {
         Ok(()) => {}
         Err(error) if http_status(&error) == Some(404) => {}
         Err(error) => return Err(scope_error(error, "deleting preview webhook")),
@@ -219,7 +342,11 @@ mod tests {
     use super::*;
     #[test]
     fn record_parts_match_dashboard_encoding() {
-        assert_eq!(rkey("my_repo.v2"), "preview-my_repo.v2");
+        assert_eq!(rkey("my_repo.v2", None), "preview-my_repo.v2");
+        assert_eq!(
+            rkey("blog", Some("did:plc:aaaaaaaaaaaaaaaaaaaaaaaa")),
+            "preview-blog~did:plc:aaaaaaaaaaaaaaaaaaaaaaaa"
+        );
         assert_eq!(
             hook_url(
                 "https://preview-bot.wisp.place",
@@ -243,6 +370,11 @@ mod tests {
         assert!(!valid_claim("a--b"));
         assert!(valid_claim("pr-123"));
         assert!(bot_url("http://example.com").is_err());
+        assert!(valid_owner("did:plc:aaaaaaaaaaaaaaaaaaaaaaaa"));
+        assert!(valid_owner("did:web:example.com"));
+        assert!(!valid_owner("did:web:example.com%3A8080"));
+        assert!(!valid_owner("did:plc:short"));
+        assert!(!valid_owner("did:key:z6Mk"));
     }
     #[test]
     fn claims_must_belong_to_the_account() {
@@ -252,6 +384,48 @@ mod tests {
         assert!(pick_claim(None, held()).is_err());
         assert_eq!(pick_claim(None, vec!["alice".into()]).unwrap(), "alice");
         assert!(pick_claim(None, vec![]).is_err());
+    }
+    #[test]
+    fn claims_come_from_the_hook_for_this_repo_and_owner() {
+        let bot = "https://preview-bot.wisp.place";
+        let own = hook_url(bot, "blog", "ana", None);
+        assert_eq!(claim_in_hook_url(&own, "blog", None).unwrap(), "ana");
+        let owner = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa";
+        let collab = hook_url(bot, "blog", "ana", Some(owner));
+        assert_eq!(
+            claim_in_hook_url(&collab, "blog", Some(owner)).unwrap(),
+            "ana"
+        );
+        assert!(claim_in_hook_url(&collab, "blog", None).is_err());
+        assert!(claim_in_hook_url(&own, "docs", None).is_err());
+        assert!(
+            claim_in_hook_url(&format!("{bot}/v1/hook?repo=blog&claim=Bad"), "blog", None).is_err()
+        );
+    }
+    #[test]
+    fn previews_deploy_the_pull_requests_head_commit() {
+        fn env<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
+            move |name| {
+                pairs
+                    .iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| (*value).to_owned())
+            }
+        }
+        let both = [
+            ("TANGLED_PR_SOURCE_SHA", "aaaaaaa"),
+            ("TANGLED_COMMIT_SHA", "bbbbbbb"),
+        ];
+        assert_eq!(pipeline_sha(env(&both)).as_deref(), Some("aaaaaaa"));
+        assert_eq!(
+            pipeline_sha(env(&[
+                ("TANGLED_PR_SOURCE_SHA", ""),
+                ("TANGLED_COMMIT_SHA", "bbbbbbb")
+            ]))
+            .as_deref(),
+            Some("bbbbbbb")
+        );
+        assert_eq!(pipeline_sha(env(&[])), None);
     }
     #[test]
     fn encodes_like_url_search_params() {

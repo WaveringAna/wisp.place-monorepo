@@ -35,9 +35,9 @@ This tells the preview bot about your deploys. Create a `place.wisp.v2.wh` recor
 
 The dashboard's **cli & ci** tab writes it when you turn previews on for a repo; any AT Protocol client can write it too (`com.atproto.repo.putRecord`). Every site write you make fires it, and the bot ignores anything not named `pr-<sha7>`. It needs no secret: the bot checks the repository, pipeline, pull request, claim and preview URL itself before it comments. Delete the record to turn previews off.
 
-The claim has to belong to whoever deploys, and that account has to be the repo's owner or one of its collaborators on Tangled. For a repo you collaborate on, the record goes in your own PDS and the URL names the owner too: `...?repo=<repo name>&claim=<your subdomain>&owner=<owner did>`.
+The claim has to belong to whoever deploys, and that account has to be the repo's owner or one of its collaborators on Tangled. For a repo you collaborate on, the record goes in your own PDS, the URL names the owner too (`...?repo=<repo name>&claim=<your subdomain>&owner=<owner did>`), and the record key is `preview-<repo>~<owner did>`, so it never replaces the hook for a repo of your own with the same name.
 
-With the CLI: `wispctl preview enable <handle> --repo <repo name> --claim <subdomain>` (add `--owner <owner did>` as a collaborator), and `wispctl preview disable <handle> --repo <repo name>`.
+With the CLI: `wispctl preview enable <handle> --repo <repo name> --claim <subdomain>` and `wispctl preview disable <handle> --repo <repo name>`. As a collaborator, add `--owner <owner did>` to both.
 
 ### 2. The workflow on your spindle
 
@@ -46,7 +46,7 @@ With the CLI: `wispctl preview enable <handle> --repo <repo name> --claim <subdo
 
 That's it: open a pull request, and once the deploy finishes the bot comments the preview link. Each new round updates the same comment.
 
-Spindle never passes secrets to pipelines that run code from a fork, so a pull request from a fork builds but does not deploy. The workflow skips the deploy step in that case.
+Spindle never passes secrets to pipelines that run code from a fork, so a pull request from a fork builds but does not deploy: `wispctl preview deploy` sees no `WISP_APP_PASSWORD` and skips.
 
 ## The workflow
 
@@ -64,11 +64,6 @@ dependencies:
   - nodejs
   - pnpm
 
-environment:
-  WISP_HANDLE: "alice.example.com"
-  PREVIEW_HOST: "preview.wisp.place"
-  PREVIEW_CLAIM: "alice"
-
 steps:
   - name: build
     command: |
@@ -77,26 +72,26 @@ steps:
 
   - name: deploy preview
     command: |
-      set -euo pipefail
-      if [ -z "${WISP_APP_PASSWORD:-}" ]; then
-        echo "no deploy secret in this pipeline (pull request from a fork); skipping"
-        exit 0
-      fi
-      npm install --global --prefix "$HOME/.local" wispctl@2.0.3
+      npm install --global --prefix "$HOME/.local" wispctl@2.1.0
       export PATH="$HOME/.local/bin:$PATH"
-      wispctl deploy "$WISP_HANDLE" \
-        --password "$WISP_APP_PASSWORD" \
-        --path ./dist \
-        --sha "$TANGLED_COMMIT_SHA" \
-        --header "X-Robots-Tag: noindex" \
-        --preview-host "$PREVIEW_HOST" \
-        --preview-claim "$PREVIEW_CLAIM" \
-        --yes
+      wispctl preview deploy --path ./dist
 ```
 
-`--sha` names the site `pr-<sha7>`, and `--preview-host` makes `wispctl` check that name before it uploads anything, then print the preview URL once the deploy succeeds. Set `PREVIEW_CLAIM` to your claimed wisp subdomain label; it is required when your account has more than one claim.
+The workflow names no account, subdomain or host, so it is the same for every repo. `wispctl preview deploy` takes the rest from the pipeline and from your webhook record:
 
-Replace the build commands and `./dist` with your own. The workflow pins `wispctl@2.0.3` and installs it under `$HOME/.local`, not into the read-only Nix store.
+| | from |
+| --- | --- |
+| account | `TANGLED_REPO_DID`, the repo's owner, signing in with `WISP_APP_PASSWORD` |
+| repo | `TANGLED_REPO_NAME` |
+| site name | `pr-<sha7>` of `TANGLED_PR_SOURCE_SHA` (or `TANGLED_COMMIT_SHA`) |
+| subdomain | the `claim` in the repo's `preview-<repo>` webhook record |
+| preview host | `preview.wisp.place`, or `--preview-host` |
+
+Changing the subdomain in the dashboard takes effect on the next deploy, with no change to the workflow. If the webhook record is missing, the deploy fails and says previews are not turned on for the repo. Every preview gets `X-Robots-Tag: noindex`; add `--spa` or `--header "Name: value"` for anything else the site needs.
+
+As a collaborator, pass your own handle (`wispctl preview deploy <your handle> --path ./dist`), since the account would otherwise be the repo's owner.
+
+Replace the build commands and `./dist` with your own. The workflow pins `wispctl@2.1.0` and installs it under `$HOME/.local`, not into the read-only Nix store.
 
 ## Cleaning up
 
@@ -121,7 +116,7 @@ steps:
   - name: prune old previews
     command: |
       set -euo pipefail
-      npm install --global --prefix "$HOME/.local" wispctl@2.0.3
+      npm install --global --prefix "$HOME/.local" wispctl@2.1.0
       export PATH="$HOME/.local/bin:$PATH"
       wispctl site prune "$WISP_HANDLE" \
         --password "$WISP_APP_PASSWORD" \

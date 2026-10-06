@@ -37,6 +37,8 @@ const SPINDLE_TIMEOUT_MS = 8_000
 const STATUS: Record<PreviewSetupRefusal, number> = {
 	'unknown-repo': 404,
 	'no-spindle': 409,
+	'no-repo-did': 409,
+	'hook-slot-taken': 409,
 	'claim-not-owned': 403,
 	'needs-ci-permission': 403,
 	'bad-app-password': 422,

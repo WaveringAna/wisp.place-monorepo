@@ -104,7 +104,7 @@ describe('preview routes', () => {
 
 	test('disables previews for a repo', async () => {
 		const { ports, calls } = fakePorts({
-			listHooks: async () => [{ rkey: 'preview-blog', repo: 'blog', claim: 'alice' }],
+			listHooks: async () => [{ rkey: 'preview-blog', repo: 'blog', claim: 'alice', owner: null }],
 		})
 		const response = await app(ports).handle(new Request('http://localhost/api/previews/blog', { method: 'DELETE' }))
 		expect(response.status).toBe(200)

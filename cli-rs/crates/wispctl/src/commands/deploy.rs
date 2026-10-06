@@ -238,9 +238,10 @@ pub async fn run(mut args: DeployArgs) -> Result<()> {
     let agent = authenticated.agent;
     let did = authenticated.did;
     let preview_url = if let Some(host) = preview_host.as_deref() {
-        let claim = match args.preview_claim.as_deref() {
-            Some(claim) => claim.to_owned(),
-            None => {
+        let claim = match (args.preview_claim.as_deref(), &args.preview_hook) {
+            (Some(claim), _) => claim.to_owned(),
+            (None, Some(hook)) => crate::commands::preview::hook_claim(&agent, &did, hook).await?,
+            (None, None) => {
                 let service = xrpc::parse_service_did(args.service.as_deref())?;
                 let data = xrpc::send(&agent, &service, domain::get_list::GetList, None).await?;
                 let claims = wisp_claims(items(&data, "domains"));

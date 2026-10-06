@@ -1,4 +1,13 @@
-import { type PreviewHook, type PreviewRow, previewRows, type TangledRepo } from './previews'
+import {
+	ownHookFor,
+	type PreviewBlock,
+	type PreviewHook,
+	type PreviewRow,
+	previewBlock,
+	previewHookRkey,
+	previewRows,
+	type TangledRepo,
+} from './previews'
 
 /**
  * Everything preview setup reads and writes, as plain functions over the
@@ -56,7 +65,9 @@ export async function loadPreviews(ports: PreviewSetupPorts): Promise<PreviewsVi
 
 export type PreviewSetupRefusal =
 	| 'unknown-repo'
-	| 'no-spindle'
+	| PreviewBlock
+	/** A collaborator hook from wispctl 2.0.3 sits at this repo's record key. */
+	| 'hook-slot-taken'
 	| 'claim-not-owned'
 	| 'needs-ci-permission'
 	| 'bad-app-password'
@@ -75,10 +86,13 @@ const refuse = (reason: PreviewSetupRefusal): PreviewSetupResult => ({ ok: false
 
 /** The secret goes first, so a hook never wakes the bot for a repo whose workflow cannot deploy. */
 export async function enablePreview(ports: PreviewSetupPorts, input: EnablePreviewInput): Promise<PreviewSetupResult> {
-	const [repos, claims] = await Promise.all([ports.listRepos(), ports.claims()])
+	const [repos, hooks, claims] = await Promise.all([ports.listRepos(), ports.listHooks(), ports.claims()])
 	const repo = repos.find((candidate) => candidate.name === input.repo)
 	if (!repo) return refuse('unknown-repo')
-	if (!repo.spindle || !repo.repoDid) return refuse('no-spindle')
+	const blocked = previewBlock(repo)
+	if (blocked) return refuse(blocked)
+	const slot = previewHookRkey(repo.name)
+	if (hooks.some((hook) => hook.rkey === slot && hook.owner !== null)) return refuse('hook-slot-taken')
 	if (!claims.includes(input.claim)) return refuse('claim-not-owned')
 
 	if (input.appPassword !== undefined) {
@@ -96,7 +110,7 @@ export async function enablePreview(ports: PreviewSetupPorts, input: EnablePrevi
 }
 
 export async function disablePreview(ports: PreviewSetupPorts, repo: string): Promise<PreviewSetupResult> {
-	const hook = (await ports.listHooks()).find((candidate) => candidate.repo === repo)
+	const hook = ownHookFor(await ports.listHooks(), repo)
 	if (hook) await ports.deleteHook(hook.rkey)
 	return { ok: true }
 }

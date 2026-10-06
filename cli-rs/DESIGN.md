@@ -141,5 +141,14 @@ bun test --isolate scripts/wispctl-nix.test.ts
 
 `wispctl preview enable` and `disable` (2.0.3+) write and delete the `place.wisp.v2.wh`
 record `preview-<repo>` that wakes the preview bot, the same record the dashboard writes.
+As a collaborator (`--owner <did>`) the record is `preview-<repo>~<owner did>` instead, so it
+cannot replace the hook for a same-named repo of the user's own; 2.0.3 still wrote those to
+`preview-<repo>`.
 The CLI asks for the webhooks permission set for this, but does not require it, so older
 sessions still deploy and only `preview` asks them to log in again.
+
+`wispctl preview deploy` (2.1.0+) is the whole deploy step of a preview workflow. It reads the
+repo, its owner and the commit from spindle's `TANGLED_*` variables and the app password from
+`WISP_APP_PASSWORD`, then takes the claim from that same webhook record, so the claim lives only
+there and the workflow is identical for every repo. Without the record it fails; without the
+secret in a pull-request pipeline (a fork) it skips.

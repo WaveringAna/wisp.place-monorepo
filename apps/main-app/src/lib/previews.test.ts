@@ -56,7 +56,9 @@ describe('preview hook records', () => {
 			rkey: 'preview-blog',
 			repo: 'blog',
 			claim: 'alice',
+			owner: null,
 		})
+		expect(parsePreviewHook(BOT, 'preview-blog', { url: `${url}&owner=${REPO_DID}` })?.owner).toBe(REPO_DID)
 		expect(parsePreviewHook(BOT, 'x', { url: 'https://example.com/v1/hook?repo=blog&claim=alice' })).toBeNull()
 		expect(parsePreviewHook(BOT, 'x', { url: `${BOT}/v1/hook?repo=blog` })).toBeNull()
 		expect(parsePreviewHook(BOT, 'x', { url: `${BOT}/v1/hook?repo=blog&claim=Not%20A%20Claim` })).toBeNull()
@@ -68,10 +70,11 @@ describe('previewRows', () => {
 	const repos = toTangledRepos([
 		{ uri: `at://${DID}/sh.tangled.repo/blog`, value: { spindle: 'spindle.tangled.sh', repoDid: REPO_DID } },
 		{ uri: `at://${DID}/sh.tangled.repo/notes`, value: { repoDid: REPO_DID } },
+		{ uri: `at://${DID}/sh.tangled.repo/old`, value: { spindle: 'spindle.tangled.sh' } },
 	])
 
 	test('marks enabled repos with their claim and says why the others cannot preview', () => {
-		const rows = previewRows(repos, [{ rkey: 'preview-blog', repo: 'blog', claim: 'alice' }])
+		const rows = previewRows(repos, [{ rkey: 'preview-blog', repo: 'blog', claim: 'alice', owner: null }])
 		expect(rows).toEqual([
 			{
 				rkey: 'blog',
@@ -91,6 +94,20 @@ describe('previewRows', () => {
 				preview: null,
 				blocked: 'no-spindle',
 			},
+			{
+				rkey: 'old',
+				name: 'old',
+				spindle: 'spindle.tangled.sh',
+				repoDid: undefined,
+				knot: undefined,
+				preview: null,
+				blocked: 'no-repo-did',
+			},
 		])
+	})
+
+	test("does not count a collaborator hook for someone else's repo of the same name", () => {
+		const rows = previewRows(repos, [{ rkey: 'preview-blog', repo: 'blog', claim: 'alice', owner: REPO_DID }])
+		expect(rows[0]?.preview).toBeNull()
 	})
 })
