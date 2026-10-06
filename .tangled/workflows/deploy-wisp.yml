@@ -41,7 +41,7 @@ steps:
       set -euo pipefail
       export PATH="$HOME/.nix-profile/bin:$PATH"
       # Pinned and installed under $HOME, not the read-only Nix store.
-      npm install --global --prefix "$HOME/.local" wispctl@2.0.2
+      npm install --global --prefix "$HOME/.local" wispctl@2.1.0
       export PATH="$HOME/.local/bin:$PATH"
 
       wispctl deploy "$WISP_HANDLE" \
