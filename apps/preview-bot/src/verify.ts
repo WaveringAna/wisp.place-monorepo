@@ -33,6 +33,8 @@ export type Verification =
 			ok: true
 			url: string
 			sha7: string
+			/** The pull request's head commit, in full. */
+			sha: string
 			pull: { uri: string; cid: string }
 			roundIdx: number
 	  }
@@ -156,5 +158,12 @@ async function verifyFromPipeline(
 	const url = `https://${label}.${config.previewHost}/`
 	if (!(await ports.previewServes(url))) return reject('preview-not-serving')
 
-	return { ok: true, url, sha7, pull: { uri: pull.uri, cid: pull.cid }, roundIdx: pull.roundCount - 1 }
+	return {
+		ok: true,
+		url,
+		sha7,
+		sha: trigger.sourceSha,
+		pull: { uri: pull.uri, cid: pull.cid },
+		roundIdx: pull.roundCount - 1,
+	}
 }

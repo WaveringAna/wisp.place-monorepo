@@ -89,7 +89,8 @@ describe('POST /v1/preview', () => {
 		expect(await response.json()).toEqual({ status: 'created', url: 'https://pr-ab12cd3-alice.preview.wisp.place/' })
 		expect(w.creates).toHaveLength(1)
 		expect(w.creates[0]).toMatchObject({ pull: { uri: PULL_URI, cid: 'bafypull' }, roundIdx: 0 })
-		expect(w.creates[0]?.body).toContain('https://pr-ab12cd3-alice.preview.wisp.place/')
+		expect(w.creates[0]?.body).toContain('[open preview](https://pr-ab12cd3-alice.preview.wisp.place/)')
+		expect(w.creates[0]?.body).toContain(`[\`ab12cd3\`](https://tangled.org/${OWNER}/blog/commit/${SHA})`)
 	})
 
 	test('a new commit updates the same comment and keeps the earlier previews', async () => {
@@ -307,6 +308,7 @@ describe('POST /v1/hook', () => {
 		const response = await handlerFor(w)(hook({ ...event, did: collaborator }, `repo=blog&claim=alice&owner=${OWNER}`))
 		expect(response.status).toBe(200)
 		expect(owners).toEqual([OWNER])
+		expect(w.creates[0]?.body).toContain(`(https://tangled.org/${OWNER}/blog/commit/${SHA})`)
 	})
 
 	test('reads a delivery that carries a large site record', async () => {

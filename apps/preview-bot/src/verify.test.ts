@@ -61,6 +61,7 @@ describe('verifyPreview', () => {
 			ok: true,
 			url: 'https://pr-ab12cd3-alice.preview.wisp.place/',
 			sha7: 'ab12cd3',
+			sha: SHA,
 			pull: { uri: PULL_URI, cid: 'bafypull' },
 			roundIdx: 2,
 		})

@@ -126,13 +126,14 @@ export function createHandler(options: HandlerOptions): (request: Request) => Pr
 	const withPullLock = createKeyedLock()
 
 	async function writeComment(
+		repo: { owner: string; name: string },
 		verified: Extract<Verification, { ok: true }>,
 	): Promise<'created' | 'updated' | 'unchanged'> {
 		return withPullLock(verified.pull.uri, async () => {
 			const existing = await ports.findComment(verified.pull.uri)
-			const added: PreviewRow = { sha7: verified.sha7, url: verified.url }
+			const added: PreviewRow = { sha7: verified.sha7, sha: verified.sha, url: verified.url }
 			const earlier = existing ? parsePreviewRows(existing.body, config.previewHost) : []
-			const body = renderComment([added, ...earlier.filter((row) => row.sha7 !== added.sha7)])
+			const body = renderComment([added, ...earlier.filter((row) => row.sha7 !== added.sha7)], repo)
 			const input = { pull: verified.pull, roundIdx: verified.roundIdx, body }
 			if (!existing) {
 				await ports.createComment(input)
@@ -149,18 +150,18 @@ export function createHandler(options: HandlerOptions): (request: Request) => Pr
 
 	/** Verify, then write or update the comment; a rejection answers with its status in `statuses`. */
 	async function settle(
-		owner: string,
+		repo: { owner: string; name: string },
 		verify: () => Promise<Verification>,
 		statuses: Record<Rejection, number>,
 	): Promise<Response> {
 		try {
 			const verified = await verify()
 			if (!verified.ok) {
-				log('rejected', { reason: verified.reason, owner })
+				log('rejected', { reason: verified.reason, owner: repo.owner })
 				return reply(statuses[verified.reason], { error: verified.reason })
 			}
-			const status = await writeComment(verified)
-			log(status, { owner, pull: verified.pull.uri })
+			const status = await writeComment(repo, verified)
+			log(status, { owner: repo.owner, pull: verified.pull.uri })
 			return reply(200, { status, url: verified.url })
 		} catch (error) {
 			log('upstream-failure', { error: error instanceof Error ? error.name : 'unknown' })
@@ -184,7 +185,7 @@ export function createHandler(options: HandlerOptions): (request: Request) => Pr
 		}
 		if (!isHookWellFormed(hook)) return reply(400, { error: 'bad-request' })
 		if (!withinLimits(request, hook.owner)) return reply(429, { error: 'rate-limited' })
-		return settle(hook.owner, () => verifyHook(hook, ports, config), HOOK_STATUS)
+		return settle({ owner: hook.owner, name: hook.repo }, () => verifyHook(hook, ports, config), HOOK_STATUS)
 	}
 
 	return async (request) => {
@@ -203,6 +204,6 @@ export function createHandler(options: HandlerOptions): (request: Request) => Pr
 		const parsed = parseRequest(text)
 		if (!parsed || !isWellFormed(parsed)) return reply(400, { error: 'bad-request' })
 		if (!withinLimits(request, parsed.owner)) return reply(429, { error: 'rate-limited' })
-		return settle(parsed.owner, () => verifyPreview(parsed, ports, config), STATUS)
+		return settle({ owner: parsed.owner, name: parsed.repo }, () => verifyPreview(parsed, ports, config), STATUS)
 	}
 }
