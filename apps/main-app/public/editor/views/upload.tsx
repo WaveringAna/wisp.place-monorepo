@@ -2,7 +2,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { type DragEvent, type FormEvent, useId, useRef, useState } from 'react'
 import type { UserInfo } from '../api'
 import { formatBytes, plural } from '../format'
-import { defaultSiteAddress, type PublicSite, siteAddress } from '../model'
+import { defaultSiteAddress, isPreviewSite, type PublicSite, siteAddress } from '../model'
 import { keys, useSites } from '../queries'
 import { notify } from '../store'
 import { Button, cx, Input, Section, Segmented } from '../ui'
@@ -117,7 +117,9 @@ function destinationFor(
 
 export function UploadView({ user }: { user: UserInfo | undefined }) {
 	const sites = useSites()
-	const publicSites = (sites.data ?? []).filter((site): site is PublicSite => site.kind === 'public')
+	const publicSites = (sites.data ?? []).filter(
+		(site): site is PublicSite => site.kind === 'public' && !isPreviewSite(site),
+	)
 	const [chosenMode, setMode] = useState<Mode>('update')
 	const [name, setName] = useState('')
 	const [expiry, setExpiry] = useState<Expiry>('default')

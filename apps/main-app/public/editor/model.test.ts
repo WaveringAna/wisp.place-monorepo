@@ -4,6 +4,7 @@ import {
 	domainMappingChanges,
 	eventsFilter,
 	fromSettingsDraft,
+	isPreviewSite,
 	mappedDomainKeys,
 	type ScopeDraft,
 	scopePath,
@@ -160,5 +161,17 @@ describe('webhooks', () => {
 		})
 		expect(scopePath('at://did:plc:me/app.bsky.feed.post')).toBe('app.bsky.feed.post')
 		expect(scopePath('at://did:plc:me')).toBe('all records')
+	})
+})
+
+describe('isPreviewSite', () => {
+	const site = (rkey: string) =>
+		toPublicSite({ did: 'did:plc:a', rkey, display_name: null, created_at: 0, updated_at: 0 })
+
+	test('matches only pr-<sha7> sites', () => {
+		expect(isPreviewSite(site('pr-47598b7'))).toBe(true)
+		expect(
+			['pr-47598b', 'pr-47598b7x', 'pr-ABCDEF1', 'blog', 'pr-review'].map((rkey) => isPreviewSite(site(rkey))),
+		).toEqual([false, false, false, false, false])
 	})
 })

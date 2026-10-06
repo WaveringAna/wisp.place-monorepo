@@ -67,6 +67,9 @@ export const toPrivateSite = (record: PrivateSiteRecord): PrivateSite => ({
 
 export const newestFirst = (a: Site, b: Site) => b.createdAt - a.createdAt
 
+/** A pull-request preview (`pr-<sha7>`), written by `wispctl preview deploy` rather than by hand. */
+export const isPreviewSite = (site: Site): boolean => site.kind === 'public' && /^pr-[0-9a-f]{7}$/.test(site.rkey)
+
 export const defaultSiteAddress = (handle: string, rkey: string) => `${SITES_HOST}/${handle}/${rkey}`
 
 /** What a visitor types: the preferred mapped domain, else the shared sites host. */

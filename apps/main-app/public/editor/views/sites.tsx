@@ -3,7 +3,7 @@ import { api, errorText, type UserInfo } from '../api'
 import { confirmAction } from '../confirm'
 import { expiresIn, formatBytes, plural, timeAgo } from '../format'
 import { type RowProps, rowActions, useRovingList } from '../keys'
-import { defaultSiteAddress, type PrivateSite, type PublicSite, type Site, siteAddress } from '../model'
+import { defaultSiteAddress, isPreviewSite, type PrivateSite, type PublicSite, type Site, siteAddress } from '../model'
 import { keys, useAction, usePdsSync, useSites } from '../queries'
 import { notify } from '../store'
 import { Button, Empty, ExternalLink, Notice, openInNewTab, Section, SkeletonRows, Tag } from '../ui'
@@ -29,8 +29,12 @@ export function SitesView({ user, onDeploy }: SitesViewProps) {
 	const sync = usePdsSync()
 	const [expanded, setExpanded] = useState<string | null>(null)
 	const [configuring, setConfiguring] = useState<PublicSite | null>(null)
+	const [showPreviews, setShowPreviews] = useState(false)
 	const handle = user?.handle ?? '…'
-	const list = sites.data ?? []
+	const all = sites.data ?? []
+	// Pull-request previews pile up one per round; they stay out of the way unless asked for.
+	const previewCount = all.filter(isPreviewSite).length
+	const list = showPreviews ? all : all.filter((site) => !isPreviewSite(site))
 
 	const deleteSite = useAction(
 		(site: Site) => (site.kind === 'public' ? api.deleteSite(site.rkey) : api.deletePrivateSite(site.siteId)),
@@ -65,14 +69,21 @@ export function SitesView({ user, onDeploy }: SitesViewProps) {
 			title="sites"
 			meta={sites.data && `${plural(list.length, 'site')}${sync.isPending ? ' · checking your pds…' : ''}`}
 			actions={
-				<Button variant="primary" onClick={onDeploy}>
-					+ deploy
-				</Button>
+				<>
+					{previewCount > 0 && (
+						<Button variant="ghost" aria-pressed={showPreviews} onClick={() => setShowPreviews((shown) => !shown)}>
+							{showPreviews ? 'hide previews' : `show ${plural(previewCount, 'preview')}`}
+						</Button>
+					)}
+					<Button variant="primary" onClick={onDeploy}>
+						+ deploy
+					</Button>
+				</>
 			}
 		>
 			{sites.isPending && <SkeletonRows />}
 			{sites.isError && <Notice tone="bad">could not load your sites: {sites.error.message}</Notice>}
-			{sites.isSuccess && list.length === 0 && (
+			{sites.isSuccess && all.length === 0 && (
 				<Empty>
 					{sync.isPending ? 'fetching your sites from your pds ✦' : 'nothing here yet, go put some stuff somewhere ✦'}
 				</Empty>
