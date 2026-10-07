@@ -4,7 +4,7 @@ import type { Sql } from 'postgres'
 const logger = createLogger('firehose-service')
 
 /**
- * Garbage collection of content-addressed bodies (CAS_STORAGE.md).
+ * Garbage collection of content-addressed bodies.
  *
  * An object is collectable once nothing references it (`refs = 0`) and it has been unreferenced for
  * longer than the grace period. The grace period is what lets a site update that wrote or found a body

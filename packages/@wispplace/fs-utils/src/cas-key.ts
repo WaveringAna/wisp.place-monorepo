@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto'
  * The stored body is not a function of the blob CID alone: the writer derives it from the blob
  * bytes plus the manifest's `mimeType`, `encoding` and `base64`. The key therefore pairs the
  * source CID with a `variant` over those flags, so two manifests that interpret one blob
- * differently never share an object. See CAS_STORAGE.md.
+ * differently never share an object.
  */
 
 const KEY_PREFIX = 'cas/'

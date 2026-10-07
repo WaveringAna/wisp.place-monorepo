@@ -1,5 +1,5 @@
 /**
- * Schema for content-addressed site storage (see CAS_STORAGE.md). Kept as plain statements so
+ * Schema for content-addressed site storage. Kept as plain statements so
  * main-app's migration runner and tests apply exactly the same DDL.
  */
 

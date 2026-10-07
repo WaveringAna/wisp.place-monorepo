@@ -3,7 +3,7 @@ import { casKey } from '@wispplace/fs-utils'
 
 // Site files are read from the CAS key that the site's `file_objects` maps. A path with no mapping has
 // no stored body: that is a repair request, never a read of {did}/{rkey}/{path}. Only per-site
-// pre-rewritten HTML (.rewritten/) keeps its per-site key. See CAS_STORAGE.md.
+// pre-rewritten HTML (.rewritten/) keeps its per-site key.
 
 const DID = 'did:plc:test'
 const RKEY = 'pr-ab12cd3'

@@ -64,7 +64,7 @@ export interface SiteCache {
 	rkey: string
 	record_cid: string
 	file_cids: Record<string, string> // path -> CID mapping
-	// path -> CAS key (see CAS_STORAGE.md). Null/absent until the site is converted or rewritten.
+	// path -> CAS key. Null/absent until the site is converted or rewritten.
 	file_objects?: unknown
 	cached_at: number
 	updated_at: number

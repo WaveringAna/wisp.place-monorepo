@@ -58,6 +58,7 @@ package-lock.json
 server
 .env.dev
 e2e-artifacts/
+.browser-artifacts/
 
 # fetched by deploy/fetch-komodo-types.sh
 deploy/komodo/vendor/

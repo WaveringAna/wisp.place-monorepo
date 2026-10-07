@@ -11,7 +11,7 @@ import { handleSiteCreateOrUpdate } from './cache-writer'
 import { classifyLegacyFile } from './cas-migration'
 
 // Site bodies are stored once, at a content-addressed key, and shared by every site that references
-// them. Per-site state is only the manifest mapping and the pre-rewritten HTML. See CAS_STORAGE.md.
+// them. Per-site state is only the manifest mapping and the pre-rewritten HTML.
 
 const did = 'did:plc:root'
 const recordCid = 'current-record'

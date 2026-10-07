@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * One-shot conversion of cached site files to content-addressed storage (CAS_STORAGE.md).
+ * One-shot conversion of cached site files to content-addressed storage.
  * Delete this script and src/lib/cas-migration.ts once every site has been converted.
  *
  *   dry-run        classify every file and report what would happen; changes nothing

@@ -4,7 +4,7 @@ import type { StorageMetadata } from '@wispplace/tiered-storage'
 import { shouldStayCompressed } from './stored-file-rules'
 
 /**
- * One-shot conversion of `{did}/{rkey}/{path}` objects to content-addressed keys (CAS_STORAGE.md).
+ * One-shot conversion of `{did}/{rkey}/{path}` objects to content-addressed keys.
  *
  * The new cache writer derives a body's key from the manifest's `mimeType`, `encoding` and `base64`.
  * The old objects only record what was *stored*, so the manifest's encoding has to be recovered from

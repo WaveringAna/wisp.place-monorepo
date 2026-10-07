@@ -1,7 +1,7 @@
 import { parseCasKey } from '@wispplace/fs-utils'
 
 /**
- * Audit of content-addressed objects (CAS_STORAGE.md). The key names the blob CID and the writer verified
+ * Audit of content-addressed objects. The key names the blob CID and the writer verified
  * the bytes against it, so the object's recorded `sourceCid` must be that CID. No site, owner or PDS is
  * involved: a CAS body belongs to every site that references it.
  */

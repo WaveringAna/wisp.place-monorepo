@@ -415,7 +415,7 @@ export const runDatabaseMigrations = async (primaryDb: SQL): Promise<void> => {
 			await db`CREATE INDEX IF NOT EXISTS idx_site_cache_absent_since ON site_cache(absent_since) WHERE absent_since IS NOT NULL`
 		})
 
-		// Content-addressed site storage (CAS_STORAGE.md). Additive: site_cache.file_objects stays
+		// Content-addressed site storage. Additive: site_cache.file_objects stays
 		// NULL for legacy sites, which keep being read from {did}/{rkey}/{path}.
 		await runMigration('add content-addressed storage schema', async () => {
 			for (const statement of CAS_SCHEMA_STATEMENTS) await db.unsafe(statement)
