@@ -94,7 +94,7 @@ const expiryText = (expiry: Expiry, minutes: string) => {
 
 interface Destination {
 	text: string
-	/** Nothing chosen yet: the text is a placeholder. */
+	/** Nothing chosen yet, so there is nowhere to show. */
 	pending: boolean
 }
 
@@ -195,15 +195,19 @@ export function UploadView({ user }: { user: UserInfo | undefined }) {
 							</div>
 						</>
 					)}
-					<span className="upload-label">files</span>
+					<span className="upload-label upload-label-top">files</span>
 					<DropZone files={files} onFiles={setFiles} busy={busy} />
 				</fieldset>
 				<div className="upload-command">
-					<span className="text-rose" aria-hidden="true">
-						→
-					</span>
-					<span className={cx('min-w-0 flex-1 truncate', target.pending && 'text-ink-soft')}>{target.text}</span>
-					<Button variant="primary" type="submit" busy={busy}>
+					{!target.pending && (
+						<>
+							<span className="text-rose" aria-hidden="true">
+								→
+							</span>
+							<span className="min-w-0 flex-1 truncate">{target.text}</span>
+						</>
+					)}
+					<Button variant="primary" type="submit" busy={busy} className="ml-auto">
 						{submitLabel(mode, files.length)}
 					</Button>
 				</div>
@@ -278,12 +282,35 @@ interface DropZoneProps {
 	busy: boolean
 }
 
-/** One row that takes a dropped folder, or picks a folder or loose files with its buttons. */
+/** An outlined folder that opens while something is dragged over it. */
+const FolderIcon = ({ open }: { open: boolean }) => (
+	<svg
+		className="dropzone-icon"
+		viewBox="0 0 48 40"
+		width="48"
+		height="40"
+		fill="none"
+		stroke="currentColor"
+		strokeWidth="2.25"
+		strokeLinejoin="round"
+		strokeLinecap="round"
+		aria-hidden="true"
+	>
+		<path d="M4 9a3 3 0 0 1 3-3h10l4 4.5h20a3 3 0 0 1 3 3V33a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3Z" />
+		{open ? <path d="M4 33 9.5 19a3 3 0 0 1 2.8-2H45l-6 17" /> : <path d="M4 16h40" />}
+	</svg>
+)
+
+/**
+ * A large drop target that is also the folder picker: dropping a folder or clicking anywhere on it
+ * both work. Loose files and clearing sit underneath, outside the button.
+ */
 function DropZone({ files, onFiles, busy }: DropZoneProps) {
 	const [dragging, setDragging] = useState(false)
 	const filePicker = useRef<HTMLInputElement>(null)
 	const folderPicker = useRef<HTMLInputElement | null>(null)
 	const root = uploadRoot(files)
+	const chosen = files.length > 0
 
 	const pick = (picked: FileList | null) => {
 		if (picked?.length) onFiles(Array.from(picked))
@@ -302,49 +329,54 @@ function DropZone({ files, onFiles, busy }: DropZoneProps) {
 	}
 
 	return (
-		// biome-ignore lint/a11y/noStaticElementInteractions: a drop target only; its buttons cover the keyboard
-		<div
-			className={cx('dropzone', dragging && 'dropzone-over', files.length > 0 && 'dropzone-full')}
-			onDragOver={(event) => {
-				event.preventDefault()
-				if (!busy) setDragging(true)
-			}}
-			onDragLeave={(event) => {
-				if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false)
-			}}
-			onDrop={drop}
-		>
-			{files.length ? (
-				<span className="min-w-0 flex-1 truncate">
-					<span className="text-ok" aria-hidden="true">
-						✓{' '}
-					</span>
-					<span className="font-bold">{root ? `${root}/` : 'loose files'}</span>
-					<span className="text-ink-soft">
-						{' '}
-						· {plural(files.length, 'file')} · {formatBytes(totalBytes(files))}
-					</span>
-				</span>
-			) : (
-				<span className="min-w-0 flex-1">
-					<span className="text-rose" aria-hidden="true">
-						⇣{' '}
-					</span>
-					drop a folder here <span className="text-ink-soft">or pick one</span>
-				</span>
-			)}
-			<span className="flex shrink-0 gap-1.5">
-				<Button onClick={() => folderPicker.current?.click()}>{files.length ? 'change' : 'folder'}</Button>
-				{files.length ? (
-					<Button variant="ghost" onClick={() => onFiles([])}>
-						clear
-					</Button>
+		<div className="min-w-0">
+			<button
+				type="button"
+				className={cx('dropzone', dragging && 'dropzone-over', chosen && 'dropzone-full')}
+				onClick={() => folderPicker.current?.click()}
+				onDragOver={(event) => {
+					event.preventDefault()
+					if (!busy) setDragging(true)
+				}}
+				onDragLeave={(event) => {
+					if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false)
+				}}
+				onDrop={drop}
+			>
+				<FolderIcon open={dragging} />
+				{chosen ? (
+					<>
+						<span className="dropzone-title">
+							<span className="text-ok" aria-hidden="true">
+								✓{' '}
+							</span>
+							{root ? `${root}/` : 'loose files'}
+						</span>
+						<span className="dropzone-hint">
+							{plural(files.length, 'file')} · {formatBytes(totalBytes(files))} · click to choose another folder
+						</span>
+					</>
 				) : (
-					<Button variant="ghost" onClick={() => filePicker.current?.click()}>
-						files
-					</Button>
+					<>
+						<span className="dropzone-title">{dragging ? 'let go to add it' : 'drop your site folder here'}</span>
+						<span className="dropzone-hint">or click to choose one</span>
+					</>
 				)}
-			</span>
+			</button>
+			<p className="dropzone-alt">
+				{chosen ? (
+					<button type="button" className="link-button" onClick={() => onFiles([])}>
+						clear
+					</button>
+				) : (
+					<>
+						just a few files?{' '}
+						<button type="button" className="link-button" onClick={() => filePicker.current?.click()}>
+							pick them instead
+						</button>
+					</>
+				)}
+			</p>
 			<input ref={filePicker} type="file" multiple hidden onChange={(event) => pick(event.target.files)} />
 			<input
 				ref={(input) => {

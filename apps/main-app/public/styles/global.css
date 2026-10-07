@@ -239,6 +239,22 @@
 		transition: border-color 140ms ease;
 	}
 
+	/* Our own caret, drawn in the theme's ink and kept clear of the rounded corner; the native
+	   one sits on the padding edge and pokes past the curve. */
+	select.input {
+		--caret: 0.4rem;
+		appearance: none;
+		padding-right: 2.4rem;
+		background-image:
+			linear-gradient(45deg, transparent calc(50% - 0.8px), var(--ink-soft) 0 calc(50% + 0.8px), transparent 0),
+			linear-gradient(135deg, transparent calc(50% - 0.8px), var(--ink-soft) 0 calc(50% + 0.8px), transparent 0);
+		background-position:
+			calc(100% - 0.95rem - var(--caret)) 55%,
+			calc(100% - 0.95rem) 55%;
+		background-size: var(--caret) var(--caret);
+		background-repeat: no-repeat;
+	}
+
 	.input::placeholder {
 		color: color-mix(in oklch, var(--ink-soft) 70%, transparent);
 	}
@@ -383,30 +399,102 @@
 		}
 	}
 
+	/* Top-aligned, for a field taller than one line. */
+	.upload-label-top {
+		align-self: start;
+		padding-top: 0.6rem;
+	}
+
+	/* The drop target is the folder picker too, so it is one big button. */
 	.dropzone {
 		display: flex;
-		flex-wrap: wrap;
+		flex-direction: column;
 		align-items: center;
-		gap: 0.6rem 1rem;
-		min-height: 3.75rem;
-		padding: 0.6rem 0.6rem 0.6rem 1rem;
+		justify-content: center;
+		gap: 0.35rem;
+		width: 100%;
+		min-height: 11rem;
+		padding: 1.5rem 1rem;
 		border: 1.5px dashed var(--rule);
-		border-radius: 0.6rem;
+		border-radius: 0.75rem;
 		background: var(--row);
+		color: var(--ink);
+		text-align: center;
+		cursor: pointer;
 		transition:
 			border-color 120ms ease,
 			background 120ms ease;
 	}
 
+	.dropzone:hover {
+		border-color: color-mix(in oklch, var(--rose) 60%, var(--rule));
+	}
+
+	.dropzone:focus-visible {
+		outline: 2px solid var(--rose);
+		outline-offset: 2px;
+	}
+
+	.dropzone:disabled {
+		cursor: progress;
+		opacity: 0.7;
+	}
+
+	.dropzone-icon {
+		margin-bottom: 0.35rem;
+		color: var(--rose);
+		transition: transform 160ms ease-out;
+	}
+
+	.dropzone-title {
+		font-weight: 700;
+	}
+
+	.dropzone-hint {
+		color: var(--ink-soft);
+		font-size: 0.8rem;
+	}
+
 	.dropzone-full {
 		border-style: solid;
 		border-color: var(--row-edge);
+		box-shadow: 3px 3px 0 var(--shadow);
+	}
+
+	.dropzone-full .dropzone-icon {
+		color: var(--ok);
 	}
 
 	.dropzone-over {
 		border-style: solid;
 		border-color: var(--rose);
 		background: color-mix(in oklch, var(--pink) 18%, var(--row));
+	}
+
+	.dropzone-over .dropzone-icon {
+		transform: translateY(-3px) scale(1.06);
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.dropzone-icon {
+			transition: none;
+		}
+	}
+
+	.dropzone-alt {
+		margin-top: 0.5rem;
+		color: var(--ink-soft);
+		font-size: 0.8rem;
+		text-align: center;
+	}
+
+	.link-button {
+		color: var(--rose);
+		cursor: pointer;
+	}
+
+	.link-button:hover {
+		text-decoration: underline;
 	}
 
 	.upload-command {
