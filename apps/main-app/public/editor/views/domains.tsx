@@ -35,13 +35,13 @@ import {
 
 const FREE_SUBDOMAINS = 3
 
-/** Regional hosting nodes, for providers that cannot point a CNAME at the apex. */
-const HOSTING_NODES = [
-	{ region: 'us east (virginia)', ip: '129.213.110.75' },
-	{ region: 'us west (california)', ip: '152.44.44.138' },
-	{ region: 'europe (netherlands)', ip: '152.53.121.97' },
-	{ region: 'asia (singapore)', ip: '213.163.207.16' },
-] as const
+/** Regional hosting nodes, for providers that cannot point a CNAME at the apex. us east has no IPv6. */
+const HOSTING_NODES: readonly { region: string; ipv4: string; ipv6?: string }[] = [
+	{ region: 'us east (virginia)', ipv4: '150.136.127.67' },
+	{ region: 'us west (california)', ipv4: '152.44.44.138', ipv6: '2604:ed40:1000:1711:ec1e:4bff:fef1:2e55' },
+	{ region: 'europe (netherlands)', ipv4: '152.53.121.97', ipv6: '2a0a:4cc0:c0:44af:c886:d7ff:febd:2a06' },
+	{ region: 'asia (singapore)', ipv4: '213.163.207.16', ipv6: '2a04:3543:1000:2310:ec1e:4bff:fef1:608b' },
+]
 
 const openDomain = (domain: string) => openInNewTab(`https://${domain}`)
 
@@ -443,10 +443,15 @@ function DnsDialog({ domain, did, verifying, verdict, onVerify, onClose }: DnsDi
 				<p className="hint mt-1">providers that flatten CNAMEs into A records (like cloudflare) are fine</p>
 			</section>
 			<details>
-				<summary className="cursor-pointer text-ink-soft hover:text-ink">or use an A record instead</summary>
-				<Notice tone="warn">A records skip GeoDNS: every visitor is served from the one region you pick.</Notice>
+				<summary className="cursor-pointer text-ink-soft hover:text-ink">or use A and AAAA records instead</summary>
+				<Notice tone="warn">
+					these skip GeoDNS: every visitor is served from the one region you pick. add its AAAA too when it has one.
+				</Notice>
 				{HOSTING_NODES.map((node) => (
-					<Record key={node.ip} name={node.region} value={node.ip} />
+					<Fragment key={node.region}>
+						<Record name={`${node.region} · A`} value={node.ipv4} />
+						{node.ipv6 && <Record name={`${node.region} · AAAA`} value={node.ipv6} />}
+					</Fragment>
 				))}
 			</details>
 		</>
