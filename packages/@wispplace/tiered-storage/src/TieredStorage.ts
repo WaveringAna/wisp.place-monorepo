@@ -6,6 +6,7 @@ import type {
 	AllTierStats,
 	SetOptions,
 	SetResult,
+	StagedTierWrite,
 	StorageMetadata,
 	StorageResult,
 	StorageSnapshot,
@@ -32,6 +33,9 @@ type InFlightBufferedRead = {
 	upperTierPromotionEpoch: number
 	promise: Promise<TierGetResult | null>
 }
+
+/** Default for {@link TieredStorageConfig.streamHotPromotionMaxBytes}. */
+const DEFAULT_STREAM_HOT_PROMOTION_MAX_BYTES = 256 * 1024
 
 export interface UpperTierInvalidationFailure {
 	tier: 'hot' | 'warm'
@@ -109,6 +113,7 @@ export class TieredStorage<T = unknown> {
 	private deserialize: (data: Uint8Array) => Promise<unknown>
 	private keyFences = new Map<string, KeyFence>()
 	private inFlightBufferedReads = new Map<string, InFlightBufferedRead>()
+	private inFlightStreamPromotions = new Set<string>()
 	private upperTierPromotionEpoch = 0
 	private upperTierMutationQueue: Promise<void> = Promise.resolve()
 
@@ -224,6 +229,7 @@ export class TieredStorage<T = unknown> {
 	/**
 	 * Promote only if no invalidation began after the source read, and order that
 	 * promotion with deletion so a write already in progress is deleted afterward.
+	 * Staged writes are committed under the same check and discarded when it fails.
 	 */
 	private async promoteIfCurrent(
 		key: string,
@@ -231,13 +237,18 @@ export class TieredStorage<T = unknown> {
 		generation: number,
 		upperTierPromotionEpoch: number,
 		promotions: Array<{ tier: StorageTier; data: Uint8Array; metadata: StorageMetadata }>,
+		staged: StagedTierWrite[] = [],
 	): Promise<void> {
 		await this.enqueueKeyMutation(key, fence, async () => {
 			await this.enqueueUpperTierMutation(async () => {
 				if (fence.generation !== generation || this.upperTierPromotionEpoch !== upperTierPromotionEpoch) {
+					await Promise.allSettled(staged.map((write) => write.abort()))
 					return
 				}
-				await Promise.allSettled(promotions.map(({ tier, data, metadata }) => tier.set(key, data, metadata)))
+				await Promise.allSettled([
+					...promotions.map(({ tier, data, metadata }) => tier.set(key, data, metadata)),
+					...staged.map((write) => write.commit()),
+				])
 			})
 		})
 	}
@@ -379,8 +390,6 @@ export class TieredStorage<T = unknown> {
 				await this.promoteIfCurrent(key, fence, generation, upperTierPromotionEpoch, promotions)
 			}
 
-			// Fire-and-forget access stats update (non-critical)
-			void this.updateAccessStats(key, 'cold')
 			const consumerResult = cloneTierGetResult(result)
 			return {
 				data: (await this.deserializeData(consumerResult.data)) as T,
@@ -460,8 +469,9 @@ export class TieredStorage<T = unknown> {
 	 * The stream must be consumed or destroyed by the caller.
 	 *
 	 * Checks tiers in order: hot → warm → cold.
-	 * On cache miss, does NOT promote data to upper tiers (streaming would
-	 * require buffering, defeating the purpose).
+	 * With eager promotion, a warm or cold hit is copied into upper tiers as the
+	 * caller consumes it (see {@link promoteStream}); nothing is promoted from a
+	 * stream that is destroyed or fails before its end.
 	 *
 	 * Decompression is automatically handled if the data was stored with
 	 * compression enabled (metadata.compressed = true).
@@ -483,6 +493,7 @@ export class TieredStorage<T = unknown> {
 		throwIfAborted(options.signal)
 		const fence = this.acquireReadFence(key)
 		const generation = fence.generation
+		const upperTierPromotionEpoch = this.upperTierPromotionEpoch
 		let ownsFence = false
 		try {
 			const tiers = [
@@ -508,9 +519,13 @@ export class TieredStorage<T = unknown> {
 					await this.delete(key)
 					return null
 				}
-				void this.updateAccessStats(key, name)
+				if (name !== 'cold') void this.updateAccessStats(key, name)
+				const source =
+					name === 'hot'
+						? result.stream
+						: await this.promoteStream(key, name, result, fence, generation, upperTierPromotionEpoch)
 				const owned = this.wrapStreamWithDecompression(
-					{ stream: result.stream, metadata: cloneStorageMetadata(result.metadata) },
+					{ stream: source, metadata: cloneStorageMetadata(result.metadata) },
 					name,
 				)
 				let released = false
@@ -538,6 +553,95 @@ export class TieredStorage<T = unknown> {
 		} finally {
 			if (!ownsFence) this.releaseReadFence(key, fence)
 		}
+	}
+
+	/**
+	 * Copy a streamed warm or cold hit into upper tiers while the caller reads it.
+	 *
+	 * @remarks
+	 * Stored bytes pass through unchanged. A cold hit is written to the warm
+	 * tier's staged write, and each chunk is handed on only once that write has
+	 * taken it, so memory stays bounded by the stream's buffers. The hot tier
+	 * gets a copy only when placement allows hot and the object stays within
+	 * `streamHotPromotionMaxBytes`. When the source ends, both are published
+	 * through {@link promoteIfCurrent}, before the returned stream ends, while
+	 * the caller's read fence is still held; a write or invalidation that began
+	 * after this read was opened discards them. A stream that is destroyed,
+	 * fails, or ends short of `metadata.size` promotes nothing, and its staged
+	 * bytes are removed. Concurrent reads of a key promote once.
+	 */
+	private async promoteStream(
+		key: string,
+		source: 'warm' | 'cold',
+		result: { stream: NodeJS.ReadableStream; metadata: StorageMetadata },
+		fence: KeyFence,
+		generation: number,
+		upperTierPromotionEpoch: number,
+	): Promise<NodeJS.ReadableStream> {
+		if (this.config.promotionStrategy !== 'eager' || this.inFlightStreamPromotions.has(key)) return result.stream
+		const warm = source === 'cold' ? this.config.tiers.warm : undefined
+		const hot = this.config.tiers.hot && this.getTiersForKey(key).includes('hot') ? this.config.tiers.hot : undefined
+		if (!warm?.stageWrite && !hot) return result.stream
+
+		this.inFlightStreamPromotions.add(key)
+		const metadata = cloneStorageMetadata(result.metadata)
+		const hotMaxBytes = this.config.streamHotPromotionMaxBytes ?? DEFAULT_STREAM_HOT_PROMOTION_MAX_BYTES
+		let staged: StagedTierWrite | undefined
+		try {
+			staged = await warm?.stageWrite?.(key, cloneStorageMetadata(metadata))
+		} catch {
+			// Promotion is best-effort; the read itself still succeeds.
+		}
+		let hotChunks: Buffer[] | undefined = hot ? [] : undefined
+		let bytesRead = 0
+		const discardStaged = async () => {
+			const discarded = staged
+			staged = undefined
+			await discarded?.abort()
+		}
+
+		const tee = new Transform({
+			transform: (chunk: Buffer, _encoding, callback) => {
+				bytesRead += chunk.byteLength
+				if (hotChunks && bytesRead > hotMaxBytes) hotChunks = undefined
+				// Copy: the caller may mutate the chunk it receives.
+				hotChunks?.push(Buffer.from(chunk))
+				if (!staged) return callback(null, chunk)
+				staged.write(chunk).then(
+					() => callback(null, chunk),
+					() => {
+						void discardStaged()
+						callback(null, chunk)
+					},
+				)
+			},
+			flush: (callback) => {
+				// A compressed object's recorded size may be its uncompressed length,
+				// so only uncompressed objects can be checked for a short source.
+				if (!metadata.compressed && bytesRead !== metadata.size) {
+					void discardStaged().then(() => callback())
+					return
+				}
+				const promotions =
+					hot && hotChunks ? [{ tier: hot, data: new Uint8Array(Buffer.concat(hotChunks)), metadata }] : []
+				const commits = staged ? [staged] : []
+				hotChunks = undefined
+				this.promoteIfCurrent(key, fence, generation, upperTierPromotionEpoch, promotions, commits).then(
+					() => callback(),
+					() => callback(),
+				)
+			},
+		})
+		tee.once('close', () => {
+			this.inFlightStreamPromotions.delete(key)
+			hotChunks = undefined
+			// A no-op after commit; otherwise removes the partial staged file.
+			void discardStaged()
+		})
+		pipeline(result.stream as Readable, tee).catch(() => {
+			// pipeline destroys the tee with the error, which the caller observes.
+		})
+		return tee
 	}
 
 	/**
@@ -1461,12 +1565,15 @@ export class TieredStorage<T = unknown> {
 	}
 
 	/**
-	 * Update access statistics for a key.
+	 * Update access statistics for a key in a cache tier.
+	 *
+	 * @remarks
+	 * The cold tier is never touched on read: it is the source of truth, and an
+	 * S3 metadata update is a HEAD plus a full-object copy that can race a
+	 * concurrent write and replace its metadata with the stale copy read here.
 	 */
-	private async updateAccessStats(key: string, tier: 'hot' | 'warm' | 'cold'): Promise<void> {
-		const tierObj =
-			tier === 'hot' ? this.config.tiers.hot : tier === 'warm' ? this.config.tiers.warm : this.config.tiers.cold
-
+	private async updateAccessStats(key: string, tier: 'hot' | 'warm'): Promise<void> {
+		const tierObj = tier === 'hot' ? this.config.tiers.hot : this.config.tiers.warm
 		if (!tierObj) return
 
 		const metadata = await tierObj.getMetadata(key)

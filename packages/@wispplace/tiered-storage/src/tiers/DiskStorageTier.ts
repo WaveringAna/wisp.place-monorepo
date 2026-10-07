@@ -2,8 +2,20 @@ import { createWriteStream, existsSync } from 'node:fs'
 import { mkdir, open, readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { pipeline } from 'node:stream/promises'
-import type { StorageMetadata, StorageTier, TierGetResult, TierStats, TierStreamResult } from '../types/index.js'
+import type {
+	StagedTierWrite,
+	StorageMetadata,
+	StorageTier,
+	TierGetResult,
+	TierStats,
+	TierStreamResult,
+} from '../types/index.js'
 import { encodeKey } from '../utils/path-encoding.js'
+
+/** Cache-root directories that hold in-progress work, never keys. */
+const INVALIDATED_DIRECTORY = '.invalidated'
+const STAGING_DIRECTORY = '.staging'
+const INTERNAL_DIRECTORIES = new Set([INVALIDATED_DIRECTORY, STAGING_DIRECTORY])
 
 function getErrnoCode(error: unknown): string | undefined {
 	if (typeof error !== 'object' || error === null) return undefined
@@ -151,7 +163,8 @@ export class DiskStorageTier implements StorageTier {
 	 */
 	private async initialize(): Promise<void> {
 		await this.ensureDirectory()
-		await rm(join(resolve(this.config.directory), '.invalidated'), { recursive: true, force: true })
+		await rm(join(resolve(this.config.directory), INVALIDATED_DIRECTORY), { recursive: true, force: true })
+		await rm(join(resolve(this.config.directory), STAGING_DIRECTORY), { recursive: true, force: true })
 		this.metadataIndex.clear()
 		this.currentSize = 0
 		await this.rebuildIndex()
@@ -200,7 +213,7 @@ export class DiskStorageTier implements StorageTier {
 			const fullPath = join(dir, entry.name)
 
 			if (entry.isDirectory()) {
-				if (entry.name === '.invalidated') continue
+				if (INTERNAL_DIRECTORIES.has(entry.name)) continue
 				await this.rebuildIndexRecursive(fullPath)
 			} else if (!entry.name.endsWith('.meta')) {
 				try {
@@ -425,10 +438,23 @@ export class DiskStorageTier implements StorageTier {
 	}
 
 	private async setUnlocked(key: string, data: Uint8Array, metadata: StorageMetadata): Promise<void> {
+		await this.storeUnlocked(key, metadata, data.byteLength, (filePath) => writeFile(filePath, data))
+	}
+
+	/**
+	 * Replace a key's entry with `size` bytes that `writeData` puts at its data path.
+	 * The caller holds the mutation lock.
+	 */
+	private async storeUnlocked(
+		key: string,
+		metadata: StorageMetadata,
+		size: number,
+		writeData: (filePath: string) => Promise<void>,
+	): Promise<void> {
 		const filePath = this.getFilePath(key)
 		const metaPath = this.getMetaPath(key)
 
-		if (this.exceedsSizeLimit(data.byteLength)) {
+		if (this.exceedsSizeLimit(size)) {
 			// Preserve unrelated cached entries, but never serve a stale value for a
 			// key whose replacement is too large for this tier.
 			await this.deleteUnlocked(key)
@@ -442,7 +468,7 @@ export class DiskStorageTier implements StorageTier {
 		}
 
 		if (this.config.maxSizeBytes) {
-			await this.evictIfNeeded(data.byteLength)
+			await this.evictIfNeeded(size)
 		}
 
 		// Eviction may have removed this newly empty nested directory.
@@ -453,7 +479,7 @@ export class DiskStorageTier implements StorageTier {
 
 		try {
 			if (!(await this.writeMetadataAtomically(metaPath, metadata))) return
-			await writeFile(filePath, data)
+			await writeData(filePath)
 		} catch (error) {
 			// Do not recreate a directory that an external invalidation removed. The
 			// entry stays absent and will be re-fetched from the source of truth.
@@ -463,12 +489,61 @@ export class DiskStorageTier implements StorageTier {
 		}
 
 		this.metadataIndex.set(key, {
-			size: data.byteLength,
+			size,
 			createdAt: metadata.createdAt,
 			lastAccessed: metadata.lastAccessed,
 			...(metadata.ttl && { ttl: metadata.ttl }),
 		})
-		this.currentSize += data.byteLength
+		this.currentSize += size
+	}
+
+	/**
+	 * Stage a write in a private file under the cache root and publish it with
+	 * one rename on commit, so readers never observe a partial object.
+	 *
+	 * @param key - The key the staged bytes will be stored under
+	 * @param metadata - Metadata stored when the write commits
+	 * @returns A staged write; abandoned staging files are removed on startup
+	 */
+	async stageWrite(key: string, metadata: StorageMetadata): Promise<StagedTierWrite> {
+		await this.initialization
+		// Reject an invalid key before any bytes are staged for it.
+		this.getFilePath(key)
+		const stagingDirectory = join(resolve(this.config.directory), STAGING_DIRECTORY)
+		await mkdir(stagingDirectory, { recursive: true })
+		const stagedPath = join(stagingDirectory, `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`)
+		const handle = await open(stagedPath, 'wx', 0o600)
+		let settled = false
+		const settle = async (): Promise<boolean> => {
+			if (settled) return false
+			settled = true
+			await handle.close().catch(() => {})
+			return true
+		}
+
+		return {
+			write: async (chunk) => {
+				for (let offset = 0; offset < chunk.byteLength; ) {
+					const { bytesWritten } = await handle.write(chunk, offset)
+					offset += bytesWritten
+				}
+			},
+			commit: async () => {
+				if (!(await settle())) return
+				try {
+					const { size } = await stat(stagedPath)
+					await this.withMutation(() =>
+						this.storeUnlocked(key, metadata, size, (filePath) => rename(stagedPath, filePath)),
+					)
+				} finally {
+					// Gone after a successful rename; removes the staged bytes otherwise.
+					await unlink(stagedPath).catch(() => {})
+				}
+			},
+			abort: async () => {
+				if (await settle()) await unlink(stagedPath).catch(() => {})
+			},
+		}
 	}
 
 	async delete(key: string): Promise<void> {
@@ -532,7 +607,7 @@ export class DiskStorageTier implements StorageTier {
 			const fullPath = join(dir, entry.name)
 
 			if (entry.isDirectory()) {
-				if (entry.name === '.invalidated') continue
+				if (INTERNAL_DIRECTORIES.has(entry.name)) continue
 				// Recurse into subdirectory
 				for await (const key of this.listKeysRecursive(fullPath, prefix)) {
 					yield key
@@ -580,7 +655,7 @@ export class DiskStorageTier implements StorageTier {
 		const prefixDirectory = this.getFilePath(prefix)
 		if (!existsSync(prefixDirectory)) return 0
 
-		const invalidationDirectory = join(resolve(this.config.directory), '.invalidated')
+		const invalidationDirectory = join(resolve(this.config.directory), INVALIDATED_DIRECTORY)
 		await mkdir(invalidationDirectory, { recursive: true })
 		const detachedDirectory = join(
 			invalidationDirectory,
@@ -695,7 +770,7 @@ export class DiskStorageTier implements StorageTier {
 			const fullPath = join(dir, entry.name)
 
 			if (entry.isDirectory()) {
-				if (entry.name === '.invalidated') continue
+				if (INTERNAL_DIRECTORIES.has(entry.name)) continue
 				const subStats = await this.getStatsRecursive(fullPath)
 				bytes += subStats.bytes
 				items += subStats.items

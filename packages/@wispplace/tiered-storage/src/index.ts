@@ -24,6 +24,7 @@ export type {
 	PlacementRule,
 	SetOptions,
 	SetResult,
+	StagedTierWrite,
 	StorageMetadata,
 	StorageResult,
 	StorageSnapshot,

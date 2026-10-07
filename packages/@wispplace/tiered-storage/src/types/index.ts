@@ -228,6 +228,18 @@ export interface StorageTier {
 	setStream?(key: string, stream: NodeJS.ReadableStream, metadata: StorageMetadata): Promise<void>
 
 	/**
+	 * Stage a write that stays invisible to readers until it is committed.
+	 *
+	 * @param key - The key the staged bytes will be stored under
+	 * @param metadata - Metadata stored alongside the data on commit
+	 *
+	 * @remarks
+	 * Lets a streamed read copy an object into this tier chunk by chunk without
+	 * buffering it and without ever exposing a partial object.
+	 */
+	stageWrite?(key: string, metadata: StorageMetadata): Promise<StagedTierWrite>
+
+	/**
 	 * Store data with associated metadata.
 	 *
 	 * @param key - The key to store under
@@ -339,6 +351,20 @@ export interface StorageTier {
 }
 
 /**
+ * An in-progress write returned by {@link StorageTier.stageWrite}.
+ */
+export interface StagedTierWrite {
+	/** Append bytes; resolves once the tier no longer needs the chunk. */
+	write(chunk: Uint8Array): Promise<void>
+
+	/** Publish the staged bytes under the key, replacing any current value. */
+	commit(): Promise<void>
+
+	/** Discard the staged bytes. A no-op after commit() or an earlier abort(). */
+	abort(): Promise<void>
+}
+
+/**
  * Rule for automatic tier placement based on key patterns.
  *
  * @remarks
@@ -442,6 +468,18 @@ export interface TieredStorageConfig {
 	 * Lazy promotion reduces writes but may serve from lower tiers more often.
 	 */
 	promotionStrategy?: 'eager' | 'lazy'
+
+	/**
+	 * Largest streamed object copied into the hot tier during eager promotion.
+	 *
+	 * @defaultValue 262144 (256 KiB)
+	 *
+	 * @remarks
+	 * A streamed read buffers at most this many bytes for the hot tier, and only
+	 * for keys whose placement includes hot. Warm promotion streams to a staged
+	 * file and has no such limit beyond the warm tier's own capacity.
+	 */
+	streamHotPromotionMaxBytes?: number
 
 	/**
 	 * Custom serialization/deserialization functions.
