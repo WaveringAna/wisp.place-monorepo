@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { type FormEvent, useEffect, useRef, useState } from 'react'
+import { type FormEvent, Fragment, useEffect, useRef, useState } from 'react'
 import {
 	api,
 	type CustomDomain,
@@ -12,20 +12,24 @@ import {
 } from '../api'
 import { confirmAction } from '../confirm'
 import { plural } from '../format'
-import { type RowProps, rowActions, useRovingList } from '../keys'
+import { rowActions, useRovingList } from '../keys'
 import { keys, useAction, useDomains } from '../queries'
 import { notify } from '../store'
 import {
 	AddLabel,
 	Button,
+	type Column,
 	CopyButton,
-	cx,
+	DetailRow,
 	Dialog,
 	Notice,
 	openInNewTab,
+	Row,
+	RowActions,
 	Section,
+	Sheet,
 	SkeletonRows,
-	Tag,
+	Status,
 	TextField,
 } from '../ui'
 
@@ -50,37 +54,23 @@ const MARQUE_CHECKS_MS = [2000, 6000, 15_000] as const
 /** `?dns=<id>`, left by the sign-in that let wisp edit marque dns, reopens that domain's dialog. */
 const dnsParam = (): string | null => new URLSearchParams(window.location.search).get('dns')
 
-interface DomainLineProps {
-	domain: string
-	/** The site it serves, null while it is not mapped to one. */
-	site: string | null
-	/** False for a custom domain whose dns has not been verified yet. */
-	verified?: boolean
-	rowProps: RowProps
-	onClick: () => void
-}
+const WISP_COLUMNS: readonly Column[] = [
+	{ name: 'subdomain' },
+	{ name: 'serves', className: 'max-sm:hidden' },
+	{ name: 'status' },
+	{ name: 'actions', label: '' },
+]
 
-/** One domain on one line: a status dot, the name, the site it serves, and a tag only when dns needs attention. */
-const DomainLine = ({ domain, site, verified = true, rowProps, onClick }: DomainLineProps) => (
-	<button type="button" {...rowProps} className="row-line" onClick={onClick}>
-		<span
-			className={cx('shrink-0 text-xs', verified && site ? 'text-ok' : verified ? 'text-ink-soft' : 'text-warn')}
-			aria-hidden="true"
-		>
-			{verified && site ? '●' : '○'}
-		</span>
-		<span className="min-w-0 truncate font-bold">{domain}</span>
-		{!verified && <Tag tone="butter">waiting for dns</Tag>}
-		<span className="flex-1" />
-		<span
-			className={cx(
-				'w-44 shrink-0 truncate text-right max-sm:hidden',
-				site ? 'text-ink-soft' : 'text-ink-soft/60 italic',
-			)}
-		>
-			{site ? `→ ${site}` : 'no site yet'}
-		</span>
-	</button>
+const CUSTOM_COLUMNS: readonly Column[] = [
+	{ name: 'domain' },
+	{ name: 'serves', className: 'max-sm:hidden' },
+	{ name: 'dns' },
+	{ name: 'actions', label: '' },
+]
+
+/** The site a domain points at, or a quiet "not mapped". */
+const Serves = ({ site }: { site: string | null }) => (
+	<td className="max-sm:hidden">{site ?? <span className="italic opacity-60">not mapped</span>}</td>
 )
 
 export function DomainsView({ user }: { user: UserInfo | undefined }) {
@@ -109,9 +99,23 @@ export function DomainsView({ user }: { user: UserInfo | undefined }) {
 		})
 
 	const viewing = domains.data?.custom.find((domain) => domain.id === dnsFor)
+	const waiting = (domains.data?.custom ?? []).filter((domain) => !domain.verified)
 
 	return (
 		<>
+			{waiting.map((domain) => (
+				<div key={domain.id} className="callout" role="status">
+					<span>
+						<strong>{domain.domain}</strong> is waiting for dns
+					</span>
+					<span className="ml-auto flex gap-1">
+						<Button onClick={() => setDnsFor(domain.id)}>records</Button>
+						<Button busy={verify.isPending && verify.variables?.id === domain.id} onClick={() => runVerify(domain)}>
+							check
+						</Button>
+					</span>
+				</div>
+			))}
 			<WispDomains supporter={user?.isSupporter ?? false} />
 			<CustomDomains verdicts={verdicts} onVerify={runVerify} onShowDns={setDnsFor} />
 			<DnsDialog
@@ -159,25 +163,33 @@ function WispDomains({ supporter }: { supporter: boolean }) {
 			{domains.isPending && <SkeletonRows count={2} />}
 			{domains.isError && <Notice tone="bad">could not load domains: {domains.error.message}</Notice>}
 			{domains.isSuccess && (
-				<ul className="rows">
+				<Sheet
+					columns={WISP_COLUMNS}
+					form={
+						canClaim ? <ClaimForm /> : <p className="text-ink-soft">all {FREE_SUBDOMAINS} free subdomains claimed ✦</p>
+					}
+				>
 					{wisp.map((domain, index) => (
-						<li key={domain.domain}>
-							<DomainLine
-								domain={domain.domain}
-								site={domain.rkey}
-								rowProps={rowProps(index)}
-								onClick={() => openDomain(domain.domain)}
-							/>
-						</li>
+						<Row key={domain.domain} rowProps={rowProps(index)} onActivate={() => openDomain(domain.domain)}>
+							<td className="name">{domain.domain}</td>
+							<Serves site={domain.rkey} />
+							<td>{domain.rkey ? <Status tone="ok">serving</Status> : <Status tone="muted">not mapped</Status>}</td>
+							<RowActions>
+								<Button variant="ghost" tabIndex={-1} onClick={() => openDomain(domain.domain)}>
+									open
+								</Button>
+								<Button
+									variant="danger"
+									tabIndex={-1}
+									busy={release.isPending && release.variables === domain.domain}
+									onClick={() => askRelease(domain)}
+								>
+									release
+								</Button>
+							</RowActions>
+						</Row>
 					))}
-					<li className="row-form">
-						{canClaim ? (
-							<ClaimForm />
-						) : (
-							<p className="text-ink-soft">all {FREE_SUBDOMAINS} free subdomains claimed ✦</p>
-						)}
-					</li>
-				</ul>
+				</Sheet>
 			)}
 		</Section>
 	)
@@ -221,25 +233,45 @@ function CustomDomains({ verdicts, onVerify, onShowDns }: CustomDomainsProps) {
 		<Section title="custom domains" meta={domains.data && plural(custom.length, 'domain')}>
 			{domains.isPending && <SkeletonRows count={2} />}
 			{domains.isSuccess && (
-				<ul className="rows">
+				<Sheet columns={CUSTOM_COLUMNS} form={<AddDomainForm onAdded={onShowDns} />}>
 					{custom.map((domain, index) => (
-						<li key={domain.id}>
-							<DomainLine
-								domain={domain.domain}
-								site={domain.rkey}
-								verified={domain.verified}
-								rowProps={rowProps(index)}
-								onClick={() => onShowDns(domain.id)}
-							/>
-							<div className="pr-4 pb-2 pl-8 empty:hidden">
-								<Verdict result={verdicts[domain.id]} />
-							</div>
-						</li>
+						<Fragment key={domain.id}>
+							<Row rowProps={rowProps(index)} onActivate={() => onShowDns(domain.id)}>
+								<td className="name">{domain.domain}</td>
+								<Serves site={domain.rkey} />
+								<td>
+									{domain.verified ? <Status tone="ok">verified</Status> : <Status tone="warn">waiting for dns</Status>}
+								</td>
+								<RowActions>
+									{!domain.verified && (
+										<Button variant="ghost" tabIndex={-1} onClick={() => onVerify(domain)}>
+											check
+										</Button>
+									)}
+									<Button variant="ghost" tabIndex={-1} onClick={() => onShowDns(domain.id)}>
+										dns
+									</Button>
+									<Button variant="ghost" tabIndex={-1} onClick={() => openDomain(domain.domain)}>
+										open
+									</Button>
+									<Button
+										variant="danger"
+										tabIndex={-1}
+										busy={remove.isPending && remove.variables?.id === domain.id}
+										onClick={() => askRemove(domain)}
+									>
+										remove
+									</Button>
+								</RowActions>
+							</Row>
+							{verdicts[domain.id] && (
+								<DetailRow id={`verdict-${domain.id}`} span={CUSTOM_COLUMNS.length}>
+									<Verdict result={verdicts[domain.id]} />
+								</DetailRow>
+							)}
+						</Fragment>
 					))}
-					<li className="row-form">
-						<AddDomainForm onAdded={onShowDns} />
-					</li>
-				</ul>
+				</Sheet>
 			)}
 			<p className="hint mt-3">
 				no domain yet?{' '}
@@ -298,11 +330,10 @@ function ClaimForm() {
 	}
 
 	return (
-		<form onSubmit={submit} className="flex flex-wrap items-center gap-x-3 gap-y-2">
+		<form onSubmit={submit} className="contents">
 			<TextField
 				label={<AddLabel>claim a subdomain</AddLabel>}
-				inline
-				className="flex-1"
+				className="field"
 				suffix=".wisp.place"
 				value={handle}
 				onChange={(event) => setHandle(event.target.value)}
@@ -310,17 +341,22 @@ function ClaimForm() {
 				autoCapitalize="none"
 				autoComplete="off"
 				spellCheck={false}
+				hint={
+					<span aria-live="polite">
+						{name && !settled && 'checking…'}
+						{settled && available && <span className="text-ok">✓ available</span>}
+						{settled && !available && (
+							<span className="text-bad">
+								{availability.data.reason === 'invalid' ? '✗ not a valid name' : '✗ taken'}
+							</span>
+						)}
+						{!name && '\u00a0'}
+					</span>
+				}
 			/>
-			<Button variant="primary" type="submit" disabled={!available} busy={claim.isPending}>
+			<Button variant="primary" type="submit" disabled={!available} busy={claim.isPending} className="mb-5">
 				claim
 			</Button>
-			<span className="text-xs" aria-live="polite">
-				{name && !settled && <span className="text-ink-soft">checking…</span>}
-				{settled && available && <span className="text-ok">✓ available</span>}
-				{settled && !available && (
-					<span className="text-bad">{availability.data.reason === 'invalid' ? '✗ not a valid name' : '✗ taken'}</span>
-				)}
-			</span>
 		</form>
 	)
 }
@@ -346,11 +382,10 @@ function AddDomainForm({ onAdded }: { onAdded: (id: string) => void }) {
 	}
 
 	return (
-		<form onSubmit={submit} className="flex flex-wrap items-center gap-x-3 gap-y-2">
+		<form onSubmit={submit} className="contents">
 			<TextField
 				label={<AddLabel>add a domain you own</AddLabel>}
-				inline
-				className="flex-1"
+				className="field"
 				name="domain"
 				placeholder="example.com"
 				autoCapitalize="none"

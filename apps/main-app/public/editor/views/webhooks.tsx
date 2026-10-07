@@ -1,7 +1,7 @@
 import { type FormEvent, useId, useState } from 'react'
-import { api, type UserInfo, type WebhookEvent, type WebhookInput } from '../api'
+import { api, type UserInfo, type WebhookDelivery, type WebhookEvent, type WebhookInput } from '../api'
 import { confirmAction } from '../confirm'
-import { plural } from '../format'
+import { plural, timeAgo } from '../format'
 import { type RowProps, rowActions, useRovingList } from '../keys'
 import {
 	ALL_WEBHOOK_EVENTS,
@@ -13,16 +13,23 @@ import {
 	WEBHOOK_APPS,
 	type Webhook,
 } from '../model'
-import { keys, useAction, useSecrets, useWebhooks } from '../queries'
+import { keys, useAction, useDeliveries, useSecrets, useWebhooks } from '../queries'
 import {
 	Button,
+	CHEVRON,
+	type Column,
+	DetailRow,
 	Dialog,
 	Empty,
 	Notice,
+	Row,
 	Section,
 	Segmented,
 	SelectField,
+	Sheet,
 	SkeletonRows,
+	Stat,
+	Status,
 	Tag,
 	TextField,
 	Toggle,
@@ -31,11 +38,24 @@ import { canUseLocalLoopbackWebhookHttp, validateEditorWebhookEndpointUrl } from
 import { Deliveries } from './deliveries'
 import { Secrets } from './secrets'
 
+const COLUMNS: readonly Column[] = [
+	CHEVRON,
+	{ name: 'endpoint' },
+	{ name: 'collections', className: 'max-sm:hidden' },
+	{ name: 'options', className: 'max-sm:hidden' },
+	{ name: 'status' },
+	{ name: 'last delivery', align: 'right', className: 'max-sm:hidden' },
+]
+
 export function WebhooksView({ user }: { user: UserInfo | undefined }) {
 	const webhooks = useWebhooks()
+	const secrets = useSecrets()
+	const deliveries = useDeliveries()
 	const [creating, setCreating] = useState(false)
 	const [expanded, setExpanded] = useState<string | null>(null)
 	const list = webhooks.data ?? []
+	const delivered = deliveries.data ?? []
+	const failed = delivered.filter((delivery) => delivery.status === 'failed').length
 
 	const remove = useAction((webhook: Webhook) => api.deleteWebhook(webhook.rkey), {
 		invalidates: [keys.webhooks],
@@ -65,25 +85,37 @@ export function WebhooksView({ user }: { user: UserInfo | undefined }) {
 					</Button>
 				}
 			>
-				<p className="hint my-2">
-					get an http callback when records change in your repo, or when other repos reference them
-				</p>
+				{webhooks.isSuccess && list.length > 0 && (
+					<div className="strip">
+						<Stat label="endpoints" value={list.length} note={`${list.filter((hook) => hook.enabled).length} on`} />
+						<Stat label="recent deliveries" value={delivered.length} />
+						<Stat
+							label="failed"
+							value={<span className={failed ? 'text-bad' : undefined}>{failed}</span>}
+							note={failed > 0 && delivered.find((delivery) => delivery.status === 'failed')?.url}
+						/>
+						<Stat label="signing secrets" value={secrets.data?.length ?? '…'} />
+					</div>
+				)}
 				{webhooks.isPending && <SkeletonRows count={2} />}
 				{webhooks.isError && <Notice tone="bad">could not load webhooks: {webhooks.error.message}</Notice>}
 				{webhooks.isSuccess && list.length === 0 && <Empty>no webhooks yet ✦</Empty>}
-				<ul className="rows">
-					{list.map((webhook, index) => (
-						<WebhookRow
-							key={webhook.rkey}
-							webhook={webhook}
-							expanded={expanded === webhook.rkey}
-							onToggle={() => setExpanded((current) => (current === webhook.rkey ? null : webhook.rkey))}
-							rowProps={rowProps(index)}
-							deleting={remove.isPending && remove.variables?.rkey === webhook.rkey}
-							onDelete={() => askRemove(webhook)}
-						/>
-					))}
-				</ul>
+				{list.length > 0 && (
+					<Sheet columns={COLUMNS}>
+						{list.map((webhook, index) => (
+							<WebhookRow
+								key={webhook.rkey}
+								webhook={webhook}
+								last={delivered.find((delivery) => delivery.url === webhook.url)}
+								expanded={expanded === webhook.rkey}
+								onToggle={() => setExpanded((current) => (current === webhook.rkey ? null : webhook.rkey))}
+								rowProps={rowProps(index)}
+								deleting={remove.isPending && remove.variables?.rkey === webhook.rkey}
+								onDelete={() => askRemove(webhook)}
+							/>
+						))}
+					</Sheet>
+				)}
 			</Section>
 			<Secrets />
 			<Deliveries />
@@ -94,6 +126,8 @@ export function WebhooksView({ user }: { user: UserInfo | undefined }) {
 
 interface WebhookRowProps {
 	webhook: Webhook
+	/** Its newest delivery, from the recent list. */
+	last: WebhookDelivery | undefined
 	expanded: boolean
 	onToggle: () => void
 	rowProps: RowProps
@@ -101,54 +135,78 @@ interface WebhookRowProps {
 	onDelete: () => void
 }
 
-function WebhookRow({ webhook, expanded, onToggle, rowProps, deleting, onDelete }: WebhookRowProps) {
+/** The endpoint's host and path on one line, its query string under it. */
+const Endpoint = ({ url }: { url: string }) => {
+	const [path, query] = url.replace(/^https?:\/\//, '').split(/\?(.*)/s)
+	return (
+		<span className="flex min-w-0 flex-col leading-snug">
+			<span className="truncate">{path}</span>
+			{query && <span className="truncate text-xs font-normal text-ink-soft">?{query}</span>}
+		</span>
+	)
+}
+
+function WebhookRow({ webhook, last, expanded, onToggle, rowProps, deleting, onDelete }: WebhookRowProps) {
 	const detailId = useId()
 	return (
-		<li>
-			<button
-				type="button"
-				{...rowProps}
-				className="row-line flex-wrap"
-				aria-expanded={expanded}
-				aria-controls={detailId}
-				onClick={onToggle}
-			>
-				<span className={webhook.enabled ? 'text-ok' : 'text-ink-soft'} aria-hidden="true">
-					{webhook.enabled ? '●' : '○'}
-				</span>
-				<span className="min-w-0 flex-1 truncate font-bold">{webhook.url}</span>
-				<span className="truncate text-ink-soft max-sm:basis-full">{scopePath(webhook.scope)}</span>
-				{webhook.backlinksOnly ? (
-					<Tag tone="lilac">backlinks only</Tag>
-				) : (
-					webhook.backlinks && <Tag tone="lilac">+ backlinks</Tag>
-				)}
-				{webhook.secretId && <Tag tone="mint">signed</Tag>}
-			</button>
-			{expanded && (
-				<div id={detailId} className="row-detail">
-					<dl className="kv">
-						<dt>endpoint</dt>
-						<dd className="break-all">{webhook.url}</dd>
-						<dt>scope</dt>
-						<dd className="break-all">{webhook.scope}</dd>
-						<dt>events</dt>
-						<dd>{webhook.events.length ? webhook.events.join(' · ') : 'create · update · delete'}</dd>
-						<dt>signed with</dt>
-						<dd>{webhook.secretId ?? <span className="text-ink-soft">unsigned</span>}</dd>
-						{!webhook.enabled && (
-							<>
-								<dt>state</dt>
-								<dd>disabled</dd>
-							</>
+		<>
+			<Row rowProps={rowProps} onActivate={onToggle} expanded={expanded} controls={detailId}>
+				<td className="chev" />
+				<td className="name max-w-0">
+					<Endpoint url={webhook.url} />
+				</td>
+				<td className="max-sm:hidden">{scopePath(webhook.scope)}</td>
+				<td className="max-sm:hidden">
+					<span className="flex gap-1">
+						{webhook.backlinksOnly ? (
+							<Tag tone="lilac">backlinks only</Tag>
+						) : (
+							webhook.backlinks && <Tag tone="lilac">+ backlinks</Tag>
 						)}
+						{webhook.secretId && <Tag tone="mint">signed</Tag>}
+						{!webhook.backlinks && !webhook.secretId && '—'}
+					</span>
+				</td>
+				<td>{webhook.enabled ? <Status tone="ok">active</Status> : <Status tone="muted">disabled</Status>}</td>
+				<td className="num whitespace-nowrap text-xs max-sm:hidden">
+					{last ? (
+						<span className="flex flex-col leading-snug">
+							{timeAgo(last.deliveredAt)}
+							<span className={last.status === 'ok' ? 'opacity-80' : 'text-bad'}>
+								{last.status === 'ok' ? 'ok' : 'failed'} · {last.eventCollection}
+							</span>
+						</span>
+					) : (
+						'—'
+					)}
+				</td>
+			</Row>
+			{expanded && (
+				<DetailRow id={detailId} span={COLUMNS.length}>
+					<dl className="detail-grid">
+						<div>
+							<dt>endpoint</dt>
+							<dd>{webhook.url}</dd>
+						</div>
+						<div>
+							<dt>scope</dt>
+							<dd>{webhook.scope}</dd>
+						</div>
+						<div>
+							<dt>events</dt>
+							<dd>{webhook.events.length ? webhook.events.join(' · ') : 'create · update · delete'}</dd>
+						</div>
+						<div>
+							<dt>signed with</dt>
+							<dd>{webhook.secretId ?? <span className="text-ink-soft">unsigned</span>}</dd>
+						</div>
 					</dl>
-					<Button variant="danger" className="mt-3" busy={deleting} onClick={onDelete} shortcut="d">
+					<Button variant="danger" className="mt-4" busy={deleting} onClick={onDelete} shortcut="d">
 						delete
 					</Button>
-				</div>
+				</DetailRow>
 			)}
-		</li>
+		</>
 	)
 }
 

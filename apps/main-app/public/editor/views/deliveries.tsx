@@ -3,18 +3,18 @@ import { useState } from 'react'
 import type { WebhookDelivery } from '../api'
 import { timeAgo } from '../format'
 import { keys, useDeliveries } from '../queries'
-import { Button, cx, Empty, Input, Notice, Section, Segmented, SkeletonRows } from '../ui'
+import { Button, Empty, Input, Notice, Section, Segmented, Sheet, SkeletonRows, Status } from '../ui'
 
 type Column = 'status' | 'eventKind' | 'eventCollection' | 'url' | 'deliveredAt'
 type Direction = 'ascending' | 'descending'
 type StatusFilter = 'all' | WebhookDelivery['status']
 
 const COLUMNS: { column: Column; label: string; className?: string }[] = [
-	{ column: 'status', label: 'status', className: 'w-16' },
+	{ column: 'status', label: 'status', className: 'w-24' },
 	{ column: 'eventKind', label: 'event', className: 'w-20' },
 	{ column: 'eventCollection', label: 'collection' },
 	{ column: 'url', label: 'endpoint', className: 'max-md:hidden' },
-	{ column: 'deliveredAt', label: 'when', className: 'w-24 text-right' },
+	{ column: 'deliveredAt', label: 'when', className: 'w-24' },
 ]
 
 const STATUSES = [
@@ -93,48 +93,35 @@ export function Deliveries() {
 							onChange={(status) => setView((previous) => ({ ...previous, status }))}
 						/>
 					</div>
-					<table className="w-full table-fixed text-left text-xs">
-						<thead className="text-ink-soft">
-							<tr className="border-b-2 border-dashed border-rule">
-								{COLUMNS.map(({ column, label, className }) => (
-									<th
-										key={column}
-										scope="col"
-										className={cx('py-1.5 pr-3 font-normal', className)}
-										aria-sort={view.column === column ? view.direction : undefined}
-									>
-										<button type="button" onClick={() => sortBy(column)} className="hover:text-ink">
-											{label}
-											{view.column === column && (view.direction === 'ascending' ? ' ↑' : ' ↓')}
-										</button>
-									</th>
-								))}
+					<Sheet
+						columns={COLUMNS.map(({ column, label, className }) => ({
+							name: column,
+							className,
+							align: column === 'deliveredAt' ? 'right' : 'left',
+							sort: view.column === column ? view.direction : undefined,
+							label: (
+								<button type="button" onClick={() => sortBy(column)} className="hover:text-ink">
+									{label}
+									{view.column === column && (view.direction === 'ascending' ? ' ↑' : ' ↓')}
+								</button>
+							),
+						}))}
+						foot={shown.length === 0 ? 'nothing matches those filters' : undefined}
+					>
+						{shown.map((delivery) => (
+							<tr key={`${delivery.rkey}:${delivery.eventRkey}:${delivery.deliveredAt}`}>
+								<td>{delivery.status === 'ok' ? <Status tone="ok">ok</Status> : <Status tone="bad">failed</Status>}</td>
+								<td>{delivery.eventKind}</td>
+								<td className="max-w-0 truncate" title={delivery.eventCollection}>
+									{delivery.eventCollection || '·'}
+								</td>
+								<td className="max-w-0 truncate max-md:hidden" title={delivery.url}>
+									{delivery.url}
+								</td>
+								<td className="num whitespace-nowrap text-xs">{timeAgo(delivery.deliveredAt)}</td>
 							</tr>
-						</thead>
-						<tbody>
-							{shown.map((delivery) => (
-								<tr
-									key={`${delivery.rkey}:${delivery.eventRkey}:${delivery.deliveredAt}`}
-									className="border-b border-dashed border-rule"
-								>
-									<td className={cx('py-1.5 pr-3 font-bold', delivery.status === 'ok' ? 'text-ok' : 'text-bad')}>
-										{delivery.status === 'ok' ? '200' : 'err'}
-									</td>
-									<td className="pr-3">{delivery.eventKind}</td>
-									<td className="truncate pr-3 text-ink-soft" title={delivery.eventCollection}>
-										{delivery.eventCollection || '·'}
-									</td>
-									<td className="truncate pr-3 text-ink-soft max-md:hidden" title={delivery.url}>
-										{delivery.url}
-									</td>
-									<td className="text-right text-ink-soft">{timeAgo(delivery.deliveredAt)}</td>
-								</tr>
-							))}
-						</tbody>
-					</table>
-					{shown.length === 0 && (
-						<p className="py-4 text-center text-xs text-ink-soft">nothing matches those filters</p>
-					)}
+						))}
+					</Sheet>
 				</>
 			)}
 		</Section>

@@ -7,16 +7,21 @@ import { keys, useAction, usePreviews } from '../queries'
 import { previewWorkflow } from '../recipes'
 import {
 	Button,
+	CHEVRON,
 	CodeBlock,
+	type Column,
 	CopyButton,
+	DetailRow,
 	Dialog,
 	Empty,
 	ExternalLink,
 	Notice,
+	Row,
 	Section,
 	SelectField,
+	Sheet,
 	SkeletonRows,
-	Tag,
+	Status,
 	TextField,
 } from '../ui'
 
@@ -47,6 +52,14 @@ const refusalText = (error: unknown) =>
 /** What a preview url looks like, with a made-up commit: `<commit>` would render as arrows in the mono font. */
 const exampleUrl = (claim: string, previewHost: string) => `pr-1a2b3c4-${claim}.${previewHost}`
 
+const COLUMNS: readonly Column[] = [
+	CHEVRON,
+	{ name: 'repo' },
+	{ name: 'spindle', className: 'max-sm:hidden' },
+	{ name: 'previews' },
+	{ name: 'deploy secret', className: 'max-sm:hidden' },
+]
+
 export function PreviewsSection({ user }: { user: UserInfo | undefined }) {
 	const previews = usePreviews()
 	const [expanded, setExpanded] = useState<string | null>(null)
@@ -70,17 +83,12 @@ export function PreviewsSection({ user }: { user: UserInfo | undefined }) {
 				)
 			}
 		>
-			{!turnedOff && (
-				<p className="hint my-2">
-					pick a repo and every pull request gets its own live site, with a comment linking to it.
-				</p>
-			)}
 			{previews.isPending && <SkeletonRows count={3} />}
 			{previews.isError && <Notice tone="bad">could not load your tangled repos: {previews.error.message}</Notice>}
 			{turnedOff && <Notice tone="warn">previews are turned off on this wisp.place deployment</Notice>}
 			{info?.previewHost && repos.length === 0 && <Empty>no tangled repos on your account yet ✦</Empty>}
-			{info?.previewHost && (
-				<ul className="rows">
+			{info?.previewHost && repos.length > 0 && (
+				<Sheet columns={COLUMNS}>
 					{repos.map((repo, index) => (
 						<PreviewRow
 							key={repo.rkey}
@@ -93,7 +101,7 @@ export function PreviewsSection({ user }: { user: UserInfo | undefined }) {
 							rowProps={rowProps(index)}
 						/>
 					))}
-				</ul>
+				</Sheet>
 			)}
 			<ConnectCiDialog open={connecting} onClose={() => setConnecting(false)} />
 		</Section>
@@ -110,36 +118,52 @@ interface PreviewRowProps {
 	rowProps: RowProps
 }
 
+const PreviewState = ({ repo, host }: { repo: PreviewRepo; host: string }) => {
+	if (repo.preview)
+		return (
+			<span className="flex flex-col leading-snug">
+				<Status tone="ok">on</Status>
+				<span className="text-xs text-ink-soft">
+					pr-*-{repo.preview.claim}.{host}
+				</span>
+			</span>
+		)
+	if (repo.blocked === 'no-spindle') return <Status tone="muted">no spindle</Status>
+	if (repo.blocked === 'no-repo-did') return <Status tone="muted">no repo did</Status>
+	return <Status tone="muted">off</Status>
+}
+
+const SecretState = ({ repo }: { repo: PreviewRepo }) => {
+	if (repo.secret === 'set') return <Status tone="ok">set</Status>
+	if (repo.secret === 'missing' && repo.preview) return <Status tone="warn">missing</Status>
+	return <>—</>
+}
+
 function PreviewRow({ repo, info, user, expanded, onToggle, onConnect, rowProps }: PreviewRowProps) {
 	const detailId = useId()
 	return (
-		<li>
-			<button
-				type="button"
-				{...rowProps}
-				className="row-line flex-wrap"
-				aria-expanded={expanded}
-				aria-controls={detailId}
-				onClick={onToggle}
-			>
-				<span className={repo.preview ? 'text-ok' : 'text-ink-soft'} aria-hidden="true">
-					{repo.preview ? '●' : '○'}
-				</span>
-				<span className="min-w-0 flex-1 truncate font-bold">{repo.name}</span>
-				<span className="truncate text-ink-soft max-sm:basis-full">{repo.spindle ?? 'no spindle'}</span>
-				{repo.preview && <Tag tone="mint">previews · {repo.preview.claim}</Tag>}
-				{repo.preview && repo.secret === 'missing' && <Tag tone="butter">no deploy secret</Tag>}
-			</button>
+		<>
+			<Row rowProps={rowProps} onActivate={onToggle} expanded={expanded} controls={detailId}>
+				<td className="chev" />
+				<td className="name">{repo.name}</td>
+				<td className="max-sm:hidden">{repo.spindle ?? '—'}</td>
+				<td>
+					<PreviewState repo={repo} host={info.previewHost ?? ''} />
+				</td>
+				<td className="max-sm:hidden">
+					<SecretState repo={repo} />
+				</td>
+			</Row>
 			{expanded && (
-				<div id={detailId} className="row-detail">
+				<DetailRow id={detailId} span={COLUMNS.length}>
 					{repo.blocked ? (
 						<Notice tone="warn">{BLOCKED[repo.blocked]}</Notice>
 					) : (
 						<PreviewSetup repo={repo} info={info} user={user} onConnect={onConnect} />
 					)}
-				</div>
+				</DetailRow>
 			)}
-		</li>
+		</>
 	)
 }
 

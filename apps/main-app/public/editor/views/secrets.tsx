@@ -1,10 +1,31 @@
 import { type FormEvent, useId, useState } from 'react'
 import { api, type SecretMeta } from '../api'
 import { confirmAction } from '../confirm'
-import { timeAgo } from '../format'
+import { plural, timeAgo } from '../format'
 import { type RowProps, rowActions, useRovingList } from '../keys'
 import { keys, useAction, useSecrets, useWebhooks } from '../queries'
-import { AddLabel, Button, CopyButton, Notice, Section, SkeletonRows, TextField } from '../ui'
+import {
+	AddLabel,
+	Button,
+	CHEVRON,
+	type Column,
+	CopyButton,
+	DetailRow,
+	Notice,
+	Row,
+	Section,
+	Sheet,
+	SkeletonRows,
+	TextField,
+} from '../ui'
+
+const COLUMNS: readonly Column[] = [
+	CHEVRON,
+	{ name: 'name' },
+	{ name: 'signs', className: 'max-sm:hidden' },
+	{ name: 'created', align: 'right', className: 'max-sm:hidden' },
+	{ name: 'rotated', align: 'right' },
+]
 
 export function Secrets() {
 	const secrets = useSecrets()
@@ -76,7 +97,28 @@ export function Secrets() {
 			)}
 			{secrets.isPending && <SkeletonRows count={1} />}
 			{secrets.isSuccess && (
-				<ul className="rows">
+				<Sheet
+					columns={COLUMNS}
+					form={
+						<form onSubmit={submit} className="contents">
+							<TextField
+								label={<AddLabel>new secret</AddLabel>}
+								className="field"
+								name="name"
+								required
+								maxLength={64}
+								pattern="[A-Za-z0-9._\-]+"
+								title="1–64 letters, digits, dots, underscores or hyphens"
+								placeholder="my-server"
+								autoComplete="off"
+								spellCheck={false}
+							/>
+							<Button variant="primary" type="submit" busy={create.isPending}>
+								create
+							</Button>
+						</form>
+					}
+				>
 					{list.map((secret, index) => (
 						<SecretRow
 							key={secret.name}
@@ -93,27 +135,7 @@ export function Secrets() {
 							onDelete={() => askRemove(secret)}
 						/>
 					))}
-					<li className="row-form">
-						<form onSubmit={submit} className="flex flex-wrap items-center gap-x-3 gap-y-2">
-							<TextField
-								label={<AddLabel>new secret</AddLabel>}
-								inline
-								className="flex-1"
-								name="name"
-								required
-								maxLength={64}
-								pattern="[A-Za-z0-9._\-]+"
-								title="1–64 letters, digits, dots, underscores or hyphens"
-								placeholder="my-server"
-								autoComplete="off"
-								spellCheck={false}
-							/>
-							<Button variant="primary" type="submit" busy={create.isPending}>
-								create
-							</Button>
-						</form>
-					</li>
-				</ul>
+				</Sheet>
 			)}
 		</Section>
 	)
@@ -144,36 +166,34 @@ function SecretRow({
 }: SecretRowProps) {
 	const detailId = useId()
 	return (
-		<li>
-			<button
-				type="button"
-				{...rowProps}
-				className="row-line"
-				aria-expanded={expanded}
-				aria-controls={detailId}
-				onClick={onToggle}
-			>
-				<span className="min-w-0 flex-1 truncate font-bold">{secret.name}</span>
-				<span className="text-xs text-ink-soft">
-					{secret.lastRotatedAt ? `rotated ${timeAgo(secret.lastRotatedAt)}` : `created ${timeAgo(secret.createdAt)}`}
-				</span>
-			</button>
+		<>
+			<Row rowProps={rowProps} onActivate={onToggle} expanded={expanded} controls={detailId}>
+				<td className="chev" />
+				<td className="name max-w-0 truncate">{secret.name}</td>
+				<td className="max-sm:hidden">{usedBy.length ? plural(usedBy.length, 'webhook') : '—'}</td>
+				<td className="num whitespace-nowrap text-xs max-sm:hidden">{timeAgo(secret.createdAt)}</td>
+				<td className="num whitespace-nowrap text-xs">{secret.lastRotatedAt ? timeAgo(secret.lastRotatedAt) : '—'}</td>
+			</Row>
 			{expanded && (
-				<div id={detailId} className="row-detail">
-					<dl className="kv">
-						<dt>signs</dt>
-						<dd>
-							{usedBy.length === 0 && <span className="text-ink-soft">no webhooks yet</span>}
-							{usedBy.map((url) => (
-								<span key={url} className="block break-all">
-									{url}
-								</span>
-							))}
-						</dd>
-						<dt>created</dt>
-						<dd>{new Date(secret.createdAt).toLocaleString()}</dd>
+				<DetailRow id={detailId} span={COLUMNS.length}>
+					<dl className="detail-grid">
+						<div>
+							<dt>signs</dt>
+							<dd>
+								{usedBy.length === 0 && <span className="text-ink-soft">no webhooks yet</span>}
+								{usedBy.map((url) => (
+									<span key={url} className="block break-all">
+										{url}
+									</span>
+								))}
+							</dd>
+						</div>
+						<div>
+							<dt>created</dt>
+							<dd>{new Date(secret.createdAt).toLocaleString()}</dd>
+						</div>
 					</dl>
-					<div className="mt-3 flex gap-2">
+					<div className="mt-4 flex gap-2">
 						<Button busy={rotating} onClick={onRotate} shortcut="r">
 							rotate
 						</Button>
@@ -181,8 +201,8 @@ function SecretRow({
 							delete
 						</Button>
 					</div>
-				</div>
+				</DetailRow>
 			)}
-		</li>
+		</>
 	)
 }

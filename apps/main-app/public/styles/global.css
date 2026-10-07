@@ -435,11 +435,9 @@
 		scrollbar-color: var(--rule) transparent;
 	}
 
-	/* Rows: one outlined sheet per list, lines split by hairlines, so a long list reads as a
-	   single calm object instead of a stack of cards. */
-	.rows {
-		display: flex;
-		flex-direction: column;
+	/* Sheets: one outlined table per list, so a long list reads as a single calm object. The header
+	   row names the columns, which is what makes a date a date and a site name a site name. */
+	.sheet {
 		border: 1.5px solid var(--row-edge);
 		border-radius: 0.75rem;
 		background: var(--row);
@@ -447,125 +445,264 @@
 		overflow: hidden;
 	}
 
-	.rows:empty {
-		display: none;
-	}
-
-	.rows > li + li {
-		border-top: 1px solid color-mix(in oklch, var(--rule) 70%, transparent);
-	}
-
-	.row-line {
-		position: relative;
-		display: flex;
-		align-items: center;
-		gap: 0.75rem;
+	.sheet table {
 		width: 100%;
-		min-height: 3.25rem;
-		padding: 0.65rem 1rem 0.65rem 2rem;
+		border-collapse: collapse;
+	}
+
+	.sheet th {
+		padding: 0.45rem 1rem;
+		border-bottom: 1.5px solid color-mix(in oklch, var(--rule) 70%, transparent);
+		background: color-mix(in oklch, var(--pane) 55%, var(--row));
+		color: var(--ink-soft);
+		font-size: 0.72rem;
+		font-weight: 400;
+		letter-spacing: 0.04em;
 		text-align: left;
+		white-space: nowrap;
+	}
+
+	.sheet td {
+		padding: 0.6rem 1rem;
+		border-top: 1px solid color-mix(in oklch, var(--rule) 70%, transparent);
+		color: var(--ink-soft);
+		vertical-align: middle;
+	}
+
+	.sheet tbody tr:first-child > td {
+		border-top: 0;
+	}
+
+	.sheet .num {
+		text-align: right;
+		font-variant-numeric: tabular-nums;
+	}
+
+	.sheet .name {
+		color: var(--ink);
+		font-weight: 700;
+	}
+
+	/* Cells of buttons at the right edge: tight, and never the reason a row wraps. */
+	.sheet .acts {
+		width: 1%;
+		padding-block: 0.3rem;
+		text-align: right;
+		white-space: nowrap;
+	}
+
+	.sheet .row {
 		cursor: pointer;
 		transition: background 120ms ease;
 	}
 
-	/* A quiet chevron on every line, lit in rose for the cursor row and turned for an open one. */
-	.row-line::before {
+	.sheet .row:hover > td {
+		background: color-mix(in oklch, var(--rose) 6%, var(--row));
+	}
+
+	.sheet .row:focus-visible {
+		outline: none;
+	}
+
+	.sheet .row:focus-within > td {
+		background: color-mix(in oklch, var(--rose) 10%, var(--row));
+	}
+
+	.sheet .row:focus-within > td:first-child {
+		box-shadow: inset 3px 0 0 var(--rose);
+	}
+
+	/* A quiet chevron on expandable rows, lit in rose for the cursor row and turned for an open one. */
+	.sheet .chev {
+		width: 2rem;
+		padding-right: 0;
+	}
+
+	.sheet .chev::before {
 		content: "›";
-		position: absolute;
-		top: 50%;
-		left: 0.85rem;
+		display: inline-block;
 		color: var(--ink-soft);
 		opacity: 0.45;
-		translate: 0 -50%;
 		transition:
 			opacity 120ms ease,
 			color 120ms ease,
 			rotate 160ms ease;
 	}
 
-	/* Lines that open something instead of expanding keep the chevron for the cursor row only. */
-	.row-line:not([aria-expanded])::before {
-		opacity: 0;
-	}
-
-	.row-line:hover {
-		background: color-mix(in oklch, var(--rose) 6%, var(--row));
-	}
-
-	.rows > li:focus-within > .row-line {
-		background: color-mix(in oklch, var(--rose) 10%, var(--row));
-		box-shadow: inset 3px 0 0 var(--rose);
-	}
-
-	.row-line:focus-visible {
-		outline: none;
-	}
-
-	.rows > li:focus-within > .row-line::before,
-	.row-line[aria-expanded="true"]::before {
+	.sheet .row:focus-within .chev::before,
+	.sheet .row[aria-expanded="true"] .chev::before {
 		color: var(--rose);
 		opacity: 1;
 	}
 
-	.row-line[aria-expanded="true"]::before {
+	.sheet .row[aria-expanded="true"] .chev::before {
 		rotate: 90deg;
 	}
 
-	.row-detail {
-		margin: 0.15rem 1rem 1rem 2rem;
-		padding: 0.25rem 0 0.25rem 1rem;
+	/* The open row's details sit under it, indented past the chevron, against a hairline. */
+	.sheet .detail > td {
+		padding: 0 1rem 1rem 3rem;
+		border-top: 0;
+	}
+
+	/* Zero intrinsic width, stretched to the cell: the details never widen a column above them. */
+	.detail-box {
+		width: 0;
+		min-width: 100%;
+		padding: 0.4rem 0 0.4rem 1rem;
 		border-left: 1.5px solid var(--rule);
 	}
 
-	/* The last line of a list that adds to it: same sheet, a step quieter than the rows above. */
-	.rows > .row-form {
-		padding: 0.75rem 1rem 0.75rem 2rem;
+	.detail-grid {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 0.9rem 1.5rem;
+	}
+
+	.detail-grid dt {
+		color: var(--ink-soft);
+		font-size: 0.75rem;
+	}
+
+	.detail-grid dd {
+		color: var(--ink);
+		overflow-wrap: anywhere;
+	}
+
+	/* The last line of a sheet that adds to it: same object, a step quieter than the rows above. */
+	.row-form {
+		display: flex;
+		align-items: flex-end;
+		gap: 0.75rem;
+		padding: 0.85rem 1rem;
 		border-top: 1.5px dashed var(--rule);
 		background: color-mix(in oklch, var(--pane) 55%, var(--row));
 	}
 
-	/* A labelled field laid out on one line, label first, for forms that sit in a row. */
-	.field-inline {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: 0.35rem 0.85rem;
+	.row-form .field {
+		flex: 1;
+		min-width: 0;
 	}
 
-	.field-inline > .field-label {
-		margin: 0;
-		font-size: inherit;
+	.sheet-foot {
+		display: flex;
+		justify-content: space-between;
+		gap: 1rem;
+		padding: 0.45rem 1rem;
+		border-top: 1.5px dashed var(--rule);
+		background: color-mix(in oklch, var(--pane) 55%, var(--row));
+		color: var(--ink-soft);
+		font-size: 0.75rem;
+	}
+
+	/* Status is a glyph and a word: the colour helps, the word carries it. */
+	.st {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.45rem;
+		color: var(--ink);
 		white-space: nowrap;
 	}
 
-	.field-inline > :not(.field-label) {
-		flex: 1;
-		min-width: 12rem;
+	.st::before {
+		width: 1em;
+		font-weight: 700;
+		text-align: center;
 	}
 
-	.kv {
-		display: grid;
-		grid-template-columns: 7rem 1fr;
-		gap: 0.3rem 1rem;
-		align-items: baseline;
+	.st-ok::before {
+		content: "✓";
+		color: var(--ok);
 	}
 
-	.kv dt {
+	.st-warn::before {
+		content: "!";
+		color: var(--warn);
+	}
+
+	.st-bad::before {
+		content: "✗";
+		color: var(--bad);
+	}
+
+	.st-muted {
 		color: var(--ink-soft);
 	}
 
-	.kv dd {
-		min-width: 0;
-		overflow-wrap: anywhere;
+	.st-muted::before {
+		content: "·";
+	}
+
+	.st-lock::before {
+		content: "⌂";
+		color: var(--lilac);
+	}
+
+	/* The one thing on a tab that needs you, at the top instead of a tag in row four. */
+	.callout {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.5rem 0.75rem;
+		margin-bottom: 1.25rem;
+		padding: 0.6rem 1rem;
+		border: 1.5px solid var(--rule);
+		border-left: 4px solid var(--warn);
+		border-radius: 0.6rem;
+		background: var(--card);
+	}
+
+	.callout::before {
+		content: "!";
+		color: var(--warn);
+		font-weight: 700;
+	}
+
+	/* The numbers that answer "is anything wrong" before the lists do. */
+	.strip {
+		display: grid;
+		grid-template-columns: repeat(4, minmax(0, 1fr));
+		gap: 0.75rem;
+		margin-bottom: 1.5rem;
+	}
+
+	.stat {
+		padding: 0.6rem 0.9rem;
+		border: 1.5px solid var(--rule);
+		border-radius: 0.75rem;
+		background: color-mix(in oklch, var(--card) 60%, var(--pane));
+	}
+
+	.stat-label {
+		color: var(--ink-soft);
+		font-size: 0.75rem;
+	}
+
+	.stat-value {
+		font-size: 1.3rem;
+		font-weight: 700;
+		line-height: 1.3;
+	}
+
+	.stat-value small {
+		margin-left: 0.5rem;
+		color: var(--ink-soft);
+		font-size: 0.78rem;
+		font-weight: 400;
 	}
 
 	@media (max-width: 640px) {
-		.row-detail {
-			margin-left: 0.75rem;
+		.sheet .detail > td {
+			padding-left: 1rem;
 		}
 
-		.kv {
-			grid-template-columns: 5.5rem 1fr;
+		.detail-grid {
+			grid-template-columns: minmax(0, 1fr);
+			gap: 0.5rem;
+		}
+
+		.strip {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
 		}
 	}
 
@@ -576,6 +713,21 @@
 		color: var(--term-text);
 		box-shadow: 4px 4px 0 var(--shadow);
 		overflow: auto;
+	}
+
+	.terminal-head {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		padding: 0.3rem 0.5rem 0.3rem 1rem;
+		border-bottom: 1px solid oklch(1 0 0 / 0.1);
+		color: var(--term-dim);
+		font-size: 0.72rem;
+	}
+
+	.terminal-head .btn-ghost {
+		margin-left: auto;
+		color: var(--term-text);
 	}
 
 	.terminal .dim {

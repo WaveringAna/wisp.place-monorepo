@@ -9,6 +9,7 @@ import {
 	useRef,
 	useState,
 } from 'react'
+import { isTypingTarget, type RowProps } from './keys'
 import { notify } from './store'
 
 export const cx = (...classes: (string | false | null | undefined)[]) => classes.filter(Boolean).join(' ')
@@ -25,6 +26,13 @@ type Tone = 'pink' | 'lilac' | 'mint' | 'butter'
 
 export const Tag = ({ tone, children }: { tone?: Tone; children: ReactNode }) => (
 	<span className={cx('tag', tone && `tag-${tone}`)}>{children}</span>
+)
+
+type StatusTone = 'ok' | 'warn' | 'bad' | 'muted' | 'lock'
+
+/** A state as a glyph and a word, like `✓ live`: the colour helps, the word carries it. */
+export const Status = ({ tone, children }: { tone: StatusTone; children: ReactNode }) => (
+	<span className={cx('st', `st-${tone}`)}>{children}</span>
 )
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -223,15 +231,122 @@ export const Empty = ({ children }: { children: ReactNode }) => (
 const SKELETON_ROWS = ['a', 'b', 'c', 'd'] as const
 
 export const SkeletonRows = ({ count = 3 }: { count?: number }) => (
-	<ul className="rows" aria-label="loading">
+	<div className="sheet" role="status" aria-label="loading">
 		{SKELETON_ROWS.slice(0, count).map((row) => (
-			<li key={row} className="flex items-center gap-4 py-3.5 pl-6">
+			<div key={row} className="flex items-center gap-4 border-t border-rule/70 px-4 py-3.5 first:border-0">
 				<span className="skeleton h-3.5 w-40" />
 				<span className="skeleton h-3.5 w-64 max-sm:hidden" />
-				<span className="skeleton ml-auto mr-3 h-3.5 w-14" />
-			</li>
+				<span className="skeleton ml-auto h-3.5 w-14" />
+			</div>
 		))}
-	</ul>
+	</div>
+)
+
+export interface Column {
+	name: string
+	/** The header text, when it is not just the name. */
+	label?: ReactNode
+	/** Numbers and dates sit on the right. */
+	align?: 'left' | 'right'
+	/** Classes for the header cell, usually a width or `max-sm:hidden`. */
+	className?: string
+	/** Set on the column the sheet is sorted by. */
+	sort?: 'ascending' | 'descending'
+}
+
+/** The chevron column of a sheet whose rows expand. */
+export const CHEVRON: Column = { name: 'chevron', label: '', className: 'chev' }
+
+interface SheetProps {
+	columns: readonly Column[]
+	children: ReactNode
+	/** A form on the sheet's last line that adds to it. */
+	form?: ReactNode
+	foot?: ReactNode
+}
+
+/** One outlined table: a header row names the columns, the rows are the list. */
+export const Sheet = ({ columns, children, form, foot }: SheetProps) => (
+	<div className="sheet">
+		<table>
+			<thead>
+				<tr>
+					{columns.map((column) => (
+						<th
+							key={column.name}
+							scope="col"
+							aria-sort={column.sort}
+							className={cx(column.align === 'right' && 'num', column.className)}
+						>
+							{column.label ?? column.name}
+						</th>
+					))}
+				</tr>
+			</thead>
+			<tbody>{children}</tbody>
+		</table>
+		{form && <div className="row-form">{form}</div>}
+		{foot && <div className="sheet-foot">{foot}</div>}
+	</div>
+)
+
+interface RowOwnProps {
+	rowProps: RowProps
+	/** What enter, space or a click on the row does. Buttons inside the row keep their own clicks. */
+	onActivate: () => void
+	expanded?: boolean
+	/** The id of the detail row an expandable row controls. */
+	controls?: string
+	children: ReactNode
+}
+
+/** A sheet row the keyboard can land on: j/k move between rows, enter activates, letters go to the list. */
+export function Row({ rowProps, onActivate, expanded, controls, children }: RowOwnProps) {
+	const onKeyDown = (event: KeyboardEvent<HTMLTableRowElement>) => {
+		if ((event.key === 'Enter' || event.key === ' ') && event.target === event.currentTarget) {
+			event.preventDefault()
+			onActivate()
+			return
+		}
+		if (!isTypingTarget(event.target)) rowProps.onKeyDown(event)
+	}
+	return (
+		<tr
+			{...rowProps}
+			className="row"
+			aria-expanded={expanded}
+			aria-controls={controls}
+			onClick={(event) => {
+				if (!(event.target instanceof Element && event.target.closest('button, a, input'))) onActivate()
+			}}
+			onKeyDown={onKeyDown}
+		>
+			{children}
+		</tr>
+	)
+}
+
+/** The row under an expanded one, holding its details against a hairline. */
+export const DetailRow = ({ id, span, children }: { id: string; span: number; children: ReactNode }) => (
+	<tr className="detail">
+		<td id={id} colSpan={span}>
+			<div className="detail-box">{children}</div>
+		</td>
+	</tr>
+)
+
+/** Buttons in a row's last cell: the mouse way to what the row's keys do, so they stay out of the tab order. */
+export const RowActions = ({ children }: { children: ReactNode }) => <td className="acts">{children}</td>
+
+/** A number and its label for the strip above a list. */
+export const Stat = ({ label, value, note }: { label: string; value: ReactNode; note?: ReactNode }) => (
+	<div className="stat">
+		<div className="stat-label">{label}</div>
+		<div className="stat-value">
+			{value}
+			{note && <small>{note}</small>}
+		</div>
+	</div>
 )
 
 export const Notice = ({ tone = 'info', children }: { tone?: 'info' | 'warn' | 'bad'; children: ReactNode }) => (
@@ -248,10 +363,19 @@ export const Notice = ({ tone = 'info', children }: { tone?: 'info' | 'warn' | '
 	</div>
 )
 
-export const CodeBlock = ({ code }: { code: string }) => (
-	<pre className="terminal overflow-x-auto p-4 text-[0.8rem] leading-relaxed">
-		<code>{code}</code>
-	</pre>
+/** A terminal, with a title strip and a copy button when it has a title. */
+export const CodeBlock = ({ code, title }: { code: string; title?: string }) => (
+	<div className="terminal">
+		{title && (
+			<div className="terminal-head">
+				{title}
+				<CopyButton text={code} />
+			</div>
+		)}
+		<pre className="overflow-x-auto p-4 text-[0.8rem] leading-relaxed">
+			<code>{code}</code>
+		</pre>
+	</div>
 )
 
 export function CopyButton({ text, label = 'copy' }: { text: string; label?: string }) {

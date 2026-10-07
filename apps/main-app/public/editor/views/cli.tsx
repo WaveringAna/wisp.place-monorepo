@@ -1,6 +1,8 @@
+import { useId, useState } from 'react'
 import type { UserInfo } from '../api'
+import { type RowProps, useRovingList } from '../keys'
 import { WISPCTL_VERSION as VERSION } from '../recipes'
-import { CodeBlock, CopyButton, ExternalLink, Section } from '../ui'
+import { CHEVRON, CodeBlock, type Column, CopyButton, DetailRow, ExternalLink, Row, Section, Sheet, Tag } from '../ui'
 import { PreviewsSection } from './previews'
 
 const BINARY_BASE = 'https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries'
@@ -34,11 +36,6 @@ const BINARIES = [
 	},
 ] as const
 
-const INSTALL = [
-	{ command: 'npm install -g wispctl', note: 'recommended' },
-	{ command: 'npm create wisp@latest', note: 'scaffold a new project' },
-] as const
-
 const LINKS = [
 	{ label: 'docs', href: 'https://docs.wisp.place/cli/' },
 	{ label: 'source', href: 'https://tangled.org/nekomimi.pet/wisp.place-monorepo/tree/main/cli-rs' },
@@ -53,28 +50,28 @@ const DEPLOY_STEP = `npm install --global --prefix "$HOME/.local" wispctl@${VERS
         --password "$WISP_APP_PASSWORD" \\
         --yes`
 
-const RECIPES = [
+const recipesFor = (handle: string) => [
 	{
 		title: 'deploy · pull · serve',
 		snippets: [
 			{
 				label: 'deploy',
-				code: `wispctl deploy your-handle.bsky.social \\
+				code: `wispctl deploy ${handle} \\
   --path ./dist \\
   --site my-site
 
-# https://sites.wisp.place/your-handle/my-site`,
+# https://sites.wisp.place/${handle}/my-site`,
 			},
 			{
 				label: 'pull',
-				code: `wispctl pull your-handle.bsky.social \\
+				code: `wispctl pull ${handle} \\
   --site my-site --path ./my-site`,
 			},
 			{
 				label: 'serve with live updates',
-				code: `wispctl serve your-handle.bsky.social --site my-site
-wispctl serve your-handle.bsky.social --site my-site --port 3000
-wispctl serve your-handle.bsky.social --site my-site --spa`,
+				code: `wispctl serve ${handle} --site my-site
+wispctl serve ${handle} --site my-site --port 3000
+wispctl serve ${handle} --site my-site --spa`,
 			},
 		],
 	},
@@ -83,14 +80,14 @@ wispctl serve your-handle.bsky.social --site my-site --spa`,
 		snippets: [
 			{
 				label: 'manage',
-				code: `wispctl domain claim your-handle.bsky.social --domain example.com
-wispctl domain claim-subdomain your-handle.bsky.social --subdomain alice
-wispctl domain status your-handle.bsky.social --domain example.com
-wispctl domain add-site your-handle.bsky.social --domain example.com --site mysite
-wispctl domain delete your-handle.bsky.social --domain example.com
-wispctl site delete your-handle.bsky.social --site mysite
-wispctl list domains your-handle.bsky.social
-wispctl list sites your-handle.bsky.social`,
+				code: `wispctl domain claim ${handle} --domain example.com
+wispctl domain claim-subdomain ${handle} --subdomain alice
+wispctl domain status ${handle} --domain example.com
+wispctl domain add-site ${handle} --domain example.com --site mysite
+wispctl domain delete ${handle} --domain example.com
+wispctl site delete ${handle} --site mysite
+wispctl list domains ${handle}
+wispctl list sites ${handle}`,
 			},
 		],
 	},
@@ -118,7 +115,7 @@ dependencies:
 environment:
   SITE_PATH: 'dist'
   SITE_NAME: 'my-site'
-  WISP_HANDLE: 'your-handle.bsky.social'
+  WISP_HANDLE: '${handle}'
 
 steps:
   - name: build
@@ -135,7 +132,31 @@ steps:
 	},
 ]
 
+const RECIPE_COLUMNS: readonly Column[] = [
+	CHEVRON,
+	{ name: 'recipe' },
+	{ name: 'snippets', className: 'max-sm:hidden' },
+]
+
+const BINARY_COLUMNS: readonly Column[] = [
+	{ name: 'platform' },
+	{ name: 'file' },
+	{ name: 'sha256', className: 'max-sm:hidden' },
+	{ name: 'actions', label: '' },
+]
+
+const installCommand = (handle: string) => `npm install -g wispctl
+wispctl deploy ${handle} --path ./dist --site my-site`
+
+const CREATE_COMMAND = 'npm create wisp@latest'
+
 export function CliView({ user }: { user: UserInfo | undefined }) {
+	const [open, setOpen] = useState<string | null>(null)
+	// The handle fills every example, so each one can be pasted as-is.
+	const handle = user?.handle ?? 'your-handle.bsky.social'
+	const recipes = recipesFor(handle)
+	const rowProps = useRovingList(recipes.length)
+
 	return (
 		<>
 			<Section
@@ -147,63 +168,94 @@ export function CliView({ user }: { user: UserInfo | undefined }) {
 					</ExternalLink>
 				))}
 			>
-				<p className="hint my-2">
-					deploy from a terminal or ci, or run your own little server that follows the firehose
-				</p>
-				<ul className="rows">
-					{INSTALL.map(({ command, note }) => (
-						<li key={command} className="flex flex-wrap items-center gap-x-4 py-2 pl-6">
-							<code className="font-bold">
-								<span className="text-rose">$ </span>
-								{command}
-							</code>
-							<span className="text-xs text-ink-soft">{note}</span>
-							<span className="ml-auto">
-								<CopyButton text={command} />
-							</span>
-						</li>
-					))}
-				</ul>
+				<div className="grid gap-4 sm:grid-cols-2">
+					<div>
+						<p className="field-label">
+							<span className="text-ink">install</span> · node 20+
+						</p>
+						<CodeBlock title="bash" code={installCommand(handle)} />
+					</div>
+					<div>
+						<p className="field-label">
+							<span className="text-ink">or without installing</span> · asks for handle, directory and site
+						</p>
+						<CodeBlock title="bash" code={CREATE_COMMAND} />
+					</div>
+				</div>
 			</Section>
 
 			<PreviewsSection user={user} />
 
 			<Section title="recipes">
-				{RECIPES.map((recipe) => (
-					<details key={recipe.title} className="group border-b border-dashed border-rule">
-						<summary className="cursor-pointer list-none py-2.5 pl-6 font-bold marker:hidden hover:bg-paper-2 [&::-webkit-details-marker]:hidden">
-							<span className="mr-2 inline-block text-rose transition-transform group-open:rotate-90">▸</span>
-							{recipe.title}
-						</summary>
-						<div className="space-y-4 pb-5 pl-6">
-							{recipe.snippets.map((snippet) => (
-								<div key={snippet.label}>
-									<p className="field-label">{snippet.label}</p>
-									<CodeBlock code={snippet.code} />
-								</div>
-							))}
-							{recipe.note && <p className="hint">{recipe.note}</p>}
-						</div>
-					</details>
-				))}
+				<Sheet columns={RECIPE_COLUMNS}>
+					{recipes.map((recipe, index) => (
+						<RecipeRow
+							key={recipe.title}
+							recipe={recipe}
+							expanded={open === recipe.title}
+							onToggle={() => setOpen((current) => (current === recipe.title ? null : recipe.title))}
+							rowProps={rowProps(index)}
+						/>
+					))}
+				</Sheet>
 			</Section>
 
 			<Section title="binaries" meta={`v${VERSION} · static builds, no runtime needed`}>
-				<ul className="rows">
+				<Sheet columns={BINARY_COLUMNS}>
 					{BINARIES.map(({ platform, filename, sha256 }) => (
-						<li key={filename} className="flex flex-wrap items-center gap-x-4 gap-y-1 py-2 pl-6">
-							<span className="w-56 shrink-0 font-bold">{platform}</span>
-							<a href={`${BINARY_BASE}/${filename}`} download className="text-xs">
-								{filename} ↓
-							</a>
-							<code className="min-w-0 flex-1 truncate text-xs text-ink-soft" title={sha256}>
-								sha256 {sha256}
-							</code>
-							<CopyButton text={sha256} label="copy sha" />
-						</li>
+						<tr key={filename}>
+							<td className="name">{platform}</td>
+							<td className="whitespace-nowrap">
+								<a href={`${BINARY_BASE}/${filename}`} download>
+									{filename} ↓
+								</a>
+							</td>
+							<td className="max-w-0 truncate text-xs max-sm:hidden" title={sha256}>
+								{sha256}
+							</td>
+							<td className="acts">
+								<CopyButton text={sha256} label="copy sha" />
+							</td>
+						</tr>
 					))}
-				</ul>
+				</Sheet>
 			</Section>
+		</>
+	)
+}
+
+interface RecipeRowProps {
+	recipe: ReturnType<typeof recipesFor>[number]
+	expanded: boolean
+	onToggle: () => void
+	rowProps: RowProps
+}
+
+function RecipeRow({ recipe, expanded, onToggle, rowProps }: RecipeRowProps) {
+	const detailId = useId()
+	return (
+		<>
+			<Row rowProps={rowProps} onActivate={onToggle} expanded={expanded} controls={detailId}>
+				<td className="chev" />
+				<td className="name">{recipe.title}</td>
+				<td className="max-sm:hidden">
+					<span className="flex flex-wrap gap-1">
+						{recipe.snippets.map((snippet) => (
+							<Tag key={snippet.label}>{snippet.label}</Tag>
+						))}
+					</span>
+				</td>
+			</Row>
+			{expanded && (
+				<DetailRow id={detailId} span={RECIPE_COLUMNS.length}>
+					<div className="space-y-4">
+						{recipe.snippets.map((snippet) => (
+							<CodeBlock key={snippet.label} title={snippet.label} code={snippet.code} />
+						))}
+						{recipe.note && <p className="hint">{recipe.note}</p>}
+					</div>
+				</DetailRow>
+			)}
 		</>
 	)
 }
