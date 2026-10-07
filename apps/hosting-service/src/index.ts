@@ -1,5 +1,10 @@
 import { existsSync, mkdirSync } from 'node:fs'
-import { createLogger, initializeGrafanaExporters, shutdownGrafanaExporters } from '@wispplace/observability'
+import {
+	createLogger,
+	initializeGrafanaExporters,
+	setInMemoryRetention,
+	shutdownGrafanaExporters,
+} from '@wispplace/observability'
 import { startCacheInvalidationSubscriber, stopCacheInvalidationSubscriber } from './lib/cache-invalidation'
 import { cache } from './lib/cache-manager'
 import { closeDatabase } from './lib/db'
@@ -11,6 +16,10 @@ import { onceAsync, stopHttpServerWithGrace } from './shutdown'
 
 const logger = createLogger('hosting-service')
 
+// Nothing in hosting reads the in-process log or request-metric rings; console
+// output and the Loki/OTLP exporters carry them instead.
+setInMemoryRetention({ logs: 0, metrics: 0 })
+
 // Initialize Grafana exporters if configured
 initializeGrafanaExporters({
 	serviceName: 'hosting-service',
@@ -21,6 +30,7 @@ const DEFAULT_PORT = 3001
 const DEFAULT_BOOTSTRAP_HOT_LIMIT = 100
 const MAX_BOOTSTRAP_HOT_LIMIT = 10_000
 const HTTP_SHUTDOWN_GRACE_PERIOD_MS = 10_000
+const CACHE_SWEEP_INTERVAL_MS = 60_000
 
 function parseBoundedInteger(value: string | undefined, fallback: number, minimum: number, maximum: number): number {
 	const normalized = value?.trim()
@@ -38,8 +48,9 @@ if (!existsSync(CACHE_DIR)) {
 	logger.info('Created cache directory')
 }
 
-// Start in-memory cache cleanup
-cache.startCleanup()
+// Sweep expired lookups every minute. Most namespaces live 10 s, so the default
+// half-hour sweep left expired site manifests resident for up to 30 minutes.
+cache.startCleanup(CACHE_SWEEP_INTERVAL_MS)
 
 // Start cache invalidation subscriber (listens for firehose-service updates via Redis pub/sub)
 startCacheInvalidationSubscriber()

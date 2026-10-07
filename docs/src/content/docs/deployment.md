@@ -234,8 +234,10 @@ PORT=3001
 
 # Tiered storage
 CACHE_DIR="./cache/sites"
-HOT_CACHE_SIZE=104857600       # 100 MB, in-memory LRU
+HOT_CACHE_SIZE=33554432        # 32 MiB default, in-memory LRU
 HOT_CACHE_COUNT=500
+MANIFEST_CACHE_SIZE=16777216   # 16 MiB default, estimated bytes of cached site manifests
+MANIFEST_CACHE_COUNT=5000
 HOT_CACHE_TTL=60               # seconds
 WARM_CACHE_SIZE=10737418240    # 10 GB, disk; this is not a RAM allowance
 WARM_EVICTION_POLICY="lru"    # lru, fifo, or size
@@ -268,7 +270,7 @@ REDIS_URL="rediss://redis.example:6379"
 TRACE_REQUESTS=false
 ```
 
-Keep `HOT_CACHE_SIZE` consistent across regions. It is the byte cap for resident file data; `WARM_CACHE_SIZE` only caps the disk tier. The process also needs memory for Bun/Node, metadata, request buffers, and shared caches, so the container RSS can exceed `HOT_CACHE_SIZE`. After measuring a fixed-image canary under representative traffic, configure a container memory limit above the observed peak plus operating headroom. Do not run production hosting containers without a memory limit indefinitely.
+Keep `HOT_CACHE_SIZE` consistent across regions. It is the byte cap for resident file data; `WARM_CACHE_SIZE` only caps the disk tier. The `HOT_CACHE_SIZE` and `MANIFEST_CACHE_SIZE` defaults are sized for a 1 GiB edge. The process also needs memory for Bun/Node, metadata, request buffers, and shared caches, so the container RSS can exceed `HOT_CACHE_SIZE`. After measuring a fixed-image canary under representative traffic, configure a container memory limit above the observed peak plus operating headroom. Do not run production hosting containers without a memory limit indefinitely.
 
 ```bash
 cd hosting-service

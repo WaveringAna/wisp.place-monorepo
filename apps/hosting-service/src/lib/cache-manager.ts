@@ -357,6 +357,52 @@ type CacheNamespace =
 	| 'siteFiles'
 	| 'sourceCidMismatches'
 
+// Rough JavaScriptCore costs: a string cell plus header, an object or array
+// with its property storage, and one property or element slot.
+const STRING_OVERHEAD_BYTES = 32
+const CONTAINER_OVERHEAD_BYTES = 64
+const SLOT_BYTES = 16
+
+/**
+ * Estimate the resident size of a JSON-shaped value, such as a postgres row
+ * with jsonb columns. Strings count one byte per UTF-16 unit, which is exact
+ * for the Latin-1 paths and CIDs that dominate site manifests. Against Bun
+ * 1.4.2 heap growth it errs high, by about 1.4x for a 1000-file manifest.
+ */
+export function estimateJsonBytes(value: unknown): number {
+	let bytes = 0
+	const pending: unknown[] = [value]
+	while (pending.length > 0) {
+		const next = pending.pop()
+		if (typeof next === 'string') {
+			bytes += STRING_OVERHEAD_BYTES + next.length
+		} else if (Array.isArray(next)) {
+			bytes += CONTAINER_OVERHEAD_BYTES + next.length * SLOT_BYTES
+			for (const item of next) pending.push(item)
+		} else if (next !== null && typeof next === 'object') {
+			bytes += CONTAINER_OVERHEAD_BYTES
+			for (const [key, item] of Object.entries(next)) {
+				bytes += STRING_OVERHEAD_BYTES + key.length + SLOT_BYTES
+				pending.push(item)
+			}
+		} else {
+			bytes += SLOT_BYTES
+		}
+	}
+	return bytes
+}
+
+function positiveIntegerFromEnv(value: string | undefined, fallback: number): number {
+	if (!value?.trim()) return fallback
+	const parsed = Number(value)
+	return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback
+}
+
+// Site manifests hold every path, CID and CAS key of a site, so they are capped
+// by estimated bytes as well as by count. Sized for a 1 GiB edge; raise with env.
+const MANIFEST_CACHE_SIZE = positiveIntegerFromEnv(process.env.MANIFEST_CACHE_SIZE, 16 * 1024 * 1024)
+const MANIFEST_CACHE_COUNT = positiveIntegerFromEnv(process.env.MANIFEST_CACHE_COUNT, 5000)
+
 // Invalidation remains immediate. These TTLs bound stale data when an invalidation event cannot be delivered.
 export const cache = new CacheManager<CacheNamespace>({
 	domains: { ttl: INVALIDATION_SAFETY_TTL_MS, maxEntries: 5000 },
@@ -369,7 +415,12 @@ export const cache = new CacheManager<CacheNamespace>({
 		maxSize: 10 * 1024 * 1024,
 		estimateSize: (v) => (v as unknown[]).length * 100,
 	},
-	siteCache: { ttl: INVALIDATION_SAFETY_TTL_MS, maxEntries: 5000 },
+	siteCache: {
+		ttl: INVALIDATION_SAFETY_TTL_MS,
+		maxEntries: MANIFEST_CACHE_COUNT,
+		maxSize: MANIFEST_CACHE_SIZE,
+		estimateSize: estimateJsonBytes,
+	},
 	// Negative-result cache for per-site fallback files (SPA, custom 404, auto-detected 404 pages).
 	// Stores null when a file is confirmed absent so repeated 404 responses don't re-hit S3.
 	siteFiles: { ttl: INVALIDATION_SAFETY_TTL_MS, maxEntries: 10_000 },

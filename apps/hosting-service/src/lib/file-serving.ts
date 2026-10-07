@@ -246,6 +246,8 @@ async function hasExpectedSourceCid(
 /**
  * Retrieve a file and, when a manifest CID is available, verify that the
  * stored object is from that manifest version before it can be served.
+ * The bytes are borrowed from the storage tiers: hash, decode or serve them,
+ * never write to them.
  */
 async function getFileWithMetadata(
 	did: string,
@@ -257,7 +259,7 @@ async function getFileWithMetadata(
 	const key = resolveStorageKey(did, rkey, filePath, fileObjects)
 	if (key === null) return null
 	if (expectedSourceCid === undefined) {
-		const result = await storage.getWithMetadata(key)
+		const result = await storage.getWithMetadata(key, { borrowData: true })
 		if (!result) return null
 
 		logStorageResult(did, rkey, filePath, result)
@@ -272,7 +274,7 @@ async function getFileWithMetadata(
 		SOURCE_CID_MISMATCH_NAMESPACE,
 		sourceCidMismatchKey,
 		async () => {
-			const result = await storage.getWithMetadata(key)
+			const result = await storage.getWithMetadata(key, { borrowData: true })
 			if (!result) return { kind: 'not-found' }
 
 			if (await hasExpectedSourceCid(result, expectedSourceCid, did, rkey, key)) {
@@ -301,7 +303,7 @@ async function getFileWithMetadata(
 			// closed without destructive cache oscillation.
 			let coldResult: FileStorageResult | null
 			try {
-				coldResult = await storage.getWithMetadata(key)
+				coldResult = await storage.getWithMetadata(key, { borrowData: true })
 			} catch (error) {
 				// A transient cold-tier outage is not evidence that the manifest is stale.
 				// Let the request boundary return 503 without scheduling a repair.

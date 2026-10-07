@@ -82,9 +82,15 @@ export interface MetricStats {
 // Configuration
 // ============================================================================
 
-const MAX_LOGS = 5000
 const MAX_ERRORS = 500
-const MAX_METRICS = 10000
+
+/** How many recent entries each in-process ring keeps for getLogs()/getMetrics(). */
+export interface InMemoryRetention {
+	logs: number
+	metrics: number
+}
+
+const retention: InMemoryRetention = { logs: 5000, metrics: 10000 }
 
 // ============================================================================
 // Storage
@@ -143,11 +149,9 @@ export const logCollector = {
 			eventType: extractEventType(safeMessage),
 		}
 
-		logs.unshift(entry)
-
-		// Rotate if needed
-		if (logs.length > MAX_LOGS) {
-			logs.splice(MAX_LOGS)
+		if (retention.logs > 0) {
+			logs.unshift(entry)
+			if (logs.length > retention.logs) logs.splice(retention.logs)
 		}
 
 		// Send only the sanitized entry to Loki.
@@ -315,15 +319,13 @@ export const metricsCollector = {
 			service: sanitizeLogString(service),
 		}
 
-		metrics.unshift(entry)
+		if (retention.metrics > 0) {
+			metrics.unshift(entry)
+			if (metrics.length > retention.metrics) metrics.splice(retention.metrics)
+		}
 
 		// Send to Prometheus/OTLP exporter
 		metricsExporter.recordMetric(entry)
-
-		// Rotate if needed
-		if (metrics.length > MAX_METRICS) {
-			metrics.splice(MAX_METRICS)
-		}
 	},
 
 	/** Per-site traffic counter; exported only, not kept in the in-memory ring. */
@@ -385,6 +387,18 @@ export const metricsCollector = {
 	clear() {
 		metrics.length = 0
 	},
+}
+
+/**
+ * Resize the in-process log and request-metric rings. Console output and the
+ * Loki/OTLP exporters are unaffected; a service that never calls getLogs() or
+ * getMetrics() can set both to 0 and keep no entries at all.
+ */
+export function setInMemoryRetention(next: Partial<InMemoryRetention>): void {
+	if (next.logs !== undefined) retention.logs = Math.max(0, Math.floor(next.logs))
+	if (next.metrics !== undefined) retention.metrics = Math.max(0, Math.floor(next.metrics))
+	logs.splice(retention.logs)
+	metrics.splice(retention.metrics)
 }
 
 // ============================================================================

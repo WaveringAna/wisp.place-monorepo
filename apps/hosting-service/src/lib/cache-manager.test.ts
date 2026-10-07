@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { CacheManager } from './cache-manager'
+import { CacheManager, estimateJsonBytes } from './cache-manager'
 
 type TestNS = 'ttl' | 'lru' | 'sized' | 'combo'
 
@@ -523,5 +523,56 @@ describe('CacheManager', () => {
 			c.stopCleanup()
 			expect(c.get<string>('lru', 'k')).toBe('val')
 		})
+	})
+})
+
+function manifestRow(files: number) {
+	const fileCids: Record<string, string> = {}
+	const fileObjects: Record<string, string> = {}
+	for (let index = 0; index < files; index++) {
+		const path = `posts/post-${index}/index.html`
+		fileCids[path] = `bafkreiexample${index}`.padEnd(59, 'a')
+		fileObjects[path] = `cas/bafkreiexample${index}.0123abcd.html`
+	}
+	return { did: 'did:plc:example', rkey: 'site', file_cids: fileCids, file_objects: fileObjects }
+}
+
+describe('estimateJsonBytes', () => {
+	test('grows with every path, CID and CAS key a manifest row holds', () => {
+		const small = estimateJsonBytes(manifestRow(10))
+		const large = estimateJsonBytes(manifestRow(1000))
+		// Each path appears in both maps: two keys, a CID and a CAS key.
+		const perFile = (large - small) / 990
+		expect(perFile).toBeGreaterThan(2 * 'posts/post-100/index.html'.length + 59 + 33)
+		expect(perFile).toBeLessThan(1024)
+	})
+
+	test('counts arrays, nested values and scalars', () => {
+		expect(estimateJsonBytes([['a.html', 'cid']])).toBeGreaterThan(estimateJsonBytes([]))
+		expect(estimateJsonBytes({ a: null, b: 1, c: true })).toBeGreaterThan(estimateJsonBytes({}))
+		expect(estimateJsonBytes('x'.repeat(100))).toBeGreaterThanOrEqual(100)
+	})
+})
+
+describe('site manifest cache budget', () => {
+	test('evicts the oldest manifests once their estimated bytes exceed MANIFEST_CACHE_SIZE', async () => {
+		const previous = process.env.MANIFEST_CACHE_SIZE
+		const row = manifestRow(200)
+		const rowBytes = estimateJsonBytes(row)
+		process.env.MANIFEST_CACHE_SIZE = String(rowBytes * 3)
+		try {
+			const budgetedModule = './cache-manager?manifest-budget'
+			const { cache } = (await import(budgetedModule)) as typeof import('./cache-manager')
+			for (let site = 0; site < 10; site++) cache.set('siteCache', `did:plc:example:site-${site}`, manifestRow(200))
+
+			const stats = cache.getStats().siteCache
+			expect(stats.entries).toBe(3)
+			expect(stats.sizeBytes).toBeLessThanOrEqual(rowBytes * 3)
+			expect(cache.get('siteCache', 'did:plc:example:site-0')).toBeUndefined()
+			expect(cache.get('siteCache', 'did:plc:example:site-9')).toBeDefined()
+		} finally {
+			if (previous === undefined) delete process.env.MANIFEST_CACHE_SIZE
+			else process.env.MANIFEST_CACHE_SIZE = previous
+		}
 	})
 })

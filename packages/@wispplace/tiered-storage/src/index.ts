@@ -8,7 +8,12 @@
  */
 
 // Main class
-export { TieredStorage, type UpperTierInvalidationFailure, type UpperTierInvalidationResult } from './TieredStorage.js'
+export {
+	type BufferedReadOptions,
+	TieredStorage,
+	type UpperTierInvalidationFailure,
+	type UpperTierInvalidationResult,
+} from './TieredStorage.js'
 export {
 	DiskStorageTier,
 	type DiskStorageTierConfig,

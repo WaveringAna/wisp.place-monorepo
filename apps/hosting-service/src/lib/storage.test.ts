@@ -78,7 +78,7 @@ afterAll(async () => {
 describe('hosting storage configuration', () => {
 	test('falls back from invalid numeric storage environment values', () => {
 		expect(getStorageConfig()).toMatchObject({
-			hotCacheSize: '100MB',
+			hotCacheSize: '32MB',
 			hotCacheCount: 500,
 			warmCacheSize: '10.0GB',
 		})
@@ -186,6 +186,19 @@ describe('TTLMemoryTier timestamp bookkeeping', () => {
 		}
 
 		expect(insertedAt.has('failed')).toBe(false)
+	})
+
+	test('releases expired entries on the next write instead of holding them until LRU eviction', async () => {
+		const data = new Uint8Array(1024)
+		await hotTier.set('expired', data, metadata('expired', data.byteLength))
+		const internals = hotTier as unknown as TTLMemoryTierInternals
+		internals.insertedAt.set('expired', Date.now() - internals.ttlMs - 1)
+
+		await hotTier.set('fresh', data, metadata('fresh', data.byteLength))
+
+		expect(await hotTier.inner.exists('expired')).toBe(false)
+		expect(internals.insertedAt.has('expired')).toBe(false)
+		expect(await hotTier.inner.getStats()).toMatchObject({ items: 1, bytes: data.byteLength })
 	})
 })
 

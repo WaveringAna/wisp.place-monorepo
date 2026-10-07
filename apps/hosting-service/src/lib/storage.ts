@@ -26,7 +26,8 @@ import {
 const logger = createLogger('hosting-storage')
 
 const DEFAULT_CACHE_DIR = './cache/sites'
-const DEFAULT_HOT_CACHE_SIZE = 104857600 // 100MB
+// Sized for the smallest (1 GiB) edge; larger edges raise it with HOT_CACHE_SIZE.
+const DEFAULT_HOT_CACHE_SIZE = 32 * 1024 * 1024
 const DEFAULT_HOT_CACHE_COUNT = 500
 const DEFAULT_WARM_CACHE_SIZE = 10737418240 // 10GB
 const DEFAULT_HOT_CACHE_TTL_SECONDS = 60
@@ -688,10 +689,17 @@ class TTLMemoryTier implements StorageTier {
 		return false
 	}
 
-	/** Remove timestamps for entries TinyLRU evicted without notifying this wrapper. */
-	private async pruneMissingTimestamps(): Promise<void> {
-		for (const key of this.insertedAt.keys()) {
-			if (!(await this.inner.exists(key))) {
+	/**
+	 * Release expired entries, which reads would refuse anyway, and drop
+	 * timestamps for entries TinyLRU evicted without notifying this wrapper.
+	 */
+	private async pruneTimestamps(): Promise<void> {
+		const now = Date.now()
+		for (const [key, insertedAt] of this.insertedAt) {
+			if (now - insertedAt > this.ttlMs) {
+				this.insertedAt.delete(key)
+				await this.inner.delete(key)
+			} else if (!(await this.inner.exists(key))) {
 				this.insertedAt.delete(key)
 			}
 		}
@@ -703,7 +711,7 @@ class TTLMemoryTier implements StorageTier {
 		} else {
 			this.insertedAt.delete(key)
 		}
-		await this.pruneMissingTimestamps()
+		await this.pruneTimestamps()
 	}
 
 	async get(key: string) {
@@ -781,7 +789,7 @@ class TTLMemoryTier implements StorageTier {
 	}
 
 	async getStats() {
-		await this.pruneMissingTimestamps()
+		await this.pruneTimestamps()
 		return this.inner.getStats()
 	}
 

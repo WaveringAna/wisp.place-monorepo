@@ -64,9 +64,18 @@ function cloneStorageMetadata(metadata: StorageMetadata): StorageMetadata {
 	}
 }
 
-function cloneTierGetResult(result: TierGetResult): TierGetResult {
+/** Options for buffered reads. */
+export interface BufferedReadOptions {
+	/**
+	 * Return the tier's bytes without a defensive copy. The caller must not
+	 * mutate them: they may be the hot-tier entry or shared with coalesced reads.
+	 */
+	borrowData?: boolean
+}
+
+function consumerTierGetResult(result: TierGetResult, options: BufferedReadOptions): TierGetResult {
 	return {
-		data: new Uint8Array(result.data),
+		data: options.borrowData === true ? result.data : new Uint8Array(result.data),
 		metadata: cloneStorageMetadata(result.metadata),
 	}
 }
@@ -257,6 +266,7 @@ export class TieredStorage<T = unknown> {
 	 * Retrieve data for a key.
 	 *
 	 * @param key - The key to retrieve
+	 * @param options - Set `borrowData` to skip the defensive copy of read-only bytes
 	 * @returns The data, or null if not found or expired
 	 *
 	 * @remarks
@@ -265,8 +275,8 @@ export class TieredStorage<T = unknown> {
 	 * Automatically handles decompression and deserialization.
 	 * Returns null if key doesn't exist or has expired (TTL).
 	 */
-	async get(key: string): Promise<T | null> {
-		const result = await this.getWithMetadata(key)
+	async get(key: string, options: BufferedReadOptions = {}): Promise<T | null> {
+		const result = await this.getWithMetadata(key, options)
 		return result ? result.data : null
 	}
 
@@ -274,6 +284,7 @@ export class TieredStorage<T = unknown> {
 	 * Retrieve data with metadata and source tier information.
 	 *
 	 * @param key - The key to retrieve
+	 * @param options - Set `borrowData` to skip the defensive copy of read-only bytes
 	 * @returns The data, metadata, and source tier, or null if not found
 	 *
 	 * @remarks
@@ -282,12 +293,12 @@ export class TieredStorage<T = unknown> {
 	 * - Metadata like access count, TTL, checksum
 	 * - When the data was created/last accessed
 	 */
-	async getWithMetadata(key: string): Promise<StorageResult<T> | null> {
+	async getWithMetadata(key: string, options: BufferedReadOptions = {}): Promise<StorageResult<T> | null> {
 		const fence = this.acquireReadFence(key)
 		const generation = fence.generation
 		const upperTierPromotionEpoch = this.upperTierPromotionEpoch
 		try {
-			return await this.getWithMetadataWithFence(key, fence, generation, upperTierPromotionEpoch)
+			return await this.getWithMetadataWithFence(key, fence, generation, upperTierPromotionEpoch, options)
 		} finally {
 			this.releaseReadFence(key, fence)
 		}
@@ -298,6 +309,7 @@ export class TieredStorage<T = unknown> {
 		fence: KeyFence,
 		generation: number,
 		upperTierPromotionEpoch: number,
+		options: BufferedReadOptions,
 	): Promise<StorageResult<T> | null> {
 		// 1. Check hot tier first
 		if (this.config.tiers.hot) {
@@ -315,7 +327,7 @@ export class TieredStorage<T = unknown> {
 				}
 				// Fire-and-forget access stats update (non-critical)
 				void this.updateAccessStats(key, 'hot')
-				const consumerResult = cloneTierGetResult(result)
+				const consumerResult = consumerTierGetResult(result, options)
 				return {
 					data: (await this.deserializeData(consumerResult.data)) as T,
 					metadata: consumerResult.metadata,
@@ -347,7 +359,7 @@ export class TieredStorage<T = unknown> {
 				}
 				// Fire-and-forget access stats update (non-critical)
 				void this.updateAccessStats(key, 'warm')
-				const consumerResult = cloneTierGetResult(result)
+				const consumerResult = consumerTierGetResult(result, options)
 				return {
 					data: (await this.deserializeData(consumerResult.data)) as T,
 					metadata: consumerResult.metadata,
@@ -390,7 +402,7 @@ export class TieredStorage<T = unknown> {
 				await this.promoteIfCurrent(key, fence, generation, upperTierPromotionEpoch, promotions)
 			}
 
-			const consumerResult = cloneTierGetResult(result)
+			const consumerResult = consumerTierGetResult(result, options)
 			return {
 				data: (await this.deserializeData(consumerResult.data)) as T,
 				metadata: consumerResult.metadata,

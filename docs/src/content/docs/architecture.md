@@ -44,7 +44,7 @@ Write:  Hot ← Warm ← Cold
 The **hot tier** is an in-memory LRU cache. Fast, small, and lost on restart — repopulated from warm/cold on access.
 
 ```bash
-HOT_CACHE_SIZE=104857600   # 100 MB
+HOT_CACHE_SIZE=33554432   # 32 MiB default
 HOT_CACHE_COUNT=500
 ```
 

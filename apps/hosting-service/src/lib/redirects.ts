@@ -32,7 +32,7 @@ export async function loadRedirectRules(
 	const key = resolveStorageKey(did, rkey, '_redirects', fileObjects)
 	if (key === null) return []
 	try {
-		const data = await storage.get(key)
+		const data = await storage.get(key, { borrowData: true })
 		if (!data) return []
 
 		const rules = parseRedirectsFileBytes(data)

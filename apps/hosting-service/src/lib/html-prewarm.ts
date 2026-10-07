@@ -61,7 +61,7 @@ async function loadSiteHtmlKeysIntoHotTier(
 		// mid-warmup) must not abandon the rest of the site's HTML.
 		try {
 			// getWithMetadata uses eager promotion and moves the key into hot tier.
-			const result = await storage.getWithMetadata(key)
+			const result = await storage.getWithMetadata(key, { borrowData: true })
 			if (result) warmedHtmlKeys++
 		} catch (err) {
 			failedKeys++
