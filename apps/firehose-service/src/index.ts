@@ -584,6 +584,9 @@ async function startProtectedWork(
 		return false
 	}
 	startFirehose(cursor, onFailure)
+	// A full storage listing is only worth its cost on the one active worker;
+	// standbys report no capacity data (`stale: true`, `lastSuccessAgeMs: null`).
+	startStorageStatsRefresh()
 	firehoseStartGate.open()
 	return true
 }
@@ -600,7 +603,6 @@ async function main() {
 		fetch: app.fetch,
 		port: config.healthPort,
 	})
-	startStorageStatsRefresh()
 	logger.info('Health server listening', { port: config.healthPort })
 
 	if (config.leadershipSupervisorEnabled) {
@@ -654,6 +656,7 @@ async function main() {
 				)
 			},
 			async () => {
+				stopStorageStatsRefresh()
 				const drain = await stopFirehose()
 				const workerStop = await stopRevalidateWorker({ gracePeriodMs: config.firehoseDrainGraceMs })
 				await stopCursorSaving()

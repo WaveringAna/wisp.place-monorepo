@@ -36,6 +36,9 @@ export function decodeFrame(bytes: Uint8Array): { header: FrameHeader; body: unk
 	return { header: header.value as unknown as FrameHeader, body: body.value }
 }
 
+/** Default for {@link BunSubscriptionOptions.maxQueuedBytes}. */
+export const DEFAULT_MAX_QUEUED_BYTES = 16 * 1024 * 1024
+
 export interface BunSubscriptionOptions<T> {
 	service: string
 	method: string
@@ -56,6 +59,14 @@ export interface BunSubscriptionOptions<T> {
 	heartbeatIntervalMs?: number
 	/** How long a ping may go unanswered before the connection is dropped (default: 5000) */
 	heartbeatTimeoutMs?: number
+	/**
+	 * Bytes of received frames the consumer may fall behind by (default: 16 MiB). A WebSocket
+	 * cannot pause its reads, so past this the connection is closed instead: frames already
+	 * queued are still delivered in order, then the subscription reconnects at once from
+	 * `getParams()`, which should name the consumer's committed cursor. Without a cursor there,
+	 * it resumes after the last sequence number it delivered, so no frame is skipped.
+	 */
+	maxQueuedBytes?: number
 }
 
 type PingWebSocket = WebSocket & { ping(data: string): unknown }
@@ -64,6 +75,8 @@ export class BunSubscription<T = unknown> {
 	private ws: WebSocket | null = null
 	private reconnectAttempts = 0
 	private aborted = false
+	/** `seq` of the last message handed to the consumer, the fallback cursor after an overflow. */
+	private lastSeq: number | undefined
 
 	constructor(public opts: BunSubscriptionOptions<T>) {
 		if (opts.signal) {
@@ -74,8 +87,11 @@ export class BunSubscription<T = unknown> {
 		}
 	}
 
-	private async getUrl(): Promise<string> {
-		const params = (await this.opts.getParams?.()) ?? {}
+	private async getUrl(resumeAfterOverflow: boolean): Promise<string> {
+		let params = (await this.opts.getParams?.()) ?? {}
+		if (resumeAfterOverflow && params.cursor === undefined && this.lastSeq !== undefined) {
+			params = { ...params, cursor: this.lastSeq }
+		}
 		const query = encodeQueryParams(params)
 		const base = this.opts.service.replace(/\/$/, '')
 		return `${base}/xrpc/${this.opts.method}${query ? `?${query}` : ''}`
@@ -89,19 +105,30 @@ export class BunSubscription<T = unknown> {
 
 	async *[Symbol.asyncIterator](): AsyncGenerator<T> {
 		const maxSilenceMs = this.opts.maxSilenceMs === undefined ? 15_000 : this.opts.maxSilenceMs
+		const maxQueuedBytes = this.opts.maxQueuedBytes ?? DEFAULT_MAX_QUEUED_BYTES
+		let resumeAfterOverflow = false
 
 		while (!this.aborted) {
 			let silenceTimer: ReturnType<typeof setTimeout> | null = null
 
 			try {
-				const url = await this.getUrl()
+				const url = await this.getUrl(resumeAfterOverflow)
+				resumeAfterOverflow = false
 
 				// Create a queue for messages
 				const messageQueue = new MessageQueue<Uint8Array>()
+				let queuedBytes = 0
 				let resolveMessage: (() => void) | null = null
 				let wsError: Error | null = null
 				let wsOpen = false
 				let wsClosed = false
+				let overflowed = false
+				let disconnectReported = false
+				const reportDisconnect = () => {
+					if (disconnectReported) return
+					disconnectReported = true
+					this.opts.onDisconnect?.()
+				}
 
 				const dropSilentConnection = (reason: string) => {
 					if (!wsClosed && !this.aborted) {
@@ -132,7 +159,8 @@ export class BunSubscription<T = unknown> {
 					}, this.opts.heartbeatIntervalMs ?? 5_000)
 				}
 
-				this.ws = new WebSocket(url)
+				const socket = new WebSocket(url)
+				this.ws = socket
 				this.ws.binaryType = 'arraybuffer'
 
 				this.ws.addEventListener('open', () => {
@@ -151,7 +179,23 @@ export class BunSubscription<T = unknown> {
 
 				this.ws.addEventListener('message', (event) => {
 					const data = event.data
+					if (overflowed) return
 					if (data instanceof ArrayBuffer) {
+						if (messageQueue.length > 0 && queuedBytes + data.byteLength > maxQueuedBytes) {
+							// This frame and any still in flight are dropped unseen; the
+							// reconnect resumes from a cursor at or before the queued ones.
+							console.warn(
+								`[BunSubscription] ${messageQueue.length} frames (${queuedBytes} bytes) unconsumed, reconnecting from cursor`,
+							)
+							overflowed = true
+							wsClosed = true
+							socket.close()
+							// Report now: the close event may land after the next connection opens.
+							reportDisconnect()
+							resolveMessage?.()
+							return
+						}
+						queuedBytes += data.byteLength
 						messageQueue.push(new Uint8Array(data))
 						resetSilenceTimer()
 						resolveMessage?.()
@@ -164,7 +208,7 @@ export class BunSubscription<T = unknown> {
 
 				this.ws.addEventListener('close', () => {
 					wsClosed = true
-					this.opts.onDisconnect?.()
+					reportDisconnect()
 					resolveMessage?.()
 				})
 
@@ -180,8 +224,8 @@ export class BunSubscription<T = unknown> {
 					throw wsError
 				}
 
-				// Process messages
-				while (!this.aborted && !wsClosed) {
+				// Process messages, including those queued before the socket closed
+				while (!this.aborted) {
 					// Wait for message if queue is empty
 					while (messageQueue.length === 0 && !wsClosed && !this.aborted) {
 						await new Promise<void>((resolve) => {
@@ -189,10 +233,11 @@ export class BunSubscription<T = unknown> {
 						})
 					}
 
-					if (wsClosed || this.aborted) break
+					if (this.aborted) break
 
 					const bytes = messageQueue.shift()
-					if (!bytes) continue
+					if (!bytes) break
+					queuedBytes -= bytes.byteLength
 
 					try {
 						const { header, body } = decodeFrame(bytes)
@@ -214,6 +259,7 @@ export class BunSubscription<T = unknown> {
 							if (result !== undefined) {
 								yield result
 							}
+							if (isPlainObject(body) && typeof body.seq === 'number') this.lastSeq = body.seq
 						}
 					} catch (err) {
 						// Log decode errors but continue
@@ -227,6 +273,11 @@ export class BunSubscription<T = unknown> {
 				this.ws = null
 
 				if (this.aborted) break
+				// Falling behind is not a connection failure: resume without backoff.
+				if (overflowed) {
+					resumeAfterOverflow = true
+					continue
+				}
 
 				// Reconnect
 				this.reconnectAttempts++
