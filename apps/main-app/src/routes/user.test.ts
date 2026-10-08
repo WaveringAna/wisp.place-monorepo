@@ -43,6 +43,17 @@ mock.module('../lib/db', () => ({
 	],
 }))
 
+// The firehose has fenced `just-deployed`; nothing else.
+const mgets: string[][] = []
+mock.module('../lib/redis', () => ({
+	getConnectedRedisClient: async () => ({
+		send: async (_command: string, keys: string[]) => {
+			mgets.push(keys)
+			return keys.map((key) => (key.endsWith('/just-deployed') ? '' : null))
+		},
+	}),
+}))
+
 mock.module('../lib/wisp-auth', () => ({
 	SESSION_COOKIE_NAME: 'did',
 	authenticateRequest: async () => ({ did: DID, session: {} }),
@@ -120,5 +131,24 @@ describe('site list', () => {
 			).sites.map((site) => site.rkey)
 		expect(await rkeys('/api/user/sites')).toEqual(['site-a'])
 		expect(await rkeys('/api/user/sites?fresh=1')).toEqual(['just-deployed'])
+	})
+})
+
+describe('site attention', () => {
+	test('flags a fenced site in one MGET, for the eventual and the fresh list', async () => {
+		const app = userRoutes({} as never, 'test-cookie-secret', async () => new Response('{}'))
+		const flags = async (path: string) =>
+			(
+				(await responseJson(await app.handle(new Request(`http://localhost${path}`)))) as {
+					sites: { rkey: string; needs_attention?: boolean }[]
+				}
+			).sites.map(({ rkey, needs_attention }) => [rkey, needs_attention ?? false])
+		mgets.length = 0
+		expect(await flags('/api/user/sites')).toEqual([['site-a', false]])
+		expect(await flags('/api/user/sites?fresh=1')).toEqual([['just-deployed', true]])
+		expect(mgets).toEqual([
+			['wisp:revalidate:quarantine:did%3Aweb%3Aexample.com/site-a'],
+			['wisp:revalidate:quarantine:did%3Aweb%3Aexample.com/just-deployed'],
+		])
 	})
 })

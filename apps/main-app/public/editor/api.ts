@@ -61,6 +61,8 @@ export interface PublicSiteRecord {
 	created_at: number
 	updated_at: number
 	domains?: SiteDomain[]
+	/** The host gave up fetching this site's files from the PDS; a redeploy fixes it. */
+	needs_attention?: boolean
 }
 
 export interface PrivateSiteRecord {

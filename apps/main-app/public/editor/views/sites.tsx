@@ -3,7 +3,15 @@ import { api, errorText, type SiteDomain, type UserInfo } from '../api'
 import { confirmAction } from '../confirm'
 import { expiresIn, formatBytes, plural, timeAgo } from '../format'
 import { type RowProps, rowActions, useRovingList } from '../keys'
-import { defaultSiteAddress, isPreviewSite, type PrivateSite, type PublicSite, type Site, siteAddress } from '../model'
+import {
+	defaultSiteAddress,
+	isPreviewSite,
+	type PrivateSite,
+	type PublicSite,
+	type Site,
+	siteAddress,
+	siteStatus,
+} from '../model'
 import { expectSiteChange, keys, useAction, usePdsSync, useSites } from '../queries'
 import { notify } from '../store'
 import {
@@ -178,11 +186,8 @@ interface SiteRowProps {
 }
 
 const SiteStatus = ({ site }: { site: Site }) => {
-	if (site.kind === 'public') {
-		return site.deploying ? <Status tone="muted">deploying</Status> : <Status tone="ok">live</Status>
-	}
-	if (site.expired) return <Status tone="warn">expired</Status>
-	return <Status tone="lock">private</Status>
+	const { tone, label } = siteStatus(site)
+	return <Status tone={tone}>{label}</Status>
 }
 
 function SiteRow({
@@ -225,7 +230,15 @@ function SiteRow({
 			{expanded && (
 				<DetailRow id={detailId} span={COLUMNS.length}>
 					{isPublic ? (
-						<PublicSiteDetail site={site} handle={handle} />
+						<>
+							{site.needsAttention && !site.deploying && (
+								<Notice tone="warn">
+									needs attention: the host could not fetch this site's files from your PDS, so missing files fail to
+									load. redeploy to fix it.
+								</Notice>
+							)}
+							<PublicSiteDetail site={site} handle={handle} />
+						</>
 					) : (
 						<PrivateSiteDetail site={site} onOpen={onOpen} />
 					)}

@@ -9,6 +9,7 @@ import {
 	type ScopeDraft,
 	scopePath,
 	siteAddress,
+	siteStatus,
 	toPublicSite,
 	toSettingsDraft,
 	toWebhook,
@@ -123,6 +124,16 @@ describe('sites', () => {
 		expect(site.name).toBe('blog')
 		expect(siteAddress(site, 'me.bsky.social')).toBe('blog.example')
 		expect(siteAddress({ ...site, domains: [] }, 'me.bsky.social')).toBe('sites.wisp.place/me.bsky.social/blog')
+	})
+
+	test('a site the host could not fetch shows needs attention until a redeploy is under way', () => {
+		const record = { did: 'did:x', rkey: 'blog', display_name: null, created_at: 1, updated_at: 2 }
+		const fenced = toPublicSite({ ...record, needs_attention: true })
+		expect(fenced.needsAttention).toBe(true)
+		expect(siteStatus(fenced)).toEqual({ tone: 'warn', label: 'needs attention' })
+		expect(siteStatus({ ...fenced, deploying: true })).toEqual({ tone: 'muted', label: 'deploying' })
+		expect(toPublicSite(record)).not.toHaveProperty('needsAttention')
+		expect(siteStatus(toPublicSite(record))).toEqual({ tone: 'ok', label: 'live' })
 	})
 })
 

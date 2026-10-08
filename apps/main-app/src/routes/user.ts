@@ -9,6 +9,7 @@ import { createLogger } from '@wispplace/observability'
 import { Elysia } from 'elysia'
 import { eventualRead, getDomainsForDid, getSitesWithDomainsForDid } from '../lib/db'
 import { backfillSitesFromPds } from '../lib/pds-backfill'
+import { flagSitesNeedingAttention } from '../lib/site-attention'
 import { requireAuth, SESSION_COOKIE_NAME } from '../lib/wisp-auth'
 
 const logger = createLogger('main-app')
@@ -91,13 +92,14 @@ export const userRoutes = (
 		/**
 		 * GET /api/user/sites
 		 * Success: { sites } — each site carries its own `domains` array, so the
-		 * list view needs one request rather than one per site.
+		 * list view needs one request rather than one per site, and
+		 * `needs_attention: true` when its repairs were dead-lettered.
 		 * `?fresh=1` reads the primary, for a dashboard waiting on a deploy or delete it just made.
 		 */
 		.get('/sites', async ({ auth, query }) => {
 			try {
 				const read = query.fresh === '1' ? getSitesWithDomainsForDid : eventualRead.getSitesWithDomainsForDid
-				const sites = await read(auth.did)
+				const sites = await flagSitesNeedingAttention(await read(auth.did))
 				return { sites }
 			} catch {
 				logger.error('[User] Sites error')

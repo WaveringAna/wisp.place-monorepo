@@ -24,6 +24,8 @@ export interface PublicSite {
 	recordCid?: string
 	/** Deployed from this dashboard, and the list has not caught up yet. */
 	deploying?: boolean
+	/** The host could not fetch its files and serves errors for the missing ones until a redeploy. */
+	needsAttention?: boolean
 }
 
 export interface PrivateSite {
@@ -54,6 +56,7 @@ export const toPublicSite = (record: PublicSiteRecord): PublicSite => ({
 	updatedAt: record.updated_at * 1000,
 	domains: [...(record.domains ?? [])].sort(byDomainPreference),
 	recordCid: record.record_cid,
+	...(record.needs_attention ? { needsAttention: true } : {}),
 })
 
 export const toPrivateSite = (record: PrivateSiteRecord): PrivateSite => ({
@@ -80,6 +83,17 @@ export const defaultSiteAddress = (handle: string, rkey: string) => `${SITES_HOS
 /** What a visitor types: the preferred mapped domain, else the shared sites host. */
 export const siteAddress = (site: PublicSite, handle: string) =>
 	site.domains[0]?.domain ?? defaultSiteAddress(handle, site.rkey)
+
+export type SiteStatusTone = 'ok' | 'warn' | 'muted' | 'lock'
+
+/** The status column: a just-made deploy first, then a site the host could not fetch, then live. */
+export function siteStatus(site: Site): { tone: SiteStatusTone; label: string } {
+	if (site.kind === 'private')
+		return site.expired ? { tone: 'warn', label: 'expired' } : { tone: 'lock', label: 'private' }
+	if (site.deploying) return { tone: 'muted', label: 'deploying' }
+	if (site.needsAttention) return { tone: 'warn', label: 'needs attention' }
+	return { tone: 'ok', label: 'live' }
+}
 
 /* ── Site settings ─────────────────────────────────────────────────────── */
 
