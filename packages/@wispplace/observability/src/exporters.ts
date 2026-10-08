@@ -30,6 +30,7 @@ import type {
 	RevalidateQuarantineSnapshot,
 	SiteRequestEntry,
 } from './core'
+import { createProcessMemoryInstruments } from './process-memory'
 import { sanitizeContext, sanitizeForLog, sanitizeLogString } from './redact'
 
 // ============================================================================
@@ -544,6 +545,7 @@ class MetricsExporter {
 
 		this.hosting = createHostingInstruments(meter)
 		this.quarantine = createRevalidateQuarantineInstruments(meter)
+		createProcessMemoryInstruments(meter)
 
 		this.serviceInfo = meter.createObservableGauge('service_instance_info', {
 			description: 'Service instance presence',

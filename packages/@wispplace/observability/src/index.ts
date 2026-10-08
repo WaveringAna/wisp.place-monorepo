@@ -21,6 +21,8 @@ export {
 	shutdownGrafanaExporters,
 } from './exporters'
 
+export { createProcessMemoryInstruments, type ProcessMemoryOptions, readCgroupMemory } from './process-memory'
+
 // Note: Middleware should be imported from specific subpaths:
 // - import { observabilityMiddleware } from '@wispplace/observability/middleware/elysia'
 // - import { observabilityMiddleware, observabilityErrorHandler } from '@wispplace/observability/middleware/hono'
