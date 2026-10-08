@@ -5,14 +5,28 @@
 
 import os from 'node:os'
 import { gzipSync } from 'node:zlib'
-import { type Counter, type Histogram, type MeterProvider, metrics, type ObservableGauge } from '@opentelemetry/api'
+import {
+	type Counter,
+	type Histogram,
+	type Meter,
+	type MeterProvider,
+	metrics,
+	type ObservableGauge,
+} from '@opentelemetry/api'
 import { OTLPMetricExporter as OTLPMetricExporterHTTP } from '@opentelemetry/exporter-metrics-otlp-http'
 import { OTLPMetricExporter as OTLPMetricExporterProto } from '@opentelemetry/exporter-metrics-otlp-proto'
 import type { CompressionAlgorithm } from '@opentelemetry/otlp-exporter-base'
 import { resourceFromAttributes } from '@opentelemetry/resources'
 import { PeriodicExportingMetricReader, MeterProvider as SdkMeterProvider } from '@opentelemetry/sdk-metrics'
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions'
-import type { ErrorEntry, LogEntry, MetricEntry, SiteRequestEntry } from './core'
+import type {
+	ErrorEntry,
+	HostingNotFoundReason,
+	HostingResponseEntry,
+	LogEntry,
+	MetricEntry,
+	SiteRequestEntry,
+} from './core'
 import { sanitizeContext, sanitizeForLog, sanitizeLogString } from './redact'
 
 // ============================================================================
@@ -365,12 +379,49 @@ class LokiExporter {
 // OpenTelemetry Metrics Exporter
 // ============================================================================
 
+/** Hot reads answer in about a millisecond and cold S3 reads in hundreds, so buckets start at 1 ms. */
+export const HOSTING_RESPONSE_BUCKETS_MS = [1, 2.5, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000]
+
+export type HostingInstruments = {
+	recordResponse(entry: HostingResponseEntry): void
+	recordNotFound(reason: HostingNotFoundReason): void
+}
+
+/**
+ * Hosting latency and 404 instruments. Every label comes from a closed set
+ * (at most 4 tiers x 5 status classes x 3 kinds, and 8 reasons), so series
+ * never grow with hosts, sites or paths.
+ */
+export function createHostingInstruments(meter: Meter): HostingInstruments {
+	const responseTime = meter.createHistogram('hosting_response_time_ms', {
+		description: 'Hosting time to response headers by serving tier, status class and kind',
+		unit: 'ms',
+		advice: { explicitBucketBoundaries: HOSTING_RESPONSE_BUCKETS_MS },
+	})
+	const notFound = meter.createCounter('hosting_not_found_total', {
+		description: 'Hosting 404 responses by reason',
+	})
+	return {
+		recordResponse(entry) {
+			responseTime.record(entry.durationMs, {
+				tier: entry.tier,
+				status_class: entry.statusClass,
+				kind: entry.kind,
+			})
+		},
+		recordNotFound(reason) {
+			notFound.add(1, { reason })
+		},
+	}
+}
+
 class MetricsExporter {
 	private meterProvider?: MeterProvider
 	private requestCounter?: Counter
 	private requestDuration?: Histogram
 	private errorCounter?: Counter
 	private siteRequestCounter?: Counter
+	private hosting?: HostingInstruments
 	private serviceInfo?: ObservableGauge
 	private shutdownPromise?: Promise<void>
 	private config: GrafanaConfig = {}
@@ -440,6 +491,8 @@ class MetricsExporter {
 			description: 'Requests served for a hosted site',
 		})
 
+		this.hosting = createHostingInstruments(meter)
+
 		this.serviceInfo = meter.createObservableGauge('service_instance_info', {
 			description: 'Service instance presence',
 		})
@@ -494,6 +547,16 @@ class MetricsExporter {
 			status_class: entry.statusClass,
 			html: entry.html ? 'true' : 'false',
 		})
+	}
+
+	recordHostingResponse(entry: HostingResponseEntry) {
+		if (!this.config.enabled) return
+		this.hosting?.recordResponse(entry)
+	}
+
+	recordHostingNotFound(reason: HostingNotFoundReason) {
+		if (!this.config.enabled) return
+		this.hosting?.recordNotFound(reason)
 	}
 
 	async shutdown(): Promise<void> {

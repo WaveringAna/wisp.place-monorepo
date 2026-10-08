@@ -50,6 +50,32 @@ export interface SiteRequestEntry {
 	html: boolean
 }
 
+/** The storage tier that served a hosting response body, or `none` when no stored file did. */
+export type HostingTier = 'hot' | 'warm' | 'cold' | 'none'
+
+/** 404 is split from other 4xx because it dominates edge traffic. */
+export type HostingStatusClass = '2xx' | '3xx' | '404' | '4xx' | '5xx'
+
+export type HostingResponseKind = 'html' | 'asset' | 'other'
+
+export interface HostingResponseEntry {
+	tier: HostingTier
+	statusClass: HostingStatusClass
+	kind: HostingResponseKind
+	durationMs: number
+}
+
+/** Why hosting answered 404. Closed so it can be a metric label. */
+export type HostingNotFoundReason =
+	| 'unknown-custom-domain'
+	| 'unregistered-subdomain'
+	| 'unmapped-domain'
+	| 'preview-not-found'
+	| 'private-not-found'
+	| 'file-not-found'
+	| 'redirect-404'
+	| 'other'
+
 export interface LogFilter {
 	level?: string
 	service?: string
@@ -331,6 +357,16 @@ export const metricsCollector = {
 	/** Per-site traffic counter; exported only, not kept in the in-memory ring. */
 	recordSiteRequest(entry: SiteRequestEntry) {
 		metricsExporter.recordSiteRequest(entry)
+	},
+
+	/** Hosting time to headers by tier, status class and kind; exported only. */
+	recordHostingResponse(entry: HostingResponseEntry) {
+		metricsExporter.recordHostingResponse(entry)
+	},
+
+	/** Hosting 404s by reason; exported only. */
+	recordHostingNotFound(reason: HostingNotFoundReason) {
+		metricsExporter.recordHostingNotFound(reason)
 	},
 
 	getMetrics(filter?: MetricFilter) {
