@@ -93,6 +93,22 @@ alert rules for them yet. transient fences are retried automatically 15 min,
 and stops the retries); permanent and unknown ones still need the owner to
 redeploy or an operator's `apps/firehose-service/scripts/repair-site.ts`.
 
+## service memory
+
+hosting, main and firehose export their own memory through the same OTLP path,
+read only when the exporter collects (every 5 s; webhook-service never starts the
+exporter, so it reports nothing): `process_memory_bytes{kind}`
+(rss/heap_used/heap_total/external/array_buffers from `process.memoryUsage()`),
+`process_uptime_seconds`, and `cgroup_memory_bytes{kind}`
+(current/anon/file/shmem/swap/peak/limit from the container's cgroup v2 files;
+`limit` is absent without a memory limit, and the whole metric is absent outside
+cgroup v2). the only label is `kind`; `instance` and `service.name` come from the
+OTel resource, so restarts keep the same series. under bun, Buffers and typed
+arrays count in `external`, not `array_buffers`. edge netdata cannot do this:
+it names containers by id only. `grafana/infra-monitoring/service-memory.json`
+charts them, including memory against uptime so restarts overlay; there are no
+alert rules for them yet.
+
 ## focused alert rules
 
 `probe.py` runs once per minute on each app host. stolas also runs the central
