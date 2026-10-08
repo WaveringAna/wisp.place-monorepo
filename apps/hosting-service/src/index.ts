@@ -8,6 +8,7 @@ import {
 import { startCacheInvalidationSubscriber, stopCacheInvalidationSubscriber } from './lib/cache-invalidation'
 import { cache } from './lib/cache-manager'
 import { closeDatabase } from './lib/db'
+import { notFoundLog } from './lib/not-found-log'
 import { closePrivateSitesDatabase } from './lib/private-sites-db'
 import { closeRevalidateQueue } from './lib/revalidate-queue'
 import { getStorageConfig, storage } from './lib/storage'
@@ -53,8 +54,9 @@ if (!existsSync(CACHE_DIR)) {
 // half-hour sweep left expired site manifests resident for up to 30 minutes.
 cache.startCleanup(CACHE_SWEEP_INTERVAL_MS)
 
-// Summarize fail-closed 503s once a window instead of logging each request.
+// Summarize fail-closed 503s and 404s once a window instead of logging each request.
 unavailableLog.start()
+notFoundLog.start()
 
 // Start cache invalidation subscriber (listens for firehose-service updates via Redis pub/sub)
 startCacheInvalidationSubscriber()
@@ -120,6 +122,7 @@ const shutdown = onceAsync(async (signal: 'SIGINT' | 'SIGTERM') => {
 	cache.stopCleanup()
 	// Flush the partial window while the log exporters are still running.
 	unavailableLog.stop()
+	notFoundLog.stop()
 	const tasks = [
 		{ name: 'access statistics', promise: flushAccessStats() },
 		{ name: 'cache invalidation subscriber', promise: stopCacheInvalidationSubscriber() },

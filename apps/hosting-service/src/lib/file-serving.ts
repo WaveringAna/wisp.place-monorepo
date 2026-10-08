@@ -38,6 +38,7 @@ import { triggerSiteHtmlHotCacheWarmup } from './html-prewarm'
 import { generate404Page, generateDirectoryListing, siteUpdatingResponse } from './page-generators'
 import { loadRedirectRules, matchRedirectRule, parseCookies, parseQueryString } from './redirects'
 import { applyCustomHeaders, getIndexFiles } from './request-utils'
+import { markRedirectNotFound } from './request-visibility'
 import { recordStorageMiss } from './revalidate-metrics'
 import { enqueueRevalidate } from './revalidate-queue'
 import { resolveStorageKey, type SiteManifest } from './site-storage-keys'
@@ -1679,7 +1680,7 @@ async function serveRedirectTarget(
 			const response = await resolveFile(internalRedirectPath(targetPath))
 			// A redirect-defined 404 must not disguise an unavailable or stale
 			// manifest object as a cacheable not-found response.
-			return response.status === 503 ? response : wrapResponseStatus(response, 404)
+			return response.status === 503 ? response : markRedirectNotFound(wrapResponseStatus(response, 404))
 		}
 		default:
 			return null

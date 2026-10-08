@@ -67,6 +67,16 @@ do not expose them to satisfy a public health check. public VictoriaLogs
 queries are blocked; the public Loki ingestion path remains unauthenticated
 for existing exporters, so restrict its write access separately if needed.
 
+## hosting latency and 404s
+
+hosting exports `hosting_response_time_ms` (time to response headers, labels
+`tier` hot/warm/cold/none, `status_class` 2xx/3xx/404/4xx/5xx, `kind`
+html/asset/other) and `hosting_not_found_total{reason}`. every label is a closed
+set; hosts never become labels. the hosts behind each 404 reason are in the
+hosting log line `[NotFound] 404 summary`, once a minute per reason with its top
+5 hosts. `grafana/infra-monitoring/hosting-visibility.json` charts both; there
+are no alert rules for them yet.
+
 ## focused alert rules
 
 `probe.py` runs once per minute on each app host. stolas also runs the central

@@ -278,6 +278,7 @@ const { applyCacheInvalidationForTests, markSiteUpdating, resetUpdatingSitesForT
 	'./cache-invalidation'
 )
 const { unavailableLog } = await import('./unavailable-log')
+const { siteNotFoundReason } = await import('./request-visibility')
 const {
 	serveFileInternal,
 	serveFileInternalWithRewrite,
@@ -542,6 +543,23 @@ describe('serveFileInternal directory-index fallback for extensioned paths', () 
 		expect(response.status).toBe(200)
 		expect(await response.text()).toBe('direct markdown')
 		expect(storageGetWithMetadataKeys.filter((key) => key === storageKey('direct.md'))).toHaveLength(1)
+	})
+
+	test('names a _redirects 404 rule apart from a missing file', async () => {
+		storeFile('_redirects', '/old /gone.html 404', 'text/plain')
+		storeFile('gone.html', '<h1>gone</h1>', 'text/html')
+		siteFileCids = { _redirects: 'redirects-cid', 'gone.html': 'gone-cid' }
+
+		const redirected = await serveFromCache(DID, RKEY, 'old', 'https://example.com/old')
+		const missing = await serveFromCache(DID, RKEY, 'never.css', 'https://example.com/never.css')
+		const served = await serveFromCache(DID, RKEY, 'gone.html', 'https://example.com/gone.html')
+
+		expect([redirected.status, missing.status, served.status]).toEqual([404, 404, 200])
+		// The rule's page was still read from a tier, and the 404 keeps saying which.
+		expect(redirected.headers.get('X-Cache-Tier')).toBe('cold')
+		expect(siteNotFoundReason(redirected)).toBe('redirect-404')
+		expect(siteNotFoundReason(missing)).toBe('file-not-found')
+		expect(siteNotFoundReason(served)).toBeNull()
 	})
 
 	test('serves decoded file names containing spaces', async () => {

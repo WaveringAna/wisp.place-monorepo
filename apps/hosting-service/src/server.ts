@@ -5,7 +5,12 @@
 
 import { isPreviewHostname, parsePreviewHostname } from '@wispplace/constants'
 import { normalizeSitePath } from '@wispplace/fs-utils'
-import { CLIENT_CLOSED_REQUEST_STATUS, createLogger, isClientAbort } from '@wispplace/observability'
+import {
+	CLIENT_CLOSED_REQUEST_STATUS,
+	createLogger,
+	type HostingNotFoundReason,
+	isClientAbort,
+} from '@wispplace/observability'
 import { observabilityErrorHandler, observabilityMiddleware } from '@wispplace/observability/middleware/hono'
 import { siteIdFromHostname } from '@wispplace/private-sites'
 import { type Context, Hono } from 'hono'
@@ -16,6 +21,7 @@ import { getCustomDomain, getCustomDomainByHash, getWispDomain } from './lib/db'
 import { serveFromCache, serveFromCacheWithRewrite } from './lib/file-serving'
 import { privateNotFound, servePrivateSite } from './lib/private-serving'
 import { decodeRequestPathname, extractHeaders, isValidRkey } from './lib/request-utils'
+import { requestVisibility, tagNotFound, tagSiteNotFound } from './lib/request-visibility'
 import { recordSiteResponse } from './lib/site-metrics'
 import { getStorageReadHealthSnapshot, type StorageReadHealthSnapshot } from './lib/storage'
 import { isValidAtprotoIdentifier, resolveDid } from './lib/utils'
@@ -38,15 +44,17 @@ function recordPublicSiteFailure(
 }
 
 function trackPublicSiteResponse(
+	request: Request,
 	ownerDid: string,
 	siteRkey: string,
-	method: string,
-	signal: AbortSignal,
 	responsePromise: Promise<Response>,
+	notFoundHost?: string,
 ): Promise<Response> {
+	const { method, signal } = request
 	return responsePromise
 		.then((response) => {
 			recordPublicSiteResponse(ownerDid, siteRkey, method, response)
+			tagSiteNotFound(request, response, notFoundHost)
 			return response
 		})
 		.then(
@@ -90,6 +98,7 @@ export function normalizeConfiguredHostname(value: string | undefined, fallback:
 }
 
 const BASE_HOST = normalizeConfiguredHostname(process.env.BASE_HOST, DEFAULT_BASE_HOST)
+const SHARED_SITES_HOST = `sites.${BASE_HOST}`
 
 // Separate origins keep tenant JavaScript and ambient cookies isolated.
 const PRIVATE_HOST = normalizeConfiguredHostname(process.env.PRIVATE_HOST, `priv.${BASE_HOST}`)
@@ -100,18 +109,33 @@ if (PREVIEW_HOST && (PREVIEW_HOST === BASE_HOST || PREVIEW_HOST.endsWith(`.${BAS
 	logger.warn(`PREVIEW_HOST ${PREVIEW_HOST} is under ${BASE_HOST}; previews will share its cookie scope`)
 }
 
+type NotFound = { reason: HostingNotFoundReason; message: string }
+
+const CUSTOM_DOMAIN_MISSING: NotFound = {
+	reason: 'unknown-custom-domain',
+	message: 'Custom domain not found or not verified',
+}
+const SUBDOMAIN_MISSING: NotFound = { reason: 'unregistered-subdomain', message: 'Subdomain not registered' }
+const DOMAIN_UNMAPPED: NotFound = { reason: 'unmapped-domain', message: 'Domain not mapped to a site' }
+const PREVIEW_MISSING: NotFound = { reason: 'preview-not-found', message: 'Preview not found' }
+
+function notFound(c: Context, { reason, message }: NotFound): Response {
+	tagNotFound(c.req.raw, reason)
+	return c.text(message, 404)
+}
+
 async function serveMappedPublicDomain(
 	c: Context,
 	domain: PublicDomainMapping | null,
 	path: string,
-	notFoundMessage: string,
+	missing: NotFound,
 ): Promise<Response> {
 	if (!domain) {
-		return c.text(notFoundMessage, 404)
+		return notFound(c, missing)
 	}
 
 	if (!domain.rkey) {
-		return c.text('Domain not mapped to a site', 404)
+		return notFound(c, DOMAIN_UNMAPPED)
 	}
 
 	if (!isValidRkey(domain.rkey)) {
@@ -120,10 +144,9 @@ async function serveMappedPublicDomain(
 
 	const headers = extractHeaders(c.req.raw.headers)
 	return trackPublicSiteResponse(
+		c.req.raw,
 		domain.did,
 		domain.rkey,
-		c.req.method,
-		c.req.raw.signal,
 		serveFromCache(domain.did, domain.rkey, path, c.req.url, headers, {
 			method: c.req.method,
 			signal: c.req.raw.signal,
@@ -156,6 +179,7 @@ app.use(
 
 // Add observability middleware
 app.use('*', observabilityMiddleware('hosting-service'))
+app.use('*', requestVisibility())
 
 // Error handler
 app.onError(observabilityErrorHandler('hosting-service'))
@@ -304,14 +328,14 @@ function serveSharedSiteFile(c: Context, sitePath: SharedSitePath, did: string):
 	logger.debug(`Serving with basePath: ${basePath}`)
 	const headers = extractHeaders(c.req.raw.headers)
 	return trackPublicSiteResponse(
+		c.req.raw,
 		did,
 		sitePath.site,
-		c.req.method,
-		c.req.raw.signal,
 		serveFromCacheWithRewrite(did, sitePath.site, sitePath.filePath, basePath, c.req.url, headers, {
 			method: c.req.method,
 			signal: c.req.raw.signal,
 		}),
+		`${SHARED_SITES_HOST}/${sitePath.identifier}/${sitePath.site}`,
 	)
 }
 
@@ -335,13 +359,19 @@ function privateSiteResponse(c: Context, request: SiteRequest): Response | Promi
 	return request.hostname === PRIVATE_HOST ? privateNotFound() : null
 }
 
+async function servePrivateHost(c: Context, privateResponse: Response | Promise<Response>): Promise<Response> {
+	const response = await privateResponse
+	if (response.status === 404) tagNotFound(c.req.raw, 'private-not-found')
+	return response
+}
+
 async function servePreviewSite(c: Context, request: SiteRequest, previewHost: string): Promise<Response> {
 	const preview = parsePreviewHostname(request.hostname, previewHost)
-	if (!preview) return c.text('Preview not found', 404)
+	if (!preview) return notFound(c, PREVIEW_MISSING)
 
 	const owner = await getWispDomain(`${preview.claim}.${BASE_HOST}`)
-	if (!owner) return c.text('Preview not found', 404)
-	return serveMappedPublicDomain(c, { did: owner.did, rkey: preview.rkey }, request.publicPath, 'Preview not found')
+	if (!owner) return notFound(c, PREVIEW_MISSING)
+	return serveMappedPublicDomain(c, { did: owner.did, rkey: preview.rkey }, request.publicPath, PREVIEW_MISSING)
 }
 
 function parseDnsHashHostname(hostname: string): DnsHashHostname | null {
@@ -357,7 +387,7 @@ async function serveDnsHashDomain(c: Context, request: SiteRequest): Promise<Res
 	if (dnsHostname.baseDomain !== BASE_HOST) return c.text('Invalid base domain', 400)
 
 	const customDomain = await getCustomDomainByHash(dnsHostname.hash)
-	return serveMappedPublicDomain(c, customDomain, request.publicPath, 'Custom domain not found or not verified')
+	return serveMappedPublicDomain(c, customDomain, request.publicPath, CUSTOM_DOMAIN_MISSING)
 }
 
 async function servePublicDomain(c: Context, request: SiteRequest): Promise<Response> {
@@ -366,11 +396,11 @@ async function servePublicDomain(c: Context, request: SiteRequest): Promise<Resp
 
 	if (request.hostname.endsWith(`.${BASE_HOST}`)) {
 		const domainInfo = await getWispDomain(request.hostname)
-		return serveMappedPublicDomain(c, domainInfo, request.publicPath, 'Subdomain not registered')
+		return serveMappedPublicDomain(c, domainInfo, request.publicPath, SUBDOMAIN_MISSING)
 	}
 
 	const customDomain = await getCustomDomain(request.hostname)
-	return serveMappedPublicDomain(c, customDomain, request.publicPath, 'Custom domain not found or not verified')
+	return serveMappedPublicDomain(c, customDomain, request.publicPath, CUSTOM_DOMAIN_MISSING)
 }
 
 function logSiteRequest(request: SiteRequest): void {
@@ -380,8 +410,8 @@ function logSiteRequest(request: SiteRequest): void {
 async function routeSiteRequest(c: Context, request: SiteRequest): Promise<Response> {
 	logSiteRequest(request)
 	const privateResponse = privateSiteResponse(c, request)
-	if (privateResponse) return await privateResponse
-	if (request.hostname === `sites.${BASE_HOST}`) return await serveSharedSite(c, request)
+	if (privateResponse) return await servePrivateHost(c, privateResponse)
+	if (request.hostname === SHARED_SITES_HOST) return await serveSharedSite(c, request)
 	if (PREVIEW_HOST && isPreviewHostname(request.hostname, PREVIEW_HOST))
 		return await servePreviewSite(c, request, PREVIEW_HOST)
 	return await servePublicDomain(c, request)

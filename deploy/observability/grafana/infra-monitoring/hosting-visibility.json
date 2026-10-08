@@ -1,0 +1,297 @@
+{
+  "uid": "wisp-hosting-visibility",
+  "id": null,
+  "title": "hosting \u00b7 latency and 404s",
+  "tags": [
+    "hosting",
+    "wisp"
+  ],
+  "schemaVersion": 42,
+  "version": 1,
+  "editable": true,
+  "timezone": "browser",
+  "graphTooltip": 1,
+  "refresh": "1m",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "annotations": {
+    "list": []
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "edge",
+        "label": "edges",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "victoria-metrics"
+        },
+        "query": {
+          "query": "label_values(hosting_response_time_ms_count, instance)",
+          "refId": "StandardVariableQuery"
+        },
+        "definition": "label_values(hosting_response_time_ms_count, instance)",
+        "refresh": 2,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "options": [],
+        "hide": 0,
+        "skipUrlSync": false
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "p95 time to headers \u00b7 by edge and tier",
+      "type": "timeseries",
+      "description": "95th percentile from request start to response headers in hosting, split by the tier that served the body (hot memory, warm disk, cold S3; none = generated responses such as 404 pages and redirects). Body transfer time is not included.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoria-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 9
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoria-metrics"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (instance, tier, le) (rate(hosting_response_time_ms_bucket{instance=~\"${edge:regex}\"}[5m])))",
+          "instant": false,
+          "range": true,
+          "legendFormat": "{{instance}} \u00b7 {{tier}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "fillOpacity": 0
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "responses by tier \u00b7 req/s",
+      "type": "timeseries",
+      "description": "Hosting responses per second by serving tier. A high cold share on one edge means its warm/hot tiers are not holding the working set.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoria-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 9,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoria-metrics"
+          },
+          "editorMode": "code",
+          "expr": "sum by (instance, tier) (rate(hosting_response_time_ms_count{instance=~\"${edge:regex}\"}[5m]))",
+          "instant": false,
+          "range": true,
+          "legendFormat": "{{instance}} \u00b7 {{tier}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "fillOpacity": 30
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "404s by reason \u00b7 req/s",
+      "type": "timeseries",
+      "description": "Why hosting answered 404. Top hosts per reason are in the hosting log line `[NotFound] 404 summary`, once a minute.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoria-metrics"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 9,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoria-metrics"
+          },
+          "editorMode": "code",
+          "expr": "sum by (reason) (rate(hosting_not_found_total{instance=~\"${edge:regex}\"}[5m]))",
+          "instant": false,
+          "range": true,
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "fillOpacity": 30
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "title": "404 share of responses \u00b7 by edge and reason",
+      "type": "bargauge",
+      "description": "Fraction of all hosting responses in the selected range that were 404, per edge and reason.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoria-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 17,
+        "w": 24,
+        "h": 9
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoria-metrics"
+          },
+          "editorMode": "code",
+          "expr": "sum by (instance, reason) (increase(hosting_not_found_total{instance=~\"${edge:regex}\"}[$__range])) / ignoring (reason) group_left sum by (instance) (increase(hosting_response_time_ms_count{instance=~\"${edge:regex}\"}[$__range]))",
+          "instant": true,
+          "range": false,
+          "legendFormat": "{{instance}} \u00b7 {{reason}}",
+          "refId": "A",
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.2
+              },
+              {
+                "color": "red",
+                "value": 0.5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    }
+  ]
+}
