@@ -731,6 +731,23 @@ export const runDatabaseMigrations = async (primaryDb: SQL): Promise<void> => {
 			`
 		})
 
+		// DNS verification worker state. Additive: existing rows start with no
+		// failures, so every domain is checked on the first pass after rollout.
+		await runMigration('add custom_domains dns verification backoff', async () => {
+			await db`ALTER TABLE custom_domains ADD COLUMN IF NOT EXISTS verify_failures INTEGER NOT NULL DEFAULT 0`
+			await db`ALTER TABLE custom_domains ADD COLUMN IF NOT EXISTS verify_failing_since BIGINT`
+			await db`ALTER TABLE custom_domains ADD COLUMN IF NOT EXISTS verify_lost BOOLEAN NOT NULL DEFAULT false`
+			await db`ALTER TABLE custom_domains ADD COLUMN IF NOT EXISTS verify_next_at BIGINT`
+			await db`ALTER TABLE custom_domains ADD COLUMN IF NOT EXISTS verify_parked_at BIGINT`
+			await db`ALTER TABLE custom_domains ADD COLUMN IF NOT EXISTS verify_warning TEXT`
+			await db`
+				CREATE TABLE IF NOT EXISTS dns_verification_state (
+					id TEXT PRIMARY KEY DEFAULT 'default',
+					last_pass_at BIGINT NOT NULL
+				)
+			`
+		})
+
 		// Seed initial supporter DID
 		await runMigration('seed initial supporter', async () => {
 			await db`

@@ -19,7 +19,10 @@ import {
 	hasSeparateDatabaseReadPool,
 	warmPrimaryConnections,
 } from './lib/db'
+import { resolveDnsVerificationPolicy } from './lib/dns-verification-schedule'
+import { createDnsVerificationStore } from './lib/dns-verification-store'
 import { type DNSVerificationLogLevel, DNSVerificationWorker } from './lib/dns-verification-worker'
+import { verifyCustomDomain } from './lib/dns-verify'
 import { startPeriodicSingleFlightTask, stopServerWithGracePeriod } from './lib/lifecycle'
 import {
 	cleanupExpiredSessions,
@@ -154,11 +157,14 @@ const connectionWarming = startPeriodicSingleFlightTask(
 
 const privateSiteReaper = startPrivateSiteReaper()
 
-// Start DNS verification worker (runs every 10 minutes)
+// Start DNS verification worker. Every instance ticks every 10 minutes, but a
+// pass runs on one instance per interval (see dns-verification-worker).
 // Can be disabled via DISABLE_DNS_WORKER=true environment variable
-const dnsVerifier = new DNSVerificationWorker(
-	10 * 60 * 1000, // 10 minutes
-	(msg, data, level: DNSVerificationLogLevel = 'info') => {
+const dnsVerifier = new DNSVerificationWorker({
+	store: createDnsVerificationStore(),
+	verify: verifyCustomDomain,
+	policy: resolveDnsVerificationPolicy(Bun.env),
+	onLog: (msg, data, level: DNSVerificationLogLevel = 'info') => {
 		const context = data ? { data } : undefined
 		if (level === 'error') {
 			logCollector.error(`[DNS Verifier] ${msg}`, 'main-app', undefined, context)
@@ -168,11 +174,11 @@ const dnsVerifier = new DNSVerificationWorker(
 			logCollector.info(`[DNS Verifier] ${msg}`, 'main-app', context)
 		}
 	},
-)
+})
 
 if (Bun.env.DISABLE_DNS_WORKER !== 'true') {
 	dnsVerifier.start()
-	logger.info('DNS Verifier Started - checking custom domains every 10 minutes')
+	logger.info('DNS Verifier Started - checking due custom domains every 10 minutes')
 } else {
 	logger.info('DNS Verifier disabled via DISABLE_DNS_WORKER environment variable')
 }
@@ -529,7 +535,8 @@ const shutdown = (): void => {
 			{ name: 'public uploads', promise: stopAndDrainPublicUploads(GRACEFUL_SHUTDOWN_TIMEOUT_MS) },
 		]
 		try {
-			dnsVerifier.stop()
+			// Not awaited, as before: a pass waiting on DNS timeouts must not hold up shutdown.
+			void dnsVerifier.stop()
 		} catch {
 			logger.error('[DNS Verifier] Shutdown failed')
 		}

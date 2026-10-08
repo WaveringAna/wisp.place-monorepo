@@ -415,7 +415,13 @@ export const claimCustomDomain = async (did: string, domain: string, hash: strin
                 did = EXCLUDED.did,
                 rkey = EXCLUDED.rkey,
                 verified = EXCLUDED.verified,
-                created_at = EXCLUDED.created_at
+                created_at = EXCLUDED.created_at,
+                verify_failures = 0,
+                verify_failing_since = NULL,
+                verify_lost = false,
+                verify_next_at = NULL,
+                verify_parked_at = NULL,
+                verify_warning = NULL
             WHERE custom_domains.verified = false
             RETURNING *
         `
@@ -442,10 +448,20 @@ export const updateCustomDomainRkey = async (id: string, rkey: string | null) =>
 	return rows[0] ?? null
 }
 
+/**
+ * Record a user-triggered check. It also clears the worker's backoff and
+ * parking, so the background worker resumes checking from the next pass.
+ */
 export const updateCustomDomainVerification = async (id: string, verified: boolean) => {
 	const rows = await db`
         UPDATE custom_domains
-        SET verified = ${verified}, last_verified_at = EXTRACT(EPOCH FROM NOW())
+        SET verified = ${verified},
+            last_verified_at = EXTRACT(EPOCH FROM NOW()),
+            verify_failures = 0,
+            verify_failing_since = NULL,
+            verify_lost = CASE WHEN ${verified} THEN false ELSE (verified OR verify_lost) END,
+            verify_next_at = NULL,
+            verify_parked_at = NULL
         WHERE id = ${id}
         RETURNING *
     `
