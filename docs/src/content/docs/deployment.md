@@ -236,6 +236,7 @@ PORT=3001
 CACHE_DIR="./cache/sites"
 HOT_CACHE_SIZE=33554432        # 32 MiB default, in-memory LRU
 HOT_CACHE_COUNT=500
+HOT_CACHE_MAX_OBJECT_SIZE=262144  # 256 KiB default; larger files are cached on disk only
 MANIFEST_CACHE_SIZE=16777216   # 16 MiB default, estimated bytes of cached site manifests
 MANIFEST_CACHE_COUNT=5000
 HOT_CACHE_TTL=60               # seconds

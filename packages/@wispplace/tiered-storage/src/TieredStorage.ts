@@ -36,6 +36,24 @@ type InFlightBufferedRead = {
 
 /** Default for {@link TieredStorageConfig.streamHotPromotionMaxBytes}. */
 const DEFAULT_STREAM_HOT_PROMOTION_MAX_BYTES = 256 * 1024
+/** Default for {@link TieredStorageConfig.bufferedHotPromotionMaxBytes}. */
+const DEFAULT_BUFFERED_HOT_PROMOTION_MAX_BYTES = 256 * 1024
+const DEFAULT_ACCESS_STATS_FLUSH_INTERVAL_MS = 30_000
+const DEFAULT_ACCESS_STATS_FLUSH_BATCH_SIZE = 1_000
+const DEFAULT_ACCESS_STATS_MAX_PENDING_KEYS = 10_000
+
+/** Reads of one key in one tier since its statistics were last written. */
+type PendingAccess = { tier: 'hot' | 'warm'; key: string; hits: number; lastAccessed: number }
+
+/** Counters for the batched access statistics. */
+export interface AccessStatsBufferStats {
+	/** Keys with reads not yet written to their tier. */
+	pendingKeys: number
+	/** Key writes completed since construction. */
+	flushedKeys: number
+	/** Reads not persisted because the buffer was full. */
+	droppedReads: number
+}
 
 export interface UpperTierInvalidationFailure {
 	tier: 'hot' | 'warm'
@@ -125,6 +143,11 @@ export class TieredStorage<T = unknown> {
 	private inFlightStreamPromotions = new Set<string>()
 	private upperTierPromotionEpoch = 0
 	private upperTierMutationQueue: Promise<void> = Promise.resolve()
+	private pendingAccess = new Map<string, PendingAccess>()
+	private accessStatsTimer: ReturnType<typeof setInterval> | null = null
+	private accessStatsFlush: Promise<void> | null = null
+	private flushedAccessKeys = 0
+	private droppedAccessReads = 0
 
 	constructor(private config: TieredStorageConfig) {
 		if (!config.tiers.cold) {
@@ -325,8 +348,7 @@ export class TieredStorage<T = unknown> {
 					await this.delete(key)
 					return null
 				}
-				// Fire-and-forget access stats update (non-critical)
-				void this.updateAccessStats(key, 'hot')
+				this.recordAccess(key, 'hot')
 				const consumerResult = consumerTierGetResult(result, options)
 				return {
 					data: (await this.deserializeData(consumerResult.data)) as T,
@@ -352,13 +374,12 @@ export class TieredStorage<T = unknown> {
 				}
 				// Eager promotion is best-effort. The key fence prevents a lower-tier
 				// result captured before invalidation from repopulating hot storage.
-				if (this.config.tiers.hot && this.config.promotionStrategy === 'eager') {
+				if (this.config.tiers.hot && this.config.promotionStrategy === 'eager' && this.fitsBufferedHot(result.data)) {
 					await this.promoteIfCurrent(key, fence, generation, upperTierPromotionEpoch, [
 						{ tier: this.config.tiers.hot, data: result.data, metadata: result.metadata },
 					])
 				}
-				// Fire-and-forget access stats update (non-critical)
-				void this.updateAccessStats(key, 'warm')
+				this.recordAccess(key, 'warm')
 				const consumerResult = consumerTierGetResult(result, options)
 				return {
 					data: (await this.deserializeData(consumerResult.data)) as T,
@@ -396,7 +417,7 @@ export class TieredStorage<T = unknown> {
 				if (this.config.tiers.warm) {
 					promotions.push({ tier: this.config.tiers.warm, data: result.data, metadata: result.metadata })
 				}
-				if (this.config.tiers.hot) {
+				if (this.config.tiers.hot && this.fitsBufferedHot(result.data)) {
 					promotions.push({ tier: this.config.tiers.hot, data: result.data, metadata: result.metadata })
 				}
 				await this.promoteIfCurrent(key, fence, generation, upperTierPromotionEpoch, promotions)
@@ -531,7 +552,7 @@ export class TieredStorage<T = unknown> {
 					await this.delete(key)
 					return null
 				}
-				if (name !== 'cold') void this.updateAccessStats(key, name)
+				if (name !== 'cold') this.recordAccess(key, name)
 				const source =
 					name === 'hot'
 						? result.stream
@@ -1516,7 +1537,7 @@ export class TieredStorage<T = unknown> {
 
 		for (const [key, metadata] of keysToLoad) {
 			const data = await this.config.tiers.warm.get(key)
-			if (data) {
+			if (data && this.fitsBufferedHot(data)) {
 				await this.config.tiers.hot.set(key, data, metadata)
 				loaded++
 			}
@@ -1576,23 +1597,116 @@ export class TieredStorage<T = unknown> {
 		return Date.now() > metadata.ttl.getTime()
 	}
 
+	/** Whether a buffered read is small enough to copy into the hot tier. */
+	private fitsBufferedHot(data: Uint8Array): boolean {
+		return data.byteLength <= (this.config.bufferedHotPromotionMaxBytes ?? DEFAULT_BUFFERED_HOT_PROMOTION_MAX_BYTES)
+	}
+
 	/**
-	 * Update access statistics for a key in a cache tier.
+	 * Count a hit in a cache tier; {@link flushAccessStatsBatch} writes it later.
 	 *
 	 * @remarks
-	 * The cold tier is never touched on read: it is the source of truth, and an
-	 * S3 metadata update is a HEAD plus a full-object copy that can race a
-	 * concurrent write and replace its metadata with the stale copy read here.
+	 * The tier's in-memory recency is refreshed now, so eviction never sees a
+	 * read entry as cold. The cold tier is never touched on read: it is the
+	 * source of truth, and an S3 metadata update is a HEAD plus a full-object
+	 * copy that can race a concurrent write.
 	 */
-	private async updateAccessStats(key: string, tier: 'hot' | 'warm'): Promise<void> {
+	private recordAccess(key: string, tier: 'hot' | 'warm'): void {
+		const now = Date.now()
 		const tierObj = tier === 'hot' ? this.config.tiers.hot : this.config.tiers.warm
-		if (!tierObj) return
+		tierObj?.recordAccess?.(key, new Date(now))
 
-		const metadata = await tierObj.getMetadata(key)
-		if (metadata) {
-			metadata.lastAccessed = new Date()
-			metadata.accessCount++
-			await tierObj.setMetadata(key, metadata)
+		const id = `${tier}\0${key}`
+		const pending = this.pendingAccess.get(id)
+		if (pending) {
+			pending.hits++
+			pending.lastAccessed = now
+			return
+		}
+		const limits = this.config.accessStats
+		if (this.pendingAccess.size >= (limits?.maxPendingKeys ?? DEFAULT_ACCESS_STATS_MAX_PENDING_KEYS)) {
+			this.droppedAccessReads++
+			return
+		}
+		this.pendingAccess.set(id, { tier, key, hits: 1, lastAccessed: now })
+		if (!this.accessStatsTimer) {
+			this.accessStatsTimer = setInterval(
+				() => void this.flushAccessStatsBatch(),
+				limits?.flushIntervalMs ?? DEFAULT_ACCESS_STATS_FLUSH_INTERVAL_MS,
+			)
+			// Statistics must never keep the process alive.
+			this.accessStatsTimer.unref?.()
+		}
+	}
+
+	/**
+	 * Write one batch of buffered access statistics, one key at a time. Only one
+	 * batch runs at once; the timer stops once nothing is pending.
+	 */
+	private flushAccessStatsBatch(): Promise<void> {
+		if (this.accessStatsFlush) return this.accessStatsFlush
+		const limit = this.config.accessStats?.flushBatchSize ?? DEFAULT_ACCESS_STATS_FLUSH_BATCH_SIZE
+		const batch: PendingAccess[] = []
+		for (const [id, pending] of this.pendingAccess) {
+			if (batch.length >= limit) break
+			batch.push(pending)
+			this.pendingAccess.delete(id)
+		}
+		if (this.pendingAccess.size === 0 && this.accessStatsTimer) {
+			clearInterval(this.accessStatsTimer)
+			this.accessStatsTimer = null
+		}
+		this.accessStatsFlush = (async () => {
+			for (const pending of batch) {
+				try {
+					await this.writeAccessStats(pending)
+				} catch {
+					// Statistics are best-effort; a failed write drops only these counts.
+				}
+			}
+		})().finally(() => {
+			this.accessStatsFlush = null
+		})
+		return this.accessStatsFlush
+	}
+
+	/**
+	 * Merge buffered hits into a tier's stored metadata. The checksum guard keeps
+	 * a write that replaced the object meanwhile from being overwritten.
+	 */
+	private async writeAccessStats({ tier, key, hits, lastAccessed }: PendingAccess): Promise<void> {
+		const tierObj = tier === 'hot' ? this.config.tiers.hot : this.config.tiers.warm
+		const metadata = await tierObj?.getMetadata(key)
+		if (!tierObj || !metadata) return
+		const updated: StorageMetadata = {
+			...metadata,
+			accessCount: metadata.accessCount + hits,
+			lastAccessed: new Date(Math.max(metadata.lastAccessed.getTime(), lastAccessed)),
+		}
+		if (tierObj.setMetadataIfChecksumMatches) {
+			if (!(await tierObj.setMetadataIfChecksumMatches(key, metadata.checksum, updated))) return
+		} else {
+			await tierObj.setMetadata(key, updated)
+		}
+		this.flushedAccessKeys++
+	}
+
+	/**
+	 * Write every buffered access statistic now, e.g. during graceful shutdown.
+	 * Reads that arrive meanwhile are written too.
+	 */
+	async flushAccessStats(): Promise<void> {
+		do {
+			await this.flushAccessStatsBatch()
+		} while (this.pendingAccess.size > 0)
+	}
+
+	/** Counters for the batched access statistics. */
+	getAccessStatsBufferStats(): AccessStatsBufferStats {
+		return {
+			pendingKeys: this.pendingAccess.size,
+			flushedKeys: this.flushedAccessKeys,
+			droppedReads: this.droppedAccessReads,
 		}
 	}
 

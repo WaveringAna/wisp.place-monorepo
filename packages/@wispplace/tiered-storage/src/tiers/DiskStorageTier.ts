@@ -712,6 +712,12 @@ export class DiskStorageTier implements StorageTier {
 		}
 	}
 
+	/** Refresh the in-memory recency that LRU eviction sorts by. */
+	recordAccess(key: string, accessedAt: Date): void {
+		const entry = this.metadataIndex.get(key)
+		if (entry && accessedAt > entry.lastAccessed) entry.lastAccessed = accessedAt
+	}
+
 	async setMetadata(key: string, metadata: StorageMetadata): Promise<void> {
 		await this.withMutation(() => this.setMetadataUnlocked(key, metadata))
 	}
@@ -738,8 +744,9 @@ export class DiskStorageTier implements StorageTier {
 		const metaPath = this.getMetaPath(key)
 		if (!(await this.writeMetadataAtomically(metaPath, metadata))) return
 
-		// Keep the in-memory index in sync so eviction sees updated access data.
-		entry.lastAccessed = metadata.lastAccessed
+		// Keep the in-memory index in sync so eviction sees updated access data. A
+		// batched stats write may carry an older time than a read recorded since.
+		if (metadata.lastAccessed > entry.lastAccessed) entry.lastAccessed = metadata.lastAccessed
 		if (metadata.ttl) {
 			entry.ttl = metadata.ttl
 		} else {

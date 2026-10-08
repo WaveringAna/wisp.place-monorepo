@@ -93,11 +93,18 @@ logger.info('Hosting storage configured', {
 	coldStorageMode: storageConfig.coldStorageMode,
 	diskSourceAllowed: storageConfig.diskSourceAllowed,
 	hotCacheCount: storageConfig.hotCacheCount,
+	hotCacheMaxObjectSize: storageConfig.hotCacheMaxObjectSize,
 	hotCacheSize: storageConfig.hotCacheSize,
 	s3EndpointConfigured: storageConfig.s3EndpointConfigured,
 	warmCacheSize: storageConfig.warmCacheSize,
 	warmEvictionPolicy: storageConfig.warmEvictionPolicy,
 })
+
+/** Persist buffered access statistics; the warm tier rebuilds its LRU order from them after a restart. */
+async function flushAccessStats(): Promise<void> {
+	await storage.flushAccessStats()
+	logger.info('Flushed access statistics', storage.getAccessStatsBufferStats())
+}
 
 // Graceful shutdown. The shared promise makes SIGINT/SIGTERM races idempotent.
 const shutdown = onceAsync(async (signal: 'SIGINT' | 'SIGTERM') => {
@@ -114,6 +121,7 @@ const shutdown = onceAsync(async (signal: 'SIGINT' | 'SIGTERM') => {
 	// Flush the partial window while the log exporters are still running.
 	unavailableLog.stop()
 	const tasks = [
+		{ name: 'access statistics', promise: flushAccessStats() },
 		{ name: 'cache invalidation subscriber', promise: stopCacheInvalidationSubscriber() },
 		{ name: 'revalidation queue', promise: closeRevalidateQueue() },
 	]

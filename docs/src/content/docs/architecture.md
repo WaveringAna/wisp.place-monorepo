@@ -46,6 +46,7 @@ The **hot tier** is an in-memory LRU cache. Fast, small, and lost on restart —
 ```bash
 HOT_CACHE_SIZE=33554432   # 32 MiB default
 HOT_CACHE_COUNT=500
+HOT_CACHE_MAX_OBJECT_SIZE=262144   # larger files stay in the warm tier
 ```
 
 The **warm tier** is a disk cache at `cache/sites/{did}/{sitename}/path`. It survives restarts and requires no network.

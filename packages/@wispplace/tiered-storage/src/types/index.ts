@@ -335,6 +335,16 @@ export interface StorageTier {
 	setMetadataIfChecksumMatches?(key: string, expectedChecksum: string, metadata: StorageMetadata): Promise<boolean>
 
 	/**
+	 * Note a read in memory, without I/O.
+	 *
+	 * @remarks
+	 * TieredStorage persists access statistics in batches, so a tier whose
+	 * eviction depends on access recency updates it here to keep a recently
+	 * read entry from being evicted as cold before the batch is written.
+	 */
+	recordAccess?(key: string, accessedAt: Date): void
+
+	/**
 	 * Get statistics about this tier.
 	 *
 	 * @returns Statistics including size, item count, hits, misses, etc.
@@ -480,6 +490,39 @@ export interface TieredStorageConfig {
 	 * file and has no such limit beyond the warm tier's own capacity.
 	 */
 	streamHotPromotionMaxBytes?: number
+
+	/**
+	 * Largest buffered read copied into the hot tier during eager promotion.
+	 *
+	 * @defaultValue 262144 (256 KiB)
+	 *
+	 * @remarks
+	 * The buffered counterpart of `streamHotPromotionMaxBytes`, compared with
+	 * the stored (possibly compressed) size. A larger object is still promoted
+	 * to the warm tier, so one big page cannot crowd the hot tier's smaller
+	 * entries out. Explicit `set()` placement is not limited.
+	 */
+	bufferedHotPromotionMaxBytes?: number
+
+	/**
+	 * Batching of per-read access statistics (`accessCount`, `lastAccessed`).
+	 *
+	 * @remarks
+	 * Hot and warm hits are counted in memory per key and written to their tier
+	 * every `flushIntervalMs`, at most `flushBatchSize` keys per flush, instead
+	 * of one metadata write per read. At most `maxPendingKeys` keys are held;
+	 * reads of further keys until the next flush are not persisted, although
+	 * tiers implementing `recordAccess` still see them for eviction. Call
+	 * {@link TieredStorage.flushAccessStats} on shutdown to persist the rest.
+	 */
+	accessStats?: {
+		/** @defaultValue 30000 */
+		flushIntervalMs?: number
+		/** @defaultValue 1000 */
+		flushBatchSize?: number
+		/** @defaultValue 10000 */
+		maxPendingKeys?: number
+	}
 
 	/**
 	 * Custom serialization/deserialization functions.

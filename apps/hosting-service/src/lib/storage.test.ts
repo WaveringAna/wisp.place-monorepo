@@ -41,7 +41,11 @@ const {
 } = (await import(storageTestModule)) as typeof import('./storage')
 
 type StorageInternals = {
-	config: { tiers: { cold: StorageTier; hot?: StorageTier; warm?: StorageTier } }
+	config: {
+		tiers: { cold: StorageTier; hot?: StorageTier; warm?: StorageTier }
+		bufferedHotPromotionMaxBytes?: number
+		streamHotPromotionMaxBytes?: number
+	}
 }
 type TTLMemoryTierInternals = { insertedAt: Map<string, number>; ttlMs: number }
 
@@ -83,6 +87,21 @@ describe('hosting storage configuration', () => {
 			warmCacheSize: '10.0GB',
 		})
 		expect((hotTier as unknown as TTLMemoryTierInternals).ttlMs).toBe(60_000)
+	})
+
+	test('caps hot-tier objects at HOT_CACHE_MAX_OBJECT_SIZE on both read paths', () => {
+		const local = { NODE_ENV: 'test', CACHE_DIR: '/cache/sites' }
+		expect(resolveHostingStorageConfig(local).hotCacheMaxObjectSize).toBe(256 * 1024)
+		expect(resolveHostingStorageConfig({ ...local, HOT_CACHE_MAX_OBJECT_SIZE: '1048576' }).hotCacheMaxObjectSize).toBe(
+			1024 * 1024,
+		)
+		expect(resolveHostingStorageConfig({ ...local, HOT_CACHE_MAX_OBJECT_SIZE: '0' }).hotCacheMaxObjectSize).toBe(
+			256 * 1024,
+		)
+		expect((storage as unknown as StorageInternals).config).toMatchObject({
+			bufferedHotPromotionMaxBytes: 256 * 1024,
+			streamHotPromotionMaxBytes: 256 * 1024,
+		})
 	})
 
 	test('shares the disk tier between public and private disk-only storage', () => {

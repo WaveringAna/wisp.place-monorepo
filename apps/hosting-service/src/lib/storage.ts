@@ -29,6 +29,9 @@ const DEFAULT_CACHE_DIR = './cache/sites'
 // Sized for the smallest (1 GiB) edge; larger edges raise it with HOT_CACHE_SIZE.
 const DEFAULT_HOT_CACHE_SIZE = 32 * 1024 * 1024
 const DEFAULT_HOT_CACHE_COUNT = 500
+// Matches the library's stream default, so a hot entry's size limit does not
+// depend on whether it was read buffered or streamed.
+const DEFAULT_HOT_CACHE_MAX_OBJECT_SIZE = 256 * 1024
 const DEFAULT_WARM_CACHE_SIZE = 10737418240 // 10GB
 const DEFAULT_HOT_CACHE_TTL_SECONDS = 60
 const DEFAULT_S3_REGION = 'us-east-1'
@@ -48,6 +51,7 @@ export interface HostingStorageConfiguration {
 	cacheDir: string
 	hotCacheSize: number
 	hotCacheCount: number
+	hotCacheMaxObjectSize: number
 	warmCacheSize: number
 	warmEvictionPolicy: 'lru' | 'fifo' | 'size'
 	hotCacheTtlSeconds: number
@@ -211,6 +215,11 @@ export function resolveHostingStorageConfig(env: HostingStorageEnvironment = pro
 		cacheDir: validateCacheDirectory(env.CACHE_DIR),
 		hotCacheSize: parsePositiveStorageInteger(env.HOT_CACHE_SIZE, DEFAULT_HOT_CACHE_SIZE, MAX_CACHE_SIZE_BYTES),
 		hotCacheCount: parsePositiveStorageInteger(env.HOT_CACHE_COUNT, DEFAULT_HOT_CACHE_COUNT, MAX_CACHE_ITEMS),
+		hotCacheMaxObjectSize: parsePositiveStorageInteger(
+			env.HOT_CACHE_MAX_OBJECT_SIZE,
+			DEFAULT_HOT_CACHE_MAX_OBJECT_SIZE,
+			MAX_CACHE_SIZE_BYTES,
+		),
 		warmCacheSize: parsePositiveStorageInteger(env.WARM_CACHE_SIZE, DEFAULT_WARM_CACHE_SIZE, MAX_CACHE_SIZE_BYTES),
 		warmEvictionPolicy,
 		hotCacheTtlSeconds: parsePositiveStorageInteger(
@@ -235,6 +244,7 @@ const resolvedStorageConfig = resolveHostingStorageConfig()
 const CACHE_DIR = resolvedStorageConfig.cacheDir
 const HOT_CACHE_SIZE = resolvedStorageConfig.hotCacheSize
 const HOT_CACHE_COUNT = resolvedStorageConfig.hotCacheCount
+const HOT_CACHE_MAX_OBJECT_SIZE = resolvedStorageConfig.hotCacheMaxObjectSize
 const WARM_CACHE_SIZE = resolvedStorageConfig.warmCacheSize
 const WARM_EVICTION_POLICY = resolvedStorageConfig.warmEvictionPolicy
 const HOT_CACHE_TTL = resolvedStorageConfig.hotCacheTtlSeconds
@@ -924,6 +934,9 @@ function initializeStorage(): TieredStorage<Uint8Array> {
 		// Eager promotion: promote data to upper tiers on read
 		// This ensures frequently accessed files end up in hot tier
 		promotionStrategy: 'eager',
+		// Larger objects are promoted to warm only, on both read paths
+		bufferedHotPromotionMaxBytes: HOT_CACHE_MAX_OBJECT_SIZE,
+		streamHotPromotionMaxBytes: HOT_CACHE_MAX_OBJECT_SIZE,
 
 		// Identity serialization: store raw binary without JSON transformation
 		serialization: {
@@ -1013,6 +1026,7 @@ export function getStorageConfig() {
 		cacheDir: CACHE_DIR,
 		hotCacheSize: `${(HOT_CACHE_SIZE / 1024 / 1024).toFixed(0)}MB`,
 		hotCacheCount: HOT_CACHE_COUNT,
+		hotCacheMaxObjectSize: `${(HOT_CACHE_MAX_OBJECT_SIZE / 1024).toFixed(0)}KB`,
 		warmCacheSize: `${(WARM_CACHE_SIZE / 1024 / 1024 / 1024).toFixed(1)}GB`,
 		warmEvictionPolicy: WARM_EVICTION_POLICY,
 		coldStorageMode: S3_BUCKET ? 's3' : 'disk',

@@ -14,6 +14,7 @@ export async function getCacheStats() {
 
 	return {
 		tieredStorage: tieredStats,
+		accessStats: storage.getAccessStatsBufferStats(),
 		inMemory: cache.getStats(),
 	}
 }

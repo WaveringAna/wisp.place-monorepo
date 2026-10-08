@@ -9,6 +9,7 @@
 
 // Main class
 export {
+	type AccessStatsBufferStats,
 	type BufferedReadOptions,
 	TieredStorage,
 	type UpperTierInvalidationFailure,
