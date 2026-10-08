@@ -43,6 +43,7 @@ import { enqueueRevalidate } from './revalidate-queue'
 import { resolveStorageKey, type SiteManifest } from './site-storage-keys'
 import { addPublicSourceCidIfChecksumMatches, evictPublicCacheKey, isStorageUnavailableError, storage } from './storage'
 import { createTrace, logTrace, type RequestTrace, span } from './trace'
+import { type RevalidateOutcome, type UnavailableReason, unavailableLog } from './unavailable-log'
 import { getCachedSettings } from './utils'
 
 const logger = createLogger('file-serving')
@@ -426,27 +427,39 @@ function shouldServeUpdatingPage(requestHeaders?: Record<string, string>): boole
 	return fetchDest === 'document' || fetchDest === 'iframe' || fetchDest === 'frame'
 }
 
-function buildUnavailableResponse(message: string, requestHeaders?: Record<string, string>): Response {
-	if (shouldServeUpdatingPage(requestHeaders)) {
-		return siteUpdatingResponse()
-	}
+type UnavailableCause = { reason: UnavailableReason; revalidate: RevalidateOutcome }
 
-	return new Response(message, {
-		status: 503,
-		headers: {
-			'Cache-Control': 'no-store',
-			'Retry-After': '5',
-		},
-	})
+// Why each fail-closed 503 was built. Only the response a request actually
+// returns is counted, so an intermediate 503 that a caller discards is not.
+const unavailableCauses = new WeakMap<Response, UnavailableCause>()
+
+function buildUnavailableResponse(
+	message: string,
+	cause: UnavailableCause,
+	requestHeaders?: Record<string, string>,
+): Response {
+	const response = shouldServeUpdatingPage(requestHeaders)
+		? siteUpdatingResponse()
+		: new Response(message, {
+				status: 503,
+				headers: {
+					'Cache-Control': 'no-store',
+					'Retry-After': '5',
+				},
+			})
+	unavailableCauses.set(response, cause)
+	return response
 }
 
 function buildSiteUpdatingResponse(requestHeaders?: Record<string, string>): Response {
-	return buildUnavailableResponse('Site is updating', requestHeaders)
+	return buildUnavailableResponse('Site is updating', { reason: 'updating', revalidate: 'none' }, requestHeaders)
 }
 
-function buildStorageMissResponse(requestHeaders?: Record<string, string>): Response {
-	return buildUnavailableResponse('Storage temporarily unavailable', requestHeaders)
+function buildStorageMissResponse(cause: UnavailableCause, requestHeaders?: Record<string, string>): Response {
+	return buildUnavailableResponse('Storage temporarily unavailable', cause, requestHeaders)
 }
+
+const STORAGE_UNAVAILABLE: UnavailableCause = { reason: 'storage-unavailable', revalidate: 'none' }
 
 type DirectoryEntryMap = Map<string, boolean>
 
@@ -1370,8 +1383,8 @@ function createExpectedManifestMissTracker(
 		async response(): Promise<Response | null> {
 			if (!expectedMissPath) return null
 			recordStorageMiss(expectedMissPath)
-			await enqueueRevalidate(did, rkey, `storage-miss:${expectedMissPath}`)
-			return buildStorageMissResponse(requestHeaders)
+			const { result } = await enqueueRevalidate(did, rkey, `storage-miss:${expectedMissPath}`)
+			return buildStorageMissResponse({ reason: 'cid-miss', revalidate: result }, requestHeaders)
 		},
 	}
 }
@@ -1700,8 +1713,8 @@ async function serveRedirectResponse(options: RedirectRequestOptions): Promise<R
 async function buildSourceCidStorageMissResponse(options: FileRequestOptions, filePath: string): Promise<Response> {
 	const sourcePath = sourceManifestPath(filePath)
 	recordStorageMiss(sourcePath)
-	await enqueueRevalidate(options.did, options.rkey, `storage-miss:${sourcePath}`)
-	return buildStorageMissResponse(options.requestHeaders)
+	const { result } = await enqueueRevalidate(options.did, options.rkey, `storage-miss:${sourcePath}`)
+	return buildStorageMissResponse({ reason: 'cid-mismatch', revalidate: result }, options.requestHeaders)
 }
 
 async function serveFileRequest(options: FileRequestOptions): Promise<Response> {
@@ -1709,7 +1722,7 @@ async function serveFileRequest(options: FileRequestOptions): Promise<Response> 
 		return await resolveFileRequest(options)
 	} catch (error) {
 		if (isStorageUnavailableError(error)) {
-			return buildStorageMissResponse(options.requestHeaders)
+			return buildStorageMissResponse(STORAGE_UNAVAILABLE, options.requestHeaders)
 		}
 		if (error instanceof SourceCidValidationError) {
 			return await buildSourceCidStorageMissResponse(options, error.filePath)
@@ -1754,8 +1767,8 @@ async function resolveCachedRequest(options: CachedRequestOptions, trace: Reques
 	const manifest = await getSiteManifest(did, rkey, trace)
 	if (manifest === null) {
 		recordStorageMiss('manifest')
-		await enqueueRevalidate(did, rkey, 'storage-miss:manifest')
-		return buildStorageMissResponse(requestHeaders)
+		const { result } = await enqueueRevalidate(did, rkey, 'storage-miss:manifest')
+		return buildStorageMissResponse({ reason: 'manifest-miss', revalidate: result }, requestHeaders)
 	}
 	const settings = await span(trace, 'db:settings', () => getCachedSettings(did, rkey))
 	const indexFiles = getIndexFiles(settings)
@@ -1788,7 +1801,7 @@ async function resolveCachedRequest(options: CachedRequestOptions, trace: Reques
 	return response
 }
 
-async function serveCachedRequest(options: CachedRequestOptions): Promise<Response> {
+async function resolveCachedResponse(options: CachedRequestOptions): Promise<Response> {
 	const { did, filePath, requestHeaders, rkey } = options
 	if (isSiteUpdating(did, rkey)) {
 		return buildSiteUpdatingResponse(requestHeaders)
@@ -1799,10 +1812,17 @@ async function serveCachedRequest(options: CachedRequestOptions): Promise<Respon
 		return await resolveCachedRequest(options, trace)
 	} catch (error) {
 		if (!isStorageUnavailableError(error)) throw error
-		return buildStorageMissResponse(requestHeaders)
+		return buildStorageMissResponse(STORAGE_UNAVAILABLE, requestHeaders)
 	} finally {
 		logTrace(trace, filePath || '/', logger)
 	}
+}
+
+async function serveCachedRequest(options: CachedRequestOptions): Promise<Response> {
+	const response = await resolveCachedResponse(options)
+	const cause = unavailableCauses.get(response)
+	if (cause) unavailableLog.record(options.did, options.rkey, cause.reason, cause.revalidate)
+	return response
 }
 
 /**

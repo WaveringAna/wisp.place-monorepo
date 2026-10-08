@@ -11,6 +11,7 @@ import { closeDatabase } from './lib/db'
 import { closePrivateSitesDatabase } from './lib/private-sites-db'
 import { closeRevalidateQueue } from './lib/revalidate-queue'
 import { getStorageConfig, storage } from './lib/storage'
+import { unavailableLog } from './lib/unavailable-log'
 import app from './server'
 import { onceAsync, stopHttpServerWithGrace } from './shutdown'
 
@@ -51,6 +52,9 @@ if (!existsSync(CACHE_DIR)) {
 // Sweep expired lookups every minute. Most namespaces live 10 s, so the default
 // half-hour sweep left expired site manifests resident for up to 30 minutes.
 cache.startCleanup(CACHE_SWEEP_INTERVAL_MS)
+
+// Summarize fail-closed 503s once a window instead of logging each request.
+unavailableLog.start()
 
 // Start cache invalidation subscriber (listens for firehose-service updates via Redis pub/sub)
 startCacheInvalidationSubscriber()
@@ -107,6 +111,8 @@ const shutdown = onceAsync(async (signal: 'SIGINT' | 'SIGTERM') => {
 	if (httpStop.forceStopFailed) logger.error('HTTP server force stop failed')
 
 	cache.stopCleanup()
+	// Flush the partial window while the log exporters are still running.
+	unavailableLog.stop()
 	const tasks = [
 		{ name: 'cache invalidation subscriber', promise: stopCacheInvalidationSubscriber() },
 		{ name: 'revalidation queue', promise: closeRevalidateQueue() },

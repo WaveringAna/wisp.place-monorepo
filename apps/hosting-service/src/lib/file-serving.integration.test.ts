@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test'
 import { gunzipSync, gzipSync } from 'node:zlib'
 import { computeCID } from '@wispplace/atproto-utils'
 import { MAX_BLOB_SIZE } from '@wispplace/constants'
@@ -274,7 +274,10 @@ mock.module('./revalidate-queue', () => ({
 }))
 const { cache } = await import('./cache-manager')
 const { resetHtmlHotCacheWarmupForTests } = await import('./html-prewarm')
-const { applyCacheInvalidationForTests } = await import('./cache-invalidation')
+const { applyCacheInvalidationForTests, markSiteUpdating, resetUpdatingSitesForTests } = await import(
+	'./cache-invalidation'
+)
+const { unavailableLog } = await import('./unavailable-log')
 const {
 	serveFileInternal,
 	serveFileInternalWithRewrite,
@@ -1609,5 +1612,102 @@ describe('manifest source CID validation', () => {
 		expect(evictedPublicCacheKeys).toEqual([storageKey('mismatched.txt')])
 		expect(storageGetWithMetadataKeys.filter((key) => key === storageKey('mismatched.txt'))).toHaveLength(2)
 		expect(revalidateCalls).toEqual([{ did: DID, rkey: RKEY, reason: 'storage-miss:mismatched.txt' }])
+	})
+})
+
+describe('fail-closed 503 visibility', () => {
+	beforeEach(() => {
+		resetServingState()
+		resetUpdatingSitesForTests()
+	})
+	afterEach(() => {
+		resetUpdatingSitesForTests()
+		mock.restore()
+	})
+
+	async function failClosedCauses(serve: () => Promise<Response>) {
+		const record = spyOn(unavailableLog, 'record').mockImplementation(() => {})
+		try {
+			expect((await serve()).status).toBe(503)
+			return [...record.mock.calls]
+		} finally {
+			record.mockRestore()
+		}
+	}
+
+	const serve = (path: string, headers?: Record<string, string>) =>
+		serveFromCache(DID, RKEY, path, `https://example.com/${path}`, headers)
+
+	test('names a site that is mid-update, for the HTML page too', async () => {
+		siteFileCids = { 'index.html': 'cid' }
+		markSiteUpdating(DID, RKEY)
+
+		expect(await failClosedCauses(() => serve('index.html'))).toEqual([[DID, RKEY, 'updating', 'none']])
+		expect(await failClosedCauses(() => serve('index.html', { accept: 'text/html' }))).toEqual([
+			[DID, RKEY, 'updating', 'none'],
+		])
+	})
+
+	test('names a missing manifest with its repair outcome', async () => {
+		expect(await failClosedCauses(() => serve('index.html'))).toEqual([[DID, RKEY, 'manifest-miss', 'enqueued']])
+	})
+
+	test('names a manifest file absent from every tier', async () => {
+		siteFileCids = { 'missing.txt': 'expected-cid' }
+		expect(await failClosedCauses(() => serve('missing.txt'))).toEqual([[DID, RKEY, 'cid-miss', 'enqueued']])
+	})
+
+	test('names a source CID mismatch, including behind a redirect 404', async () => {
+		siteFileCids = { _redirects: 'redirects-cid', 'stale.txt': 'expected-cid' }
+		storeFile('_redirects', '/old /stale.txt 404', 'text/plain')
+		const staleReads = (): FakeReadOutcome[] => [
+			{ data: new TextEncoder().encode('warm'), source: 'warm', customMetadata: { sourceCid: 'old-cid' } },
+			{ data: new TextEncoder().encode('cold'), source: 'cold', customMetadata: { sourceCid: 'older-cid' } },
+		]
+
+		queueStorageReads('stale.txt', staleReads())
+		expect(await failClosedCauses(() => serve('stale.txt'))).toEqual([[DID, RKEY, 'cid-mismatch', 'enqueued']])
+
+		cache.clear('sourceCidMismatches')
+		queueStorageReads('stale.txt', staleReads())
+		expect(await failClosedCauses(() => serve('old'))).toEqual([[DID, RKEY, 'cid-mismatch', 'enqueued']])
+	})
+
+	test('names a storage outage on a file read and on a _redirects read', async () => {
+		siteFileCids = { 'unavailable.txt': 'expected-cid' }
+		queueStorageReads('unavailable.txt', [new TestStorageUnavailableError('getWithMetadata', 'timeout')])
+		expect(await failClosedCauses(() => serve('unavailable.txt'))).toEqual([[DID, RKEY, 'storage-unavailable', 'none']])
+
+		siteFileCids = { _redirects: 'redirects-cid' }
+		failStorageGet('_redirects', new TestStorageUnavailableError('get', 'timeout'))
+		expect(await failClosedCauses(() => serve('old'))).toEqual([[DID, RKEY, 'storage-unavailable', 'none']])
+	})
+
+	test('records nothing for responses that are not fail-closed', async () => {
+		siteFileCids = { 'index.html': 'cid-of-index.html' }
+		storeFile('index.html', '<html>ok</html>')
+		const record = spyOn(unavailableLog, 'record')
+
+		expect((await serve('index.html')).status).toBe(200)
+		expect((await serve('nope.txt')).status).toBe(404)
+		expect(record).not.toHaveBeenCalled()
+	})
+
+	test('logs a burst of 1000 failures for one site as one line', async () => {
+		const info = spyOn(console, 'info').mockImplementation(() => {})
+		unavailableLog.flush()
+		info.mockClear()
+
+		for (let i = 0; i < 1000; i++) await serve('index.html')
+		expect(info).not.toHaveBeenCalled()
+
+		expect(unavailableLog.flush()).toBe(1)
+		const lines = info.mock.calls.map(([line]) => String(line)).filter((line) => line.includes('[FailClosed]'))
+		expect(lines).toHaveLength(1)
+		expect(lines[0]).toContain(`"site":"${DID}/${RKEY}"`)
+		expect(lines[0]).toContain('"reason":"manifest-miss"')
+		expect(lines[0]).toContain('"count":1000')
+		expect(lines[0]).toContain('"revalidate":{"enqueued":1000}')
+		expect(lines[0]).not.toContain('index.html')
 	})
 })
