@@ -7,7 +7,7 @@ import {
 } from '@wispplace/atproto-utils'
 import { createLogger } from '@wispplace/observability'
 import { Elysia } from 'elysia'
-import { eventualRead, getDomainsForDid } from '../lib/db'
+import { eventualRead, getDomainsForDid, getSitesWithDomainsForDid } from '../lib/db'
 import { backfillSitesFromPds } from '../lib/pds-backfill'
 import { requireAuth, SESSION_COOKIE_NAME } from '../lib/wisp-auth'
 
@@ -92,10 +92,12 @@ export const userRoutes = (
 		 * GET /api/user/sites
 		 * Success: { sites } — each site carries its own `domains` array, so the
 		 * list view needs one request rather than one per site.
+		 * `?fresh=1` reads the primary, for a dashboard waiting on a deploy or delete it just made.
 		 */
-		.get('/sites', async ({ auth }) => {
+		.get('/sites', async ({ auth, query }) => {
 			try {
-				const sites = await eventualRead.getSitesWithDomainsForDid(auth.did)
+				const read = query.fresh === '1' ? getSitesWithDomainsForDid : eventualRead.getSitesWithDomainsForDid
+				const sites = await read(auth.did)
 				return { sites }
 			} catch {
 				logger.error('[User] Sites error')

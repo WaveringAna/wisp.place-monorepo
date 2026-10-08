@@ -20,6 +20,10 @@ export interface PublicSite {
 	createdAt: number
 	updatedAt: number
 	domains: SiteDomain[]
+	/** The manifest the listing was built from; unset on a site whose deploy has not reached the list yet. */
+	recordCid?: string
+	/** Deployed from this dashboard, and the list has not caught up yet. */
+	deploying?: boolean
 }
 
 export interface PrivateSite {
@@ -49,6 +53,7 @@ export const toPublicSite = (record: PublicSiteRecord): PublicSite => ({
 	createdAt: record.created_at * 1000,
 	updatedAt: record.updated_at * 1000,
 	domains: [...(record.domains ?? [])].sort(byDomainPreference),
+	recordCid: record.record_cid,
 })
 
 export const toPrivateSite = (record: PrivateSiteRecord): PrivateSite => ({

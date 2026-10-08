@@ -57,6 +57,7 @@ export interface PublicSiteRecord {
 	did: string
 	rkey: string
 	display_name: string | null
+	record_cid?: string
 	created_at: number
 	updated_at: number
 	domains?: SiteDomain[]
@@ -194,13 +195,17 @@ export interface PreviewsInfo {
 
 export interface UploadStarted {
 	jobId?: string
+	/** Set instead of a job when an empty site was written straight away. */
+	uri?: string
+	cid?: string
 }
 
 export const api = {
 	user: () => request<UserInfo>('/api/user/info'),
 	logout: () => post('/api/auth/logout'),
 
-	sites: () => request<{ sites?: PublicSiteRecord[] }>('/api/user/sites'),
+	/** `fresh` reads the primary, for a list that has to show a change made seconds ago. */
+	sites: (fresh = false) => request<{ sites?: PublicSiteRecord[] }>(`/api/user/sites${fresh ? '?fresh=1' : ''}`),
 	/** Queues sites that are on the PDS but not cached yet; `synced` counts what the PDS has. */
 	syncSites: () => post<{ synced: number; queued: number }>('/api/user/sync'),
 	privateSites: () => request<{ sites?: PrivateSiteRecord[] }>('/api/user/private-sites'),

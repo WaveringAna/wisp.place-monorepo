@@ -2,6 +2,7 @@ import { QueryClient, type QueryKey, useMutation, useQuery, useQueryClient } fro
 import { ApiError, api, errorText } from './api'
 import { newestFirst, type Site, toPrivateSite, toPublicSite, toWebhook } from './model'
 import { rememberAccount } from './remembered-accounts'
+import { changedSiteName, overlayChanges, type SiteChange, waitUntilSettled } from './site-sync'
 import { notify } from './store'
 
 export const queryClient = new QueryClient({
@@ -36,12 +37,45 @@ export const useUser = () =>
 		staleTime: Number.POSITIVE_INFINITY,
 	})
 
+/** Deploys and deletes made here that the server's site list does not show yet. */
+let waitingChanges: readonly SiteChange[] = []
+
 async function fetchSites(): Promise<Site[]> {
-	// Private sites are an extra; a failure there must not hide the public list.
-	const [publicSites, privateSites] = await Promise.all([api.sites(), api.privateSites().catch(() => ({ sites: [] }))])
-	return [...(publicSites.sites ?? []).map(toPublicSite), ...(privateSites.sites ?? []).map(toPrivateSite)].sort(
-		newestFirst,
+	const changes = waitingChanges
+	// Private sites are an extra; a failure there must not hide the public list. While a
+	// change is on its way the list is read from the primary, so replica lag cannot hold it up.
+	const [publicSites, privateSites] = await Promise.all([
+		api.sites(changes.length > 0),
+		api.privateSites().catch(() => ({ sites: [] })),
+	])
+	const server = [...(publicSites.sites ?? []).map(toPublicSite), ...(privateSites.sites ?? []).map(toPrivateSite)]
+	const { sites, waiting } = overlayChanges(server, changes)
+	// Changes made while this request was out are kept for the next one.
+	waitingChanges = waitingChanges.filter((change) => !changes.includes(change) || waiting.includes(change))
+	return sites.sort(newestFirst)
+}
+
+/**
+ * Shows a deploy or delete in the site list at once, then refetches on a short
+ * backoff until the server list shows it too. If it has not after a minute the
+ * list goes back to what the server says.
+ */
+export async function expectSiteChange(change: SiteChange): Promise<void> {
+	waitingChanges = [...waitingChanges, change]
+	// A refetch already in flight would land the list from before the change on top of it.
+	await queryClient.cancelQueries({ queryKey: keys.sites })
+	queryClient.setQueryData<Site[]>(
+		keys.sites,
+		(sites) => sites && overlayChanges(sites, [change]).sites.sort(newestFirst),
 	)
+	const settled = await waitUntilSettled(async () => {
+		await queryClient.refetchQueries({ queryKey: keys.sites, type: 'all' })
+		return !waitingChanges.includes(change)
+	})
+	if (settled) return
+	waitingChanges = waitingChanges.filter((waiting) => waiting !== change)
+	await queryClient.refetchQueries({ queryKey: keys.sites, type: 'all' })
+	notify.ok(`the site list has not caught up with ${changedSiteName(change)} yet, refresh in a minute`)
 }
 
 /**
@@ -60,7 +94,9 @@ export const usePdsSync = () =>
 		staleTime: Number.POSITIVE_INFINITY,
 	})
 
-export const useSites = () => useQuery({ queryKey: keys.sites, queryFn: fetchSites })
+export const sitesQuery = { queryKey: keys.sites, queryFn: fetchSites }
+
+export const useSites = () => useQuery(sitesQuery)
 
 /**
  * When the dashboard last changed a domain. The list is normally read from a

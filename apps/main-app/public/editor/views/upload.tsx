@@ -3,7 +3,8 @@ import { type DragEvent, type FormEvent, useId, useRef, useState } from 'react'
 import type { UserInfo } from '../api'
 import { formatBytes, plural } from '../format'
 import { defaultSiteAddress, isPreviewSite, type PublicSite, siteAddress } from '../model'
-import { keys, useSites } from '../queries'
+import { expectSiteChange, keys, useSites } from '../queries'
+import { deployedChange } from '../site-sync'
 import { notify } from '../store'
 import { Button, cx, Input, Section, Segmented } from '../ui'
 import { rootedUploadPaths, uploadRoot } from '../upload-paths'
@@ -128,8 +129,10 @@ export function UploadView({ user }: { user: UserInfo | undefined }) {
 	const [destination, setDestination] = useState<string | null>(null)
 	const client = useQueryClient()
 	// Files and fields are kept when an upload fails, so retrying is one click.
-	const upload = useUpload(() => {
-		client.invalidateQueries({ queryKey: keys.sites })
+	const upload = useUpload((result) => {
+		const change = deployedChange(result, Date.now())
+		if (change) void expectSiteChange(change)
+		else client.invalidateQueries({ queryKey: keys.sites })
 		setFiles([])
 		setName('')
 	})

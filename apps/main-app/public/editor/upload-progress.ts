@@ -14,6 +14,9 @@ export interface UploadProgress {
 }
 
 export interface UploadResult {
+	/** The manifest record a public upload wrote. */
+	uri?: string
+	cid?: string
 	uploadedCount?: number
 	fileCount?: number
 	skippedFiles?: { name: string; reason: string }[]
@@ -111,7 +114,7 @@ interface UploadRequest {
  * Sends an upload and follows its server-sent progress stream. The stream is
  * tied to the job id, so it closes on unmount or when another upload starts.
  */
-export function useUpload(onFinished: () => void) {
+export function useUpload(onFinished: (result: UploadResult) => void) {
 	const [state, dispatch] = useReducer(uploadReducer, idleUpload)
 	const [jobId, setJobId] = useState<string | null>(null)
 	const finishStream = useEffectEvent(onFinished)
@@ -124,8 +127,9 @@ export function useUpload(onFinished: () => void) {
 		)
 		source.addEventListener('done', (event) => {
 			source.close()
-			dispatch({ type: 'done', result: (eventData(event) ?? {}) as UploadResult })
-			finishStream()
+			const result = (eventData(event) ?? {}) as UploadResult
+			dispatch({ type: 'done', result })
+			finishStream(result)
 		})
 		// Fires both for an `error` event from the server and for a dropped connection.
 		source.addEventListener('error', (event) => {
@@ -142,13 +146,14 @@ export function useUpload(onFinished: () => void) {
 	const start = async ({ title, body, isPrivate }: UploadRequest) => {
 		dispatch({ type: 'start', title })
 		try {
-			const { jobId } = await (isPrivate ? api.uploadPrivateSite(body) : api.uploadSite(body))
+			const { jobId, uri, cid } = await (isPrivate ? api.uploadPrivateSite(body) : api.uploadSite(body))
 			if (jobId) {
 				setJobId(jobId)
 				return
 			}
-			dispatch({ type: 'done', result: {} })
-			onFinished()
+			const result = { uri, cid }
+			dispatch({ type: 'done', result })
+			onFinished(result)
 		} catch (error) {
 			dispatch({ type: 'fail', error: errorText(error) })
 		}

@@ -18,6 +18,8 @@ type SitePresentationRow = {
 	did: string
 	rkey: string
 	display_name: string | null
+	/** The manifest the row was built from, so a dashboard can tell when its own deploy has landed. */
+	record_cid: string
 	created_at: number | string | null
 	updated_at: number | string | null
 	domains: SiteDomain[]
@@ -135,6 +137,7 @@ export const createPresentationReadQueries = (sql: SQL) => {
 				s.did,
 				s.rkey,
 				s.rkey AS display_name,
+				s.record_cid,
 				s.cached_at AS created_at,
 				s.updated_at,
 				site_domain.domain_type,
@@ -165,6 +168,7 @@ export const createPresentationReadQueries = (sql: SQL) => {
 					did: row.did,
 					rkey: row.rkey,
 					display_name: row.display_name,
+					record_cid: row.record_cid,
 					created_at: row.created_at,
 					updated_at: row.updated_at,
 					domains: [],

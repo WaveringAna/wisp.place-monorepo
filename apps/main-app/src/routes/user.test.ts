@@ -38,6 +38,9 @@ mock.module('../lib/db', () => ({
 		wispDomains: [],
 	}),
 	getSitesByDid: async () => [],
+	getSitesWithDomainsForDid: async () => [
+		{ created_at: 2, did: DID, display_name: 'just-deployed', domains: [], rkey: 'just-deployed', updated_at: 2 },
+	],
 }))
 
 mock.module('../lib/wisp-auth', () => ({
@@ -105,5 +108,17 @@ describe('domain list', () => {
 		expect((await list('/api/user/domains?fresh=1')).customDomains).toEqual([
 			{ id: 'fresh', domain: 'just-added.example' },
 		])
+	})
+})
+
+describe('site list', () => {
+	test('reads the primary when asked for a fresh list', async () => {
+		const app = userRoutes({} as never, 'test-cookie-secret', async () => new Response('{}'))
+		const rkeys = async (path: string) =>
+			(
+				(await responseJson(await app.handle(new Request(`http://localhost${path}`)))) as { sites: { rkey: string }[] }
+			).sites.map((site) => site.rkey)
+		expect(await rkeys('/api/user/sites')).toEqual(['site-a'])
+		expect(await rkeys('/api/user/sites?fresh=1')).toEqual(['just-deployed'])
 	})
 })

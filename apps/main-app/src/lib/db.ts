@@ -389,6 +389,9 @@ export const getCustomDomainsByDid = primaryPresentationRead.getCustomDomainsByD
 /** Both domain lists from the primary, for a dashboard that just changed them and has to see it. */
 export const getDomainsForDid = primaryPresentationRead.getDomainsForDid
 
+/** The site list from the primary, for a dashboard waiting to see a site it just deployed or deleted. */
+export const getSitesWithDomainsForDid = primaryPresentationRead.getSitesWithDomainsByDid
+
 export const getCustomDomainInfo = primaryPresentationRead.getCustomDomainInfo
 
 export const getCustomDomainByHash = async (hash: string) => {
