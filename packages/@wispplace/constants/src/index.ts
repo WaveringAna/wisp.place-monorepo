@@ -93,4 +93,5 @@ export const DEFAULT_IGNORE_PATTERNS: string[] = [
 export * from './cache-events'
 // AT Protocol OAuth permission sets for the place.wisp.* namespace
 export * from './oauth-scopes'
+export * from './redis-keepalive'
 export * from './revalidate-events'

@@ -5,6 +5,7 @@ import {
 	type RevalidateQueueClient,
 	type RevalidateReasonCategory,
 	revalidateReasonCategory,
+	startRedisKeepalive,
 } from '@wispplace/constants'
 import Redis from 'ioredis'
 import { recordRevalidateResult } from './revalidate-metrics'
@@ -30,6 +31,7 @@ const storageMissDedupeTtlSeconds = parseBoundedPositiveInt(
 )
 
 let client: Redis | null = null
+let stopKeepalive: (() => void) | null = null
 let loggedMissingRedis = false
 
 function parseBoundedPositiveInt(value: string | undefined, fallback: number, maximum: number): number {
@@ -72,6 +74,12 @@ function getRedisClient(): Redis | null {
 
 		client.on('ready', () => {
 			console.log(`[Revalidate] Redis connected, stream: ${streamName}`)
+		})
+
+		// Enqueues are rare, so without a ping haproxy cuts the idle connection every 180 s.
+		const created = client
+		stopKeepalive = startRedisKeepalive(() => (created.status === 'ready' ? created.ping() : undefined), {
+			onError: (err) => console.warn(`[Revalidate] Redis keepalive failed (${redisErrorKind(err)})`),
 		})
 	}
 
@@ -128,6 +136,8 @@ export async function closeRevalidateQueue(): Promise<void> {
 	if (client) {
 		const toClose = client
 		client = null
+		stopKeepalive?.()
+		stopKeepalive = null
 		await toClose.quit()
 	}
 }

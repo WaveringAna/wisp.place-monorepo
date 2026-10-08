@@ -11,6 +11,7 @@ import {
 	publishCacheInvalidationEvent,
 	revalidationQuarantineKey,
 	revalidationSiteVersionKey,
+	startRedisKeepalive,
 } from '@wispplace/constants'
 import { createLogger } from '@wispplace/observability'
 import Redis from 'ioredis'
@@ -20,6 +21,7 @@ import { isSiteDeleteTombstoneReason } from './revalidate-queue'
 const logger = createLogger('firehose-service')
 
 let publisher: Redis | null = null
+let stopPublisherKeepalive: (() => void) | null = null
 let publisherReadyTimeoutMs = 5_000
 let loggedMissingRedis = false
 
@@ -82,6 +84,14 @@ function getPublisher(): Redis | null {
 
 		publisher.on('ready', () => {
 			logger.info('[CacheInvalidation] Redis publisher connected')
+		})
+
+		// Publishes are rare, so without a ping haproxy cuts the idle connection
+		// every 180 s and the next publish has to wait for the reconnect.
+		const created = publisher
+		stopPublisherKeepalive = startRedisKeepalive(() => (created.status === 'ready' ? created.ping() : undefined), {
+			onError: (err) =>
+				logger.warn('[CacheInvalidation] Redis publisher keepalive failed', { errorKind: revalidationErrorKind(err) }),
 		})
 	}
 
@@ -288,6 +298,8 @@ export async function closeCacheInvalidationPublisher(): Promise<void> {
 	if (publisher) {
 		const toClose = publisher
 		publisher = null
+		stopPublisherKeepalive?.()
+		stopPublisherKeepalive = null
 		await toClose.quit()
 	}
 }
