@@ -1,5 +1,6 @@
 import type { Context } from 'hono'
 import { routePath } from 'hono/route'
+import { CLIENT_CLOSED_REQUEST_STATUS, isClientAbort } from '../client-abort'
 import { logCollector, metricsCollector } from '../core'
 import { redactSecretPath } from '../redact'
 
@@ -22,13 +23,18 @@ export function observabilityMiddleware(service: string) {
 
 /**
  * Hono error handler for observability
- * Logs errors with context
+ * Logs errors with context; a client that went away is not a server error.
  */
 export function observabilityErrorHandler(service: string) {
 	return (err: Error, c: Context) => {
-		const { pathname } = new URL(c.req.url)
+		const route = `${c.req.method} ${redactSecretPath(new URL(c.req.url).pathname)}`
 
-		logCollector.error(`Request failed: ${c.req.method} ${redactSecretPath(pathname)}`, service, err, {
+		if (isClientAbort(err, c.req.raw.signal)) {
+			logCollector.info(`Request aborted by client: ${route}`, service, { errorName: err.name })
+			return new Response(null, { status: CLIENT_CLOSED_REQUEST_STATUS })
+		}
+
+		logCollector.error(`Request failed: ${route}`, service, err, {
 			statusCode: c.res.status || 500,
 		})
 

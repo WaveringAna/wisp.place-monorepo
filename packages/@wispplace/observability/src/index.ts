@@ -3,6 +3,8 @@
  * Framework-agnostic observability package with Elysia and Hono middleware
  */
 
+export { CLIENT_CLOSED_REQUEST_STATUS, isClientAbort } from './client-abort'
+
 // Export everything from core
 export * from './core'
 

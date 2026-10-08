@@ -5,7 +5,7 @@
 
 import { isPreviewHostname, parsePreviewHostname } from '@wispplace/constants'
 import { normalizeSitePath } from '@wispplace/fs-utils'
-import { createLogger } from '@wispplace/observability'
+import { CLIENT_CLOSED_REQUEST_STATUS, createLogger, isClientAbort } from '@wispplace/observability'
 import { observabilityErrorHandler, observabilityMiddleware } from '@wispplace/observability/middleware/hono'
 import { siteIdFromHostname } from '@wispplace/private-sites'
 import { type Context, Hono } from 'hono'
@@ -26,14 +26,22 @@ function recordPublicSiteResponse(ownerDid: string, siteRkey: string, method: st
 	recordSiteResponse(ownerDid, siteRkey, method, response.status, response.headers.get('content-type'))
 }
 
-function recordPublicSiteFailure(ownerDid: string, siteRkey: string, method: string): void {
-	recordSiteResponse(ownerDid, siteRkey, method, 500, null)
+function recordPublicSiteFailure(
+	ownerDid: string,
+	siteRkey: string,
+	method: string,
+	error: unknown,
+	signal: AbortSignal,
+): void {
+	const status = isClientAbort(error, signal) ? CLIENT_CLOSED_REQUEST_STATUS : 500
+	recordSiteResponse(ownerDid, siteRkey, method, status, null)
 }
 
 function trackPublicSiteResponse(
 	ownerDid: string,
 	siteRkey: string,
 	method: string,
+	signal: AbortSignal,
 	responsePromise: Promise<Response>,
 ): Promise<Response> {
 	return responsePromise
@@ -44,7 +52,7 @@ function trackPublicSiteResponse(
 		.then(
 			(response) => response,
 			(error) => {
-				recordPublicSiteFailure(ownerDid, siteRkey, method)
+				recordPublicSiteFailure(ownerDid, siteRkey, method, error, signal)
 				throw error
 			},
 		)
@@ -115,6 +123,7 @@ async function serveMappedPublicDomain(
 		domain.did,
 		domain.rkey,
 		c.req.method,
+		c.req.raw.signal,
 		serveFromCache(domain.did, domain.rkey, path, c.req.url, headers, {
 			method: c.req.method,
 			signal: c.req.raw.signal,
@@ -298,6 +307,7 @@ function serveSharedSiteFile(c: Context, sitePath: SharedSitePath, did: string):
 		did,
 		sitePath.site,
 		c.req.method,
+		c.req.raw.signal,
 		serveFromCacheWithRewrite(did, sitePath.site, sitePath.filePath, basePath, c.req.url, headers, {
 			method: c.req.method,
 			signal: c.req.raw.signal,
