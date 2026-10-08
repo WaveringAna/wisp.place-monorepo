@@ -4,6 +4,7 @@ import { SQL } from 'bun'
 import { probeConnectionWithRetry } from './connection-warming'
 import { databaseConfiguration, db } from './db'
 import { logger } from './logger'
+import { deleteExpiredOAuthRows } from './oauth-cleanup'
 import { createClientMetadata } from './oauth-client-metadata'
 import { createOAuthFetch } from './oauth-fetch'
 import { withReservedOAuthLock } from './oauth-lock'
@@ -241,25 +242,7 @@ const sessionStore = {
 
 export { sessionStore }
 
-// Cleanup expired sessions and states
-export const cleanupExpiredSessions = async () => {
-	const now = Math.floor(Date.now() / 1000)
-	try {
-		const sessionsDeleted = await db`
-            DELETE FROM oauth_sessions WHERE expires_at < ${now}
-        `
-		const statesDeleted = await db`
-            DELETE FROM oauth_states WHERE expires_at IS NOT NULL AND expires_at < ${now}
-        `
-		logger.info(
-			`[Cleanup] Deleted ${sessionsDeleted.length} expired sessions and ${statesDeleted.length} expired states`,
-		)
-		return { sessions: sessionsDeleted.length, states: statesDeleted.length }
-	} catch (err) {
-		logger.error('[Cleanup] Failed to cleanup expired data', err)
-		return { sessions: 0, states: 0 }
-	}
-}
+export const cleanupExpiredSessions = () => deleteExpiredOAuthRows(db)
 
 const persistKey = async (key: JoseKey) => {
 	const priv = key.privateJwk
