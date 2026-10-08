@@ -7,6 +7,10 @@
  * whose DNS is unchanged costs no database write. Failing domains back off;
  * after `parkAfterSec` of continuous failure they are parked and only a
  * user-triggered verify checks them again.
+ *
+ * A verified domain whose lookup fails without a different owner in DNS keeps
+ * serving through a grace window, rechecked every pass, so one resolver or
+ * nameserver blip does not take a live site offline.
  */
 
 export interface DnsVerificationPolicy {
@@ -20,6 +24,18 @@ export interface DnsVerificationPolicy {
 	parkAfterSec: number
 	/** Oldest `last_verified_at` an unchanged verified domain may keep. */
 	lastCheckedRefreshSec: number
+	/** A verified domain stays verified until it has failed this long... */
+	unverifyAfterSec: number
+	/** ...and in at least this many consecutive passes. */
+	unverifyAfterFailures: number
+	/** In-pass rechecks of a verified domain that failed, each after `confirmDelaySec`. */
+	confirmRetries: number
+	confirmDelaySec: number
+	/**
+	 * Most failing domains rechecked in one pass. More than this failing at once
+	 * points at our resolvers, and the grace window covers the rest.
+	 */
+	confirmMaxDomains: number
 }
 
 export const DEFAULT_DNS_VERIFICATION_POLICY: DnsVerificationPolicy = {
@@ -28,6 +44,11 @@ export const DEFAULT_DNS_VERIFICATION_POLICY: DnsVerificationPolicy = {
 	failureBackoffSec: [10 * 60, 30 * 60, 60 * 60, 6 * 60 * 60, 24 * 60 * 60],
 	parkAfterSec: 7 * 24 * 60 * 60,
 	lastCheckedRefreshSec: 6 * 60 * 60,
+	unverifyAfterSec: 30 * 60,
+	unverifyAfterFailures: 3,
+	confirmRetries: 2,
+	confirmDelaySec: 15,
+	confirmMaxDomains: 20,
 }
 
 const positiveNumber = (value: string | undefined): number | undefined => {
@@ -43,11 +64,13 @@ export const resolveDnsVerificationPolicy = (
 	const minutes = positiveNumber(env.DNS_VERIFIER_VERIFIED_RECHECK_MINUTES)
 	const days = positiveNumber(env.DNS_VERIFIER_PARK_AFTER_DAYS)
 	const hours = positiveNumber(env.DNS_VERIFIER_LAST_CHECKED_REFRESH_HOURS)
+	const graceMinutes = positiveNumber(env.DNS_VERIFIER_UNVERIFY_AFTER_MINUTES)
 	return {
 		...defaults,
 		verifiedRecheckSec: minutes !== undefined ? Math.round(minutes * 60) : defaults.verifiedRecheckSec,
 		parkAfterSec: days !== undefined ? Math.round(days * 24 * 60 * 60) : defaults.parkAfterSec,
 		lastCheckedRefreshSec: hours !== undefined ? Math.round(hours * 60 * 60) : defaults.lastCheckedRefreshSec,
+		unverifyAfterSec: graceMinutes !== undefined ? Math.round(graceMinutes * 60) : defaults.unverifyAfterSec,
 	}
 }
 
@@ -100,6 +123,8 @@ export const checkStatus = (
 		const dueBy = window.to + policy.passIntervalSec / 2
 		return state.nextCheckAt === null || state.nextCheckAt <= dueBy ? 'due' : 'backoff'
 	}
+	// A verified domain in its grace window is rechecked every pass.
+	if (state.failingSince !== null) return 'due'
 	const period = policy.verifiedRecheckSec
 	if (window.from === null || window.to - window.from >= period) return 'due'
 	// Due when this domain's phase point k * period + phase lies in (from, to].
@@ -114,7 +139,24 @@ export const backoffDelaySec = (failures: number, lost: boolean, policy: DnsVeri
 	return lost ? Math.min(delay, policy.verifiedRecheckSec) : delay
 }
 
-export type VerificationTransition = 'verified' | 'lost' | 'parked'
+/**
+ * 'failing': a verified domain started failing and keeps serving in grace.
+ * 'recovered': it passed again before the grace ran out.
+ */
+export type VerificationTransition = 'verified' | 'lost' | 'parked' | 'failing' | 'recovered'
+
+export interface CheckResult {
+	verified: boolean
+	warning?: string
+	found?: { txt?: string[] }
+}
+
+/**
+ * The TXT answer names another DID, so the domain has positively changed
+ * hands. An empty answer or a lookup error proves nothing either way.
+ */
+export const pointsToAnotherOwner = (result: CheckResult, did: string): boolean =>
+	!result.verified && (result.found?.txt ?? []).some((value) => value.trim().startsWith('did:') && value !== did)
 
 export interface CheckOutcome {
 	/** Columns to write, or null when nothing changed. */
@@ -137,7 +179,7 @@ const sameColumns = (a: DomainVerificationColumns, b: DomainVerificationColumns)
 /** Decide what one check result changes, at pass time `now`. */
 export const planCheck = (
 	state: DomainVerificationState,
-	result: { verified: boolean; warning?: string },
+	result: CheckResult,
 	now: number,
 	policy: DnsVerificationPolicy,
 ): CheckOutcome => {
@@ -157,14 +199,34 @@ export const planCheck = (
 		}
 		return {
 			next: sameColumns(state, next) ? null : next,
-			transition: state.verified ? null : 'verified',
+			transition: !state.verified ? 'verified' : state.failingSince !== null ? 'recovered' : null,
 			newWarning: warning !== null && warning !== state.warning ? warning : null,
 		}
 	}
 
 	const failures = state.failures + 1
 	const failingSince = state.failingSince ?? now
+	const graceOver = failures >= policy.unverifyAfterFailures && now - failingSince >= policy.unverifyAfterSec
+	if (state.verified && !graceOver && !pointsToAnotherOwner(result, state.did)) {
+		return {
+			next: {
+				verified: true,
+				lastVerifiedAt: state.lastVerifiedAt,
+				failures,
+				failingSince,
+				lost: true,
+				nextCheckAt: null,
+				parkedAt: null,
+				warning: state.warning,
+			},
+			transition: state.failingSince === null ? 'failing' : null,
+			newWarning: null,
+		}
+	}
+
 	const lost = state.verified || state.lost
+	// Backoff restarts when the grace ends, so a site back soon after goes live soon.
+	const backoffStep = state.verified ? 1 : failures
 	const parked = now - failingSince >= policy.parkAfterSec
 	return {
 		next: {
@@ -173,7 +235,7 @@ export const planCheck = (
 			failures,
 			failingSince,
 			lost,
-			nextCheckAt: now + backoffDelaySec(failures, lost, policy),
+			nextCheckAt: now + backoffDelaySec(backoffStep, lost, policy),
 			parkedAt: parked ? now : null,
 			warning: null,
 		},

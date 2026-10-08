@@ -29,6 +29,7 @@ if (!integrationDatabaseUrl) {
 			store: createDnsVerificationStore(),
 			policy: DEFAULT_DNS_VERIFICATION_POLICY,
 			verify: (domain) => verify(domain),
+			sleep: async () => undefined,
 		})
 
 	describe('DNS verification store integration', () => {
@@ -112,6 +113,36 @@ if (!integrationDatabaseUrl) {
 					SELECT verified, verify_parked_at, verify_failures FROM custom_domains WHERE id = ${id}
 				`
 				expect(row).toEqual({ verified: true, verify_parked_at: null, verify_failures: 0 })
+			},
+			integrationTimeoutMs,
+		)
+
+		test(
+			'a verified domain keeps serving through a failing pass and clears the streak when it passes',
+			async () => {
+				const id = ids[1] as string
+				await updateCustomDomainVerification(id, true)
+				const readRow = async () => {
+					const [row] = await db<
+						Array<{ verified: boolean; verify_failures: number; verify_failing_since: string | null }>
+					>`
+						SELECT verified, verify_failures, verify_failing_since FROM custom_domains WHERE id = ${id}
+					`
+					return row
+				}
+
+				await resetPassClock()
+				await worker(async () => ({
+					verified: false,
+					error: 'DNS lookup failed: No NS records',
+					found: { txt: [] },
+				})).runPass(false)
+				expect(await readRow()).toMatchObject({ verified: true, verify_failures: 1 })
+				expect((await readRow())?.verify_failing_since).not.toBeNull()
+
+				await resetPassClock()
+				await worker(async () => ({ verified: true, found: { txt: [did] } })).runPass(false)
+				expect(await readRow()).toEqual({ verified: true, verify_failures: 0, verify_failing_since: null })
 			},
 			integrationTimeoutMs,
 		)

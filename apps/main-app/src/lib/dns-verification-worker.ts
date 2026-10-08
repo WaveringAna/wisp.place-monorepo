@@ -11,6 +11,7 @@ import {
 	type DomainVerificationState,
 	passIsDue,
 	planCheck,
+	pointsToAnotherOwner,
 } from './dns-verification-schedule'
 import type { VerificationResult } from './dns-verify'
 import { type PeriodicSingleFlightTask, startPeriodicSingleFlightTask } from './lifecycle'
@@ -65,6 +66,14 @@ interface VerificationPassStats extends VerificationStats {
 	/** Domains that only a user-triggered verify will check again. */
 	parked: number
 	newlyParked: number
+	/** Verified domains failing but still serving. */
+	graceFailing: number
+	graceRecovered: number
+	/** In-pass rechecks, and those that passed. */
+	confirmRetries: number
+	confirmRescued: number
+	/** Failing verified domains past `confirmMaxDomains`, counted without a recheck. */
+	confirmSkipped: number
 	writes: number
 }
 
@@ -92,6 +101,11 @@ const emptyPassStats = (): VerificationPassStats => ({
 	backoff: 0,
 	parked: 0,
 	newlyParked: 0,
+	graceFailing: 0,
+	graceRecovered: 0,
+	confirmRetries: 0,
+	confirmRescued: 0,
+	confirmSkipped: 0,
 	writes: 0,
 })
 
@@ -100,7 +114,14 @@ export interface DNSVerificationWorkerOptions {
 	verify: VerifyDomain
 	policy?: DnsVerificationPolicy
 	onLog?: (message: string, data?: Record<string, unknown>, level?: DNSVerificationLogLevel) => void
+	/** Waits between in-pass rechecks; tests replace it. */
+	sleep?: (ms: number) => Promise<void>
 }
+
+// The id is a SHA256 of did:domain; its prefix names the CNAME target.
+const cnameHash = (id: string) => id.substring(0, 16)
+
+const sleepFor = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
 /**
  * Every main-app instance schedules passes, but a pass runs on one instance at
@@ -111,6 +132,7 @@ export class DNSVerificationWorker {
 	private task: PeriodicSingleFlightTask<PassOutcome> | null = null
 	private lastRunTime: number | null = null
 	private readonly policy: DnsVerificationPolicy
+	private readonly sleep: (ms: number) => Promise<void>
 	private stats = {
 		totalChecked: 0,
 		verified: 0,
@@ -122,6 +144,7 @@ export class DNSVerificationWorker {
 
 	constructor(private readonly options: DNSVerificationWorkerOptions) {
 		this.policy = options.policy ?? DEFAULT_DNS_VERIFICATION_POLICY
+		this.sleep = options.sleep ?? sleepFor
 	}
 
 	private log(message: string, data?: Record<string, unknown>, level: DNSVerificationLogLevel = 'info') {
@@ -138,6 +161,7 @@ export class DNSVerificationWorker {
 			intervalMinutes: this.policy.passIntervalSec / 60,
 			verifiedRecheckMinutes: this.policy.verifiedRecheckSec / 60,
 			parkAfterDays: this.policy.parkAfterSec / 86400,
+			unverifyAfterMinutes: this.policy.unverifyAfterSec / 60,
 		})
 		this.task = startPeriodicSingleFlightTask(
 			() => this.runPass(false),
@@ -210,12 +234,131 @@ export class DNSVerificationWorker {
 			}
 		}
 
+		const recordResult = async (state: DomainVerificationState, result: VerificationResult): Promise<void> => {
+			const { id, domain, did, verified: wasVerified } = state
+			const outcome = planCheck(state, result, now, this.policy)
+
+			if (result.verified && outcome.next) {
+				// Ownership may have changed while DNS was being checked.
+				const ownerId = await store.currentOwnerId(domain)
+				if (ownerId !== id) {
+					runStats.failed++
+					runStats.ownershipChanged++
+					logDiagnostic('Domain ownership changed during verification', {
+						domain,
+						expectedId: id,
+						expectedDid: did,
+						actualId: ownerId,
+					})
+					return
+				}
+			}
+
+			if (outcome.next) {
+				if (!(await store.saveDomain(id, did, outcome.next))) {
+					runStats.ownershipChanged++
+					return
+				}
+				runStats.writes++
+			}
+
+			if (result.verified) {
+				runStats.verified++
+				if (!wasVerified) {
+					runStats.newlyVerified++
+					this.log('Domain verified', { domain })
+				} else if (outcome.transition === 'recovered') {
+					runStats.graceRecovered++
+					this.log('Verified domain recovered within its grace window', {
+						domain,
+						failures: state.failures,
+						failingForSec: state.failingSince === null ? null : now - state.failingSince,
+					})
+				}
+				const foundCname = result.found?.cname
+				if (foundCname !== undefined && foundCname.toLowerCase() !== `${cnameHash(id)}.dns.wisp.place`) {
+					runStats.cnameAdvisoryFailures++
+				}
+				if (result.warning) runStats.warnings++
+				if (outcome.newWarning) logWarning('DNS verification warning', { domain, warning: outcome.newWarning })
+				return
+			}
+
+			runStats.failed++
+			if (!wasVerified) runStats.pending++
+			const failureKind = classifyVerificationFailure(result, wasVerified)
+			if (failureKind === 'missing-dns') runStats.missingDns++
+			if (outcome.next?.verified) runStats.graceFailing++
+			if (outcome.transition === 'failing') {
+				logDiagnostic('Verified domain failing DNS verification, still serving', {
+					domain,
+					did,
+					failureKind,
+					error: result.error,
+					found: result.found,
+					unverifyAfterMinutes: this.policy.unverifyAfterSec / 60,
+				})
+			} else if (outcome.transition === 'lost') {
+				runStats.previouslyVerifiedFailed++
+				logDiagnostic('Previously verified domain failed DNS verification', {
+					domain,
+					did,
+					failureKind,
+					error: result.error,
+					found: result.found,
+					otherOwner: pointsToAnotherOwner(result, did),
+					failingSince: outcome.next?.failingSince,
+				})
+			} else if (outcome.transition === 'parked') {
+				runStats.newlyParked++
+				this.log('Domain verification parked until the owner verifies again', {
+					domain,
+					failures: outcome.next?.failures,
+					failingSince: outcome.next?.failingSince,
+				})
+			}
+		}
+
+		const applyResult = async (state: DomainVerificationState, result: VerificationResult): Promise<void> => {
+			try {
+				await recordResult(state, result)
+			} catch (error) {
+				runStats.errors++
+				logDiagnostic(
+					`Error verifying domain: ${state.domain}`,
+					{ did: state.did, error: error instanceof Error ? error.message : String(error) },
+					'error',
+				)
+			}
+		}
+
 		try {
 			runStats.duplicatesRemoved = await store.removeDuplicateRows()
 			const domains = await store.listDomains()
 			runStats.domains = domains.length
 			const window = { from: lastPassAt, to: now }
 
+			const verifyOnce = async (state: DomainVerificationState): Promise<VerificationResult | null> => {
+				const { id, domain, did } = state
+				try {
+					return await verify(domain, did, cnameHash(id))
+				} catch (error) {
+					runStats.errors++
+					logDiagnostic(
+						`Error verifying domain: ${domain}`,
+						{ did, error: error instanceof Error ? error.message : String(error) },
+						'error',
+					)
+					return null
+				}
+			}
+
+			// A verified domain that fails without naming another owner is checked
+			// again later in the pass before the failure counts.
+			const unconfirmed = (state: DomainVerificationState, result: VerificationResult): boolean =>
+				state.verified && !result.verified && !pointsToAnotherOwner(result, state.did)
+
+			let toConfirm: Array<{ state: DomainVerificationState; result: VerificationResult }> = []
 			for (const state of domains) {
 				const status = checkStatus(state, window, this.policy)
 				if (status === 'parked') runStats.parked++
@@ -224,85 +367,31 @@ export class DNSVerificationWorker {
 				if (status !== 'due') continue
 
 				runStats.totalChecked++
-				const { id, domain, did, verified: wasVerified } = state
-				try {
-					// The id is a SHA256 of did:domain; its prefix names the CNAME target.
-					const expectedHash = id.substring(0, 16)
-					const result = await verify(domain, did, expectedHash)
-					const outcome = planCheck(state, result, now, this.policy)
-
-					if (result.verified && outcome.next) {
-						// Ownership may have changed while DNS was being checked.
-						const ownerId = await store.currentOwnerId(domain)
-						if (ownerId !== id) {
-							runStats.failed++
-							runStats.ownershipChanged++
-							logDiagnostic('Domain ownership changed during verification', {
-								domain,
-								expectedId: id,
-								expectedDid: did,
-								actualId: ownerId,
-							})
-							continue
-						}
-					}
-
-					if (outcome.next) {
-						if (!(await store.saveDomain(id, did, outcome.next))) {
-							runStats.ownershipChanged++
-							continue
-						}
-						runStats.writes++
-					}
-
-					if (result.verified) {
-						runStats.verified++
-						if (!wasVerified) {
-							runStats.newlyVerified++
-							this.log('Domain verified', { domain })
-						}
-						const foundCname = result.found?.cname
-						if (foundCname !== undefined && foundCname.toLowerCase() !== `${expectedHash}.dns.wisp.place`) {
-							runStats.cnameAdvisoryFailures++
-						}
-						if (result.warning) runStats.warnings++
-						if (outcome.newWarning) logWarning('DNS verification warning', { domain, warning: outcome.newWarning })
-						continue
-					}
-
-					runStats.failed++
-					if (!wasVerified) runStats.pending++
-					const failureKind = classifyVerificationFailure(result, wasVerified)
-					if (failureKind === 'missing-dns') runStats.missingDns++
-					if (outcome.transition === 'lost') {
-						runStats.previouslyVerifiedFailed++
-						logDiagnostic('Previously verified domain failed DNS verification', {
-							domain,
-							did,
-							failureKind,
-							error: result.error,
-							found: result.found,
-						})
-					} else if (outcome.transition === 'parked') {
-						runStats.newlyParked++
-						this.log('Domain verification parked until the owner verifies again', {
-							domain,
-							failures: outcome.next?.failures,
-							failingSince: outcome.next?.failingSince,
-						})
-					}
-				} catch (error) {
-					runStats.errors++
-					logDiagnostic(
-						`Error verifying domain: ${domain}`,
-						{
-							did,
-							error: error instanceof Error ? error.message : String(error),
-						},
-						'error',
-					)
-				}
+				const result = await verifyOnce(state)
+				if (!result) continue
+				if (unconfirmed(state, result)) toConfirm.push({ state, result })
+				else await applyResult(state, result)
 			}
+
+			const unconfirmedFailures = toConfirm.splice(this.policy.confirmMaxDomains)
+			runStats.confirmSkipped = unconfirmedFailures.length
+			for (const check of unconfirmedFailures) await applyResult(check.state, check.result)
+			for (let retry = 0; retry < this.policy.confirmRetries && toConfirm.length > 0; retry++) {
+				await this.sleep(this.policy.confirmDelaySec * 1000)
+				const stillFailing: typeof toConfirm = []
+				for (const check of toConfirm) {
+					runStats.confirmRetries++
+					const result = (await verifyOnce(check.state)) ?? check.result
+					if (unconfirmed(check.state, result)) {
+						stillFailing.push({ state: check.state, result })
+					} else {
+						if (result.verified) runStats.confirmRescued++
+						await applyResult(check.state, result)
+					}
+				}
+				toConfirm = stillFailing
+			}
+			for (const check of toConfirm) await applyResult(check.state, check.result)
 
 			await store.recordPass(now)
 			this.stats.totalChecked += runStats.totalChecked

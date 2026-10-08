@@ -85,6 +85,7 @@ const harness = (domains: DomainVerificationState[], answer: DnsAnswer) => {
 	const database = fakeDatabase(domains)
 	const checks: Array<{ id: string; at: number }> = []
 	const logs: Array<{ message: string; data?: Record<string, unknown> }> = []
+	const sleeps: number[] = []
 	const worker = () =>
 		new DNSVerificationWorker({
 			store: fakeStore(database),
@@ -95,12 +96,20 @@ const harness = (domains: DomainVerificationState[], answer: DnsAnswer) => {
 				return answer(id)
 			},
 			onLog: (message, data) => logs.push({ message, data }),
+			sleep: async (ms) => {
+				sleeps.push(ms)
+			},
 		})
-	return { database, checks, logs, worker }
+	return { database, checks, logs, sleeps, worker }
 }
 
 const verified: DnsAnswer = () => ({ verified: true, found: { txt: ['did'] } })
 const missing: DnsAnswer = () => ({ verified: false, error: 'TXT record mismatch', found: { txt: [] } })
+const noNameservers: DnsAnswer = (id) => ({
+	verified: false,
+	error: `DNS lookup failed: No NS records found for _wisp.${id}.example.test`,
+	found: { txt: [] },
+})
 
 /** Two instances ticking every interval, the second half an interval later. */
 const runTwoInstances = async (
@@ -166,26 +175,136 @@ describe('DNS verification worker', () => {
 		const times = h.checks.map((check) => check.at)
 		const gaps = times.slice(1).map((at, i) => at - (times[i] as number))
 		expect(gaps).toEqual([600, 1800, 3600, 21600, 86400, 86400, 86400])
+		// Pending domains have no grace and are not rechecked within a pass.
+		expect(h.sleeps).toHaveLength(0)
 	})
 
-	test('a domain that was serving retries at least hourly after losing verification', async () => {
+	test('a verified domain whose DNS is removed keeps serving for the grace window, then retries at least hourly', async () => {
 		let dnsPresent = true
 		const h = harness([newDomain('site', true)], () => (dnsPresent ? verified('site') : missing('site')))
 		const worker = h.worker()
 		await worker.runPass(false)
 		dnsPresent = false
-		const lostAt = h.database.now + policy.verifiedRecheckSec
-		for (let at = h.database.now + PASS; at <= lostAt + 6 * 3600; at += PASS) {
+		const removedAt = h.database.now
+		for (let at = h.database.now + PASS; at <= removedAt + 8 * 3600; at += PASS) {
 			h.database.now = at
 			await worker.runPass(false)
 		}
 
-		const failures = h.checks.slice(1).map((check) => check.at)
-		const gaps = failures.slice(1).map((at, i) => at - (failures[i] as number))
-		expect(gaps.slice(0, 3)).toEqual([600, 1800, 3600])
+		const passes = [...new Set(h.checks.slice(1).map((check) => check.at))]
+		const gaps = passes.slice(1).map((at, i) => at - (passes[i] as number))
+		// Three more passes in grace, then 10 min, then hourly.
+		expect(gaps.slice(0, 5)).toEqual([600, 600, 600, 600, 3600])
 		expect(Math.max(...gaps)).toBe(3600)
+		const unverified = h.database.writes.filter((write) => !write.columns.verified)
+		const firstFailure = passes[0] as number
+		expect(unverified[0]?.columns.lastVerifiedAt).toBe(firstFailure + policy.unverifyAfterSec)
+		expect(
+			h.logs.filter((log) => log.message === 'Verified domain failing DNS verification, still serving'),
+		).toHaveLength(1)
 		expect(h.logs.filter((log) => log.message === 'Previously verified domain failed DNS verification')).toHaveLength(1)
 		expect(h.database.rows.get('site')?.verified).toBe(false)
+	})
+
+	test('a lookup blip in one pass never writes verified=false', async () => {
+		let failing = false
+		const h = harness([newDomain('blip', true)], () => (failing ? noNameservers('blip') : verified('blip')))
+		const worker = h.worker()
+		await worker.runPass(false)
+
+		// Every lookup of one whole pass fails, the in-pass rechecks included.
+		failing = true
+		h.database.now += policy.verifiedRecheckSec
+		await worker.runPass(false)
+		expect(h.database.rows.get('blip')).toMatchObject({ verified: true, failures: 1 })
+		failing = false
+		h.database.now += PASS
+		await worker.runPass(false)
+
+		expect(h.database.writes.every((write) => write.columns.verified)).toBe(true)
+		expect(h.database.rows.get('blip')).toMatchObject({ verified: true, failures: 0, failingSince: null, lost: false })
+		expect(
+			h.logs.filter((log) => log.message === 'Verified domain failing DNS verification, still serving'),
+		).toHaveLength(1)
+		expect(h.logs.filter((log) => log.message === 'Verified domain recovered within its grace window')).toHaveLength(1)
+	})
+
+	test('a verified domain that recovers inside the grace window is never unverified', async () => {
+		let failingPasses = 0
+		const h = harness([newDomain('flaky', true)], () => (failingPasses > 0 ? missing('flaky') : verified('flaky')))
+		const worker = h.worker()
+		await worker.runPass(false)
+		h.database.now += policy.verifiedRecheckSec
+		for (failingPasses = 3; failingPasses > 0; failingPasses--) {
+			await worker.runPass(false)
+			h.database.now += PASS
+		}
+		await worker.runPass(false)
+		// Back to the hourly schedule without another write.
+		const writes = h.database.writes.length
+		h.database.now += PASS
+		await worker.runPass(false)
+
+		expect(h.database.writes.every((write) => write.columns.verified)).toBe(true)
+		expect(h.database.writes.length).toBe(writes)
+		expect(h.database.rows.get('flaky')).toMatchObject({ verified: true, failures: 0, failingSince: null })
+		expect(h.logs.filter((log) => log.message === 'Previously verified domain failed DNS verification')).toHaveLength(0)
+	})
+
+	test('rechecks a failing verified domain within the pass and keeps it when a recheck passes', async () => {
+		let calls = 0
+		const h = harness([newDomain('transient', true)], () =>
+			++calls === 2 ? missing('transient') : verified('transient'),
+		)
+		const worker = h.worker()
+		await worker.runPass(false)
+		h.database.writes.length = 0
+		h.database.now += policy.verifiedRecheckSec
+		await worker.runPass(false)
+
+		expect(calls).toBe(3)
+		expect(h.sleeps).toEqual([policy.confirmDelaySec * 1000])
+		expect(h.database.writes).toHaveLength(0)
+		expect(h.database.rows.get('transient')).toMatchObject({ verified: true, failures: 0, failingSince: null })
+		const passes = summaries(h.logs)
+		expect(passes[passes.length - 1]?.data).toMatchObject({ confirmRetries: 1, confirmRescued: 1, failed: 0 })
+	})
+
+	test('rechecks at most confirmMaxDomains failing domains in one pass', async () => {
+		const domains = Array.from({ length: policy.confirmMaxDomains + 5 }, (_, i) => newDomain(`many${i}`, true))
+		let failing = false
+		const h = harness(domains, (id) => (failing ? noNameservers(id) : verified(id)))
+		const worker = h.worker()
+		await worker.runPass(false)
+		failing = true
+		const checksBefore = h.checks.length
+		h.database.now += policy.verifiedRecheckSec
+		await worker.runPass(false)
+
+		const retries = policy.confirmMaxDomains * policy.confirmRetries
+		expect(h.checks.length - checksBefore).toBe(domains.length + retries)
+		expect([...h.database.rows.values()].every((row) => row.verified && row.failures === 1)).toBe(true)
+		const passes = summaries(h.logs)
+		expect(passes[passes.length - 1]?.data).toMatchObject({ confirmRetries: retries, confirmSkipped: 5 })
+	})
+
+	test('unverifies at once when the TXT record names another DID', async () => {
+		let moved = false
+		const h = harness([newDomain('sold', true)], () =>
+			moved
+				? { verified: false, error: 'TXT record does not match', found: { txt: ['did:plc:new-owner'] } }
+				: verified('sold'),
+		)
+		const worker = h.worker()
+		await worker.runPass(false)
+		moved = true
+		h.database.now += policy.verifiedRecheckSec
+		await worker.runPass(false)
+
+		expect(h.sleeps).toHaveLength(0)
+		expect(h.database.rows.get('sold')).toMatchObject({ verified: false, lost: true, failures: 1 })
+		const lost = h.logs.find((log) => log.message === 'Previously verified domain failed DNS verification')
+		expect(lost?.data).toMatchObject({ otherOwner: true })
 	})
 
 	test('parks a domain after seven days of failure and logs it once', async () => {
@@ -331,11 +450,13 @@ describe('DNS verification schedule', () => {
 				DNS_VERIFIER_VERIFIED_RECHECK_MINUTES: '120',
 				DNS_VERIFIER_PARK_AFTER_DAYS: '14',
 				DNS_VERIFIER_LAST_CHECKED_REFRESH_HOURS: 'soon',
+				DNS_VERIFIER_UNVERIFY_AFTER_MINUTES: '45',
 			}),
 		).toMatchObject({
 			verifiedRecheckSec: 7200,
 			parkAfterSec: 14 * 86400,
 			lastCheckedRefreshSec: policy.lastCheckedRefreshSec,
+			unverifyAfterSec: 2700,
 		})
 		expect(resolveDnsVerificationPolicy({ DNS_VERIFIER_PARK_AFTER_DAYS: '-1' }).parkAfterSec).toBe(policy.parkAfterSec)
 	})
