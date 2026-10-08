@@ -39,11 +39,14 @@ export interface RepairDependencies {
 	onEnqueued?(event: { streamId: string; request: VerifiedRepairRequest }): void
 }
 
-interface FenceSnapshot {
+export interface FenceSnapshot {
 	quarantine: string | null
 	version: string | null
 	generation: string | null
 }
+
+/** The exact live stream, worker group and capacity a repair is enqueued into. */
+export type RepairTarget = Pick<RepairSiteOptions, 'did' | 'rkey' | 'stream' | 'group' | 'maxStreamLength'>
 
 function infoRows(value: unknown): Array<Record<string, unknown>> {
 	if (!Array.isArray(value)) throw new Error('Invalid Redis consumer information')
@@ -59,7 +62,10 @@ function infoRows(value: unknown): Array<Record<string, unknown>> {
 }
 
 /** A recent consumer alone is insufficient: require the versioned worker's expiring lease. */
-export async function assertVerifiedRepairWorker(redis: RepairRedis, options: RepairSiteOptions): Promise<void> {
+export async function assertVerifiedRepairWorker(
+	redis: RepairRedis,
+	options: Pick<RepairSiteOptions, 'stream' | 'group'>,
+): Promise<void> {
 	const groups = infoRows(await redis.xinfo('GROUPS', options.stream))
 	if (groups.length !== 1 || groups[0]?.name !== options.group) {
 		throw new Error('Expected exactly the configured worker group; refusing repair')
@@ -120,6 +126,67 @@ redis.call('SET', KEYS[5], id, 'EX', 86400)
 if ARGV[14] == '1' then redis.call('DEL', KEYS[1]) end
 return {'enqueued', id}
 `
+
+function fenceKeys(did: string, rkey: string): [string, string, string] {
+	return [
+		revalidationQuarantineKey(did, rkey),
+		revalidationSiteVersionKey(did, rkey),
+		verifiedRepairQuarantineGenerationKey(did, rkey),
+	]
+}
+
+/** One MGET of the fence, reconciled version and quarantine generation; the release script compares all three. */
+export async function readFenceSnapshot(
+	redis: Pick<RepairRedis, 'mget'>,
+	did: string,
+	rkey: string,
+): Promise<FenceSnapshot> {
+	const [quarantine, version, generation] = await redis.mget(...fenceKeys(did, rkey))
+	if ([quarantine, version, generation].some((value) => value !== null && typeof value !== 'string')) {
+		throw new Error('Invalid site fence/version/generation snapshot')
+	}
+	return { quarantine: quarantine ?? null, version: version ?? null, generation: generation ?? null }
+}
+
+/**
+ * Enqueue a verified repair and release the fence in one script, refusing if
+ * the fence, version or generation moved since `snapshot`. Returns the raw
+ * script reply: `['enqueued', streamId]` or `[refusal, '']`.
+ */
+export async function releaseFenceAndEnqueueRepair(
+	redis: Pick<RepairRedis, 'eval'>,
+	target: RepairTarget,
+	snapshot: FenceSnapshot,
+	request: VerifiedRepairRequest,
+): Promise<unknown> {
+	const [fenceKey, versionKey, generationKey] = fenceKeys(target.did, target.rkey)
+	return await redis.eval(
+		RELEASE_AND_ENQUEUE_VERIFIED_REPAIR_SCRIPT,
+		6,
+		fenceKey,
+		versionKey,
+		target.stream,
+		verifiedRepairCapabilityKey(target.stream, target.group),
+		`revalidate:site:storage-miss:${target.did}:${target.rkey}`,
+		generationKey,
+		snapshot.quarantine ?? '',
+		snapshot.version === null ? '0' : '1',
+		snapshot.version ?? '',
+		target.group,
+		VERIFIED_REPAIR_PROTOCOL,
+		String(target.maxStreamLength),
+		target.did,
+		target.rkey,
+		VERIFIED_REPAIR_REASON,
+		String(Date.now()),
+		request.token,
+		request.recordCid,
+		request.manifestFingerprint,
+		snapshot.quarantine === null ? '0' : '1',
+		snapshot.generation === null ? '0' : '1',
+		snapshot.generation ?? '',
+	)
+}
 
 export function assertExactSite(did: string, rkey: string): void {
 	if (did.length > 2048 || !/^did:[a-z]+:(?:[a-zA-Z0-9._:-]|%[0-9A-F]{2})*[a-zA-Z0-9._-]$/.test(did)) {
@@ -190,16 +257,7 @@ export async function repairSite(
 	}
 	signal.throwIfAborted()
 	await assertVerifiedRepairWorker(dependencies.redis, options)
-	const keys = [
-		revalidationQuarantineKey(options.did, options.rkey),
-		revalidationSiteVersionKey(options.did, options.rkey),
-	]
-	const generationKey = verifiedRepairQuarantineGenerationKey(options.did, options.rkey)
-	const [quarantine, version, generation] = await dependencies.redis.mget(...keys, generationKey)
-	if ([quarantine, version, generation].some((value) => value !== null && typeof value !== 'string')) {
-		throw new Error('Invalid site fence/version/generation snapshot')
-	}
-	const snapshot = { quarantine: quarantine!, version: version!, generation: generation! }
+	const snapshot = await readFenceSnapshot(dependencies.redis, options.did, options.rkey)
 	const verified = await dependencies.preflight(options.did, options.rkey, signal)
 	signal.throwIfAborted()
 	if (!options.apply) return { status: 'dry-run', did: options.did, rkey: options.rkey, snapshot, verified }
@@ -214,31 +272,7 @@ export async function repairSite(
 	}
 	let result: unknown
 	try {
-		result = await dependencies.redis.eval(
-			RELEASE_AND_ENQUEUE_VERIFIED_REPAIR_SCRIPT,
-			6,
-			...keys,
-			options.stream,
-			verifiedRepairCapabilityKey(options.stream, options.group),
-			`revalidate:site:storage-miss:${options.did}:${options.rkey}`,
-			generationKey,
-			snapshot.quarantine ?? '',
-			snapshot.version === null ? '0' : '1',
-			snapshot.version ?? '',
-			options.group,
-			VERIFIED_REPAIR_PROTOCOL,
-			String(options.maxStreamLength),
-			options.did,
-			options.rkey,
-			VERIFIED_REPAIR_REASON,
-			String(Date.now()),
-			request.token,
-			request.recordCid,
-			request.manifestFingerprint,
-			snapshot.quarantine === null ? '0' : '1',
-			snapshot.generation === null ? '0' : '1',
-			snapshot.generation ?? '',
-		)
+		result = await releaseFenceAndEnqueueRepair(dependencies.redis, options, snapshot, request)
 	} catch (error) {
 		throw new Error(
 			`Repair enqueue outcome is unknown; token=${request.token} receipt=${verifiedRepairReceiptKey(options.stream, request.token)}. Inspect before retrying.`,
@@ -254,8 +288,12 @@ export async function repairSite(
 	const final = await dependencies.preflight(options.did, options.rkey, signal)
 	if (!sameManifest(verified, final))
 		throw new Error('Source changed after enqueue; requested repair cannot be confirmed')
-	const [finalFence, finalVersion, finalGeneration] = await dependencies.redis.mget(...keys, generationKey)
-	if (finalFence !== null || finalVersion !== snapshot.version || finalGeneration !== snapshot.generation)
+	const released = await readFenceSnapshot(dependencies.redis, options.did, options.rkey)
+	if (
+		released.quarantine !== null ||
+		released.version !== snapshot.version ||
+		released.generation !== snapshot.generation
+	)
 		throw new Error('Site fence/version changed after enqueue; repair cannot be confirmed')
 	signal.throwIfAborted()
 	return { status: 'materialized', streamId, receipt }

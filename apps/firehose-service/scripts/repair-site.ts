@@ -1,8 +1,7 @@
 /** Exact-site, verified quarantine recovery. See docs/operations/repair-site.md. */
 import Redis from 'ioredis'
-import { fetchAuthoritativeSiteRecord, verifySiteBlobs } from '../src/lib/cache-writer'
+import { preflightVerifiedRepair } from '../src/lib/cache-writer'
 import { closeDatabase } from '../src/lib/db'
-import { createRevalidationResourceContext } from '../src/lib/revalidate-resources'
 import { repairSite } from '../src/lib/site-repair'
 import { parseRepairSiteArguments } from '../src/lib/site-repair-cli'
 import { verifiedRepairReceiptKey } from '../src/lib/site-repair-protocol'
@@ -29,17 +28,8 @@ export async function main(): Promise<void> {
 			options,
 			{
 				redis,
-				preflight: async (did, rkey, signal) => {
-					// Each pass has a real cancellation deadline and a shared streamed byte cap.
-					const resources = createRevalidationResourceContext(600_000, 1024 * 1024 * 1024, signal)
-					try {
-						const current = await fetchAuthoritativeSiteRecord(did, rkey, resources)
-						if (!current) throw new Error('Canonical site record is absent; no repair is safe')
-						return await verifySiteBlobs(did, rkey, current.record, current.cid, resources)
-					} finally {
-						resources.close()
-					}
-				},
+				// Each pass has a real cancellation deadline and a shared streamed byte cap.
+				preflight: (did, rkey, signal) => preflightVerifiedRepair(did, rkey, signal, 600_000, 1024 * 1024 * 1024),
 				onEnqueued: ({ streamId, request }) =>
 					console.log(
 						JSON.stringify({

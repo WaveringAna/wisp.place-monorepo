@@ -12,14 +12,18 @@ export const DEFAULT_REVALIDATE_STREAM = 'wisp:revalidate'
 export const DEFAULT_REVALIDATE_STREAM_CAPACITY = 1_000_000
 export const DEFAULT_REVALIDATE_DLQ_STREAM = 'wisp:revalidate:dlq'
 
+/** Prefix of every per-site quarantine fence key; the rest is `<did>/<rkey>`, each URI-encoded. */
+export const REVALIDATE_QUARANTINE_KEY_PREFIX = 'wisp:revalidate:quarantine:'
+
 /**
  * Durable per-site fence installed when repair work reaches the DLQ.
  *
  * Hosting producers must not recreate work behind this fence. Only a newer
- * firehose event may clear it before reconciling the authoritative record.
+ * firehose event, or a verified repair whose source blobs were all fetched
+ * first (operator command or the firehose retry schedule), may clear it.
  */
 export function revalidationQuarantineKey(did: string, rkey: string): string {
-	return `wisp:revalidate:quarantine:${encodeURIComponent(did)}/${encodeURIComponent(rkey)}`
+	return `${REVALIDATE_QUARANTINE_KEY_PREFIX}${encodeURIComponent(did)}/${encodeURIComponent(rkey)}`
 }
 
 /** Latest successfully reconciled ATProto repo revision for one site. */

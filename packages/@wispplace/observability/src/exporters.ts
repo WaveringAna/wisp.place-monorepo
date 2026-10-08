@@ -25,6 +25,9 @@ import type {
 	HostingResponseEntry,
 	LogEntry,
 	MetricEntry,
+	RevalidateQuarantineClass,
+	RevalidateQuarantineRetryOutcome,
+	RevalidateQuarantineSnapshot,
 	SiteRequestEntry,
 } from './core'
 import { sanitizeContext, sanitizeForLog, sanitizeLogString } from './redact'
@@ -415,6 +418,53 @@ export function createHostingInstruments(meter: Meter): HostingInstruments {
 	}
 }
 
+export type RevalidateQuarantineInstruments = {
+	setSnapshot(snapshot: RevalidateQuarantineSnapshot | null): void
+	recordRetry(outcome: RevalidateQuarantineRetryOutcome): void
+}
+
+const QUARANTINE_CLASSES: RevalidateQuarantineClass[] = ['transient', 'permanent', 'unknown']
+
+/**
+ * Revalidation quarantine gauges and retry counter. Gauges report only while a
+ * snapshot is set (the firehose leader), and every label is a closed set
+ * (3 classes, 6 outcomes): sites never become labels.
+ */
+export function createRevalidateQuarantineInstruments(meter: Meter): RevalidateQuarantineInstruments {
+	let current: RevalidateQuarantineSnapshot | null = null
+	const fenced = meter.createObservableGauge('revalidate_quarantined_sites', {
+		description: 'Sites fenced by the revalidation dead-letter queue, by latest failure class',
+	})
+	const dlqEntries = meter.createObservableGauge('revalidate_dlq_entries', {
+		description: 'Entries in the revalidation dead-letter stream',
+	})
+	const oldestAge = meter.createObservableGauge('revalidate_quarantine_oldest_age_seconds', {
+		description: 'Age of the oldest fenced site with a readable dead-letter record',
+		unit: 's',
+	})
+	const retries = meter.createCounter('revalidate_quarantine_retries_total', {
+		description: 'Quarantine retry transitions by outcome',
+	})
+	fenced.addCallback((result) => {
+		if (!current) return
+		for (const classification of QUARANTINE_CLASSES) result.observe(current.fenced[classification], { classification })
+	})
+	dlqEntries.addCallback((result) => {
+		if (current) result.observe(current.dlqEntries)
+	})
+	oldestAge.addCallback((result) => {
+		if (current) result.observe(current.oldestFenceAgeSeconds)
+	})
+	return {
+		setSnapshot(snapshot) {
+			current = snapshot
+		},
+		recordRetry(outcome) {
+			retries.add(1, { outcome })
+		},
+	}
+}
+
 class MetricsExporter {
 	private meterProvider?: MeterProvider
 	private requestCounter?: Counter
@@ -422,6 +472,7 @@ class MetricsExporter {
 	private errorCounter?: Counter
 	private siteRequestCounter?: Counter
 	private hosting?: HostingInstruments
+	private quarantine?: RevalidateQuarantineInstruments
 	private serviceInfo?: ObservableGauge
 	private shutdownPromise?: Promise<void>
 	private config: GrafanaConfig = {}
@@ -492,6 +543,7 @@ class MetricsExporter {
 		})
 
 		this.hosting = createHostingInstruments(meter)
+		this.quarantine = createRevalidateQuarantineInstruments(meter)
 
 		this.serviceInfo = meter.createObservableGauge('service_instance_info', {
 			description: 'Service instance presence',
@@ -557,6 +609,15 @@ class MetricsExporter {
 	recordHostingNotFound(reason: HostingNotFoundReason) {
 		if (!this.config.enabled) return
 		this.hosting?.recordNotFound(reason)
+	}
+
+	setRevalidateQuarantineSnapshot(snapshot: RevalidateQuarantineSnapshot | null) {
+		this.quarantine?.setSnapshot(snapshot)
+	}
+
+	recordRevalidateQuarantineRetry(outcome: RevalidateQuarantineRetryOutcome) {
+		if (!this.config.enabled) return
+		this.quarantine?.recordRetry(outcome)
 	}
 
 	async shutdown(): Promise<void> {

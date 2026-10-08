@@ -48,7 +48,11 @@ import {
 	upsertSiteSettingsCache,
 	withSiteWriteLock,
 } from './db'
-import { assertRevalidationActive, type RevalidationResourceContext } from './revalidate-resources'
+import {
+	assertRevalidationActive,
+	createRevalidationResourceContext,
+	type RevalidationResourceContext,
+} from './revalidate-resources'
 import {
 	fingerprintSiteManifest,
 	type VerifiedRepairProof,
@@ -1144,6 +1148,27 @@ export async function verifySiteBlobs(
 		manifestFingerprint: fingerprintSiteManifest(recordCid, update.expandedRoot, update.ownerDidByFilePath),
 		fileCount: files.length,
 		totalBytes: files.reduce((total, file) => total + file.blob.size, 0),
+	}
+}
+
+/**
+ * Read the canonical record and verify every blob under one deadline and one
+ * streamed byte cap. Never writes; a failure means no fence may be released.
+ */
+export async function preflightVerifiedRepair(
+	did: string,
+	rkey: string,
+	signal: AbortSignal,
+	deadlineMs: number,
+	transferBudgetBytes: number,
+): Promise<VerifiedSitePreflight> {
+	const resources = createRevalidationResourceContext(deadlineMs, transferBudgetBytes, signal)
+	try {
+		const current = await fetchAuthoritativeSiteRecord(did, rkey, resources)
+		if (!current) throw new Error('Canonical site record is absent; no repair is safe')
+		return await verifySiteBlobs(did, rkey, current.record, current.cid, resources)
+	} finally {
+		resources.close()
 	}
 }
 

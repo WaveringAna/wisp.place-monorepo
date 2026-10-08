@@ -76,6 +76,20 @@ export type HostingNotFoundReason =
 	| 'redirect-404'
 	| 'other'
 
+/** How a fenced site's latest dead-letter record classifies it; `unknown` when that record is unreadable. */
+export type RevalidateQuarantineClass = 'transient' | 'permanent' | 'unknown'
+
+/** One transition of the firehose quarantine retry schedule. Closed so it can be a metric label. */
+export type RevalidateQuarantineRetryOutcome = 'retrying' | 'recovered' | 'failed' | 'gave-up' | 'deferred' | 'skipped'
+
+/** What the firehose leader last saw of the revalidation quarantine. */
+export interface RevalidateQuarantineSnapshot {
+	fenced: Record<RevalidateQuarantineClass, number>
+	dlqEntries: number
+	/** Age of the oldest fence with a readable dead-letter record; 0 when there is none. */
+	oldestFenceAgeSeconds: number
+}
+
 export interface LogFilter {
 	level?: string
 	service?: string
@@ -367,6 +381,16 @@ export const metricsCollector = {
 	/** Hosting 404s by reason; exported only. */
 	recordHostingNotFound(reason: HostingNotFoundReason) {
 		metricsExporter.recordHostingNotFound(reason)
+	},
+
+	/** Firehose leader quarantine gauges; `null` stops reporting them (lost leadership). Exported only. */
+	setRevalidateQuarantineSnapshot(snapshot: RevalidateQuarantineSnapshot | null) {
+		metricsExporter.setRevalidateQuarantineSnapshot(snapshot)
+	},
+
+	/** Firehose quarantine retry transitions by outcome; exported only. */
+	recordRevalidateQuarantineRetry(outcome: RevalidateQuarantineRetryOutcome) {
+		metricsExporter.recordRevalidateQuarantineRetry(outcome)
 	},
 
 	getMetrics(filter?: MetricFilter) {

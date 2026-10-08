@@ -77,6 +77,22 @@ hosting log line `[NotFound] 404 summary`, once a minute per reason with its top
 5 hosts. `grafana/infra-monitoring/hosting-visibility.json` charts both; there
 are no alert rules for them yet.
 
+## revalidation quarantine
+
+the firehose leader exports `revalidate_quarantined_sites{classification}`
+(transient/permanent/unknown, from each fence's latest dead-letter record;
+MAX_ATTEMPTS counts as transient), `revalidate_dlq_entries`,
+`revalidate_quarantine_oldest_age_seconds` and
+`revalidate_quarantine_retries_total{outcome}`
+(retrying/recovered/failed/gave-up/deferred/skipped). gauges come only from the
+leader and stop when it steps down, so aggregate with `max`, not `sum`, across
+instances. a bounded SCAN refreshes them every ~5 minutes.
+`grafana/infra-monitoring/revalidate-quarantine.json` charts them; there are no
+alert rules for them yet. transient fences are retried automatically 15 min,
+1 h, 6 h and 24 h after failing (`WISP_QUARANTINE_RETRY=off` keeps the gauges
+and stops the retries); permanent and unknown ones still need the owner to
+redeploy or an operator's `apps/firehose-service/scripts/repair-site.ts`.
+
 ## focused alert rules
 
 `probe.py` runs once per minute on each app host. stolas also runs the central

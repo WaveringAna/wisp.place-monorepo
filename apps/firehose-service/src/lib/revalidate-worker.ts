@@ -26,6 +26,7 @@ import {
 } from './cache-writer'
 import { startCasGarbageCollector, stopCasGarbageCollector } from './cas-gc-job'
 import { markSiteAbsent } from './db'
+import { startQuarantineRetry, stopQuarantineRetry } from './quarantine-retry'
 import {
 	isSettingsFailureRevalidationReason,
 	isSiteDeleteTombstoneReason,
@@ -1736,6 +1737,7 @@ export async function startRevalidateWorker(): Promise<void> {
 	// Leader-only like this worker, so two nodes never sweep the same site.
 	startAbsentSiteSweeper()
 	startCasGarbageCollector()
+	startQuarantineRetry(classifyRevalidationError)
 }
 
 export function startRevalidateWorkerForTests(
@@ -1799,7 +1801,7 @@ export async function stopRevalidateWorker(
 ): Promise<RevalidateWorkerStopResult> {
 	running = false
 	cancelLoopRetryWait?.()
-	const sweeperStopped = Promise.all([stopAbsentSiteSweeper(), stopCasGarbageCollector()])
+	const sweeperStopped = Promise.all([stopAbsentSiteSweeper(), stopCasGarbageCollector(), stopQuarantineRetry()])
 
 	// Abort active PDS/blob work before disconnecting Redis. The resource context
 	// treats this as lifecycle cancellation, not a delivery failure, so the PEL

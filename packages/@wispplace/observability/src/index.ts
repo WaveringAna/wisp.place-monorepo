@@ -11,11 +11,13 @@ export * from './core'
 // Export Grafana integration
 export {
 	createHostingInstruments,
+	createRevalidateQuarantineInstruments,
 	type GrafanaConfig,
 	grafanaConfig,
 	HOSTING_RESPONSE_BUCKETS_MS,
 	type HostingInstruments,
 	initializeGrafanaExporters,
+	type RevalidateQuarantineInstruments,
 	shutdownGrafanaExporters,
 } from './exporters'
 
