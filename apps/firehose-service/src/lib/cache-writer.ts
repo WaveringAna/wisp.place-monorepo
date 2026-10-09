@@ -424,6 +424,86 @@ export type SiteRecordFetchOutcome =
 	| { kind: 'retryable'; error: 'PDS_UNRESOLVED' | 'INVALID_RECORD' | 'MISSING_CID' | 'FETCH_FAILED' }
 
 /**
+ * What the owner's PDS says about the repo behind one site, for the
+ * repo-absence probe (repo-absence.ts). `pds` is the endpoint the DID document
+ * named at probe time, so a migration shows up as a different value.
+ */
+export type RepoProbeOutcome =
+	| { kind: 'present' }
+	| { kind: 'record-absent'; pds: string }
+	| { kind: 'repo-absent'; pds: string }
+	/** The PLC directory answered 410: the DID itself was tombstoned. */
+	| { kind: 'did-tombstoned' }
+	/** Anything else, including RepoDeactivated/RepoTakendown, 5xx, timeouts and unresolvable DIDs. */
+	| { kind: 'unavailable'; reason: string }
+
+const PROBE_UNAVAILABLE_CODES = new Set(['RepoDeactivated', 'RepoTakendown', 'RepoSuspended'])
+
+/**
+ * Classify a getRecord answer for the repo-absence probe. Only HTTP 400 with
+ * `RepoNotFound`, or the older reference PDS's `InvalidRequest` "Could not find
+ * repo", means the repo is gone; a gateway 404 or any other answer does not.
+ */
+export async function readRepoProbeResponse(response: Response, pds: string): Promise<RepoProbeOutcome> {
+	if (response.status !== 400) {
+		void response.body?.cancel().catch(() => undefined)
+		return response.ok ? { kind: 'present' } : { kind: 'unavailable', reason: `HTTP_${response.status}` }
+	}
+	// A malformed or oversized body is not evidence of anything.
+	const body = await (response.json() as Promise<{ error?: unknown; message?: unknown } | null>).catch(() => null)
+	const error = typeof body?.error === 'string' ? body.error : ''
+	if (error === 'RecordNotFound') return { kind: 'record-absent', pds }
+	const missingRepo =
+		error === 'RepoNotFound' ||
+		(error === 'InvalidRequest' && typeof body?.message === 'string' && body.message.startsWith('Could not find repo'))
+	if (missingRepo) return { kind: 'repo-absent', pds }
+	return { kind: 'unavailable', reason: PROBE_UNAVAILABLE_CODES.has(error) ? error : 'HTTP_400' }
+}
+
+/**
+ * Resolve the DID afresh through PLC (or did:web) and ask the PDS it names for
+ * the site record. Never throws; every failure is `unavailable`.
+ */
+export async function probeSiteRepo(
+	did: string,
+	rkey: string,
+	resources?: RevalidationResources,
+): Promise<RepoProbeOutcome> {
+	try {
+		assertRevalidationActive(resources)
+		let identityStatus = 0
+		const resolved = await getPdsForDid(
+			did,
+			async (url, options) => {
+				const response = await pdsIdentityFetch(url, options)
+				identityStatus = response.status
+				return response
+			},
+			pdsEndpointOptions,
+			{ signal: resources?.signal, byteBudget: resources?.transferBudget },
+		)
+		if (!resolved) {
+			return did.startsWith('did:plc:') && identityStatus === 410
+				? { kind: 'did-tombstoned' }
+				: { kind: 'unavailable', reason: 'PDS_UNRESOLVED' }
+		}
+		const query = new URLSearchParams({ repo: did, collection: 'place.wisp.fs', rkey })
+		const response = await safeFetch(
+			`${rewritePdsEndpoint(resolved)}/xrpc/com.atproto.repo.getRecord?${query.toString()}`,
+			{
+				...(pdsRequestOptions ?? {}),
+				maxSize: MAX_PDS_RECORD_RESPONSE_BYTES,
+				signal: resources?.signal,
+				byteBudget: resources?.transferBudget,
+			},
+		)
+		return await readRepoProbeResponse(response, resolved)
+	} catch {
+		return { kind: 'unavailable', reason: 'FETCH_FAILED' }
+	}
+}
+
+/**
  * A revalidation-safe PDS lookup. `absent` means the PDS answered HTTP 400
  * `RecordNotFound` (confirmed) or a gateway answered 404 (unconfirmed).
  */

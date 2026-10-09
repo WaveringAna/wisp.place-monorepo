@@ -1069,6 +1069,22 @@ export async function listAbsentSites(limit: number): Promise<AbsentSiteMark[]> 
     `
 }
 
+/**
+ * Tombstone a site that has no cache row, so hosting answers 404 instead of a
+ * fail-closed manifest miss. Never touches an existing row, its files or any
+ * domain claim; a later materialization overwrites it. Returns false when a
+ * row already existed.
+ */
+export async function insertMissingSiteTombstone(did: string, rkey: string): Promise<boolean> {
+	const rows = await sql`
+      INSERT INTO site_cache (did, rkey, record_cid, file_cids, cached_at, updated_at, cold_synced)
+      VALUES (${did}, ${rkey}, ${DELETED_SITE_RECORD_CID}, '{}', EXTRACT(EPOCH FROM NOW()), EXTRACT(EPOCH FROM NOW()), true)
+      ON CONFLICT (did, rkey) DO NOTHING
+      RETURNING did
+    `
+	return rows.length > 0
+}
+
 /** Keep an empty durable manifest so hosting can distinguish a confirmed delete from a projection/storage outage. */
 export async function markSiteCacheDeleted(did: string, rkey: string): Promise<void> {
 	await upsertSiteCache(did, rkey, DELETED_SITE_RECORD_CID, {})

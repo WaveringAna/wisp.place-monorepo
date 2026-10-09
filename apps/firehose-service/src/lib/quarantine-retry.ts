@@ -10,10 +10,12 @@
  * the fence, reconciled version or quarantine generation moved. The worker
  * then materializes the current record under its lock, or quarantines it
  * again. Permanent or unreadable failures are never retried, and after the
- * last scheduled attempt the fence stays. Leader-only, like the worker.
+ * last scheduled attempt the fence stays. Fences the schedule is not working on
+ * are then probed for a repo that is gone from its PDS (repo-absence.ts).
+ * Leader-only, like the worker.
  */
 import { randomUUID } from 'node:crypto'
-import { REVALIDATE_QUARANTINE_KEY_PREFIX } from '@wispplace/constants'
+import { enqueueSiteRevalidation, REVALIDATE_QUARANTINE_KEY_PREFIX } from '@wispplace/constants'
 import {
 	createLogger,
 	metricsCollector,
@@ -23,7 +25,16 @@ import {
 } from '@wispplace/observability'
 import Redis from 'ioredis'
 import { config } from '../config'
-import { preflightVerifiedRepair } from './cache-writer'
+import { publishCacheInvalidation } from './cache-invalidation'
+import { preflightVerifiedRepair, probeSiteRepo } from './cache-writer'
+import { clearSiteAbsent, insertMissingSiteTombstone, markSiteAbsent } from './db'
+import {
+	type RepoAbsenceDependencies,
+	type RepoAbsenceTickOutcomes,
+	repoAbsencePolicyFromEnv,
+	runRepoAbsenceChecks,
+} from './repo-absence'
+import { createRevalidationResourceContext } from './revalidate-resources'
 import {
 	assertExactSite,
 	assertVerifiedRepairWorker,
@@ -54,6 +65,8 @@ const MAX_RETRY_STATES = 5_000
 const INSPECT_CHUNK = 200
 const PREFLIGHT_DEADLINE_MS = 5 * 60_000
 const PREFLIGHT_TRANSFER_BUDGET_BYTES = 1024 * 1024 * 1024
+const REPO_PROBE_DEADLINE_MS = 60_000
+const REPO_PROBE_BYTE_BUDGET = 4 * 1024 * 1024
 
 export interface DeadLetter {
 	classification: string
@@ -98,6 +111,8 @@ export interface QuarantineRetryDependencies {
 	preflight(did: string, rkey: string, signal: AbortSignal): Promise<VerifiedSitePreflight>
 	classify(error: unknown): { classification: 'permanent' | 'transient'; code: string }
 	recordRetry(outcome: RevalidateQuarantineRetryOutcome): void
+	/** Absent turns the repo-absence check off (WISP_REPO_ABSENCE=off). */
+	repoAbsence?: RepoAbsenceDependencies
 	now(): number
 	random(): number
 }
@@ -106,6 +121,7 @@ export interface QuarantineRetryTickResult {
 	snapshot: RevalidateQuarantineSnapshot
 	scanComplete: boolean
 	outcomes: Partial<Record<RevalidateQuarantineRetryOutcome, number>>
+	repoAbsence: RepoAbsenceTickOutcomes
 }
 
 /** MAX_ATTEMPTS is recorded as permanent, but it only means deliveries ran out without a classified failure. */
@@ -407,26 +423,66 @@ export async function runQuarantineRetryTick(
 		deps.now(),
 	)
 	if (!scan.complete) logger.warn('[QuarantineRetry] Fence scan stopped at its bound; counts are partial')
-	if (!deps.retries || signal.aborted) return { snapshot, scanComplete: scan.complete, outcomes }
+	const result = { snapshot, scanComplete: scan.complete, outcomes, repoAbsence: {} }
+	if (signal.aborted) return result
 
-	await settleUnfencedStates(deps, new Set(sites.map(({ field }) => field)), record)
-	const due: Array<{ site: FencedSite; state: RetryState }> = []
-	for (const site of sites) {
-		const state = await advanceFencedSite(deps, site, record)
-		if (state && !state.gaveUp && deps.now() >= state.nextAt) due.push({ site, state })
-	}
-	due.sort((left, right) => left.state.nextAt - right.state.nextAt)
-	for (const { site, state } of due.slice(0, QUARANTINE_RETRIES_PER_TICK)) {
-		if (signal.aborted) break
-		try {
-			await attemptRepair(deps, site, state, signal, record)
-		} catch (error) {
-			logger.warn(`[QuarantineRetry] Attempt failed before release for ${site.did}/${site.rkey}`, {
-				errorKind: error instanceof Error ? error.name : 'UnknownError',
-			})
+	// Sites without a live retry schedule: never retryable, given up, or retries switched off.
+	const idle: FencedSite[] = deps.retries ? [] : sites
+	if (deps.retries) {
+		await settleUnfencedStates(deps, new Set(sites.map(({ field }) => field)), record)
+		const due: Array<{ site: FencedSite; state: RetryState }> = []
+		for (const site of sites) {
+			const state = await advanceFencedSite(deps, site, record)
+			if (!state || state.gaveUp) idle.push(site)
+			else if (deps.now() >= state.nextAt) due.push({ site, state })
+		}
+		due.sort((left, right) => left.state.nextAt - right.state.nextAt)
+		for (const { site, state } of due.slice(0, QUARANTINE_RETRIES_PER_TICK)) {
+			if (signal.aborted) break
+			try {
+				await attemptRepair(deps, site, state, signal, record)
+			} catch (error) {
+				logger.warn(`[QuarantineRetry] Attempt failed before release for ${site.did}/${site.rkey}`, {
+					errorKind: error instanceof Error ? error.name : 'UnknownError',
+				})
+			}
 		}
 	}
-	return { snapshot, scanComplete: scan.complete, outcomes }
+	if (deps.repoAbsence && !signal.aborted) {
+		result.repoAbsence = await runRepoAbsenceChecks(
+			deps.redis,
+			deps.repoAbsence,
+			idle,
+			parseFenceField,
+			deps.now,
+			signal,
+		)
+	}
+	return result
+}
+
+function productionRepoAbsence(redis: Redis): RepoAbsenceDependencies {
+	return {
+		policy: repoAbsencePolicyFromEnv(),
+		probe: (did, rkey, signal) => {
+			const resources = createRevalidationResourceContext(REPO_PROBE_DEADLINE_MS, REPO_PROBE_BYTE_BUDGET, signal)
+			return probeSiteRepo(did, rkey, resources).finally(() => resources.close())
+		},
+		markSiteAbsent,
+		insertMissingSiteTombstone,
+		clearSiteAbsent,
+		publishCacheInvalidation: (did, rkey) => publishCacheInvalidation(did, rkey, 'update'),
+		enqueueRepair: (did, rkey) =>
+			enqueueSiteRevalidation(redis, {
+				stream: config.revalidateStream,
+				maxLen: config.revalidateStreamMaxLen,
+				dedupeTtlSeconds: config.revalidateDedupeTtlSeconds,
+				did,
+				rkey,
+				reason: 'storage-miss:repo-returned',
+			}),
+		record: (probe, action) => metricsCollector.recordRevalidateRepoAbsence(probe, action),
+	}
 }
 
 let timer: ReturnType<typeof setTimeout> | null = null
@@ -457,6 +513,7 @@ export function startQuarantineRetry(classify: QuarantineRetryDependencies['clas
 			preflightVerifiedRepair(did, rkey, signal, PREFLIGHT_DEADLINE_MS, PREFLIGHT_TRANSFER_BUDGET_BYTES),
 		classify,
 		recordRetry: (outcome) => metricsCollector.recordRevalidateQuarantineRetry(outcome),
+		repoAbsence: process.env.WISP_REPO_ABSENCE === 'off' ? undefined : productionRepoAbsence(redis),
 		now: Date.now,
 		random: Math.random,
 	}
@@ -464,9 +521,10 @@ export function startQuarantineRetry(classify: QuarantineRetryDependencies['clas
 		timer = setTimeout(async () => {
 			if (own.signal.aborted) return
 			activeTick = runQuarantineRetryTick(deps, own.signal)
-				.then(({ snapshot, outcomes }) => {
+				.then(({ snapshot, outcomes, repoAbsence }) => {
 					if (!own.signal.aborted) metricsCollector.setRevalidateQuarantineSnapshot(snapshot)
 					if (Object.keys(outcomes).length > 0) logger.info('[QuarantineRetry] Tick complete', { ...outcomes })
+					if (Object.keys(repoAbsence).length > 0) logger.info('[RepoAbsence] Tick complete', { ...repoAbsence })
 				})
 				.catch(() => logger.warn('[QuarantineRetry] Tick failed'))
 			await activeTick
