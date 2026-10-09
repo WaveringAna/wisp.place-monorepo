@@ -25,6 +25,8 @@ import type {
 	HostingResponseEntry,
 	LogEntry,
 	MetricEntry,
+	RepoAbsenceAction,
+	RepoAbsenceProbe,
 	RevalidateQuarantineClass,
 	RevalidateQuarantineRetryOutcome,
 	RevalidateQuarantineSnapshot,
@@ -422,6 +424,7 @@ export function createHostingInstruments(meter: Meter): HostingInstruments {
 export type RevalidateQuarantineInstruments = {
 	setSnapshot(snapshot: RevalidateQuarantineSnapshot | null): void
 	recordRetry(outcome: RevalidateQuarantineRetryOutcome): void
+	recordRepoAbsence(probe: RepoAbsenceProbe, action: RepoAbsenceAction): void
 }
 
 const QUARANTINE_CLASSES: RevalidateQuarantineClass[] = ['transient', 'permanent', 'unknown']
@@ -429,7 +432,7 @@ const QUARANTINE_CLASSES: RevalidateQuarantineClass[] = ['transient', 'permanent
 /**
  * Revalidation quarantine gauges and retry counter. Gauges report only while a
  * snapshot is set (the firehose leader), and every label is a closed set
- * (3 classes, 6 outcomes): sites never become labels.
+ * (3 classes, 6 outcomes, 5 probe answers x 6 actions): sites never become labels.
  */
 export function createRevalidateQuarantineInstruments(meter: Meter): RevalidateQuarantineInstruments {
 	let current: RevalidateQuarantineSnapshot | null = null
@@ -445,6 +448,9 @@ export function createRevalidateQuarantineInstruments(meter: Meter): RevalidateQ
 	})
 	const retries = meter.createCounter('revalidate_quarantine_retries_total', {
 		description: 'Quarantine retry transitions by outcome',
+	})
+	const repoAbsence = meter.createCounter('revalidate_repo_absence_probes_total', {
+		description: "Repo-absence probes of fenced sites' owner PDS, by answer and resulting action",
 	})
 	fenced.addCallback((result) => {
 		if (!current) return
@@ -462,6 +468,9 @@ export function createRevalidateQuarantineInstruments(meter: Meter): RevalidateQ
 		},
 		recordRetry(outcome) {
 			retries.add(1, { outcome })
+		},
+		recordRepoAbsence(probe, action) {
+			repoAbsence.add(1, { probe, action })
 		},
 	}
 }
@@ -620,6 +629,11 @@ class MetricsExporter {
 	recordRevalidateQuarantineRetry(outcome: RevalidateQuarantineRetryOutcome) {
 		if (!this.config.enabled) return
 		this.quarantine?.recordRetry(outcome)
+	}
+
+	recordRevalidateRepoAbsence(probe: RepoAbsenceProbe, action: RepoAbsenceAction) {
+		if (!this.config.enabled) return
+		this.quarantine?.recordRepoAbsence(probe, action)
 	}
 
 	async shutdown(): Promise<void> {

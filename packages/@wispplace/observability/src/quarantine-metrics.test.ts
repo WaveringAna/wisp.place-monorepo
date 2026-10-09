@@ -68,4 +68,14 @@ describe('revalidation quarantine instruments', () => {
 		expect(points).toHaveLength(OUTCOMES.length)
 		for (const point of points) expect(Object.keys(point.attributes)).toEqual(['outcome'])
 	})
+
+	test('repo-absence probes are labelled by answer and action only', async () => {
+		const metrics = await collect(({ recordRepoAbsence }) => {
+			for (let i = 0; i < 100; i++) recordRepoAbsence('repo-absent', i % 2 ? 'counted' : 'unchanged')
+			recordRepoAbsence('unavailable', 'unchanged')
+		})
+		const points = metrics.revalidate_repo_absence_probes_total?.dataPoints ?? []
+		expect(points).toHaveLength(3)
+		for (const point of points) expect(Object.keys(point.attributes).sort()).toEqual(['action', 'probe'])
+	})
 })

@@ -82,6 +82,12 @@ export type RevalidateQuarantineClass = 'transient' | 'permanent' | 'unknown'
 /** One transition of the firehose quarantine retry schedule. Closed so it can be a metric label. */
 export type RevalidateQuarantineRetryOutcome = 'retrying' | 'recovered' | 'failed' | 'gave-up' | 'deferred' | 'skipped'
 
+/** What one repo-absence probe of a fenced site's owner PDS answered. Closed so it can be a metric label. */
+export type RepoAbsenceProbe = 'present' | 'record-absent' | 'repo-absent' | 'did-tombstoned' | 'unavailable'
+
+/** What the repo-absence check did with one probe answer. Closed so it can be a metric label. */
+export type RepoAbsenceAction = 'counted' | 'reset' | 'confirmed' | 'restored' | 'unchanged' | 'refused'
+
 /** What the firehose leader last saw of the revalidation quarantine. */
 export interface RevalidateQuarantineSnapshot {
 	fenced: Record<RevalidateQuarantineClass, number>
@@ -391,6 +397,11 @@ export const metricsCollector = {
 	/** Firehose quarantine retry transitions by outcome; exported only. */
 	recordRevalidateQuarantineRetry(outcome: RevalidateQuarantineRetryOutcome) {
 		metricsExporter.recordRevalidateQuarantineRetry(outcome)
+	},
+
+	/** Firehose repo-absence probes of fenced sites by answer and action; exported only. */
+	recordRevalidateRepoAbsence(probe: RepoAbsenceProbe, action: RepoAbsenceAction) {
+		metricsExporter.recordRevalidateRepoAbsence(probe, action)
 	},
 
 	getMetrics(filter?: MetricFilter) {
