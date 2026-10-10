@@ -76,6 +76,9 @@ export type HostingNotFoundReason =
 	| 'redirect-404'
 	| 'other'
 
+/** What a retried replica read ended as: it succeeded on a retry, or ran out of retries. Closed so it can be a metric label. */
+export type HostingDbReadRetryOutcome = 'recovered' | 'exhausted'
+
 /** How a fenced site's latest dead-letter record classifies it; `unknown` when that record is unreadable. */
 export type RevalidateQuarantineClass = 'transient' | 'permanent' | 'unknown'
 
@@ -387,6 +390,11 @@ export const metricsCollector = {
 	/** Hosting 404s by reason; exported only. */
 	recordHostingNotFound(reason: HostingNotFoundReason) {
 		metricsExporter.recordHostingNotFound(reason)
+	},
+
+	/** Hosting replica reads that needed a retry after a dropped connection, by outcome; exported only. */
+	recordHostingDbReadRetry(outcome: HostingDbReadRetryOutcome) {
+		metricsExporter.recordHostingDbReadRetry(outcome)
 	},
 
 	/** Firehose leader quarantine gauges; `null` stops reporting them (lost leadership). Exported only. */

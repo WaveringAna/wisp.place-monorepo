@@ -61,6 +61,16 @@ describe('hosting instruments', () => {
 		for (const point of notFound?.dataPoints ?? []) expect(Object.keys(point.attributes)).toEqual(['reason'])
 	})
 
+	test('replica read retries are labelled by outcome only', async () => {
+		const metrics = await collect(({ recordDbReadRetry }) => {
+			for (let i = 0; i < 100; i++) recordDbReadRetry(i % 2 ? 'recovered' : 'exhausted')
+		})
+
+		const points = metrics.hosting_db_read_retries_total?.dataPoints ?? []
+		expect(points).toHaveLength(2)
+		for (const point of points) expect(Object.keys(point.attributes)).toEqual(['outcome'])
+	})
+
 	test('records time to headers in millisecond buckets fine enough for hot reads', async () => {
 		const metrics = await collect(({ recordResponse }) => {
 			for (const durationMs of [0.4, 0.9, 3, 180, 240]) {

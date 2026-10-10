@@ -21,6 +21,7 @@ import { PeriodicExportingMetricReader, MeterProvider as SdkMeterProvider } from
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions'
 import type {
 	ErrorEntry,
+	HostingDbReadRetryOutcome,
 	HostingNotFoundReason,
 	HostingResponseEntry,
 	LogEntry,
@@ -391,12 +392,13 @@ export const HOSTING_RESPONSE_BUCKETS_MS = [1, 2.5, 5, 10, 25, 50, 100, 250, 500
 export type HostingInstruments = {
 	recordResponse(entry: HostingResponseEntry): void
 	recordNotFound(reason: HostingNotFoundReason): void
+	recordDbReadRetry(outcome: HostingDbReadRetryOutcome): void
 }
 
 /**
- * Hosting latency and 404 instruments. Every label comes from a closed set
- * (at most 4 tiers x 5 status classes x 3 kinds, and 8 reasons), so series
- * never grow with hosts, sites or paths.
+ * Hosting latency, 404 and replica-read-retry instruments. Every label comes
+ * from a closed set (at most 4 tiers x 5 status classes x 3 kinds, 8 reasons
+ * and 2 retry outcomes), so series never grow with hosts, sites or paths.
  */
 export function createHostingInstruments(meter: Meter): HostingInstruments {
 	const responseTime = meter.createHistogram('hosting_response_time_ms', {
@@ -406,6 +408,9 @@ export function createHostingInstruments(meter: Meter): HostingInstruments {
 	})
 	const notFound = meter.createCounter('hosting_not_found_total', {
 		description: 'Hosting 404 responses by reason',
+	})
+	const dbReadRetries = meter.createCounter('hosting_db_read_retries_total', {
+		description: 'Hosting replica reads retried after a dropped connection, by outcome',
 	})
 	return {
 		recordResponse(entry) {
@@ -417,6 +422,9 @@ export function createHostingInstruments(meter: Meter): HostingInstruments {
 		},
 		recordNotFound(reason) {
 			notFound.add(1, { reason })
+		},
+		recordDbReadRetry(outcome) {
+			dbReadRetries.add(1, { outcome })
 		},
 	}
 }
@@ -620,6 +628,11 @@ class MetricsExporter {
 	recordHostingNotFound(reason: HostingNotFoundReason) {
 		if (!this.config.enabled) return
 		this.hosting?.recordNotFound(reason)
+	}
+
+	recordHostingDbReadRetry(outcome: HostingDbReadRetryOutcome) {
+		if (!this.config.enabled) return
+		this.hosting?.recordDbReadRetry(outcome)
 	}
 
 	setRevalidateQuarantineSnapshot(snapshot: RevalidateQuarantineSnapshot | null) {
