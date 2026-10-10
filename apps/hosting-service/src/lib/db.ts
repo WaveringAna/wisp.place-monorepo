@@ -1,6 +1,8 @@
 import type { CustomDomainLookup, DomainLookup, SiteCache, SiteSettingsCache } from '@wispplace/database'
+import { metricsCollector } from '@wispplace/observability'
 import postgres from 'postgres'
 import { cache } from './cache-manager'
+import { retryTransientRead } from './read-retry'
 
 // The hosting service only reads. Prefer the read replica, fall back to the primary.
 const databaseUrl =
@@ -11,6 +13,16 @@ const sql = postgres(databaseUrl, {
 	idle_timeout: 20,
 })
 
+// Every query here is an idempotent read, and the pool can hand out a connection
+// that a proxy or the network already closed, so `read` is `sql` plus a short retry.
+const read = <T extends readonly (object | undefined)[]>(
+	strings: TemplateStringsArray,
+	...parameters: readonly postgres.ParameterOrFragment<never>[]
+): Promise<postgres.RowList<T>> =>
+	retryTransientRead(() => sql<T>(strings, ...parameters), {
+		onOutcome: metricsCollector.recordHostingDbReadRetry,
+	})
+
 // Short TTL for negative / unmapped lookups so newly-mapped domains appear quickly.
 const NEGATIVE_TTL_MS = 10_000
 
@@ -20,7 +32,7 @@ export async function getWispDomain(domain: string): Promise<DomainLookup | null
 		'domains',
 		key,
 		async () => {
-			const result = await sql<DomainLookup[]>`
+			const result = await read<DomainLookup[]>`
       SELECT did, rkey FROM domains WHERE domain = ${key} LIMIT 1
     `
 			return result[0] || null
@@ -35,7 +47,7 @@ export async function getCustomDomain(domain: string): Promise<CustomDomainLooku
 		'customDomains',
 		key,
 		async () => {
-			const result = await sql<CustomDomainLookup[]>`
+			const result = await read<CustomDomainLookup[]>`
       SELECT cd.id, cd.domain, cd.did, cd.rkey, cd.verified
       FROM custom_domains cd
       LEFT JOIN site_cache sc
@@ -60,7 +72,7 @@ export async function getCustomDomainByHash(hash: string): Promise<CustomDomainL
 		'customDomains',
 		`hash:${hash}`,
 		async () => {
-			const result = await sql<CustomDomainLookup[]>`
+			const result = await read<CustomDomainLookup[]>`
       SELECT id, domain, did, rkey, verified FROM custom_domains
       WHERE id = ${hash} AND verified = true LIMIT 1
     `
@@ -115,7 +127,7 @@ export function closeDatabase(): Promise<void> {
 
 export async function getSiteSettingsCache(did: string, rkey: string): Promise<SiteSettingsCache | null> {
 	return cache.getOrFetch('settings', `${did}:${rkey}`, async () => {
-		const result = await sql<SiteSettingsCache[]>`
+		const result = await read<SiteSettingsCache[]>`
       SELECT did, rkey, record_cid, directory_listing, spa_mode, custom_404, index_files, clean_urls, headers, cached_at, updated_at
       FROM site_settings_cache
       WHERE did = ${did} AND rkey = ${rkey}
@@ -130,7 +142,7 @@ export async function getSiteCache(did: string, rkey: string): Promise<SiteCache
 		'siteCache',
 		`${did}:${rkey}`,
 		async () => {
-			const result = await sql<SiteCache[]>`
+			const result = await read<SiteCache[]>`
         SELECT did, rkey, record_cid, file_cids, file_objects, cached_at, updated_at, absent_since
         FROM site_cache
         WHERE did = ${did} AND rkey = ${rkey}
