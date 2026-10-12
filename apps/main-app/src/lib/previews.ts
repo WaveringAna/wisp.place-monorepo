@@ -22,6 +22,8 @@ export interface TangledRepo {
 	spindle: string | undefined
 	repoDid: string | undefined
 	knot: string | undefined
+	/** Forked from another repo, which tangled records as `source`. */
+	fork: boolean
 }
 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
@@ -45,6 +47,7 @@ export function toTangledRepos(records: readonly unknown[]): TangledRepo[] {
 				spindle: host(value.spindle),
 				repoDid: text(value.repoDid),
 				knot: host(value.knot),
+				fork: text(value.source) !== undefined,
 			},
 		]
 	})
@@ -96,13 +99,18 @@ export interface PreviewRow extends TangledRepo {
 export const previewBlock = (repo: TangledRepo): PreviewBlock | null =>
 	!repo.spindle ? 'no-spindle' : !repo.repoDid ? 'no-repo-did' : null
 
+/** Repos that can build pull requests come first and forks last; the PDS order holds within each group. */
+const rowGroup = (repo: TangledRepo): number => (repo.spindle ? 0 : repo.fork ? 2 : 1)
+
 export function previewRows(repos: readonly TangledRepo[], hooks: readonly PreviewHook[]): PreviewRow[] {
-	return repos.map((repo) => {
-		const hook = ownHookFor(hooks, repo.name)
-		return {
-			...repo,
-			preview: hook ? { claim: hook.claim, hookRkey: hook.rkey } : null,
-			blocked: previewBlock(repo),
-		}
-	})
+	return repos
+		.map((repo) => {
+			const hook = ownHookFor(hooks, repo.name)
+			return {
+				...repo,
+				preview: hook ? { claim: hook.claim, hookRkey: hook.rkey } : null,
+				blocked: previewBlock(repo),
+			}
+		})
+		.sort((a, b) => rowGroup(a) - rowGroup(b))
 }

@@ -13,7 +13,10 @@ describe('toTangledRepos', () => {
 				uri: `at://${DID}/sh.tangled.repo/wisp-preview-test`,
 				value: { spindle: 'spindle.tangled.sh', repoDid: REPO_DID, knot: 'knot1.tangled.sh' },
 			},
-			{ uri: `at://${DID}/sh.tangled.repo/3mlfedz5snx22`, value: { name: 'sister-radio', knot: 'knot1.tangled.sh' } },
+			{
+				uri: `at://${DID}/sh.tangled.repo/3mlfedz5snx22`,
+				value: { name: 'sister-radio', knot: 'knot1.tangled.sh', source: 'did:plc:ahjoatghq3cdpizm3lrf5k27' },
+			},
 		])
 		expect(repos).toEqual([
 			{
@@ -22,8 +25,16 @@ describe('toTangledRepos', () => {
 				spindle: 'spindle.tangled.sh',
 				repoDid: REPO_DID,
 				knot: 'knot1.tangled.sh',
+				fork: false,
 			},
-			{ rkey: '3mlfedz5snx22', name: 'sister-radio', spindle: undefined, repoDid: undefined, knot: 'knot1.tangled.sh' },
+			{
+				rkey: '3mlfedz5snx22',
+				name: 'sister-radio',
+				spindle: undefined,
+				repoDid: undefined,
+				knot: 'knot1.tangled.sh',
+				fork: true,
+			},
 		])
 	})
 
@@ -33,7 +44,9 @@ describe('toTangledRepos', () => {
 			{ uri: 5, value: {} },
 			{ uri: `at://${DID}/sh.tangled.repo/a`, value: { spindle: 'https://evil.example/x', repoDid: REPO_DID } },
 		])
-		expect(repos).toEqual([{ rkey: 'a', name: 'a', spindle: undefined, repoDid: REPO_DID, knot: undefined }])
+		expect(repos).toEqual([
+			{ rkey: 'a', name: 'a', spindle: undefined, repoDid: REPO_DID, knot: undefined, fork: false },
+		])
 	})
 })
 
@@ -82,17 +95,9 @@ describe('previewRows', () => {
 				spindle: 'spindle.tangled.sh',
 				repoDid: REPO_DID,
 				knot: undefined,
+				fork: false,
 				preview: { claim: 'alice', hookRkey: 'preview-blog' },
 				blocked: null,
-			},
-			{
-				rkey: 'notes',
-				name: 'notes',
-				spindle: undefined,
-				repoDid: REPO_DID,
-				knot: undefined,
-				preview: null,
-				blocked: 'no-spindle',
 			},
 			{
 				rkey: 'old',
@@ -100,8 +105,19 @@ describe('previewRows', () => {
 				spindle: 'spindle.tangled.sh',
 				repoDid: undefined,
 				knot: undefined,
+				fork: false,
 				preview: null,
 				blocked: 'no-repo-did',
+			},
+			{
+				rkey: 'notes',
+				name: 'notes',
+				spindle: undefined,
+				repoDid: REPO_DID,
+				knot: undefined,
+				fork: false,
+				preview: null,
+				blocked: 'no-spindle',
 			},
 		])
 	})
@@ -109,5 +125,27 @@ describe('previewRows', () => {
 	test("does not count a collaborator hook for someone else's repo of the same name", () => {
 		const rows = previewRows(repos, [{ rkey: 'preview-blog', repo: 'blog', claim: 'alice', owner: REPO_DID }])
 		expect(rows[0]?.preview).toBeNull()
+	})
+
+	test('lists repos with a spindle first and forks last, keeping record order within each', () => {
+		const source = 'did:plc:ahjoatghq3cdpizm3lrf5k27'
+		const mixed = toTangledRepos(
+			[
+				['fork-a', { source }],
+				['plain-a', {}],
+				['ci-a', { spindle: 'spindle.tangled.sh' }],
+				['fork-ci', { spindle: 'spindle.tangled.sh', source }],
+				['plain-b', {}],
+				['fork-b', { source: `at://${source}/sh.tangled.repo/3mdppefpttk22` }],
+			].map(([rkey, value]) => ({ uri: `at://${DID}/sh.tangled.repo/${rkey}`, value })),
+		)
+		expect(previewRows(mixed, []).map((row) => row.name)).toEqual([
+			'ci-a',
+			'fork-ci',
+			'plain-a',
+			'plain-b',
+			'fork-a',
+			'fork-b',
+		])
 	})
 })

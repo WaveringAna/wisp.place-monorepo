@@ -182,6 +182,7 @@ export interface PreviewRepo {
 	name: string
 	spindle?: string
 	knot?: string
+	fork: boolean
 	preview: { claim: string; hookRkey: string } | null
 	blocked: 'no-spindle' | 'no-repo-did' | null
 	secret: 'set' | 'missing' | 'unknown'

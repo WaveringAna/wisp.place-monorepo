@@ -8,6 +8,7 @@ const repo = (name: string, extra: Partial<TangledRepo> = {}): TangledRepo => ({
 	spindle: 'spindle.tangled.sh',
 	repoDid: 'did:plc:kya7uhnwkpq7zfngkebpxl6i',
 	knot: 'knot1.tangled.sh',
+	fork: false,
 	...extra,
 })
 
@@ -43,8 +44,8 @@ describe('loadPreviews', () => {
 		expect(view.canSetSecrets).toBe(true)
 		expect(view.repos.map((row) => [row.name, row.preview?.claim ?? null, row.blocked, row.secret])).toEqual([
 			['blog', 'alice', null, 'set'],
-			['notes', null, 'no-spindle', 'unknown'],
 			['old', null, 'no-repo-did', 'unknown'],
+			['notes', null, 'no-spindle', 'unknown'],
 		])
 	})
 

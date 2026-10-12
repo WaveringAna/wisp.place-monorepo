@@ -30,6 +30,7 @@ function fakePorts(overrides: Partial<PreviewSetupPorts> = {}) {
 				spindle: 'spindle.tangled.sh',
 				repoDid: 'did:plc:kya7uhnwkpq7zfngkebpxl6i',
 				knot: undefined,
+				fork: false,
 			},
 		],
 		listHooks: async () => [],

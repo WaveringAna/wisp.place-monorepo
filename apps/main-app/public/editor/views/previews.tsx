@@ -22,6 +22,7 @@ import {
 	Sheet,
 	SkeletonRows,
 	Status,
+	Tag,
 	TextField,
 } from '../ui'
 
@@ -145,7 +146,12 @@ function PreviewRow({ repo, info, user, expanded, onToggle, onConnect, rowProps 
 		<>
 			<Row rowProps={rowProps} onActivate={onToggle} expanded={expanded} controls={detailId}>
 				<td className="chev" />
-				<td className="name">{repo.name}</td>
+				<td className="name">
+					<span className="inline-flex items-center gap-2">
+						{repo.name}
+						{repo.fork && <Tag>fork</Tag>}
+					</span>
+				</td>
 				<td className="max-sm:hidden">{repo.spindle ?? '—'}</td>
 				<td>
 					<PreviewState repo={repo} host={info.previewHost ?? ''} />
