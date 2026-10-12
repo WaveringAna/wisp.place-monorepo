@@ -333,3 +333,16 @@ export function extractHeaders(rawHeaders: Headers): Record<string, string> {
 	})
 	return headers
 }
+
+/**
+ * Validates a MIME type string ensuring it contains only valid HTTP header value characters
+ * and has a reasonable length. Rejects CR/LF or control characters.
+ */
+export function isValidMimeType(mimeType: unknown): mimeType is string {
+	return (
+		typeof mimeType === 'string' &&
+		mimeType.length > 0 &&
+		mimeType.length <= MAX_CUSTOM_HEADER_VALUE_LENGTH &&
+		!hasInvalidHeaderValueCharacter(mimeType)
+	)
+}

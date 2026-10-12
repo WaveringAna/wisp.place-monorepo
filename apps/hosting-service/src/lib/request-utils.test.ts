@@ -5,6 +5,7 @@ import {
 	DEFAULT_INDEX_FILES,
 	decodeRequestPathname,
 	getIndexFiles,
+	isValidMimeType,
 	MAX_GLOB_MATCH_OPERATIONS,
 	matchGlob,
 	matchGlobWithStats,
@@ -273,5 +274,24 @@ describe('decodeRequestPathname', () => {
 	test('rejects literal and percent-decoded NULs before path sanitization', () => {
 		expect(decodeRequestPathname('/unsafe%00path')).toBeNull()
 		expect(decodeRequestPathname('/unsafe\0path')).toBeNull()
+	})
+})
+
+describe('isValidMimeType', () => {
+	test('accepts valid MIME types', () => {
+		expect(isValidMimeType('text/plain')).toBe(true)
+		expect(isValidMimeType('text/html; charset=utf-8')).toBe(true)
+		expect(isValidMimeType('application/json')).toBe(true)
+	})
+
+	test('rejects CRLF, control characters, empty or non-string inputs', () => {
+		expect(isValidMimeType('text/plain\r\nX-Injected: attack')).toBe(false)
+		expect(isValidMimeType('text/plain\n')).toBe(false)
+		expect(isValidMimeType('text/plain\0')).toBe(false)
+		expect(isValidMimeType('')).toBe(false)
+		expect(isValidMimeType(null)).toBe(false)
+		expect(isValidMimeType(undefined)).toBe(false)
+		expect(isValidMimeType(123)).toBe(false)
+		expect(isValidMimeType('a'.repeat(1001))).toBe(false)
 	})
 })

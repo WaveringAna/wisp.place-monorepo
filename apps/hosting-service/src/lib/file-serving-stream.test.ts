@@ -395,4 +395,21 @@ describe('file serving streams', () => {
 		expect(response.status).toBe(422)
 		expect(response.status).not.toBe(304)
 	})
+
+	test('sanitizes malformed stored mimeType to prevent response construction failure and spool leak', async () => {
+		const identity = new TextEncoder().encode('safe mime identity content')
+		const compressed = new Uint8Array(gzipSync(identity))
+		activeBody = compressed
+		activeCid = computeCID(compressed)
+		activeMimeType = 'text/plain\r\nX-Injected: attack'
+		activeEncoding = 'gzip'
+
+		const response = await serveFileInternal(DID, RKEY, 'asset.bin', null, {
+			'accept-encoding': 'gzip;q=0',
+		})
+		expect(response.status).toBe(200)
+		// Should fall back to lookup by extension or application/octet-stream, stripped of CR/LF
+		expect(response.headers.get('Content-Type')).toBe('application/octet-stream')
+		expect(await response.text()).toBe('safe mime identity content')
+	})
 })

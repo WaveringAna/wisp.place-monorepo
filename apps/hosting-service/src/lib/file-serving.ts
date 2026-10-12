@@ -37,7 +37,7 @@ import {
 import { triggerSiteHtmlHotCacheWarmup } from './html-prewarm'
 import { generate404Page, generateDirectoryListing, siteUpdatingResponse } from './page-generators'
 import { loadRedirectRules, matchRedirectRule, parseCookies, parseQueryString } from './redirects'
-import { applyCustomHeaders, getIndexFiles } from './request-utils'
+import { applyCustomHeaders, getIndexFiles, isValidMimeType } from './request-utils'
 import { markRedirectNotFound } from './request-visibility'
 import { recordStorageMiss } from './revalidate-metrics'
 import { enqueueRevalidate } from './revalidate-queue'
@@ -680,7 +680,7 @@ async function getFileForRequest(
 		if (!streamed) return { kind: 'missing' }
 		const { result, prefix } = await peekFileStream(streamed)
 		const metadata = result.metadata.customMetadata as StoredFileCustomMetadata | undefined
-		const mimeType = metadata?.mimeType || lookup(candidatePath) || 'application/octet-stream'
+		const mimeType = resolveSafeMimeType(metadata?.mimeType, candidatePath)
 		const shouldRewriteOnDemand =
 			strategy.rewriteMissingHtmlOnDemand && !wasRewritten && isHtmlContent(candidatePath, mimeType)
 		if (shouldRewriteOnDemand) {
@@ -814,6 +814,11 @@ function buildGzipDecodeFailureResponse(
 	return new Response('Stored file could not be decompressed safely', { status: 422, headers })
 }
 
+export function resolveSafeMimeType(untrustedMime: unknown, filePath: string): string {
+	if (isValidMimeType(untrustedMime)) return untrustedMime
+	return lookup(filePath) || 'application/octet-stream'
+}
+
 type StoredFileRepresentation = {
 	result: FileStorageResult | StreamResult
 	content: Buffer | undefined
@@ -845,7 +850,7 @@ function createStoredFileRepresentation(
 	const content =
 		'data' in result ? Buffer.from(result.data.buffer, result.data.byteOffset, result.data.byteLength) : undefined
 	const metadata = result.metadata?.customMetadata as StoredFileCustomMetadata | undefined
-	const mimeType = metadata?.mimeType || lookup(filePath) || 'application/octet-stream'
+	const mimeType = resolveSafeMimeType(metadata?.mimeType, filePath)
 	const shouldCompress = shouldCompressMimeType(mimeType)
 	const hasGzipMagic = streamGzipMagic ?? (content ? isGzipped(content) : false)
 	const explicitlyGzipped = metadata?.encoding === 'gzip'
@@ -1522,7 +1527,18 @@ async function buildStreamFileResponse(
 		await disposeFileStreamAndWait(bodyStream)
 		return new Response(null, { status, headers })
 	}
-	return new Response(getStreamResponseBody(bodyStream, signal), { status, headers })
+	let webStream: ReadableStream<Uint8Array> | undefined
+	try {
+		webStream = getStreamResponseBody(bodyStream, signal)
+		return new Response(webStream, { status, headers })
+	} catch (error) {
+		if (webStream) await webStream.cancel().catch(() => undefined)
+		if (bodyStream !== prepared.stream) {
+			await disposeFileStreamAndWait(bodyStream).catch(() => undefined)
+		}
+		await disposeFileStreamAndWait(prepared.stream).catch(() => undefined)
+		throw error
+	}
 }
 
 function sliceReadableStream(source: Readable, range: ByteRange): Readable {
@@ -1551,7 +1567,7 @@ async function buildFileResponse(options: FileResolverOptions, fileResult: FileF
 	const { filePath, result, wasRewritten } = fileResult
 	if ('stream' in result) return await buildStreamFileResponse(options, filePath, result)
 	const meta = result.metadata.customMetadata as { encoding?: string; mimeType?: string } | undefined
-	const mimeType = meta?.mimeType || lookup(filePath) || 'application/octet-stream'
+	const mimeType = resolveSafeMimeType(meta?.mimeType, filePath)
 	const shouldRewriteOnDemand =
 		strategy.rewriteMissingHtmlOnDemand && !wasRewritten && isHtmlContent(filePath, mimeType)
 

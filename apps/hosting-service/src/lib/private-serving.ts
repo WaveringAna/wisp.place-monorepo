@@ -28,6 +28,7 @@ import {
 	type PrivateSiteFile,
 	touchShare,
 } from './private-sites-db'
+import { isValidMimeType } from './request-utils'
 import { privateStorage } from './storage'
 
 const logger = createLogger('hosting-service')
@@ -347,7 +348,7 @@ const privateFileResponse = (target: string, bytes: Uint8Array, meta: PrivateSit
 		status: 200,
 		headers: {
 			...privateResponseHeaders(),
-			'Content-Type': meta?.mimeType ?? (lookup(target) || 'application/octet-stream'),
+			'Content-Type': (isValidMimeType(meta?.mimeType) ? meta.mimeType : lookup(target)) || 'application/octet-stream',
 			'Content-Length': String(bytes.byteLength),
 		},
 	})

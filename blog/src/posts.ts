@@ -46,6 +46,14 @@ export const authors = {
 
 const posts: Post[] = [
 	{
+		slug: 'integrating-atproto',
+		title: 'Integrating Better with other Atproto Services',
+		description: 'preview deployments with tangled, and automatic DNS with marque.at',
+		date: '2026-10-06',
+		author: authors.nekomimi,
+		tags: ['release', 'cli']
+	},
+	{
 		slug: 'wispctl-1-3-2',
 		title: 'wispctl 1.3.2',
 		description: 'wispctl uses permission sets now for friendlier oauth links',
