@@ -3,21 +3,21 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>wisp.place - Static Hosting on AT Protocol</title>
-    <meta name="description" content="Somewhere to put your stuff. A folder becomes a website. That's the whole thing." />
+    <title>wisp.place - Static Web Hosting</title>
+    <meta name="description" content="Somewhere to put your stuff." />
 
     <!-- Open Graph / Facebook -->
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://wisp.place/" />
-    <meta property="og:title" content="wisp.place - Static Hosting on AT Protocol" />
-    <meta property="og:description" content="Somewhere to put your stuff. A folder becomes a website. That's the whole thing." />
+    <meta property="og:title" content="wisp.place - Static Web Hosting" />
+    <meta property="og:description" content="Somewhere to put your stuff." />
     <meta property="og:site_name" content="wisp.place" />
 
     <!-- Twitter -->
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:url" content="https://wisp.place/" />
-    <meta name="twitter:title" content="wisp.place - Static Hosting on AT Protocol" />
-    <meta name="twitter:description" content="Somewhere to put your stuff. A folder becomes a website. That's the whole thing." />
+    <meta name="twitter:title" content="wisp.place - Static Web Hosting" />
+    <meta name="twitter:description" content="Somewhere to put your stuff" />
 
     <!-- Theme -->
     <meta name="theme-color" content="#fbf3ec" media="(prefers-color-scheme: light)" />
@@ -96,7 +96,7 @@
                 --line: oklch(0.10 0.03 290);
                 --rose: oklch(0.83 0.11 5);
                 --card: oklch(0.27 0.035 290);
-                --shadow: oklch(0.08 0.03 290 / 0.9);
+                --shadow: oklch(0 0.03 290);
                 --term-bg: oklch(0.14 0.03 290);
                 --glow: oklch(0.90 0.14 85);
                 --btn-bg: var(--pink);
@@ -192,7 +192,7 @@
         .nav-cta, .btn-pop {
             border: 2px solid var(--line);
             border-radius: 999px;
-            box-shadow: 3px 3px 0 var(--shadow);
+            box-shadow: 1px 3px 0 var(--shadow);
             transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease;
         }
         .nav-cta { background: var(--pink); color: oklch(0.26 0.031 352); text-transform: none; letter-spacing: 0; font-size: 0.9rem; padding: 0.4rem 1rem; }
@@ -1010,14 +1010,11 @@
                     <h1 class="display">Somewhere to put your
                         <span class="squiggle">stuff.<svg viewBox="0 0 200 20" preserveAspectRatio="none" aria-hidden="true"><path d="M2 12 C 20 2, 35 20, 55 10 S 90 2, 110 11 S 150 20, 170 9 S 192 6, 198 10"/></svg></span>
                     </h1>
-                    <p class="hero-desc">
-                        <span class="hand">A folder becomes a website.</span>
-                    </p>
+                    <br>
                     <div class="cta-row">
-                        <a href="#signin" class="btn-pop" data-signin>Upload a folder →</a>
+                        <a href="#signin" class="btn-pop" data-signin>Upload a website →</a>
                         <a href="https://docs.wisp.place" target="_blank" class="btn-pop alt">Read the docs</a>
                     </div>
-                    <p class="hero-note">✿ free, no card, run by one person for fun</p>
                 </div>
 
                 <div class="stage">
@@ -1042,7 +1039,6 @@
                             <button type="button" class="btn-pop alt small" id="pretend">use a pretend one</button>
                         </div>
                         <input type="file" id="folder-input" webkitdirectory directory multiple hidden>
-                        <p class="fine">Nothing leaves your computer until you sign in.</p>
                     </div>
 
                     <div class="mini-browser" id="mini-browser" aria-live="polite">
@@ -1327,7 +1323,7 @@
             // ── Fairy ───────────────────────────────────────────────────
             const fairy = $('fairy');
             const bubble = $('fairy-bubble');
-            const quips = ['hi!! ✦', 'wheee', 'that tickles', 'put your stuff here!', 'i live on the internet', 'boop', 'no investors, just me', 'psst, try it! ↓'];
+            const quips = ['hi!! ✦', 'wheee', 'that tickles', 'boop', '>.....<'];
             let quip = 0;
             fairy.addEventListener('click', (e) => {
                 fairy.classList.remove('twirl');
