@@ -7,6 +7,7 @@ import { Readable } from 'node:stream'
 import { computeCID } from '@wispplace/atproto-utils'
 import { shouldCompressMimeType } from '@wispplace/atproto-utils/compression'
 import { MAX_BLOB_SIZE } from '@wispplace/constants'
+import type { SiteCache } from '@wispplace/database'
 import { type FileObjects, normalizeFileCids, normalizeFileObjects } from '@wispplace/fs-utils'
 import { isHtmlContent, rewriteHtmlPaths } from '@wispplace/fs-utils/html-rewriter'
 import type { Record as WispSettings } from '@wispplace/lexicons/types/place/wisp/settings'
@@ -403,9 +404,13 @@ async function getFallbackFile(
 	return result
 }
 
-async function getSiteManifest(did: string, rkey: string, trace?: RequestTrace | null): Promise<SiteManifest | null> {
-	const siteCache = await span(trace, 'db:siteCache', () => getSiteCache(did, rkey))
-	if (!siteCache) return null
+// Normalizing a manifest walks every file entry (a regex check per CAS key and two object copies), so
+// a request for a 1000-file site paid that on every hit. The row object comes from the in-memory lookup
+// cache and is replaced whenever the entry expires or is invalidated, so keying on its identity can never
+// serve a manifest older than the row it was built from. Nothing mutates a manifest after it is built.
+const manifestsBySiteCache = new WeakMap<object, SiteManifest>()
+
+function buildSiteManifest(siteCache: SiteCache): SiteManifest {
 	// The owner's PDS confirmed the record is gone: serve it like a deleted site
 	// (an empty manifest, so every path 404s) while the files await the sweeper.
 	if (siteCache.absent_since !== null && siteCache.absent_since !== undefined) {
@@ -416,6 +421,16 @@ async function getSiteManifest(did: string, rkey: string, trace?: RequestTrace |
 		// One snapshot with the CIDs: a body is only read from the key its own manifest names.
 		fileObjects: normalizeFileObjects(siteCache.file_objects),
 	}
+}
+
+async function getSiteManifest(did: string, rkey: string, trace?: RequestTrace | null): Promise<SiteManifest | null> {
+	const siteCache = await span(trace, 'db:siteCache', () => getSiteCache(did, rkey))
+	if (!siteCache) return null
+	const memoized = manifestsBySiteCache.get(siteCache)
+	if (memoized) return memoized
+	const manifest = buildSiteManifest(siteCache)
+	manifestsBySiteCache.set(siteCache, manifest)
+	return manifest
 }
 
 function shouldServeUpdatingPage(requestHeaders?: Record<string, string>): boolean {
