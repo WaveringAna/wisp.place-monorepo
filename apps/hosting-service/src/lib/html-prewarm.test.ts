@@ -103,6 +103,22 @@ describe('HTML prewarm', () => {
 		expect(listKeysCalls).toBe(0)
 	})
 
+	test('builds the manifest path list only when a warmup starts', async () => {
+		let listed = 0
+		const paths = () => {
+			listed++
+			return ['index.html']
+		}
+		triggerSiteHtmlHotCacheWarmup(DID, RKEY, paths, objectsFor(['index.html']))
+		await waitForSiteHtmlHotCacheWarmupForTests(DID, RKEY)
+		expect(listed).toBe(1)
+		expect(promotedKeys).toEqual([key('index.html')])
+
+		// Already warm: later requests of the site must not pay for listing the manifest again.
+		for (let i = 0; i < 5; i++) triggerSiteHtmlHotCacheWarmup(DID, RKEY, paths, objectsFor(['index.html']))
+		expect(listed).toBe(1)
+	})
+
 	test('normalizes leading slashes before excluding rewritten and metadata paths', async () => {
 		await warmup(['/.rewritten/foo.html', '/.metadata.json', '/nested/page.html'])
 

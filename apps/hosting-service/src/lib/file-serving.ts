@@ -1829,7 +1829,7 @@ async function resolveCachedRequest(options: CachedRequestOptions, trace: Reques
 	const response = redirectResponse ?? (await resolveFile(filePath))
 	// Start the manifest-backed warmup only after the requested response has
 	// resolved, so unrelated HTML reads cannot delay this request.
-	triggerSiteHtmlHotCacheWarmup(did, rkey, Object.keys(manifest.fileCids), manifest.fileObjects)
+	triggerSiteHtmlHotCacheWarmup(did, rkey, () => Object.keys(manifest.fileCids), manifest.fileObjects)
 	return response
 }
 

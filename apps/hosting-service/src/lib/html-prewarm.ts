@@ -75,7 +75,7 @@ async function loadSiteHtmlKeysIntoHotTier(
 export function triggerSiteHtmlHotCacheWarmup(
 	did: string,
 	rkey: string,
-	manifestPaths?: readonly string[],
+	manifestPaths?: readonly string[] | (() => readonly string[]),
 	fileObjects: FileObjects | null = null,
 ): void {
 	const siteKey = getSiteKey(did, rkey)
@@ -87,6 +87,9 @@ export function triggerSiteHtmlHotCacheWarmup(
 	const epoch = prewarmEpoch
 	const existing = prewarmInFlight.get(siteKey)
 	if (existing || activePrewarmCount >= MAX_CONCURRENT_PREWARMS) return
+	// Every request of a site calls this, and listing a large manifest costs more than the request
+	// itself: the list is only built here, once a warmup is actually going to start.
+	const paths = typeof manifestPaths === 'function' ? manifestPaths() : manifestPaths
 	activePrewarmCount++
 
 	const entry: { promise: Promise<void> } = {
@@ -95,7 +98,7 @@ export function triggerSiteHtmlHotCacheWarmup(
 				const { scannedKeys, warmedHtmlKeys, failedKeys } = await loadSiteHtmlKeysIntoHotTier(
 					did,
 					rkey,
-					manifestPaths,
+					paths,
 					fileObjects,
 				)
 				if (prewarmEpoch !== epoch || prewarmInFlight.get(siteKey) !== entry) return
