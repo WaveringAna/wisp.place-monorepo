@@ -1,0 +1,4 @@
+# Clears the developer's local .env before any test module loads, so host and
+# infrastructure selection never comes from ambient state. See the file for why.
+[test]
+preload = ["./scripts/test-env.ts"]

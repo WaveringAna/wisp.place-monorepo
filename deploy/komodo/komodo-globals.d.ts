@@ -39,5 +39,3 @@ declare global {
 		parseCargoToml(text: string): unknown
 	}
 }
-
-export {}

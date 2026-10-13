@@ -73,7 +73,10 @@ function parseArguments(argv: string[]): Arguments {
 				args.maxSites = Number.parseInt(next(), 10)
 				break
 			case '--error':
-				args.errorCodes = next().split(',').map((code) => code.trim()).filter(Boolean)
+				args.errorCodes = next()
+					.split(',')
+					.map((code) => code.trim())
+					.filter(Boolean)
 				break
 			case '--since':
 				args.since = Number.parseInt(next(), 10)
@@ -82,10 +85,16 @@ function parseArguments(argv: string[]): Arguments {
 				args.until = Number.parseInt(next(), 10)
 				break
 			case '--did':
-				args.dids = next().split(',').map((did) => did.trim()).filter(Boolean)
+				args.dids = next()
+					.split(',')
+					.map((did) => did.trim())
+					.filter(Boolean)
 				break
 			case '--exclude-did':
-				args.excludeDids = next().split(',').map((did) => did.trim()).filter(Boolean)
+				args.excludeDids = next()
+					.split(',')
+					.map((did) => did.trim())
+					.filter(Boolean)
 				break
 			case '--manifest':
 				args.manifest = next()
@@ -254,7 +263,9 @@ async function main(): Promise<void> {
 				console.log(`Enqueued ${entry.did}/${entry.rkey} (${reason}) as ${streamId}`)
 				await sleep(args.rateMs)
 			}
-			console.log(`Applied ${enqueued.filter((item) => !item.deduplicated).length} enqueues, ${enqueued.filter((item) => item.deduplicated).length} deduplicated.`)
+			console.log(
+				`Applied ${enqueued.filter((item) => !item.deduplicated).length} enqueues, ${enqueued.filter((item) => item.deduplicated).length} deduplicated.`,
+			)
 		} else {
 			for (const entry of selected) {
 				console.log(`[dry-run] Would enqueue ${entry.did}/${entry.rkey} (${entry.reason})`)
@@ -267,7 +278,13 @@ async function main(): Promise<void> {
 			applied: args.apply,
 			dlqStream,
 			targetStream,
-			filters: { errorCodes: args.errorCodes, since: args.since, until: args.until, dids: args.dids, excludeDids: args.excludeDids },
+			filters: {
+				errorCodes: args.errorCodes,
+				since: args.since,
+				until: args.until,
+				dids: args.dids,
+				excludeDids: args.excludeDids,
+			},
 			dlqEntryCount: entries.length,
 			matchedEntryCount: filtered.length,
 			distinctSiteCount: newestBySite.size,
@@ -276,8 +293,11 @@ async function main(): Promise<void> {
 			rollbackHint:
 				'Rollback: for each manifest item with a streamId, XDEL targetStream <streamId> (only safe while unconsumed). Deduplicated items have no streamId.',
 		}
-		fs.writeFileSync(args.manifest, `${JSON.stringify(manifest, null, 2)}
-`)
+		fs.writeFileSync(
+			args.manifest,
+			`${JSON.stringify(manifest, null, 2)}
+`,
+		)
 		console.log(`Manifest written to ${args.manifest}`)
 	} finally {
 		await redis.quit().catch(() => undefined)

@@ -93,6 +93,7 @@ mock.module('./cache-invalidation', () => ({
 		if (strictFailure) throw new Error('redis unavailable')
 		return '123-0'
 	},
+	closeCacheInvalidationPublisher: async () => {},
 }))
 
 async function fileEntry(name: string, content = bytes): Promise<Entry> {

@@ -1,6 +1,16 @@
 import { describe, expect, test } from 'bun:test'
 
-const { default: app, getCacheInvalidationHealthResponse, normalizeConfiguredHostname } = await import('./server')
+// /health fails closed when Redis invalidation is configured but not attached.
+// A developer with REDIS_URL in their `.env` would otherwise get a 503 here and
+// CI would get a 200, for reasons that have nothing to do with the code.
+process.env.REDIS_URL = ''
+
+const {
+	default: app,
+	getCacheInvalidationHealthResponse,
+	normalizeConfiguredHostname,
+	resolveHostConfig,
+} = await import('./server')
 
 describe('hosting server', () => {
 	test('serves a compact cache invalidation health payload', async () => {
@@ -32,6 +42,37 @@ describe('hosting server', () => {
 	test('normalizes configured hosts without accepting URL credentials', () => {
 		expect(normalizeConfiguredHostname('WISP.PLACE:443', 'fallback.example')).toBe('wisp.place')
 		expect(normalizeConfiguredHostname('user:secret@wisp.place', 'fallback.example')).toBe('fallback.example')
+	})
+
+	test('derives every router host from one environment object', () => {
+		expect(resolveHostConfig({})).toEqual({
+			baseHost: 'wisp.place',
+			sharedSitesHost: 'sites.wisp.place',
+			privateHost: 'priv.wisp.place',
+			previewHost: null,
+		})
+	})
+
+	test('derives the private and shared hosts from a configured base host', () => {
+		expect(resolveHostConfig({ BASE_HOST: 'wisp.localhost:3001' })).toEqual({
+			baseHost: 'wisp.localhost',
+			sharedSitesHost: 'sites.wisp.localhost',
+			privateHost: 'priv.wisp.localhost',
+			previewHost: null,
+		})
+	})
+
+	// A local `.env` with a port attached is what silently changed 404 reasons
+	// across machines, so the override has to win over the base host's default.
+	test('lets private and preview hosts be overridden independently', () => {
+		expect(
+			resolveHostConfig({ BASE_HOST: 'wisp.place', PRIVATE_HOST: 'PRIVATE.EXAMPLE', PREVIEW_HOST: 'try.place' }),
+		).toEqual({
+			baseHost: 'wisp.place',
+			sharedSitesHost: 'sites.wisp.place',
+			privateHost: 'private.example',
+			previewHost: 'try.place',
+		})
 	})
 
 	test('uses the normalized URL hostname for DNS-hash routing', async () => {

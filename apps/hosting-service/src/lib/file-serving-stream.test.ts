@@ -140,7 +140,10 @@ mock.module('./db', () => ({
 	getSiteSettingsCache: async () => null,
 }))
 mock.module('./utils', () => ({ getCachedSettings: async () => null }))
-mock.module('./revalidate-queue', () => ({ enqueueRevalidate: async () => ({ enqueued: true, result: 'enqueued' }) }))
+mock.module('./revalidate-queue', () => ({
+	enqueueRevalidate: async () => ({ enqueued: true, result: 'enqueued' }),
+	closeRevalidateQueue: async () => {},
+}))
 mock.module('./revalidate-metrics', () => ({ recordStorageMiss: () => {} }))
 mock.module('./cache-invalidation', () => ({ isSiteUpdating: () => false }))
 mock.module('./html-prewarm', () => ({ triggerSiteHtmlHotCacheWarmup: () => {} }))

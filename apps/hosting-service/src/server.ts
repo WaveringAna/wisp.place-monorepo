@@ -97,14 +97,47 @@ export function normalizeConfiguredHostname(value: string | undefined, fallback:
 	}
 }
 
-const BASE_HOST = normalizeConfiguredHostname(process.env.BASE_HOST, DEFAULT_BASE_HOST)
-const SHARED_SITES_HOST = `sites.${BASE_HOST}`
+export type HostingHostConfig = {
+	/** Apex the wisp subdomains are handed out under. */
+	baseHost: string
+	/** `sites.{baseHost}`, where every site is addressed by `{did}/{site}`. */
+	sharedSitesHost: string
+	/** Apex private sites live on. Separate origin keeps tenant JS and ambient cookies isolated. */
+	privateHost: string
+	/** Apex previews live on, or null when previews are disabled. */
+	previewHost: string | null
+}
 
-// Separate origins keep tenant JavaScript and ambient cookies isolated.
-const PRIVATE_HOST = normalizeConfiguredHostname(process.env.PRIVATE_HOST, `priv.${BASE_HOST}`)
+/**
+ * Resolve every hostname the router branches on, from one environment object.
+ *
+ * The router branches on these once per request, so they are resolved once per
+ * process below. This stays a pure function so tests can vary hosts without
+ * mutating `process.env` ahead of an import: reading these at module scope made
+ * the suite's result depend on whether the developer running it happened to have
+ * a local `.env` setting BASE_HOST or PRIVATE_HOST, which CI never has.
+ */
+export function resolveHostConfig(env: NodeJS.ProcessEnv = process.env): HostingHostConfig {
+	const baseHost = normalizeConfiguredHostname(env.BASE_HOST, DEFAULT_BASE_HOST)
+	return {
+		baseHost,
+		sharedSitesHost: `sites.${baseHost}`,
+		privateHost: normalizeConfiguredHostname(env.PRIVATE_HOST, `priv.${baseHost}`),
+		// Preview deploys need a registrable domain of their own, so there is no
+		// default: unset disables them.
+		previewHost: normalizeConfiguredHostname(env.PREVIEW_HOST, '') || null,
+	}
+}
 
-// Preview deploys need a registrable domain of their own, so there is no default: unset disables them.
-const PREVIEW_HOST = normalizeConfiguredHostname(process.env.PREVIEW_HOST, '') || null
+const hostConfig = resolveHostConfig()
+
+const {
+	baseHost: BASE_HOST,
+	sharedSitesHost: SHARED_SITES_HOST,
+	privateHost: PRIVATE_HOST,
+	previewHost: PREVIEW_HOST,
+} = hostConfig
+
 if (PREVIEW_HOST && (PREVIEW_HOST === BASE_HOST || PREVIEW_HOST.endsWith(`.${BASE_HOST}`))) {
 	logger.warn(`PREVIEW_HOST ${PREVIEW_HOST} is under ${BASE_HOST}; previews will share its cookie scope`)
 }

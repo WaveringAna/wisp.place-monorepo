@@ -18,7 +18,7 @@
     "typescript": "^5.9.3"
   },
   "scripts": {
-    "test": "NODE_ENV=test bun test --isolate",
+    "test": "NODE_ENV=test bun test --isolate apps packages/@wispplace scripts",
     "dev": "NODE_ENV=development bun run build && NODE_ENV=development bun run --watch apps/main-app/src/index.ts",
     "dev:infra": "./scripts/dev-infra.sh up",
     "dev:infra:down": "./scripts/dev-infra.sh down",

@@ -24,8 +24,10 @@ Your site appears at `https://sites.wisp.place/{your-did}/{site-name}` or your c
 
 - **`/apps/main-app`** - Main backend (OAuth, site management, custom domains)
 - **`/apps/hosting-service`** - Microservice that serves cached sites from disk
-- **`/cli`** - CLI for direct PDS uploads as well as serving with firehose updates
-- **`/apps/main-app/public`** - React frontend
+- **`/apps/firehose-service`** - Watches the firehose and caches sites to S3
+- **`/apps/webhook-service`** - Delivers outbound webhooks
+- **`/cli-rs`** - Rust CLI (`wispctl`) for direct PDS uploads
+- **`/apps/main-app/public`** - Static frontend plus a Bun-bundled React editor
 - **`/packages`** - Shared packages
 
 ### How it works
@@ -96,11 +98,7 @@ Notes:
 bun run hosting:dev
 
 # CLI
-cd cli
-bun install
-bun run index.ts
-bun build
-node dist/index.js
+npm install -g wispctl   # or: npm create wisp
 ```
 
 ## Features
@@ -161,7 +159,7 @@ Example `_redirects`:
 
 - Backend: Bun + Elysia + PostgreSQL
 - Frontend: React 19 + Tailwind 4 + Radix UI
-- Hosting: Node microservice using Hono
+- Hosting: Bun microservice using Hono
 - CLI: Rust + Jacquard (AT Protocol library)
 - Protocol: AT Protocol OAuth + custom lexicons
 

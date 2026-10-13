@@ -2,7 +2,11 @@ import { beforeEach, describe, expect, mock, spyOn, test } from 'bun:test'
 import { type HostingNotFoundReason, type HostingResponseEntry, metricsCollector } from '@wispplace/observability'
 import { markRedirectNotFound } from './lib/request-visibility'
 
+// Every host the router branches on is pinned here rather than inherited from a
+// local `.env`. Leaving PRIVATE_HOST unset made this file's 404 reasons depend
+// on whether the developer running it had one.
 process.env.BASE_HOST = 'wisp.place'
+process.env.PRIVATE_HOST = 'priv.wisp.place'
 process.env.PREVIEW_HOST = 'preview.wisp.place'
 
 const OWNER_DID = 'did:plc:abcdefghijklmnopqrstuvwx'

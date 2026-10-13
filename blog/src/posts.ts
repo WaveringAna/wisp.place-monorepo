@@ -51,7 +51,7 @@ const posts: Post[] = [
 		description: 'preview deployments with tangled, and automatic DNS with marque.at',
 		date: '2026-10-06',
 		author: authors.nekomimi,
-		tags: ['release', 'cli']
+		tags: ['release', 'cli'],
 	},
 	{
 		slug: 'wispctl-1-3-2',

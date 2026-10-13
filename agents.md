@@ -105,7 +105,7 @@ Bun workspaces: `packages/@wisp/*`, `apps/main-app`, `apps/hosting-service`, etc
 
 PLEASE USE `bun check` to type check and `biome check --write` to lint.
 
-This codebase will be using Effect. Explore repos/effect (a local, gitignored checkout of Effect-TS/effect at commit 6389d9ac6; not tracked) when writing Effect code. This will help you understand Effect and write masterful Effect code.
+The services are plain Bun + Effect-free TypeScript: explicit async, no framework runtime dependency. Do not introduce Effect without a reason, and keep configuration resolvable as a pure function of an environment object so it stays testable — `resolveDatabaseConfiguration(process.env)` in `apps/main-app/src/lib/db.ts` and `resolveHostConfig(env)` in `apps/hosting-service/src/server.ts` are the pattern to copy.
 
 ### Vendored Repositories
 
@@ -125,7 +125,26 @@ loaded afterwards: those files fail to link with a misleading
 `SyntaxError: Export named '<something>' not found in module .../lib/db.ts`, and
 their tests are silently skipped rather than reported as failures. Adding any new
 export to `src/lib/db.ts` is enough to trigger it. `bunfig.toml` does not support
-`[test] isolate`, so it has to be the CLI flag.
+`[test] isolate`, so it has to be the CLI flag. The root script scopes discovery to
+`apps packages/@wispplace scripts` because the positional filters are substring
+matches, so a bare `packages` also matches `repos/effect/packages/...`: those suites
+fail to load outside their own dependency tree, and a partial `mock.module` from one
+file can leave fake timers installed for the whole process, so a later file awaiting a
+real timer hangs the run forever instead of failing.
+
+`bunfig.toml` does register a `[test] preload` (scripts/test-env.ts), which clears
+the host, origin and storage variables Bun loads from your local `.env` before any
+test module is imported. Without it a developer's `.env` decides the result: a
+PRIVATE_HOST changed a 404's reason, and a REDIS_URL turned /health from 200 into a
+503 — both failing locally and passing in CI for reasons unrelated to the code. If a
+test needs one of those variables, set it itself at the top of the file, where the
+dependency is visible. Run with WISP_TEST_ENV_REPORT=1 to see what was cleared.
+
+The same reasoning applies to any value a module reads at import time: a
+module-level `const X = process.env.X` is fixed for the life of the test file and
+cannot be varied between tests. Prefer passing an environment object to a resolver
+(`resolveHostConfig(env)`, `resolveDatabaseConfiguration(env)`) so config stays
+testable.
 
 There are three typescript apps
 **`apps/main-app`** - Main backend (Bun + Elysia)
@@ -164,9 +183,9 @@ There are three typescript apps
 
 ### CLI
 
-**`cli/`** - TypeScript CLI using commander, clack. 
+**`cli-rs/`** - Rust workspace (`wispctl`, published to npm), using jacquard for the AT Protocol.
 - Direct PDS uploads without interacting with main-app
-- Can also do the same firehose watching, caching, and serving hosting-service does, just without domain management
+- Replaces the old TypeScript `cli/`, which no longer exists. `cli-rs/DESIGN.md` is the contract for behaviour, wording and on-disk state; the TS CLI was its reference implementation.
 
 ### Other Directories
 

@@ -67,6 +67,7 @@ mock.module('./revalidate-queue', () => ({
 		revalidateCalls.push({ did, rkey, reason })
 		return { enqueued: true, result: 'enqueued' as const }
 	},
+	closeRevalidateQueue: async () => {},
 }))
 
 const { cache } = await import('./cache-manager')

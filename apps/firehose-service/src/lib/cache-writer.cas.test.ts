@@ -99,6 +99,7 @@ mock.module('./storage', () => ({
 mock.module('./cache-invalidation', () => ({
 	publishCacheInvalidation: async () => undefined,
 	publishCacheInvalidationStrict: async () => '1-0',
+	closeCacheInvalidationPublisher: async () => {},
 }))
 
 type Spec = { name: string; content: string; mimeType?: string; gzip?: boolean; undeclared?: boolean }

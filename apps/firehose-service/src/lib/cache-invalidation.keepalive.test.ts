@@ -43,9 +43,12 @@ beforeEach(() => {
 })
 
 afterEach(async () => {
-	await closeCacheInvalidationPublisher()
-	config.redisUrl = originalRedisUrl
-	jest.useRealTimers()
+	try {
+		await closeCacheInvalidationPublisher()
+	} finally {
+		config.redisUrl = originalRedisUrl
+		jest.useRealTimers()
+	}
 })
 
 test('pings the idle publisher connection inside the 180 s proxy idle timeout', async () => {

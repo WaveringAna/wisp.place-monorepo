@@ -41,8 +41,11 @@ beforeEach(() => {
 })
 
 afterEach(async () => {
-	await closeRevalidateQueue()
-	jest.useRealTimers()
+	try {
+		await closeRevalidateQueue()
+	} finally {
+		jest.useRealTimers()
+	}
 })
 
 test('pings the idle revalidate queue connection inside the 180 s proxy idle timeout', async () => {

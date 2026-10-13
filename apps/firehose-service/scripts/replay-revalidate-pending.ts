@@ -69,7 +69,10 @@ function parseArguments(argv: string[]): Arguments {
 				args.maxItems = Number.parseInt(next(), 10)
 				break
 			case '--did':
-				args.dids = next().split(',').map((did) => did.trim()).filter(Boolean)
+				args.dids = next()
+					.split(',')
+					.map((did) => did.trim())
+					.filter(Boolean)
 				break
 			case '--manifest':
 				args.manifest = next()
@@ -152,9 +155,7 @@ async function main(): Promise<void> {
 			entries.push({ id, did, rkey, reason, deliveries, consumer })
 		}
 
-		console.log(
-			`${args.sourceStream}/${args.group}: ${entries.length} pending items selected (cap ${args.maxItems}).`,
-		)
+		console.log(`${args.sourceStream}/${args.group}: ${entries.length} pending items selected (cap ${args.maxItems}).`)
 		const dedupeCategory = (reason: string): string => {
 			if (reason.startsWith('firehose-settings-failed:')) return 'settings'
 			if (reason.startsWith('rewrite-miss')) return 'rewrite-miss'
@@ -216,7 +217,9 @@ async function main(): Promise<void> {
 				})
 				await sleep(args.rateMs)
 			}
-			console.log(`Applied ${migrated.length} migrations (${migrated.filter((m) => !m.deduplicated).length} enqueued, ${migrated.filter((m) => m.deduplicated).length} deduplicated).`)
+			console.log(
+				`Applied ${migrated.length} migrations (${migrated.filter((m) => !m.deduplicated).length} enqueued, ${migrated.filter((m) => m.deduplicated).length} deduplicated).`,
+			)
 		} else {
 			for (const entry of entries) {
 				const reason = entry.reason.startsWith('storage-miss') ? entry.reason : 'dlq-replay'
@@ -237,8 +240,11 @@ async function main(): Promise<void> {
 			rollbackHint:
 				'Rollback: for each migrated item with a streamId, XDEL targetStream <streamId> (only safe while unconsumed) and re-add the source entry fields to sourceStream; source entries were XACKed and XDELed.',
 		}
-		fs.writeFileSync(args.manifest, `${JSON.stringify(manifest, null, 2)}
-`)
+		fs.writeFileSync(
+			args.manifest,
+			`${JSON.stringify(manifest, null, 2)}
+`,
+		)
 		console.log(`Manifest written to ${args.manifest}`)
 	} finally {
 		await redis.quit().catch(() => undefined)

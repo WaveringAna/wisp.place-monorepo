@@ -16,7 +16,20 @@ steps:
       export PATH="$HOME/.nix-profile/bin:$PATH"
       bun install
 
+  - name: type check
+    command: |
+      export PATH="$HOME/.nix-profile/bin:$PATH"
+      bun run check
+
+  - name: lint
+    command: |
+      export PATH="$HOME/.nix-profile/bin:$PATH"
+      bun run lint
+
+  # Scoped to the first-party workspaces on purpose. A bare `bun test` with no
+  # path filter also matches any directory whose path contains "packages",
+  # including the gitignored repos/effect checkout when one is present locally.
   - name: run all tests
     command: |
       export PATH="$HOME/.nix-profile/bin:$PATH"
-      bun test --isolate
+      bun test --isolate apps packages/@wispplace
