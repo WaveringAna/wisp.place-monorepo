@@ -543,6 +543,17 @@ async function hasFileForNonForcedRedirect(
 	return fileInStorage !== null
 }
 
+async function isHotTierHit(
+	did: string,
+	rkey: string,
+	filePath: string,
+	fileObjects: FileObjects | null,
+): Promise<boolean> {
+	if (typeof storage.isInHotTier !== 'function') return false
+	const key = resolveStorageKey(did, rkey, filePath, fileObjects)
+	return key !== null && (await storage.isInHotTier(key))
+}
+
 async function getVerifiedFileStream(
 	did: string,
 	rkey: string,
@@ -671,6 +682,9 @@ async function getFileForRequest(
 		wasRewritten: boolean,
 	): Promise<{ kind: 'stream'; file: FileForRequestResult } | { kind: 'fallback' | 'missing' | 'mismatch' }> => {
 		if (typeof storage.getStream !== 'function') return { kind: 'fallback' }
+		// A body already in the memory tier is served from its buffer: wrapping it in streams cost more
+		// than the rest of the request. Disk and object-store reads keep streaming.
+		if (await isHotTierHit(did, rkey, candidatePath, fileObjects)) return { kind: 'fallback' }
 		const guessedMimeType = lookup(candidatePath) || 'application/octet-stream'
 		if (strategy.rewriteMissingHtmlOnDemand && !wasRewritten && isHtmlContent(candidatePath, guessedMimeType)) {
 			return { kind: 'fallback' }

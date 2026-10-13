@@ -70,6 +70,32 @@ describe('TieredStorage', () => {
 			expect(await storage.exists('test-key')).toBe(true)
 			expect(await storage.exists('non-existent')).toBe(false)
 		})
+
+		test('reports whether the hot tier holds a key', async () => {
+			const hot = new MemoryStorageTier({ maxSizeBytes: 1024 * 1024 })
+			const storage = new TieredStorage({
+				tiers: { hot, cold: new DiskStorageTier({ directory: `${testDir}/cold` }) },
+			})
+
+			await storage.set('in-hot', { data: 'test' })
+			await storage.set('cold-only', { data: 'test' }, { skipTiers: ['hot'] })
+
+			expect(await storage.isInHotTier('in-hot')).toBe(true)
+			expect(await storage.isInHotTier('cold-only')).toBe(false)
+			expect(await storage.isInHotTier('non-existent')).toBe(false)
+
+			await hot.delete('in-hot')
+			expect(await storage.isInHotTier('in-hot')).toBe(false)
+		})
+
+		test('reports no hot hits when there is no hot tier', async () => {
+			const storage = new TieredStorage({
+				tiers: { cold: new DiskStorageTier({ directory: `${testDir}/cold` }) },
+			})
+
+			await storage.set('test-key', { data: 'test' })
+			expect(await storage.isInHotTier('test-key')).toBe(false)
+		})
 	})
 
 	describe('Cascading Write', () => {

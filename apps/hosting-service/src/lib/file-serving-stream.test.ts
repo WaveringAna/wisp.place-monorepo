@@ -28,6 +28,8 @@ let evictions = 0
 let legacyCidRepairs = 0
 let streamMissing = false
 let activeFileObjects: unknown
+const hotKeys = new Set<string>()
+const hotChecks: string[] = []
 
 function nextSourceCidMetadata(): { sourceCid?: string } {
 	if (!sourceCidSequence.length) return { sourceCid: activeCid }
@@ -80,9 +82,27 @@ const fakeStorage = {
 			source: 'cold' as const,
 		}
 	},
-	async getWithMetadata() {
+	async isInHotTier(key: string) {
+		hotChecks.push(key)
+		return hotKeys.has(key)
+	},
+	async getWithMetadata(key: string) {
 		bufferedReads++
-		throw new Error('streaming response should not use buffered storage')
+		if (!hotKeys.has(key)) throw new Error('streaming response should not use buffered storage')
+		return {
+			data: activeBody,
+			metadata: {
+				key,
+				size: activeBody.byteLength,
+				checksum: 'stream-etag',
+				createdAt: new Date(),
+				lastAccessed: new Date(),
+				accessCount: 0,
+				compressed: false,
+				customMetadata: { sourceCid: activeCid, mimeType: activeMimeType },
+			},
+			source: 'hot' as const,
+		}
 	},
 	async get() {
 		return null
@@ -147,6 +167,8 @@ describe('file serving streams', () => {
 		activeEncoding = undefined
 		activeFilePath = 'asset.bin'
 		activeFileObjects = undefined
+		hotKeys.clear()
+		hotChecks.length = 0
 		cache.clear('sourceCidMismatches')
 	})
 
@@ -164,6 +186,35 @@ describe('file serving streams', () => {
 			{ key: casKey({ cid, path: 'asset.bin', mimeType: 'application/octet-stream' }), signal, borrowChunks: true },
 		])
 		expect(response.headers.get('Content-Length')).toBe(`${body.byteLength}`)
+	})
+
+	test('serves a body already in the memory tier from its buffer instead of a stream', async () => {
+		const objectKey = casKey({ cid, path: 'asset.bin', mimeType: 'application/octet-stream' })
+		hotKeys.add(objectKey)
+
+		const response = await serveFileInternal(DID, RKEY, 'asset.bin', null, {})
+
+		expect(response.status).toBe(200)
+		expect(await response.text()).toBe('streamed binary content')
+		expect(response.headers.get('Content-Length')).toBe(`${body.byteLength}`)
+		expect(hotChecks).toEqual([objectKey])
+		expect(bufferedReads).toBe(1)
+		expect(streamReads).toEqual([])
+	})
+
+	test('keeps byte ranges and conditional requests on the buffered memory-tier path', async () => {
+		hotKeys.add(casKey({ cid, path: 'asset.bin', mimeType: 'application/octet-stream' }))
+
+		const partial = await serveFileInternal(DID, RKEY, 'asset.bin', null, { range: 'bytes=2-6' })
+		expect(partial.status).toBe(206)
+		expect(await partial.text()).toBe('reame')
+		expect(partial.headers.get('Content-Range')).toBe(`bytes 2-6/${body.byteLength}`)
+
+		const etag = partial.headers.get('ETag')
+		expect(etag).toBeTruthy()
+		const notModified = await serveFileInternal(DID, RKEY, 'asset.bin', null, { 'if-none-match': etag ?? '' })
+		expect(notModified.status).toBe(304)
+		expect(streamReads).toEqual([])
 	})
 
 	test('streams a mapped file from its CAS key, and reads nothing for an unmapped one', async () => {

@@ -1043,6 +1043,17 @@ export class TieredStorage<T = unknown> {
 	}
 
 	/**
+	 * Whether the hot (memory) tier holds the key right now.
+	 *
+	 * @remarks
+	 * Lets a caller read a body that is already in memory as a buffer instead of a stream. The key can be
+	 * evicted before it is read, so treat the answer as a hint: the read itself still falls through tiers.
+	 */
+	async isInHotTier(key: string): Promise<boolean> {
+		return (await this.config.tiers.hot?.exists(key)) ?? false
+	}
+
+	/**
 	 * Check if a key exists in any tier.
 	 *
 	 * @param key - The key to check
