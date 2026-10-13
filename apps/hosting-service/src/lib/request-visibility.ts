@@ -76,10 +76,20 @@ export function hostingResponseEntry(response: Response, durationMs: number): Ho
 	return { tier, statusClass, kind: responseKind(response.headers.get('content-type'), tier), durationMs }
 }
 
-function recordNotFound(reason: HostingNotFoundReason, host: string): void {
-	metricsCollector.recordHostingNotFound(reason)
-	notFoundLog.record(reason, host)
+export type NotFoundSinks = {
+	metrics: Pick<typeof metricsCollector, 'recordHostingNotFound'>
+	notFoundLog: Pick<typeof notFoundLog, 'record'>
 }
+
+/** Count a 404 under its reason and add its host to the aggregated not-found log. */
+export function notFoundRecorder({ metrics, notFoundLog }: NotFoundSinks) {
+	return (reason: HostingNotFoundReason, host: string): void => {
+		metrics.recordHostingNotFound(reason)
+		notFoundLog.record(reason, host)
+	}
+}
+
+const recordNotFound = notFoundRecorder({ metrics: metricsCollector, notFoundLog })
 
 export type RequestVisibilityOptions = {
 	recordResponse?: (entry: HostingResponseEntry) => void

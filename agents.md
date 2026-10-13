@@ -118,19 +118,20 @@ This project keeps external reference repositories under @repos/ (local checkout
 
 ### Tests conventions
 
-Run tests with `bun test --isolate` (or `bun run test`, which passes it), never a
-bare `bun test`. Several suites call `mock.module('../lib/db', ...)` with a partial
-set of exports, and without isolation that replacement leaks into every test file
-loaded afterwards: those files fail to link with a misleading
-`SyntaxError: Export named '<something>' not found in module .../lib/db.ts`, and
-their tests are silently skipped rather than reported as failures. Adding any new
-export to `src/lib/db.ts` is enough to trigger it. `bunfig.toml` does not support
-`[test] isolate`, so it has to be the CLI flag. The root script scopes discovery to
-`apps packages/@wispplace scripts` because the positional filters are substring
-matches, so a bare `packages` also matches `repos/effect/packages/...`: those suites
-fail to load outside their own dependency tree, and a partial `mock.module` from one
-file can leave fake timers installed for the whole process, so a later file awaiting a
-real timer hangs the run forever instead of failing.
+Both `bun test` and `bun test --isolate` (what `bun run test` passes) must pass from
+the repo root. A bare `bun test` loads every file into one module registry, so a test
+must leave no process-global state behind: restore fake timers, `process.env` keys and
+`globalThis.fetch` it replaced, and never call `mock.module`. Bun keeps a module mock
+for the rest of the process (`mock.restore()` does not undo it), so a mock in one file
+replaces the real module in every file loaded after it. Instead, a module takes its
+collaborators as arguments (`createFileServing(deps)`, `createApp(deps)`,
+`createHostingDb({ sql, cache })`, `createAuthRoutes(deps)`) and its production export
+is that factory applied to the real modules. Prefer real implementations in tests
+(observability, safe-fetch against a local `Bun.serve`, tiered-storage on a memory
+tier) and fake only external services (postgres, redis, a remote PDS) at the injected
+boundary. `bunfig.toml` sets `pathIgnorePatterns = ["repos/**"]` so discovery never
+reaches the vendored checkouts, whose suites fail to load outside their own
+dependency tree.
 
 `bunfig.toml` does register a `[test] preload` (scripts/test-env.ts), which clears
 the host, origin and storage variables Bun loads from your local `.env` before any

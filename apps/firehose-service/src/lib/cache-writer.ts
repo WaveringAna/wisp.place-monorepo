@@ -11,6 +11,7 @@ import {
 	type SubfsSubject,
 } from '@wispplace/atproto-utils'
 import { MAX_BLOB_SIZE, MAX_FILE_COUNT, MAX_SITE_SIZE, MAX_SITE_SIZE_SUPPORTER } from '@wispplace/constants'
+import type { SiteCache } from '@wispplace/database'
 import {
 	casKey,
 	collectFileCidsFromEntries,
@@ -175,7 +176,12 @@ const pdsIdentityFetch: Parameters<typeof getPdsForDid>[1] = (url, options) =>
 		allowLocalhost: allowDevLocalPdsFetch,
 	})
 const pdsEndpointOptions = allowDevLocalPdsFetch ? { allowLoopback: true } : undefined
-const pdsRequestOptions = allowDevLocalPdsFetch ? { allowLocalhost: true } : undefined
+type PdsRequestOptions = { allowLocalhost: true }
+const pdsRequestOptions = requestOptionsForPds(allowDevLocalPdsFetch)
+
+function requestOptionsForPds(allowLocalhost: boolean): PdsRequestOptions | undefined {
+	return allowLocalhost ? { allowLocalhost: true } : undefined
+}
 /**
  * getRecord responses carry the full site/subfs directory record. Chunked subfs
  * publications legitimately exceed 64 KiB (production records up to ~112 KiB
@@ -222,10 +228,11 @@ export async function readPdsRecordJsonResponse<T>(response: Response): Promise<
 async function fetchPdsRecordJson<T>(
 	url: string,
 	resources?: RevalidationResources,
+	requestOptions: PdsRequestOptions | undefined = pdsRequestOptions,
 ): Promise<PdsRecordJsonResponse<T>> {
 	assertRevalidationActive(resources)
 	const response = await safeFetch(url, {
-		...(pdsRequestOptions ?? {}),
+		...(requestOptions ?? {}),
 		maxSize: MAX_PDS_RECORD_RESPONSE_BYTES,
 		signal: resources?.signal,
 		byteBudget: resources?.transferBudget,
@@ -265,7 +272,11 @@ function rewritePdsEndpoint(endpoint: string): string {
 
 type PdsEndpointResolver = (did: string, resources?: RevalidationResources) => Promise<string>
 
-function createPdsEndpointResolver(rootDid: string, rootPdsEndpoint: string): PdsEndpointResolver {
+function createPdsEndpointResolver(
+	rootDid: string,
+	rootPdsEndpoint: string,
+	resolve: typeof resolvePdsEndpoint,
+): PdsEndpointResolver {
 	const endpoints = new Map<string, Promise<string>>([[rootDid, Promise.resolve(rootPdsEndpoint)]])
 
 	return (sourceDid, resources) => {
@@ -274,7 +285,7 @@ function createPdsEndpointResolver(rootDid: string, rootPdsEndpoint: string): Pd
 		if (existing) return existing
 
 		const pending = (async () => {
-			const resolved = await resolvePdsEndpoint(sourceDid, resources)
+			const resolved = await resolve(sourceDid, resources)
 			const endpoint = resolved ? rewritePdsEndpoint(resolved) : null
 			if (!endpoint) throw new SubfsExpansionError('FETCH_FAILED')
 			return endpoint
@@ -289,6 +300,7 @@ export async function fetchSubfsRecord(
 	subject: SubfsSubject,
 	resolvePdsEndpoint: PdsEndpointResolver,
 	resources?: RevalidationResources,
+	requestOptions: PdsRequestOptions | undefined = pdsRequestOptions,
 ): Promise<unknown> {
 	assertRevalidationActive(resources)
 	const pdsEndpoint = await resolvePdsEndpoint(subject.repo, resources)
@@ -300,7 +312,7 @@ export async function fetchSubfsRecord(
 	const response = await safeFetchJson<{ value?: unknown }>(
 		`${pdsEndpoint}/xrpc/com.atproto.repo.getRecord?${query.toString()}`,
 		{
-			...(pdsRequestOptions ?? {}),
+			...(requestOptions ?? {}),
 			signal: resources?.signal,
 			byteBudget: resources?.transferBudget,
 			maxSize: MAX_PDS_RECORD_RESPONSE_BYTES,
@@ -792,6 +804,7 @@ export async function fetchSettingsRecordOutcome(
 	rkey: string,
 	pdsEndpoint?: string,
 	resources?: RevalidationResources,
+	requestOptions: PdsRequestOptions | undefined = pdsRequestOptions,
 ): Promise<SettingsRecordFetchOutcome> {
 	try {
 		assertRevalidationActive(resources)
@@ -801,7 +814,7 @@ export async function fetchSettingsRecordOutcome(
 		const url = `${endpoint}/xrpc/com.atproto.repo.getRecord?repo=${encodeURIComponent(did)}&collection=place.wisp.settings&rkey=${encodeURIComponent(rkey)}`
 		let response: PdsRecordJsonResponse<{ value?: unknown; cid?: unknown }>
 		try {
-			response = await fetchPdsRecordJson(url, resources)
+			response = await fetchPdsRecordJson(url, resources, requestOptions)
 		} catch {
 			return { kind: 'retryable', error: 'FETCH_FAILED' }
 		}
@@ -824,8 +837,9 @@ export async function fetchSettingsRecord(
 	rkey: string,
 	pdsEndpoint?: string,
 	resources?: RevalidationResources,
+	requestOptions: PdsRequestOptions | undefined = pdsRequestOptions,
 ): Promise<{ record: WispSettings; cid: string } | null> {
-	const outcome = await fetchSettingsRecordOutcome(did, rkey, pdsEndpoint, resources)
+	const outcome = await fetchSettingsRecordOutcome(did, rkey, pdsEndpoint, resources, requestOptions)
 	return outcome.kind === 'present' ? { record: outcome.record, cid: outcome.cid } : null
 }
 
@@ -1204,8 +1218,9 @@ export async function verifySiteBlobs(
 	record: WispFsRecord,
 	recordCid: string,
 	resources?: RevalidationResources,
+	dependencies: SiteMaterializerDependencies = defaultSiteMaterializerDependencies,
 ): Promise<VerifiedSitePreflight> {
-	const request = createSiteUpdateRequest(did, rkey, record, recordCid, { resources })
+	const request = createSiteUpdateRequest(did, rkey, record, recordCid, { resources }, dependencies)
 	const update = await validateSiteUpdate(request, resources)
 	if (!update) throw new Error('Site failed repair admission')
 	const files = collectFileInfo(update.expandedRoot.entries, update.ownerDidByFilePath)
@@ -1216,7 +1231,7 @@ export async function verifySiteBlobs(
 		await blobProcessingGate.run(async () => {
 			assertRevalidationActive(resources)
 			await fetchVerifiedBlob(blobSource(file, endpoint, recordCid), {
-				allowLocalhost: allowDevLocalPdsFetch,
+				allowLocalhost: dependencies.allowLocalhostPds,
 				signal: resources?.signal,
 				byteBudget: resources?.transferBudget,
 			})
@@ -1260,6 +1275,7 @@ interface DownloadedBlob {
 }
 
 async function downloadAndWriteBlob(
+	dependencies: SiteMaterializerDependencies,
 	did: string,
 	rkey: string,
 	file: FileInfo,
@@ -1287,7 +1303,7 @@ async function downloadAndWriteBlob(
 		try {
 			assertRevalidationActive(resources)
 			content = await fetchVerifiedBlob(blobSource(file, pdsEndpoint, recordCid), {
-				allowLocalhost: allowDevLocalPdsFetch,
+				allowLocalhost: dependencies.allowLocalhostPds,
 				signal: resources?.signal,
 				byteBudget: resources?.transferBudget,
 			})
@@ -1322,7 +1338,17 @@ async function downloadAndWriteBlob(
 			}
 		}
 
-		return await writePreparedBlob(did, rkey, file, content, encoding, logicalSizeBudget, resources, strictRewrites)
+		return await writePreparedBlob(
+			dependencies,
+			did,
+			rkey,
+			file,
+			content,
+			encoding,
+			logicalSizeBudget,
+			resources,
+			strictRewrites,
+		)
 	})
 }
 
@@ -1402,6 +1428,7 @@ function createOriginalFileMetadata(
 }
 
 async function writeRewrittenHtml(
+	storage: Pick<SiteMaterializerDependencies, 'writeFile' | 'deleteFile'>,
 	did: string,
 	rkey: string,
 	file: FileInfo,
@@ -1414,7 +1441,7 @@ async function writeRewrittenHtml(
 			// Hosting also recognizes MIME-derived HTML paths (for example .shtml).
 			// Remove variants we cannot regenerate so they fall back to verified raw bytes.
 			assertRevalidationActive(resources)
-			await deleteFile(`${did}/${rkey}/.rewritten/${file.path}`)
+			await storage.deleteFile(`${did}/${rkey}/.rewritten/${file.path}`)
 		}
 		return
 	}
@@ -1428,7 +1455,7 @@ async function writeRewrittenHtml(
 			throw new Error(`Rewritten HTML exceeds the ${MAX_BLOB_SIZE}-byte file limit`)
 		}
 		const rewrittenKey = `${did}/${rkey}/.rewritten/${file.path}`
-		await writeFile(rewrittenKey, rewrittenContent, createRewrittenHtmlMetadata(file))
+		await storage.writeFile(rewrittenKey, rewrittenContent, createRewrittenHtmlMetadata(file))
 		logger.debug(`Wrote rewritten HTML: ${rewrittenKey}`)
 	} catch (error) {
 		if (strict) throw error
@@ -1441,6 +1468,7 @@ async function writeRewrittenHtml(
 }
 
 async function writePreparedBlob(
+	dependencies: SiteMaterializerDependencies,
 	did: string,
 	rkey: string,
 	file: FileInfo,
@@ -1459,14 +1487,62 @@ async function writePreparedBlob(
 	await reserveAndWriteWithinLogicalBudget(logicalSizeBudget, file.path, prepared.uncompressedSize, async () => {
 		// Registered before the object exists: the garbage collector never selects a row with a fresh
 		// clock, so it cannot delete this body between the write and the site's commit.
-		await registerCasObject(key, prepared.content.byteLength)
-		await writeFile(key, prepared.content, metadata)
+		await dependencies.registerCasObject(key, prepared.content.byteLength)
+		await dependencies.writeFile(key, prepared.content, metadata)
 	})
-	await writeRewrittenHtml(did, rkey, file, prepared, resources, strictRewrites)
+	await writeRewrittenHtml(dependencies, did, rkey, file, prepared, resources, strictRewrites)
 	logger.debug(
 		`Stored ${file.path} (${prepared.content.length} stored bytes, ${prepared.uncompressedSize} logical bytes)`,
 	)
 	return { uncompressedSize: prepared.uncompressedSize }
+}
+
+/**
+ * What materializing a site touches outside this module: cold storage, the
+ * Postgres ledger, the Redis invalidation publisher and PDS identity. Blob and
+ * record reads go through safe-fetch at the resolved endpoints.
+ */
+export interface SiteMaterializerDependencies {
+	getFileMetadata: typeof getFileMetadata
+	readFile: typeof readFile
+	writeFile: typeof writeFile
+	deleteFile: typeof deleteFile
+	getSiteCache: (
+		did: string,
+		rkey: string,
+	) => Promise<Pick<SiteCache, 'file_cids' | 'file_objects' | 'cold_synced'> | null>
+	isSupporter: typeof isSupporter
+	registerCasObject: typeof registerCasObject
+	touchCasObjects: typeof touchCasObjects
+	upsertSiteCache: typeof upsertSiteCache
+	upsertSiteSettingsCache: typeof upsertSiteSettingsCache
+	publishCacheInvalidation: typeof publishCacheInvalidation
+	publishCacheInvalidationStrict: (
+		did: string,
+		rkey: string,
+		action: 'update',
+		token?: string,
+	) => ReturnType<typeof publishCacheInvalidationStrict>
+	resolvePdsEndpoint: (did: string, resources?: RevalidationResources) => Promise<string | null>
+	/** Admit loopback PDS endpoints; production enables it only behind the dev-only gates. */
+	allowLocalhostPds: boolean
+}
+
+const defaultSiteMaterializerDependencies: SiteMaterializerDependencies = {
+	getFileMetadata,
+	readFile,
+	writeFile,
+	deleteFile,
+	getSiteCache,
+	isSupporter,
+	registerCasObject,
+	touchCasObjects,
+	upsertSiteCache,
+	upsertSiteSettingsCache,
+	publishCacheInvalidation,
+	publishCacheInvalidationStrict,
+	resolvePdsEndpoint,
+	allowLocalhostPds: allowDevLocalPdsFetch,
 }
 
 export interface SiteUpdateOptions {
@@ -1491,6 +1567,7 @@ interface SiteUpdateRequest {
 	forceDownload: boolean
 	skipInvalidation: boolean
 	resources?: RevalidationResources
+	dependencies: SiteMaterializerDependencies
 }
 
 interface ValidatedSiteUpdate {
@@ -1549,7 +1626,8 @@ function createSiteUpdateRequest(
 	rkey: string,
 	record: WispFsRecord,
 	recordCid: string,
-	options?: SiteUpdateOptions,
+	options: SiteUpdateOptions | undefined,
+	dependencies: SiteMaterializerDependencies,
 ): SiteUpdateRequest {
 	return {
 		did,
@@ -1562,6 +1640,7 @@ function createSiteUpdateRequest(
 		verifiedRepair: options?.verifiedRepair,
 		onVerifiedRepairComplete: options?.onVerifiedRepairComplete,
 		resources: options?.resources,
+		dependencies,
 	}
 }
 
@@ -1570,7 +1649,7 @@ async function resolveSiteUpdatePdsEndpoint(
 	resources?: RevalidationResources,
 ): Promise<string | null> {
 	assertRevalidationActive(resources)
-	const resolved = await resolvePdsEndpoint(request.did, resources)
+	const resolved = await request.dependencies.resolvePdsEndpoint(request.did, resources)
 	const pdsEndpoint = resolved ? rewritePdsEndpoint(resolved) : null
 	if (!pdsEndpoint) logger.error('Could not resolve PDS', undefined, { did: request.did })
 	return pdsEndpoint
@@ -1585,7 +1664,13 @@ async function expandSiteUpdateRoot(
 	try {
 		const expanded = await expandSubfs(root, {
 			rootOwnerDid: request.did,
-			fetchSubfsRecord: (subject) => fetchSubfsRecord(subject, resolveSourcePdsEndpoint, resources),
+			fetchSubfsRecord: (subject) =>
+				fetchSubfsRecord(
+					subject,
+					resolveSourcePdsEndpoint,
+					resources,
+					requestOptionsForPds(request.dependencies.allowLocalhostPds),
+				),
 			signal: resources?.signal,
 			byteBudget: resources?.transferBudget,
 			limits: SUBFS_EXPANSION_LIMITS,
@@ -1625,9 +1710,15 @@ async function validateSiteUpdate(
 	}
 	const pdsEndpoint = await resolveSiteUpdatePdsEndpoint(request, resources)
 	if (!pdsEndpoint) return null
-	const resolveSourcePdsEndpoint = createPdsEndpointResolver(request.did, pdsEndpoint)
+	const resolveSourcePdsEndpoint = createPdsEndpointResolver(
+		request.did,
+		pdsEndpoint,
+		request.dependencies.resolvePdsEndpoint,
+	)
 	const expanded = await expandSiteUpdateRoot(request, root, resolveSourcePdsEndpoint, resources)
-	const sizeLimit = (await isSupporter(request.did, resources?.signal)) ? MAX_SITE_SIZE_SUPPORTER : MAX_SITE_SIZE
+	const sizeLimit = (await request.dependencies.isSupporter(request.did, resources?.signal))
+		? MAX_SITE_SIZE_SUPPORTER
+		: MAX_SITE_SIZE
 	assertRevalidationActive(resources)
 	if (!validateExpandedSiteLimits(expanded.expandedRoot, sizeLimit)) return null
 	if (
@@ -1653,7 +1744,7 @@ function warnOnUnexpectedCachedFileCids(did: string, rkey: string, rawFileCids: 
 
 /** Load the previous ledger before the update marker protects any mutations. */
 async function loadSiteUpdateLedger(update: ValidatedSiteUpdate): Promise<SiteUpdateLedger> {
-	const existing = await getSiteCache(update.request.did, update.request.rkey)
+	const existing = await update.request.dependencies.getSiteCache(update.request.did, update.request.rkey)
 	const rawFileCids = existing?.file_cids as unknown
 	const normalized = normalizeFileCids(rawFileCids)
 	warnOnUnexpectedCachedFileCids(update.request.did, update.request.rkey, rawFileCids, normalized.source)
@@ -1674,7 +1765,7 @@ async function loadSiteUpdateLedger(update: ValidatedSiteUpdate): Promise<SiteUp
 async function markSiteUpdateInProgress(update: ValidatedSiteUpdate): Promise<string | undefined> {
 	if (update.request.skipInvalidation) return undefined
 	const token = crypto.randomUUID()
-	await publishCacheInvalidation(update.request.did, update.request.rkey, 'updating', token)
+	await update.request.dependencies.publishCacheInvalidation(update.request.did, update.request.rkey, 'updating', token)
 	return token
 }
 
@@ -1745,9 +1836,13 @@ interface AccountingProbe {
 	metadataReadFailed: boolean
 }
 
-async function probeStoredFileAccounting(objectKey: string, file: FileInfo): Promise<AccountingProbe> {
+async function probeStoredFileAccounting(
+	getMetadata: SiteMaterializerDependencies['getFileMetadata'],
+	objectKey: string,
+	file: FileInfo,
+): Promise<AccountingProbe> {
 	try {
-		const metadata = await getFileMetadata(objectKey)
+		const metadata = await getMetadata(objectKey)
 		return {
 			file,
 			storedSize: getStoredUncompressedSize(metadata, file, { checkSourceDid: false }),
@@ -1775,7 +1870,11 @@ async function accountSiteFiles(plan: SiteFilePlan): Promise<AccountedSiteFilePl
 		for (let index = 0; index < plan.newFiles.length; index += 20) {
 			assertRevalidationActive(plan.update.resources)
 			const batch = plan.newFiles.slice(index, index + 20)
-			const probes = await Promise.all(batch.map((file) => probeStoredFileAccounting(keyOf(file), file)))
+			const probes = await Promise.all(
+				batch.map((file) =>
+					probeStoredFileAccounting(plan.update.request.dependencies.getFileMetadata, keyOf(file), file),
+				),
+			)
 			for (const probe of probes) {
 				if (probe.storedSize === null) {
 					filesToDownload.push(probe.file)
@@ -1827,18 +1926,19 @@ async function claimReusedObjects(
 	const alive = new Set<string>()
 	for (let index = 0; index < keys.length; index += 1_000) {
 		assertRevalidationActive(plan.update.resources)
-		for (const key of await touchCasObjects(keys.slice(index, index + 1_000))) alive.add(key)
+		for (const key of await plan.update.request.dependencies.touchCasObjects(keys.slice(index, index + 1_000)))
+			alive.add(key)
 	}
 	return reused.filter((file) => !plan.previousObjectKeys.has(keyOf(file)) && !alive.has(keyOf(file)))
 }
 
 /** Build one file's pre-rewritten HTML for this site from the body already in storage. */
 async function rewriteFromStoredBody(plan: AccountedSiteFilePlan, file: FileInfo): Promise<void> {
-	const { did, rkey, resources } = plan.update.request
+	const { did, rkey, resources, dependencies } = plan.update.request
 	const key = plan.objectKeys.get(file.path) ?? objectKeyFor(file)
 	await blobProcessingGate.run(async () => {
 		assertRevalidationActive(resources)
-		const stored = await readFile(key)
+		const stored = await dependencies.readFile(key)
 		if (!stored) throw new Error('Stored body is missing')
 		const encoding = stored.metadata.customMetadata?.encoding === 'gzip' ? ('gzip' as const) : undefined
 		const decodedHtml = Buffer.from(
@@ -1846,6 +1946,7 @@ async function rewriteFromStoredBody(plan: AccountedSiteFilePlan, file: FileInfo
 		)
 		assertRevalidationActive(resources)
 		await writeRewrittenHtml(
+			dependencies,
 			did,
 			rkey,
 			file,
@@ -1894,6 +1995,7 @@ async function downloadPlannedFile(plan: AccountedSiteFilePlan, file: FileInfo):
 	assertRevalidationActive(plan.update.resources)
 	const endpoint = await plan.update.resolveSourcePdsEndpoint(file.ownerDid, plan.update.resources)
 	return await downloadAndWriteBlob(
+		plan.update.request.dependencies,
 		plan.update.request.did,
 		plan.update.request.rkey,
 		file,
@@ -1958,7 +2060,7 @@ function collectDeleteFailures(keys: string[], results: PromiseSettledResult<voi
 
 /** Delete removed original and rewritten keys after the new writes finish. */
 async function deleteSiteFiles(plan: SiteFilePlan): Promise<DeleteFailure[]> {
-	return await deleteSiteKeys(getDeleteKeys(plan))
+	return await deleteSiteKeys(plan.update.request.dependencies.deleteFile, getDeleteKeys(plan))
 }
 
 interface BlobBackoffSummary {
@@ -1995,12 +2097,9 @@ function throwIfDownloadsBackedOff(
 
 async function publishUpdateAfterFailure(plan: SiteFilePlan): Promise<void> {
 	if (!plan.update.request.skipInvalidation) {
-		await publishCacheInvalidation(
-			plan.update.request.did,
-			plan.update.request.rkey,
-			'update',
-			plan.invalidationToken,
-		).catch(() => undefined)
+		await plan.update.request.dependencies
+			.publishCacheInvalidation(plan.update.request.did, plan.update.request.rkey, 'update', plan.invalidationToken)
+			.catch(() => undefined)
 	}
 }
 
@@ -2039,7 +2138,10 @@ async function retryDownloadFailures(plan: AccountedSiteFilePlan, failures: Down
 
 async function retryDeleteFailures(plan: SiteFilePlan, failures: DeleteFailure[]): Promise<void> {
 	if (failures.length === 0) return
-	const retryFailures = await deleteSiteKeys(failures.map((failure) => failure.key))
+	const retryFailures = await deleteSiteKeys(
+		plan.update.request.dependencies.deleteFile,
+		failures.map((failure) => failure.key),
+	)
 	if (retryFailures.length === 0) return
 	logger.error(`Retry of failed deletes failed for ${plan.update.request.did}/${plan.update.request.rkey}`, undefined, {
 		did: plan.update.request.did,
@@ -2051,11 +2153,14 @@ async function retryDeleteFailures(plan: SiteFilePlan, failures: DeleteFailure[]
 	throw new Error(`Failed to delete files for ${plan.update.request.did}/${plan.update.request.rkey}`)
 }
 
-async function deleteSiteKeys(keys: string[]): Promise<DeleteFailure[]> {
+async function deleteSiteKeys(
+	deleteObject: SiteMaterializerDependencies['deleteFile'],
+	keys: string[],
+): Promise<DeleteFailure[]> {
 	const failures: DeleteFailure[] = []
 	for (let index = 0; index < keys.length; index += 50) {
 		const batch = keys.slice(index, index + 50)
-		failures.push(...collectDeleteFailures(batch, await Promise.allSettled(batch.map((key) => deleteFile(key)))))
+		failures.push(...collectDeleteFailures(batch, await Promise.allSettled(batch.map((key) => deleteObject(key)))))
 	}
 	return failures
 }
@@ -2105,17 +2210,23 @@ async function validateFinalSiteAccounting(plan: AccountedSiteFilePlan): Promise
 }
 
 async function commitSiteLedger(plan: AccountedSiteFilePlan): Promise<void> {
-	const { did, rkey, recordCid } = plan.update.request
+	const { did, rkey, recordCid, dependencies } = plan.update.request
 	const resources = plan.update.resources
 	// The final ledger/settings writes are the point of no return. Check the
 	// active resources before and after each awaited operation so a stop or
 	// deadline cannot begin the next mutation after the operation is fenced.
 	assertRevalidationActive(resources)
 	logger.debug(`About to upsert site cache for ${did}/${rkey}`)
-	await upsertSiteCache(did, rkey, recordCid, plan.newFileCids, true, Object.fromEntries(plan.objectKeys))
+	await dependencies.upsertSiteCache(did, rkey, recordCid, plan.newFileCids, true, Object.fromEntries(plan.objectKeys))
 	assertRevalidationActive(resources)
 	logger.debug(`Updated site cache for ${did}/${rkey} with record CID ${recordCid}`)
-	const settingsRecord = await fetchSettingsRecord(did, rkey, plan.update.pdsEndpoint, resources)
+	const settingsRecord = await fetchSettingsRecord(
+		did,
+		rkey,
+		plan.update.pdsEndpoint,
+		resources,
+		requestOptionsForPds(dependencies.allowLocalhostPds),
+	)
 	assertRevalidationActive(resources)
 	if (settingsRecord)
 		// commitSiteLedger already runs under the site lock. Calling the public
@@ -2126,7 +2237,11 @@ async function commitSiteLedger(plan: AccountedSiteFilePlan): Promise<void> {
 			settingsRecord.record,
 			settingsRecord.cid,
 			{ skipInvalidation: true, resources },
-			defaultSettingsWriteDependencies,
+			{
+				...defaultSettingsWriteDependencies,
+				upsertSiteSettingsCache: dependencies.upsertSiteSettingsCache,
+				publishCacheInvalidation: dependencies.publishCacheInvalidation,
+			},
 		)
 	assertRevalidationActive(resources)
 }
@@ -2141,7 +2256,7 @@ async function notifySiteUpdateComplete(plan: SiteFilePlan): Promise<void> {
 	const { request } = plan.update
 	if (request.verifiedRepair) {
 		assertRevalidationActive(request.resources)
-		const invalidationStreamId = await publishCacheInvalidationStrict(
+		const invalidationStreamId = await request.dependencies.publishCacheInvalidationStrict(
 			request.did,
 			request.rkey,
 			'update',
@@ -2156,7 +2271,7 @@ async function notifySiteUpdateComplete(plan: SiteFilePlan): Promise<void> {
 		return
 	}
 	if (!plan.update.request.skipInvalidation) {
-		await publishCacheInvalidation(plan.update.request.did, plan.update.request.rkey, 'update', plan.invalidationToken)
+		await request.dependencies.publishCacheInvalidation(request.did, request.rkey, 'update', plan.invalidationToken)
 	}
 }
 
@@ -2188,6 +2303,8 @@ export interface SiteUpdateHandlerDependencies {
 		options?: SiteUpdateOptions,
 	) => Promise<void>
 	withSiteWriteLock: typeof withSiteWriteLock
+	/** Collaborators of the locked materializer; production binds the real ones. */
+	materializer?: SiteMaterializerDependencies
 }
 
 const defaultSiteUpdateHandlerDependencies: SiteUpdateHandlerDependencies = {
@@ -2232,7 +2349,14 @@ async function reconcileSiteUpdateUnderLock(
 		await dependencies.materializeCurrentRecord(did, rkey, currentRecord.record, currentRecord.cid, options)
 		return
 	}
-	await handleSiteCreateOrUpdateLocked(did, rkey, currentRecord.record, currentRecord.cid, options)
+	await handleSiteCreateOrUpdateLocked(
+		did,
+		rkey,
+		currentRecord.record,
+		currentRecord.cid,
+		options,
+		dependencies.materializer,
+	)
 }
 
 /**
@@ -2288,8 +2412,9 @@ async function handleSiteCreateOrUpdateLocked(
 	record: WispFsRecord,
 	recordCid: string,
 	options?: SiteUpdateOptions,
+	dependencies: SiteMaterializerDependencies = defaultSiteMaterializerDependencies,
 ): Promise<void> {
-	const request = createSiteUpdateRequest(did, rkey, record, recordCid, options)
+	const request = createSiteUpdateRequest(did, rkey, record, recordCid, options, dependencies)
 	logger.info(`Processing site ${did}/${rkey}`, {
 		recordCid,
 		forceRewriteHtml: request.forceRewriteHtml,

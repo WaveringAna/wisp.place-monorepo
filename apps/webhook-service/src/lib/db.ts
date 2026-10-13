@@ -23,9 +23,18 @@ const logger = createLogger('webhook-service:db')
 // requirements before this module constructs a connection. Never read raw env
 // here: otherwise a malformed production DATABASE_URL can bypass config.
 const validatedDatabaseUrl = config.databaseUrl
-if (!validatedDatabaseUrl) throw new Error('DATABASE_URL is required')
 
-export const db = new SQL(validatedDatabaseUrl)
+// Bun opens no connection before the first query, so importing this module
+// performs no I/O. Without a validated URL every use fails, rather than letting
+// Bun fall back to raw PG* environment variables.
+export const db = validatedDatabaseUrl ? new SQL(validatedDatabaseUrl) : missingDatabase()
+
+function missingDatabase(): SQL {
+	const missing = (): never => {
+		throw new Error('DATABASE_URL is required')
+	}
+	return Object.assign(missing, { begin: missing, reserve: missing, close: async () => undefined }) as unknown as SQL
+}
 
 /**
  * A statement runner: the shared pool, or one open transaction on it.
@@ -42,11 +51,12 @@ export async function runIntakeBatch<T>(work: (sql: SqlExecutor) => Promise<T>):
 }
 
 /**
- * Serialize all schema bootstrap work across replicas. The transaction-scoped
+ * Bootstrap the schema; the service runs this once before any other database
+ * work. Serialize all schema bootstrap work across replicas. The transaction-scoped
  * advisory lock is released automatically on commit/rollback. lock_timeout
  * makes a wedged migration fail startup rather than wait forever.
  */
-async function runDatabaseMigrations(): Promise<void> {
+export async function runDatabaseMigrations(): Promise<void> {
 	await db.begin(async (tx) => {
 		await tx`SET LOCAL lock_timeout = '5000ms'`
 		await tx`SELECT pg_advisory_xact_lock(814732190)`
@@ -365,8 +375,6 @@ async function runDatabaseMigrations(): Promise<void> {
 		`
 	})
 }
-
-await runDatabaseMigrations()
 
 function webhookKey(did: string, rkey: string): string {
 	return `${did}/${rkey}`

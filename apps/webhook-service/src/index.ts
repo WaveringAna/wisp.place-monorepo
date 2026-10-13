@@ -22,6 +22,9 @@ import { canCloseSharedClients } from './lib/shutdown-policy'
 
 const logger = createLogger('webhook-service')
 
+// Schema bootstrap precedes every lifecycle step, including the health server.
+await database.runDatabaseMigrations()
+
 type LifecyclePhase = 'starting' | 'reconciling-live' | 'live' | 'stopping' | 'stopped' | 'failed'
 
 type HealthServer = ReturnType<typeof Bun.serve>

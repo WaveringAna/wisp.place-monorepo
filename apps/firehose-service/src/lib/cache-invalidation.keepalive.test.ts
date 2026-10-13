@@ -1,17 +1,21 @@
-import { afterEach, beforeEach, expect, jest, mock, test } from 'bun:test'
+import { afterEach, beforeEach, expect, jest, test } from 'bun:test'
 import { config } from '../config'
+import { createCacheInvalidationPublisher } from './cache-invalidation'
 
 class FakeIORedis {
-	static instances: FakeIORedis[] = []
 	status = 'ready'
 	pings = 0
 	quitCalled = false
 
-	constructor() {
-		FakeIORedis.instances.push(this)
+	on(): this {
+		return this
 	}
 
-	on(): this {
+	once(): this {
+		return this
+	}
+
+	removeListener(): this {
 		return this
 	}
 
@@ -24,6 +28,14 @@ class FakeIORedis {
 		return [1, '1-0']
 	}
 
+	async xadd(): Promise<string> {
+		return '1-0'
+	}
+
+	async publish(): Promise<number> {
+		return 1
+	}
+
 	async quit(): Promise<string> {
 		this.quitCalled = true
 		this.status = 'end'
@@ -31,29 +43,32 @@ class FakeIORedis {
 	}
 }
 
-mock.module('ioredis', () => ({ default: FakeIORedis }))
-
-const { closeCacheInvalidationPublisher, enqueueSiteRevalidation } = await import('./cache-invalidation')
-const originalRedisUrl = config.redisUrl
+let instances: FakeIORedis[] = []
+const { closeCacheInvalidationPublisher, enqueueSiteRevalidation } = createCacheInvalidationPublisher({
+	config: { ...config, redisUrl: 'redis://redis.test:6379' },
+	createRedis: () => {
+		const redis = new FakeIORedis()
+		instances.push(redis)
+		return redis
+	},
+})
 
 beforeEach(() => {
 	jest.useFakeTimers()
-	config.redisUrl = 'redis://redis.test:6379'
-	FakeIORedis.instances = []
+	instances = []
 })
 
 afterEach(async () => {
 	try {
 		await closeCacheInvalidationPublisher()
 	} finally {
-		config.redisUrl = originalRedisUrl
 		jest.useRealTimers()
 	}
 })
 
 test('pings the idle publisher connection inside the 180 s proxy idle timeout', async () => {
 	expect(await enqueueSiteRevalidation('did:plc:test', 'site', 'storage-miss:index.html')).toBe('enqueued')
-	const [publisher] = FakeIORedis.instances
+	const [publisher] = instances
 
 	jest.advanceTimersByTime(180_000)
 	expect(publisher?.pings).toBe(3)
@@ -65,7 +80,7 @@ test('pings the idle publisher connection inside the 180 s proxy idle timeout', 
 
 test('stops pinging once the publisher is closed', async () => {
 	await enqueueSiteRevalidation('did:plc:test', 'site', 'storage-miss:index.html')
-	const [publisher] = FakeIORedis.instances
+	const [publisher] = instances
 	await closeCacheInvalidationPublisher()
 
 	jest.advanceTimersByTime(180_000)

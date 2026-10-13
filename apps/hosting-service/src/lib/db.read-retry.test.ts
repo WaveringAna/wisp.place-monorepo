@@ -1,24 +1,23 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test'
+import { beforeEach, describe, expect, test } from 'bun:test'
 import type { SiteCache } from '@wispplace/database'
+import { CacheManager } from './cache-manager'
+import { createHostingDb, type HostingSql } from './db'
 
-// The module binds its pool at import, so give it a fake postgres whose reads
-// fail with the queued errors before they return a row.
+// Postgres is the one piece faked here: reads fail with the queued errors before
+// they return a row. The retry and the lookup cache are the real ones.
 const row: SiteCache = { did: 'did:plc:a', rkey: 'site', record_cid: 'cid', file_cids: {}, cached_at: 0, updated_at: 0 }
 let queued: Error[] = []
 let queries = 0
-mock.module('postgres', () => ({
-	default: () =>
-		Object.assign(
-			async () => {
-				queries++
-				const error = queued.shift()
-				if (error) throw error
-				return [row]
-			},
-			{ end: async () => {} },
-		),
-}))
-const { getSiteCache } = await import('./db')
+const sql = (async () => {
+	queries++
+	const error = queued.shift()
+	if (error) throw error
+	return [row]
+}) as unknown as HostingSql
+const { getSiteCache } = createHostingDb({
+	sql,
+	cache: new CacheManager({ domains: {}, customDomains: {}, settings: {}, siteCache: {} }),
+})
 
 const withCode = (code: string) => Object.assign(new Error(`write ${code} 10.88.0.4:15433`), { code })
 

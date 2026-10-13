@@ -1,10 +1,13 @@
+import '../test-env'
 import { afterEach, describe, expect, test } from 'bun:test'
+import { parseConfig } from '../config'
+import { createRedisPublisher } from './redis'
 
-process.env.NODE_ENV = 'test'
-process.env.WEBHOOK_ALLOW_INSECURE_DEV = '1'
-process.env.REDIS_URL = 'redis://redis.example:6379'
-
-const redis = await import('./redis')
+const settings = parseConfig({
+	NODE_ENV: 'test',
+	WEBHOOK_ALLOW_INSECURE_DEV: '1',
+	REDIS_URL: 'redis://redis.example:6379',
+})
 
 type FakeRedis = {
 	url: string
@@ -64,14 +67,12 @@ const event = {
 }
 
 afterEach(() => {
-	redis.resetRedisPublisherForTests()
-	redis.setRedisClientFactoryForTests()
 	fakeClients.length = 0
 })
 
 describe('Redis publisher connection readiness', () => {
 	test('awaits the lazy Redis connection before publishing and reports readiness', async () => {
-		redis.setRedisClientFactoryForTests((url) => createFakeRedis(url) as unknown as import('bun').RedisClient)
+		const redis = createRedisPublisher(settings, (url) => createFakeRedis(url) as unknown as import('bun').RedisClient)
 		expect(redis.getRedisPublisherHealth()).toMatchObject({ configured: true, connected: false })
 
 		// The first call starts the lazy connection and is intentionally bounded;
@@ -82,5 +83,6 @@ describe('Redis publisher connection readiness', () => {
 		expect(redis.getRedisPublisherHealth()).toMatchObject({ configured: true, connected: true })
 		expect(await redis.publishWebhookEvent(event)).toEqual({ published: true, dropped: false })
 		expect(fakeClients[0]?.publishes).toHaveLength(1)
+		await redis.closeRedisPublisher()
 	})
 })

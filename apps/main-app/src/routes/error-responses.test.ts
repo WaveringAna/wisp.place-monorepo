@@ -1,6 +1,13 @@
-import { afterAll, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test'
+import { afterAll, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { BASE_HOST } from '@wispplace/constants'
 import { signCookie } from 'elysia/utils'
+import { logsDuring } from '../lib/collected-logs'
+import { clearSessionCache } from '../lib/wisp-auth'
+import { createAuthRoutes } from './auth'
+import { createDomainRoutes, type DomainRouteDeps } from './domain'
+import { createSecretRoutes } from './secret'
+import { siteRoutes } from './site'
+import { createWebhookRoutes } from './webhook'
 
 const COOKIE_SECRET = 'test-cookie-secret'
 const DID = 'did:example:alice'
@@ -21,124 +28,70 @@ const publicRegistrations = new Map<string, unknown>()
 let secretDatabaseCalls = 0
 const suppliedSecretTokens: Array<string | undefined> = []
 
-const logger = {
-	debug: () => undefined,
-	error: () => undefined,
-	info: () => undefined,
-	warn: () => undefined,
-}
-
 const fail = async (): Promise<never> => {
 	throw new Error(SENTINEL)
 }
 
-mock.module('@wispplace/observability', () => ({
-	createLogger: () => logger,
-}))
+const isDomainRegistered = async (domain: string) => {
+	publicLookups.push(domain)
+	if (failPublicLookup) throw new Error(SENTINEL)
+	return publicRegistrations.get(domain) ?? { registered: false as const }
+}
 
-mock.module('../lib/pds-backfill', () => ({
+const hasLivePrivateSite = async (siteId: string): Promise<boolean> => {
+	privateLookups.push(siteId)
+	if (failPrivateLookup) throw new Error(SENTINEL)
+	return liveSiteIds.has(siteId) && !expiredSiteIds.has(siteId)
+}
+
+// Caddy's ask only reads registrations; every write path fails loudly if reached.
+const domainApp = createDomainRoutes({
+	claimCustomDomain: fail,
+	claimDomain: fail,
+	deleteCustomDomain: fail,
+	deleteWispDomain: fail,
+	getCustomDomainById: fail,
+	getCustomDomainInfo: fail,
+	getDomainByDid: fail,
+	isDomainAvailable: fail,
+	isDomainRegistered: isDomainRegistered as DomainRouteDeps['isDomainRegistered'],
+	updateCustomDomainRkey: fail,
+	updateCustomDomainVerification: fail,
+	updateDomain: fail,
+	updateWispDomainSite: fail,
+	waitForSiteCache: fail,
+	hasLivePrivateSite,
+})({} as never, COOKIE_SECRET)
+
+const authRoutes = createAuthRoutes({
+	eventualRead: { getUserStatus: fail },
 	backfillSitesFromPds: async () => ({ found: 0, queued: 0 }),
-}))
+	resolvePrivateShareState: async () => null,
+})
 
-mock.module('../lib/db', () => ({
-	addSupporter: fail,
-	claimCustomDomain: async () => undefined,
-	claimDomain: async () => 'claimed.wisp.test',
-	consumeWebhookMutationRateLimit: async () => true,
+const secretRoutes = createSecretRoutes({
 	createWebhookSecret: async (_did: string, _name: string, token?: string) => {
 		secretDatabaseCalls++
 		suppliedSecretTokens.push(token)
 		return { token: token ?? 'wsk_test-token', createdAt: '2026-01-01T00:00:00.000Z' }
 	},
-	deleteCustomDomain: async () => undefined,
 	deleteWebhookSecret: async () => {
 		secretDatabaseCalls++
 		return true
 	},
-	deleteWispDomain: async () => undefined,
-	eventualRead: {
-		getAdminSites: fail,
-		getAdminSupporters: fail,
-	},
-	getAdminDatabaseReport: fail,
-	getWebhookEventHistory: fail,
 	listWebhookSecrets: async () => [],
 	rotateWebhookSecret: async (_did: string, _name: string, token?: string) => {
 		secretDatabaseCalls++
 		suppliedSecretTokens.push(token)
 		return { token: token ?? 'wsk_test-token', rotatedAt: '2026-01-01T00:00:00.000Z' }
 	},
-	getCustomDomainById: async () => null,
-	getCustomDomainInfo: async () => null,
-	getDomainByDid: async () => null,
-	isDomainAvailable: async () => false,
-	isDomainRegistered: async (domain: string) => {
-		publicLookups.push(domain)
-		if (failPublicLookup) throw new Error(SENTINEL)
-		return publicRegistrations.get(domain) ?? { registered: false }
-	},
-	getSitesByDid: async () => [],
-	removeSupporter: fail,
-	updateCustomDomainRkey: async () => undefined,
-	updateCustomDomainVerification: async () => undefined,
-	updateDomain: async () => 'updated.wisp.test',
-	updateWispDomainSite: async () => undefined,
-	waitForSiteCache: async () => true,
+})
+
+const webhookRoutes = createWebhookRoutes({
+	consumeWebhookMutationRateLimit: async () => true,
+	getWebhookEventHistory: fail,
 	withWebhookOwnerMutationLock: async <T>(_did: string, operation: () => Promise<T>): Promise<T> => await operation(),
-}))
-
-mock.module('../lib/cache-invalidation', () => ({
-	publishDomainCacheInvalidation: async () => undefined,
-}))
-
-mock.module('../lib/dns-verify', () => ({
-	lookupNameservers: async () => [],
-	verifyCustomDomain: async () => ({ verified: false }),
-}))
-
-mock.module('../lib/private-sites-db', () => ({
-	hasLivePrivateSite: async (siteId: string): Promise<boolean> => {
-		privateLookups.push(siteId)
-		if (failPrivateLookup) throw new Error(SENTINEL)
-		return liveSiteIds.has(siteId) && !expiredSiteIds.has(siteId)
-	},
-}))
-
-mock.module('../lib/oauth-authorize', () => ({
-	authorizeWisp: fail,
-	authorizeWispLegacy: fail,
-	canSetSpindleSecrets: async () => false,
-	grantedAddOns: async () => [],
-	isScopeAddOn: () => false,
-	setupAddOn: () => null,
-	setupState: () => '{}',
-	setupTab: () => 'sites',
-	stateValue: () => undefined,
-	isLegacyScopeState: () => false,
-	missingGrantedCapabilities: async () => [],
-	unmarkLegacyScopeState: () => undefined,
-}))
-
-mock.module('./private-redeem', () => ({
-	resolvePrivateShareState: async () => null,
-}))
-
-mock.module('../lib/slingshot-handle-resolver', () => ({
-	SlingshotHandleResolver: class {
-		async resolve(_handle: string): Promise<null> {
-			return null
-		}
-	},
-}))
-
-const [{ authRoutes }, { domainRoutes }, { secretRoutes }, { siteRoutes }, { webhookRoutes }] = await Promise.all([
-	import('./auth'),
-	import('./domain'),
-	import('./secret'),
-	import('./site'),
-	import('./webhook'),
-])
-const domainApp = domainRoutes({} as never, COOKIE_SECRET)
+})
 
 const ask = (domain: string): Promise<Response> =>
 	domainApp.handle(new Request(`http://localhost/api/domain/registered?domain=${encodeURIComponent(domain)}`))
@@ -162,6 +115,7 @@ const safeJson = async (response: Response): Promise<unknown> => {
 }
 
 beforeEach(() => {
+	clearSessionCache()
 	process.env.PRIVATE_HOST = PRIVATE_HOST
 	delete process.env.PREVIEW_HOST
 	failPublicLookup = false
@@ -176,6 +130,7 @@ beforeEach(() => {
 })
 
 afterAll(() => {
+	clearSessionCache()
 	if (originalPreviewHost === undefined) delete process.env.PREVIEW_HOST
 	else process.env.PREVIEW_HOST = originalPreviewHost
 	if (originalPrivateHost === undefined) {
@@ -187,28 +142,38 @@ afterAll(() => {
 
 describe('public error responses', () => {
 	test('keeps OAuth signin failures generic and does not duplicate the error to console', async () => {
-		const app = authRoutes({} as never, COOKIE_SECRET)
+		// The authorization server rejects every request, so the real authorizeWisp fails on its retry too.
+		const app = authRoutes({ authorize: fail } as never, COOKIE_SECRET)
 		const consoleError = spyOn(console, 'error').mockImplementation(() => undefined)
 
 		try {
-			const response = await app.handle(
-				new Request('http://localhost/api/auth/signin', {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ handle: 'alice.example' }),
-				}),
-			)
+			const logs = await logsDuring('main-app', async () => {
+				const response = await app.handle(
+					new Request('http://localhost/api/auth/signin', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({ handle: 'alice.example' }),
+					}),
+				)
 
-			expect(response.status).toBe(401)
-			expect(await safeJson(response)).toEqual({
-				details: 'Unable to start authentication',
-				error: 'Authentication failed',
+				expect(response.status).toBe(401)
+				expect(await safeJson(response)).toEqual({
+					details: 'Unable to start authentication',
+					error: 'Authentication failed',
+				})
+
+				const loginResponse = await app.handle(new Request('http://localhost/api/auth/login?login_hint=alice.example'))
+				expect(loginResponse.status).toBe(302)
+				expect(loginResponse.headers.get('location')).toBe('/?error=auth_failed')
 			})
 
-			const loginResponse = await app.handle(new Request('http://localhost/api/auth/login?login_hint=alice.example'))
-			expect(loginResponse.status).toBe(302)
-			expect(loginResponse.headers.get('location')).toBe('/?error=auth_failed')
-			expect(consoleError).not.toHaveBeenCalled()
+			// The structured logger is the only writer: one console line per error it recorded, nothing raw.
+			const errors = logs.filter((entry) => entry.level === 'error').reverse()
+			expect(errors.map((entry) => entry.message)).toEqual(['Signin error', 'Login error'])
+			expect(consoleError.mock.calls.map((args) => args.length)).toEqual([1, 1])
+			expect(consoleError.mock.calls.map(([line]) => String(line).split(' {')[0])).toEqual(
+				errors.map((entry) => `[main-app] ${entry.message}`),
+			)
 		} finally {
 			consoleError.mockRestore()
 		}

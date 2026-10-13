@@ -1,14 +1,21 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test'
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import { gzipSync } from 'node:zlib'
 import { BlobRef } from '@atproto/api'
-import * as atproto from '@wispplace/atproto-utils'
+import { computeCID } from '@wispplace/atproto-utils'
 import { casKey, type FileObjects } from '@wispplace/fs-utils'
 import type { Entry, Record as WispFsRecord } from '@wispplace/lexicons/types/place/wisp/fs'
-import * as safeFetch from '@wispplace/safe-fetch'
 import { CID } from 'multiformats/cid'
 import { sha256 } from 'multiformats/hashes/sha2'
-import { handleSiteCreateOrUpdate } from './cache-writer'
+import { handleSiteCreateOrUpdate, type SiteMaterializerDependencies } from './cache-writer'
 import { classifyLegacyFile } from './cas-migration'
+import {
+	allowLoopbackFetch,
+	createMemorySiteObjectStore,
+	type LocalPds,
+	recordNotFound,
+	startLocalPds,
+} from './local-pds.fixture'
+import type { SiteObjectStore } from './storage'
 
 // Site bodies are stored once, at a content-addressed key, and shared by every site that references
 // them. Per-site state is only the manifest mapping and the pre-rewritten HTML.
@@ -17,7 +24,7 @@ const did = 'did:plc:root'
 const recordCid = 'current-record'
 
 type Stored = { data: Uint8Array; metadata: Record<string, string> }
-const store = new Map<string, Stored>()
+let objects: SiteObjectStore
 const siteRows = new Map<string, { file_cids: Record<string, string>; file_objects: unknown; cold_synced: boolean }>()
 const bodies = new Map<string, Uint8Array>()
 let blobsFetched: string[] = []
@@ -30,77 +37,69 @@ let unreadable = new Set<string>()
 let collected = new Set<string>()
 const events: string[] = []
 
-mock.module('@wispplace/atproto-utils', () => ({ ...atproto, getPdsForDid: async () => 'https://root.pds' }))
-mock.module('@wispplace/safe-fetch', () => ({
-	...safeFetch,
-	safeFetch: async (url: string) => {
-		const parsed = new URL(url)
-		if (!parsed.pathname.endsWith('getBlob')) return new Response(null, { status: 404 })
-		const cid = parsed.searchParams.get('cid') ?? ''
+let pds: LocalPds
+let restoreLoopbackFetch: () => void
+
+beforeAll(() => {
+	restoreLoopbackFetch = allowLoopbackFetch()
+	pds = startLocalPds((url) => {
+		if (url.pathname !== '/xrpc/com.atproto.sync.getBlob') return recordNotFound()
+		const cid = url.searchParams.get('cid') ?? ''
 		blobsFetched.push(cid)
 		const body = bodies.get(cid)
 		return body ? new Response(new Uint8Array(body), { status: 200 }) : new Response(null, { status: 404 })
-	},
-	safeFetchJson: async () => ({ value: undefined }),
-}))
-mock.module('./db', () => ({
-	deleteSiteSettingsCache: async () => undefined,
-	getSiteCache: async (_did: string, rkey: string) => siteRows.get(`${_did}/${rkey}`) ?? null,
-	isSupporter: async () => false,
-	markSiteCacheDeleted: async () => undefined,
-	registerCasObject: async (key: string, size: number) => {
-		registered.push({ key, size })
-		events.push('register')
-	},
-	touchCasObjects: async (keys: string[]) => {
-		touched.push([...keys])
-		events.push('touch')
-		return keys.filter((key) => !collected.has(key))
-	},
-	upsertSiteCache: async (
-		_did: string,
-		rkey: string,
-		_recordCid: string,
-		fileCids: Record<string, string>,
-		_coldSynced?: boolean,
-		fileObjects: FileObjects | null = null,
-	) => {
-		commits.push({ rkey, fileCids, fileObjects })
-		siteRows.set(`${_did}/${rkey}`, { file_cids: fileCids, file_objects: fileObjects, cold_synced: true })
-		events.push('commit')
-	},
-	upsertSiteSettingsCache: async () => undefined,
-	withSiteWriteLock: async (_d: string, _r: string, op: (signal: AbortSignal) => Promise<unknown>) =>
-		op(new AbortController().signal),
-}))
-mock.module('./storage', () => ({
-	deleteFile: async (key: string) => {
-		store.delete(key)
-		deleted.push(key)
-	},
-	getFileMetadata: async (key: string) => {
-		const entry = store.get(key)
-		return entry ? { key, size: entry.data.length, customMetadata: entry.metadata } : null
-	},
-	readFile: async (key: string) => {
-		if (unreadable.has(key)) throw new Error('storage unavailable')
-		const entry = store.get(key)
-		return entry
-			? { data: entry.data, metadata: { key, size: entry.data.length, customMetadata: entry.metadata } }
-			: null
-	},
-	listFiles: async () => [],
-	writeFile: async (key: string, content: Uint8Array, metadata: Record<string, string> = {}) => {
-		store.set(key, { data: content, metadata })
-		writes.push(key)
-		events.push('write')
-	},
-}))
-mock.module('./cache-invalidation', () => ({
-	publishCacheInvalidation: async () => undefined,
-	publishCacheInvalidationStrict: async () => '1-0',
-	closeCacheInvalidationPublisher: async () => {},
-}))
+	})
+})
+
+afterAll(async () => {
+	await pds.stop()
+	restoreLoopbackFetch()
+})
+
+function dependencies(): SiteMaterializerDependencies {
+	return {
+		getFileMetadata: objects.getFileMetadata,
+		readFile: async (key) => {
+			if (unreadable.has(key)) throw new Error('storage unavailable')
+			return await objects.readFile(key)
+		},
+		writeFile: async (key, content, metadata) => {
+			await objects.writeFile(key, content, metadata)
+			writes.push(key)
+			events.push('write')
+		},
+		deleteFile: async (key) => {
+			await objects.deleteFile(key)
+			deleted.push(key)
+		},
+		getSiteCache: async (_did, rkey) => siteRows.get(`${_did}/${rkey}`) ?? null,
+		isSupporter: async () => false,
+		registerCasObject: async (key, size) => {
+			registered.push({ key, size })
+			events.push('register')
+		},
+		touchCasObjects: async (keys) => {
+			touched.push([...keys])
+			events.push('touch')
+			return keys.filter((key) => !collected.has(key))
+		},
+		upsertSiteCache: async (_did, rkey, _recordCid, fileCids, _coldSynced, fileObjects = null) => {
+			commits.push({ rkey, fileCids, fileObjects })
+			siteRows.set(`${_did}/${rkey}`, { file_cids: fileCids, file_objects: fileObjects, cold_synced: true })
+			events.push('commit')
+		},
+		upsertSiteSettingsCache: async () => undefined,
+		publishCacheInvalidation: async () => undefined,
+		publishCacheInvalidationStrict: async () => '1-0',
+		resolvePdsEndpoint: async () => pds.url,
+		allowLocalhostPds: true,
+	}
+}
+
+async function storedObject(key: string): Promise<Stored | undefined> {
+	const object = await objects.readFile(key)
+	return object ? { data: object.data, metadata: object.metadata.customMetadata ?? {} } : undefined
+}
 
 type Spec = { name: string; content: string; mimeType?: string; gzip?: boolean; undeclared?: boolean }
 
@@ -154,6 +153,7 @@ function update(
 	return handleSiteCreateOrUpdate(owner, rkey, record, recordCid, options, {
 		fetchAuthoritativeSiteRecord: async () => ({ record, cid: recordCid }),
 		withSiteWriteLock: async (_d, _r, operation) => operation(new AbortController().signal),
+		materializer: dependencies(),
 	})
 }
 
@@ -162,7 +162,7 @@ const bodyWrites = () => writes.filter((key) => key.startsWith('cas/'))
 const rewrittenWrites = (rkey: string) => writes.filter((key) => key.startsWith(`${did}/${rkey}/.rewritten/`))
 
 beforeEach(() => {
-	store.clear()
+	objects = createMemorySiteObjectStore()
 	siteRows.clear()
 	bodies.clear()
 	blobsFetched = []
@@ -213,7 +213,7 @@ describe('CAS cache writer', () => {
 		// Pre-rewritten HTML embeds the site's own path prefix, so the new site still gets its own copy,
 		// built from the stored body rather than from the PDS.
 		expect(rewrittenWrites('site-b')).toEqual([`${did}/site-b/.rewritten/index.html`])
-		const rewritten = new TextDecoder().decode(store.get(`${did}/site-b/.rewritten/index.html`)?.data)
+		const rewritten = new TextDecoder().decode((await storedObject(`${did}/site-b/.rewritten/index.html`))?.data)
 		expect(rewritten).toContain('home')
 		expect(lastCommit()?.fileObjects).toEqual({
 			'index.html': keyOf(record, 'index.html'),
@@ -265,8 +265,8 @@ describe('CAS cache writer', () => {
 		const keyA = keyOf(plain, 'data.txt', 'text/plain')
 		const keyB = keyOf(asJson, 'data.txt', 'application/json')
 		expect(keyA).not.toBe(keyB)
-		expect(store.get(keyA)?.metadata.mimeType).toBe('text/plain')
-		expect(store.get(keyB)?.metadata.mimeType).toBe('application/json')
+		expect((await storedObject(keyA))?.metadata.mimeType).toBe('text/plain')
+		expect((await storedObject(keyB))?.metadata.mimeType).toBe('application/json')
 	})
 
 	test('a removed path loses its per-site rewritten HTML but never its shared body', async () => {
@@ -281,7 +281,7 @@ describe('CAS cache writer', () => {
 		await update('site-a', second)
 
 		expect(deleted).toEqual([`${did}/site-a/.rewritten/old.html`])
-		expect(store.has(oldKey)).toBe(true)
+		expect(await objects.readFile(oldKey)).not.toBeNull()
 		expect(lastCommit()?.fileObjects).toEqual({ 'index.html': keyOf(second, 'index.html') })
 	})
 
@@ -375,8 +375,8 @@ describe('CAS cache writer', () => {
 		const record = await recordOf({ name: 'index.html', content: '<h1>home</h1>' })
 		await update('site-a', record)
 		const key = keyOf(record, 'index.html')
-		const stored = store.get(key) as Stored
-		store.set(key, { data: stored.data, metadata: { ...stored.metadata, uncompressedSize: 'not-a-number' } })
+		const stored = (await storedObject(key)) as Stored
+		await objects.writeFile(key, stored.data, { ...stored.metadata, uncompressedSize: 'not-a-number' })
 		blobsFetched = []
 
 		await update('site-b', record)
@@ -394,7 +394,7 @@ describe('CAS cache writer', () => {
 
 		expect(blobsFetched).toEqual([])
 		expect(bodyWrites()).toEqual([])
-		const rewritten = new TextDecoder().decode(store.get(`${did}/site-b/.rewritten/index.html`)?.data)
+		const rewritten = new TextDecoder().decode((await storedObject(`${did}/site-b/.rewritten/index.html`))?.data)
 		expect(rewritten).toContain('zipped home')
 	})
 
@@ -427,7 +427,7 @@ describe('migration classifier parity', () => {
 		const record = await recordOf(spec)
 		await update('parity', record)
 		const writerKey = bodyWrites()[0] as string
-		const stored = store.get(writerKey) as Stored
+		const stored = (await storedObject(writerKey)) as Stored
 		const metadata = {
 			key: 'legacy',
 			size: stored.data.byteLength,
@@ -462,7 +462,7 @@ describe('migration classifier parity', () => {
 		if (classification.kind === 'needs-raw-check') {
 			// The bytes are the blob itself, which is exactly what the raw check accepts.
 			expect(new TextDecoder().decode(stored.data)).toBe(spec.content)
-			expect(cidOf(record, spec.name)).toBe((await import('@wispplace/atproto-utils')).computeCID(stored.data))
+			expect(cidOf(record, spec.name)).toBe(computeCID(stored.data))
 		}
 	})
 
@@ -482,6 +482,6 @@ describe('migration classifier parity', () => {
 
 		// The stored bytes are not the blob, so the raw check rejects them and the site is repulled.
 		expect(classification.kind).toBe('needs-raw-check')
-		expect((await import('@wispplace/atproto-utils')).computeCID(stored.data)).not.toBe(cidOf(record, spec.name))
+		expect(computeCID(stored.data)).not.toBe(cidOf(record, spec.name))
 	})
 })

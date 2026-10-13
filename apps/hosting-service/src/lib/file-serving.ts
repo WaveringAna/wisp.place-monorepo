@@ -35,13 +35,13 @@ import {
 	transformFileStream,
 	verifyFileStream,
 } from './file-streams'
-import { triggerSiteHtmlHotCacheWarmup } from './html-prewarm'
+import { type HtmlPrewarm, triggerSiteHtmlHotCacheWarmup } from './html-prewarm'
 import { generate404Page, generateDirectoryListing, siteUpdatingResponse } from './page-generators'
 import { loadRedirectRules, matchRedirectRule, parseCookies, parseQueryString } from './redirects'
 import { applyCustomHeaders, getIndexFiles, isValidMimeType } from './request-utils'
 import { markRedirectNotFound } from './request-visibility'
 import { recordStorageMiss } from './revalidate-metrics'
-import { enqueueRevalidate } from './revalidate-queue'
+import { type EnqueueResult, enqueueRevalidate } from './revalidate-queue'
 import { resolveStorageKey, type SiteManifest } from './site-storage-keys'
 import { addPublicSourceCidIfChecksumMatches, evictPublicCacheKey, isStorageUnavailableError, storage } from './storage'
 import { createTrace, logTrace, type RequestTrace, span } from './trace'
@@ -58,8 +58,9 @@ const STANDARD_CACHE_CONTROL = 'public, max-age=600'
 const DEFAULT_GZIP_PROCESSING_CONCURRENCY = 2
 const MAX_GZIP_PROCESSING_CONCURRENCY = 4
 
-function getGzipProcessingConcurrency(): number {
-	const configured = process.env.HOSTING_GZIP_PROCESSING_CONCURRENCY
+/** Resolve the process-wide gzip work cap from HOSTING_GZIP_PROCESSING_CONCURRENCY (1–4, default 2). */
+export function resolveGzipProcessingConcurrency(env: Readonly<Record<string, string | undefined>>): number {
+	const configured = env.HOSTING_GZIP_PROCESSING_CONCURRENCY
 	if (!configured) return DEFAULT_GZIP_PROCESSING_CONCURRENCY
 
 	const value = Number(configured)
@@ -67,33 +68,6 @@ function getGzipProcessingConcurrency(): number {
 		return DEFAULT_GZIP_PROCESSING_CONCURRENCY
 	}
 	return value
-}
-
-const gzipProcessingConcurrency = getGzipProcessingConcurrency()
-let activeGzipProcessing = 0
-const gzipProcessingWaiters: Array<() => void> = []
-
-/**
- * Bounds CPU and memory-heavy gzip work across all requests in this process.
- * The releaser transfers its reserved slot directly to the next waiter.
- */
-async function withGzipProcessingBudget<T>(work: () => Promise<T>): Promise<T> {
-	if (activeGzipProcessing >= gzipProcessingConcurrency) {
-		await new Promise<void>((resolve) => gzipProcessingWaiters.push(resolve))
-	} else {
-		activeGzipProcessing++
-	}
-
-	try {
-		return await work()
-	} finally {
-		const next = gzipProcessingWaiters.shift()
-		if (next) {
-			next()
-		} else {
-			activeGzipProcessing--
-		}
-	}
 }
 
 type FileStorageResult = StorageResult<Uint8Array>
@@ -119,27 +93,17 @@ type SourceCidMismatchResolution =
 	| { kind: 'mismatched' }
 type StreamCidMismatchResolution = { kind: 'matched' } | { kind: 'mismatched' }
 
-interface GzipOperations {
+export interface GzipOperations {
 	compress(data: Uint8Array): Promise<Uint8Array>
 	decompress(data: Uint8Array, maxOutputBytes: number): Promise<Buffer<ArrayBuffer>>
 	measureDecompressedSize(data: Uint8Array, maxOutputBytes: number): Promise<number>
 }
 
-const defaultGzipOperations: GzipOperations = {
+export const defaultGzipOperations: GzipOperations = {
 	compress: compressGzip,
 	decompress: decompressGzip,
 	measureDecompressedSize: measureGzipDecompressedSize,
 }
-let gzipOperations: GzipOperations = defaultGzipOperations
-
-/** @internal Test seam for deterministic gzip work and concurrency tests. */
-export function setGzipOperationsForTests(overrides?: Partial<GzipOperations>): void {
-	if (process.env.NODE_ENV === 'production') {
-		throw new Error('Gzip test operations cannot be configured in production')
-	}
-	gzipOperations = { ...defaultGzipOperations, ...overrides }
-}
-
 type FileLookupMode = 'original' | 'prefer-pre-rewritten-html'
 
 interface FileServingStrategy {
@@ -188,150 +152,8 @@ function logStorageResult(did: string, rkey: string, filePath: string, result: F
 
 const MAX_PENDING_LEGACY_SOURCE_CID_BACKFILLS = 1_024
 const LEGACY_SOURCE_CID_BACKFILL_TTL_MS = 10 * 60 * 1_000
-const pendingLegacySourceCidBackfills = new Map<string, number>()
-
-async function repairLegacySourceCid(
-	did: string,
-	rkey: string,
-	key: string,
-	expectedChecksum: string,
-	sourceCid: string,
-): Promise<void> {
-	const dedupeKey = key
-	const now = Date.now()
-	const previous = pendingLegacySourceCidBackfills.get(dedupeKey)
-	if (previous !== undefined && now - previous < LEGACY_SOURCE_CID_BACKFILL_TTL_MS) return
-	if (pendingLegacySourceCidBackfills.size >= MAX_PENDING_LEGACY_SOURCE_CID_BACKFILLS) {
-		const oldest = pendingLegacySourceCidBackfills.keys().next().value
-		if (oldest !== undefined) pendingLegacySourceCidBackfills.delete(oldest)
-	}
-	pendingLegacySourceCidBackfills.set(dedupeKey, now)
-
-	try {
-		if (await addPublicSourceCidIfChecksumMatches(key, expectedChecksum, sourceCid)) return
-	} catch {
-		logger.warn('Conditional legacy source CID metadata repair failed', { did, rkey })
-	}
-	// A backend without a conditional metadata update cannot safely heal this
-	// object. Fall back to the established durable full materialization.
-	try {
-		await enqueueRevalidate(did, rkey, 'storage-miss:legacy-source-cid-backfill')
-	} catch {
-		logger.warn('Failed to enqueue legacy source CID repair', { did, rkey })
-	}
-}
-
 function hasSourceCidMetadata(metadata: StoredFileCustomMetadata | undefined): boolean {
 	return metadata !== undefined && Object.getOwnPropertyDescriptor(metadata, 'sourceCid') !== undefined
-}
-
-async function hasExpectedSourceCid(
-	result: FileStorageResult,
-	expectedSourceCid: string,
-	did: string,
-	rkey: string,
-	key: string,
-): Promise<boolean> {
-	const metadata = result.metadata?.customMetadata as StoredFileCustomMetadata | undefined
-	if (hasSourceCidMetadata(metadata)) return metadata?.sourceCid === expectedSourceCid
-
-	if (result.data.byteLength > MAX_BLOB_SIZE || result.metadata.size > MAX_BLOB_SIZE) return false
-	if (computeCID(result.data) !== expectedSourceCid) return false
-
-	// Source CID verification is the serving boundary. Metadata repair may use
-	// a cold HEAD/copy round trip, so it must not delay a verified response.
-	void repairLegacySourceCid(did, rkey, key, result.metadata.checksum, expectedSourceCid).catch(() => {
-		logger.warn('Unexpected legacy source CID repair failure', { did, rkey })
-	})
-	return true
-}
-
-/**
- * Retrieve a file and, when a manifest CID is available, verify that the
- * stored object is from that manifest version before it can be served.
- * The bytes are borrowed from the storage tiers: hash, decode or serve them,
- * never write to them.
- */
-async function getFileWithMetadata(
-	did: string,
-	rkey: string,
-	filePath: string,
-	fileObjects: FileObjects | null,
-	expectedSourceCid?: string,
-): Promise<FileStorageResult | null> {
-	const key = resolveStorageKey(did, rkey, filePath, fileObjects)
-	if (key === null) return null
-	if (expectedSourceCid === undefined) {
-		const result = await storage.getWithMetadata(key, { borrowData: true })
-		if (!result) return null
-
-		logStorageResult(did, rkey, filePath, result)
-		return result
-	}
-
-	const sourceCidMismatchKey = `${did}:${rkey}:${filePath}:${expectedSourceCid}:${key}`
-	// Dedupe the initial read, eviction, and one cold retry. Concurrent requests
-	// may all arrive while the upper tier still contains the same stale object;
-	// getOrFetch ensures that burst performs one complete validation attempt.
-	const lookupResult = await cache.getOrFetch<SourceCidMismatchResolution>(
-		SOURCE_CID_MISMATCH_NAMESPACE,
-		sourceCidMismatchKey,
-		async () => {
-			const result = await storage.getWithMetadata(key, { borrowData: true })
-			if (!result) return { kind: 'not-found' }
-
-			if (await hasExpectedSourceCid(result, expectedSourceCid, did, rkey, key)) {
-				return { kind: 'matched', result }
-			}
-
-			logger.warn('Stored file source CID does not match the manifest; retrying cold storage', {
-				did,
-				rkey,
-				filePath,
-				tier: result.source,
-			})
-
-			try {
-				// This only deletes hot/warm copies and is fenced against eager promotion.
-				// It deliberately never mutates the cold source of truth.
-				await evictPublicCacheKey(key)
-			} catch (error) {
-				if (isStorageUnavailableError(error)) throw error
-				logger.warn('Failed to evict mismatched local file cache entry', { did, rkey, filePath })
-				return { kind: 'mismatched' }
-			}
-
-			// With upper tiers evicted, this is the one allowed cold-source retry. Do
-			// not evict again if it still fails: a briefly stale DB replica must fail
-			// closed without destructive cache oscillation.
-			let coldResult: FileStorageResult | null
-			try {
-				coldResult = await storage.getWithMetadata(key, { borrowData: true })
-			} catch (error) {
-				// A transient cold-tier outage is not evidence that the manifest is stale.
-				// Let the request boundary return 503 without scheduling a repair.
-				if (isStorageUnavailableError(error)) throw error
-				logger.warn('Failed to retry cold storage after a source CID mismatch', { did, rkey, filePath })
-				return { kind: 'mismatched' }
-			}
-			if (!coldResult || !(await hasExpectedSourceCid(coldResult, expectedSourceCid, did, rkey, key))) {
-				logger.warn('Cold file source CID does not match the manifest', { did, rkey, filePath })
-				return { kind: 'mismatched' }
-			}
-
-			return { kind: 'matched', result: coldResult }
-		},
-		{
-			cacheIf: (value) => value.kind === 'mismatched',
-			ttl: SOURCE_CID_MISMATCH_TTL_MS,
-		},
-	)
-
-	if (lookupResult.kind === 'not-found') return null
-	if (lookupResult.kind === 'mismatched') throw new SourceCidValidationError(filePath)
-
-	logStorageResult(did, rkey, filePath, lookupResult.result)
-	return lookupResult.result
 }
 
 function normalizeFilePath(filePath: string): string {
@@ -371,39 +193,6 @@ function manifestHasPath(fileCids: Record<string, string> | null, filePath: stri
 	return fileCids === null || fileCids[normalizeFilePath(filePath)] !== undefined
 }
 
-/**
- * Fetch a per-site fallback file (SPA, custom 404, auto-detected 404 pages),
- * caching null results so repeated 404 responses don't re-hit S3 for files
- * that don't exist on the site. The expected source CID is part of the cache
- * key, so a DB manifest update never inherits a stale negative result.
- */
-async function getFallbackFile(
-	did: string,
-	rkey: string,
-	filePath: string,
-	manifest: SiteManifest | null,
-	strategy: FileServingStrategy,
-	trace?: RequestTrace | null,
-	signal?: AbortSignal,
-): Promise<FileForRequestResult | null> {
-	const fileCids = manifest?.fileCids ?? null
-	const expectedSourceCid = getExpectedSourceCid(fileCids, filePath)
-	if (fileCids !== null && expectedSourceCid === undefined) return null
-
-	const cacheKey = `${did}:${rkey}:${filePath}:${expectedSourceCid ?? 'no-manifest'}`
-	// null in the cache means we've confirmed this file doesn't exist
-	const negativeCached = cache.get<null>('siteFiles', cacheKey)
-	if (negativeCached === null) return null
-
-	const result = await span(trace, `storage:${filePath}`, () =>
-		getFileForRequest(did, rkey, filePath, strategy, manifest, signal),
-	)
-	if (result === null) {
-		cache.set('siteFiles', cacheKey, null)
-	}
-	return result
-}
-
 // Normalizing a manifest walks every file entry (a regex check per CAS key and two object copies), so
 // a request for a 1000-file site paid that on every hit. The row object comes from the in-memory lookup
 // cache and is replaced whenever the entry expires or is invalidated, so keying on its identity can never
@@ -421,16 +210,6 @@ function buildSiteManifest(siteCache: SiteCache): SiteManifest {
 		// One snapshot with the CIDs: a body is only read from the key its own manifest names.
 		fileObjects: normalizeFileObjects(siteCache.file_objects),
 	}
-}
-
-async function getSiteManifest(did: string, rkey: string, trace?: RequestTrace | null): Promise<SiteManifest | null> {
-	const siteCache = await span(trace, 'db:siteCache', () => getSiteCache(did, rkey))
-	if (!siteCache) return null
-	const memoized = manifestsBySiteCache.get(siteCache)
-	if (memoized) return memoized
-	const manifest = buildSiteManifest(siteCache)
-	manifestsBySiteCache.set(siteCache, manifest)
-	return manifest
 }
 
 function shouldServeUpdatingPage(requestHeaders?: Record<string, string>): boolean {
@@ -520,230 +299,6 @@ function listDirectoryEntries(
 	const entries: DirectoryEntryMap = new Map()
 	if (manifestPaths !== null) collectManifestDirectoryEntries(entries, requestPath, manifestPaths)
 	return toDirectoryEntries(entries)
-}
-
-async function hasFileForNonForcedRedirect(
-	did: string,
-	rkey: string,
-	filePath: string,
-	indexFiles: string[],
-	trace?: RequestTrace | null,
-): Promise<boolean> {
-	let checkPath: string = filePath || indexFiles[0] || 'index.html'
-	if (checkPath.endsWith('/')) {
-		checkPath += indexFiles[0] || 'index.html'
-	}
-
-	const manifest = await getSiteManifest(did, rkey, trace)
-	if (manifest !== null) {
-		return manifestHasPath(manifest.fileCids, checkPath)
-	}
-
-	const fileInStorage = await span(trace, `storage:${checkPath}`, () => getFileWithMetadata(did, rkey, checkPath, null))
-	return fileInStorage !== null
-}
-
-async function isHotTierHit(
-	did: string,
-	rkey: string,
-	filePath: string,
-	fileObjects: FileObjects | null,
-): Promise<boolean> {
-	if (typeof storage.isInHotTier !== 'function') return false
-	const key = resolveStorageKey(did, rkey, filePath, fileObjects)
-	return key !== null && (await storage.isInHotTier(key))
-}
-
-async function getVerifiedFileStream(
-	did: string,
-	rkey: string,
-	filePath: string,
-	fileObjects: FileObjects | null,
-	expectedSourceCid: string | undefined,
-	signal?: AbortSignal,
-): Promise<StreamResult | null> {
-	if (typeof storage.getStream !== 'function') return null
-	const key = resolveStorageKey(did, rkey, filePath, fileObjects)
-	if (key === null) return null
-	const read = () => storage.getStream(key, { signal, borrowChunks: true })
-	const mismatchKey = `stream:${did}:${rkey}:${filePath}:${expectedSourceCid}:${key}`
-	if (
-		expectedSourceCid &&
-		cache.get<StreamCidMismatchResolution>(SOURCE_CID_MISMATCH_NAMESPACE, mismatchKey)?.kind === 'mismatched'
-	) {
-		throw new SourceCidValidationError(filePath)
-	}
-	const result = await read()
-	if (!result) return null
-
-	const verify = async (candidate: StreamResult): Promise<StreamResult> => {
-		if (!expectedSourceCid) return candidate
-		const metadata = candidate.metadata.customMetadata as StoredFileCustomMetadata | undefined
-		if (hasSourceCidMetadata(metadata)) {
-			if (metadata?.sourceCid === expectedSourceCid) return candidate
-			disposeFileStream(candidate.stream)
-			throw new FileStreamIntegrityError()
-		}
-		const verified = await verifyFileStream(candidate, expectedSourceCid, signal)
-		void repairLegacySourceCid(did, rkey, key, candidate.metadata.checksum, expectedSourceCid).catch(() => {
-			logger.warn('Unexpected legacy source CID repair failure', { did, rkey })
-		})
-		return verified
-	}
-
-	try {
-		return await verify(result)
-	} catch (error) {
-		if (!(error instanceof FileStreamIntegrityError) || !expectedSourceCid) throw error
-		logger.warn('Stored file source CID does not match the manifest; retrying cold storage', {
-			did,
-			rkey,
-			filePath,
-			tier: result.source,
-		})
-		const resolution = await cache.getOrFetch<StreamCidMismatchResolution>(
-			SOURCE_CID_MISMATCH_NAMESPACE,
-			mismatchKey,
-			async () => {
-				try {
-					await evictPublicCacheKey(key)
-				} catch (evictionError) {
-					signal?.throwIfAborted()
-					if (isStorageUnavailableError(evictionError)) throw evictionError
-					logger.warn('Failed to evict mismatched local file cache entry', { did, rkey, filePath })
-					return { kind: 'mismatched' }
-				}
-				let coldResult: StreamResult | null
-				try {
-					coldResult = await read()
-				} catch (readError) {
-					signal?.throwIfAborted()
-					if (isStorageUnavailableError(readError)) throw readError
-					logger.warn('Failed to retry cold storage after a source CID mismatch', { did, rkey, filePath })
-					return { kind: 'mismatched' }
-				}
-				signal?.throwIfAborted()
-				if (!coldResult) return { kind: 'mismatched' }
-				try {
-					const verified = await verify(coldResult)
-					disposeFileStream(verified.stream)
-					return { kind: 'matched' }
-				} catch (coldError) {
-					if (!(coldError instanceof FileStreamIntegrityError)) throw coldError
-					return { kind: 'mismatched' }
-				}
-			},
-			{
-				cacheIf: (value) => value.kind === 'mismatched',
-				ttl: SOURCE_CID_MISMATCH_TTL_MS,
-			},
-		)
-		if (resolution.kind === 'mismatched') throw new SourceCidValidationError(filePath)
-
-		const coldResult = await read()
-		if (!coldResult) throw new SourceCidValidationError(filePath)
-		try {
-			return await verify(coldResult)
-		} catch (coldError) {
-			if (coldError instanceof FileStreamIntegrityError) throw new SourceCidValidationError(filePath)
-			throw coldError
-		}
-	}
-}
-
-async function getFileForRequest(
-	did: string,
-	rkey: string,
-	filePath: string,
-	strategy: FileServingStrategy,
-	manifest: SiteManifest | null,
-	signal?: AbortSignal,
-): Promise<FileForRequestResult | null> {
-	const fileCids = manifest?.fileCids ?? null
-	const fileObjects = manifest?.fileObjects ?? null
-	const expectedSourceCid = getExpectedSourceCid(fileCids, filePath)
-	if (fileCids !== null && expectedSourceCid === undefined) return null
-
-	let sourceCidValidationFailed = false
-	const readCandidate = async (candidatePath: string): Promise<FileStorageResult | null> => {
-		try {
-			return await getFileWithMetadata(did, rkey, candidatePath, fileObjects, expectedSourceCid)
-		} catch (error) {
-			if (error instanceof SourceCidValidationError) {
-				sourceCidValidationFailed = true
-				return null
-			}
-			throw error
-		}
-	}
-
-	const readStreamCandidate = async (
-		candidatePath: string,
-		wasRewritten: boolean,
-	): Promise<{ kind: 'stream'; file: FileForRequestResult } | { kind: 'fallback' | 'missing' | 'mismatch' }> => {
-		if (typeof storage.getStream !== 'function') return { kind: 'fallback' }
-		// A body already in the memory tier is served from its buffer: wrapping it in streams cost more
-		// than the rest of the request. Disk and object-store reads keep streaming.
-		if (await isHotTierHit(did, rkey, candidatePath, fileObjects)) return { kind: 'fallback' }
-		const guessedMimeType = lookup(candidatePath) || 'application/octet-stream'
-		if (strategy.rewriteMissingHtmlOnDemand && !wasRewritten && isHtmlContent(candidatePath, guessedMimeType)) {
-			return { kind: 'fallback' }
-		}
-		let streamed: StreamResult | null
-		try {
-			streamed = await getVerifiedFileStream(
-				did,
-				rkey,
-				candidatePath,
-				fileObjects,
-				getExpectedSourceCid(fileCids, candidatePath),
-				signal,
-			)
-		} catch (error) {
-			if (error instanceof SourceCidValidationError) {
-				sourceCidValidationFailed = true
-				return { kind: 'mismatch' }
-			}
-			throw error
-		}
-		if (!streamed) return { kind: 'missing' }
-		const { result, prefix } = await peekFileStream(streamed)
-		const metadata = result.metadata.customMetadata as StoredFileCustomMetadata | undefined
-		const mimeType = resolveSafeMimeType(metadata?.mimeType, candidatePath)
-		const shouldRewriteOnDemand =
-			strategy.rewriteMissingHtmlOnDemand && !wasRewritten && isHtmlContent(candidatePath, mimeType)
-		if (shouldRewriteOnDemand) {
-			disposeFileStream(result.stream)
-			return { kind: 'fallback' }
-		}
-		return {
-			kind: 'stream',
-			file: { result: { ...result, streamGzipMagic: isGzipped(prefix) }, filePath, wasRewritten },
-		}
-	}
-
-	const mimeTypeGuess = lookup(filePath) || 'application/octet-stream'
-	if (strategy.fileLookup === 'prefer-pre-rewritten-html' && isHtmlContent(filePath, mimeTypeGuess)) {
-		const rewrittenPath = `${REWRITTEN_PATH_PREFIX}${filePath}`
-		const rewrittenStream = await readStreamCandidate(rewrittenPath, true)
-		if (rewrittenStream.kind === 'stream') return rewrittenStream.file
-		if (rewrittenStream.kind === 'fallback') {
-			const rewritten = await readCandidate(rewrittenPath)
-			if (rewritten) return { result: rewritten, filePath, wasRewritten: true }
-		}
-	}
-
-	const streamed = await readStreamCandidate(filePath, false)
-	if (streamed.kind === 'stream') return streamed.file
-	if (streamed.kind === 'missing') {
-		if (sourceCidValidationFailed) throw new SourceCidValidationError(filePath)
-		return null
-	}
-	if (streamed.kind === 'mismatch') throw new SourceCidValidationError(filePath)
-	const result = await readCandidate(filePath)
-	if (result) return { result, filePath, wasRewritten: false }
-	if (sourceCidValidationFailed) throw new SourceCidValidationError(filePath)
-	return null
 }
 
 function gzipQuality(parameters: string[]): number {
@@ -913,73 +468,6 @@ function gzipFailure(filePath: string, failureKind: GzipFailureKind, varyByAccep
 	return { kind: 'failure', response: buildGzipDecodeFailureResponse(filePath, failureKind, varyByAcceptEncoding) }
 }
 
-async function measureLegacyGzipPassthrough(
-	content: Uint8Array,
-	filePath: string,
-	varyByAcceptEncoding: boolean,
-): Promise<GzipPreparation> {
-	try {
-		await withGzipProcessingBudget(async () => {
-			await gzipOperations.measureDecompressedSize(content, MAX_BLOB_SIZE)
-		})
-		return { kind: 'ready' }
-	} catch (error) {
-		return gzipFailure(filePath, getGzipFailureKind(error), varyByAcceptEncoding)
-	}
-}
-
-async function decodeStoredGzipIdentity(
-	content: Uint8Array,
-	filePath: string,
-	varyByAcceptEncoding: boolean,
-): Promise<DecodedGzipIdentity> {
-	try {
-		const decoded = await withGzipProcessingBudget(() => gzipOperations.decompress(content, MAX_BLOB_SIZE))
-		return { kind: 'decoded', content: decoded }
-	} catch (error) {
-		return gzipFailure(filePath, getGzipFailureKind(error), varyByAcceptEncoding)
-	}
-}
-
-/**
- * Validate gzip state before a conditional response can be emitted. This makes
- * legacy gzip bytes safe for both negotiated passthrough and identity reads.
- */
-async function prepareStoredGzipResponse(
-	representation: StoredFileRepresentation,
-	filePath: string,
-): Promise<GzipPreparation> {
-	if (!representation.isGzipContent) return { kind: 'ready' }
-	if (representation.explicitlyGzipped && !representation.hasGzipMagic) {
-		return gzipFailure(filePath, 'invalid-gzip', representation.varyByAcceptEncoding)
-	}
-
-	const sizeStatus = getStoredGzipSizeStatus(representation.metadata)
-	if (sizeStatus === 'over-limit') {
-		return gzipFailure(filePath, 'output-limit', representation.varyByAcceptEncoding)
-	}
-	if (sizeStatus === 'trusted') return { kind: 'ready' }
-	if (representation.shouldServeCompressed) {
-		// A legacy object has no trusted firehose accounting metadata. Verify its
-		// logical size before returning compressed bytes to a gzip client.
-		return await measureLegacyGzipPassthrough(
-			getStoredFileContent(representation),
-			filePath,
-			representation.varyByAcceptEncoding,
-		)
-	}
-
-	// This branch must materialize identity bytes anyway. Decode once before
-	// conditionals so a malformed legacy object cannot receive a 304.
-	const decoded = await decodeStoredGzipIdentity(
-		getStoredFileContent(representation),
-		filePath,
-		representation.varyByAcceptEncoding,
-	)
-	if (decoded.kind === 'failure') return decoded
-	return { kind: 'ready', decodedIdentity: decoded.content }
-}
-
 function getRepresentationEtag(representation: StoredFileRepresentation): string | undefined {
 	const checksum = representation.result.metadata?.checksum
 	if (!checksum) return undefined
@@ -1091,106 +579,6 @@ function buildStorageBodyResponse(
 	return new Response(bufferResponseBody(body), { status, headers })
 }
 
-async function getIdentityResponseContent(
-	representation: StoredFileRepresentation,
-	preparation: GzipPreparation,
-	filePath: string,
-): Promise<IdentityResponseContent> {
-	if (preparation.kind === 'ready' && preparation.decodedIdentity) {
-		return { kind: 'content', content: preparation.decodedIdentity }
-	}
-
-	const decoded = await decodeStoredGzipIdentity(
-		getStoredFileContent(representation),
-		filePath,
-		representation.varyByAcceptEncoding,
-	)
-	if (decoded.kind === 'failure') return decoded
-	return { kind: 'content', content: decoded.content }
-}
-
-async function buildStoredFileBodyResponse(
-	representation: StoredFileRepresentation,
-	preparation: GzipPreparation,
-	filePath: string,
-	settings: WispSettings | null,
-	sharedOrigin: boolean,
-	etag: string | undefined,
-	requestHeaders?: Record<string, string>,
-): Promise<Response> {
-	const headers = buildStoredResponseHeaders(representation, etag)
-	if (representation.isGzipContent && !representation.shouldServeCompressed) {
-		const identity = await getIdentityResponseContent(representation, preparation, filePath)
-		if (identity.kind === 'failure') return identity.response
-		return buildStorageBodyResponse(
-			identity.content,
-			headers,
-			filePath,
-			settings,
-			sharedOrigin,
-			representation.varyByAcceptEncoding,
-			requestHeaders,
-		)
-	}
-
-	if (representation.isGzipContent) headers['Content-Encoding'] = 'gzip'
-	return buildStorageBodyResponse(
-		getStoredFileContent(representation),
-		headers,
-		filePath,
-		settings,
-		sharedOrigin,
-		representation.varyByAcceptEncoding,
-		requestHeaders,
-	)
-}
-
-async function buildResponseFromStorageResult(
-	result: FileStorageResult,
-	filePath: string,
-	settings: WispSettings | null,
-	requestHeaders?: Record<string, string>,
-	sharedOrigin = false,
-): Promise<Response> {
-	const representation = createStoredFileRepresentation(result, filePath, requestHeaders)
-	const preparation = await prepareStoredGzipResponse(representation, filePath)
-	if (preparation.kind === 'failure') return preparation.response
-
-	const etag = getRepresentationEtag(representation)
-	const notModified = buildNotModifiedResponse(etag, requestHeaders, representation.varyByAcceptEncoding)
-	if (notModified) return notModified
-	return await buildStoredFileBodyResponse(
-		representation,
-		preparation,
-		filePath,
-		settings,
-		sharedOrigin,
-		etag,
-		requestHeaders,
-	)
-}
-
-async function prepareHtmlRewriteSource(
-	representation: StoredFileRepresentation,
-	filePath: string,
-): Promise<HtmlRewriteSource> {
-	if (representation.explicitlyGzipped && !representation.hasGzipMagic) {
-		return gzipFailure(filePath, 'invalid-gzip', representation.varyByAcceptEncoding)
-	}
-	if (!representation.isGzipContent) return { kind: 'content', content: getStoredFileContent(representation) }
-	if (getStoredGzipSizeStatus(representation.metadata) === 'over-limit') {
-		return gzipFailure(filePath, 'output-limit', representation.varyByAcceptEncoding)
-	}
-
-	const decoded = await decodeStoredGzipIdentity(
-		getStoredFileContent(representation),
-		filePath,
-		representation.varyByAcceptEncoding,
-	)
-	if (decoded.kind === 'failure') return decoded
-	return { kind: 'content', content: decoded.content }
-}
-
 async function rewriteHtmlContent(content: Buffer, basePath: string, filePath: string): Promise<RewrittenHtmlAttempt> {
 	try {
 		const htmlString = new TextDecoder().decode(content)
@@ -1209,64 +597,6 @@ async function rewriteHtmlContent(content: Buffer, basePath: string, filePath: s
 		logger.warn('Failed to rewrite HTML on demand, serving original', { filePath, failureKind: 'html-rewrite-failed' })
 		return { kind: 'serve-original' }
 	}
-}
-
-async function compressRewrittenHtml(
-	output: Buffer,
-	filePath: string,
-	shouldCompress: boolean,
-	requestHeaders: Record<string, string> | undefined,
-): Promise<RewrittenHtmlCompression> {
-	if (!shouldCompress || !clientAcceptsGzip(requestHeaders)) return { output }
-
-	try {
-		const compressed = await withGzipProcessingBudget(() => gzipOperations.compress(output))
-		return { output: Buffer.from(compressed), contentEncoding: 'gzip' }
-	} catch {
-		// The rewritten identity body is already safe. Do not fall back to the
-		// original representation merely because recompression failed.
-		logger.warn('Failed to recompress rewritten HTML, serving identity', {
-			filePath,
-			failureKind: 'gzip-compress-failed',
-		})
-		return { output }
-	}
-}
-
-async function buildRewrittenHtmlResponse(
-	result: FileStorageResult,
-	filePath: string,
-	basePath: string,
-	settings: WispSettings | null,
-	requestHeaders?: Record<string, string>,
-	sharedOrigin = false,
-): Promise<Response> {
-	const representation = createStoredFileRepresentation(result, filePath, requestHeaders, true)
-	const source = await prepareHtmlRewriteSource(representation, filePath)
-	if (source.kind === 'failure') return source.response
-
-	const rewritten = await rewriteHtmlContent(source.content, basePath, filePath)
-	if (rewritten.kind === 'serve-original') {
-		return await buildResponseFromStorageResult(result, filePath, settings, requestHeaders, sharedOrigin)
-	}
-
-	const compressed = await compressRewrittenHtml(
-		rewritten.output,
-		filePath,
-		representation.shouldCompress,
-		requestHeaders,
-	)
-	const headers = buildStoredResponseHeaders(representation, undefined)
-	if (compressed.contentEncoding) headers['Content-Encoding'] = compressed.contentEncoding
-	return buildStorageBodyResponse(
-		compressed.output,
-		headers,
-		filePath,
-		settings,
-		sharedOrigin,
-		representation.varyByAcceptEncoding,
-		requestHeaders,
-	)
 }
 
 interface FileResolverOptions {
@@ -1393,37 +723,6 @@ function buildStyled404Response(): Response {
 	})
 }
 
-function createExpectedManifestMissTracker(
-	did: string,
-	rkey: string,
-	requestHeaders: Record<string, string> | undefined,
-	getManifest: () => Promise<SiteManifest | null>,
-	strategy: FileServingStrategy,
-) {
-	let expectedMissPath: string | null = null
-
-	return {
-		async mark(filePath: string): Promise<void> {
-			if (expectedMissPath) return
-			const manifest = await getManifest()
-			if (!manifest) return
-
-			// A pre-rewritten cache entry is still derived from its original
-			// manifest path. If that original CID is absent, fail closed and
-			// request repair rather than falling through to a styled 404.
-			if (manifestLookupPaths(filePath, strategy).some((path) => manifestHasPath(manifest.fileCids, path))) {
-				expectedMissPath = sourceManifestPath(filePath)
-			}
-		},
-		async response(): Promise<Response | null> {
-			if (!expectedMissPath) return null
-			recordStorageMiss(expectedMissPath)
-			const { result } = await enqueueRevalidate(did, rkey, `storage-miss:${expectedMissPath}`)
-			return buildStorageMissResponse({ reason: 'cid-miss', revalidate: result }, requestHeaders)
-		},
-	}
-}
-
 function manifestLookupPaths(filePath: string, strategy: FileServingStrategy): string[] {
 	const originalPath = normalizeFilePath(filePath)
 	if (strategy.fileLookup === 'original') return [originalPath]
@@ -1436,138 +735,6 @@ function manifestMayContainFile(
 	strategy: FileServingStrategy,
 ): boolean {
 	return manifestLookupPaths(filePath, strategy).some((path) => manifestHasPath(manifest?.fileCids ?? null, path))
-}
-
-function createFileResolver(options: FileResolverOptions): FileResolver {
-	const { did, rkey, requestHeaders, strategy, trace } = options
-	let loadedManifest = options.manifest
-	let manifestLoaded = options.manifest !== undefined
-	const attemptedPaths = new Set<string>()
-
-	const getManifest = async (): Promise<SiteManifest | null> => {
-		if (!manifestLoaded) {
-			loadedManifest = await getSiteManifest(did, rkey, trace)
-			manifestLoaded = true
-		}
-		return loadedManifest ?? null
-	}
-
-	const missTracker = createExpectedManifestMissTracker(did, rkey, requestHeaders, getManifest, strategy)
-
-	const getExpectedFile = async (filePath: string): Promise<FileForRequestResult | null> => {
-		const manifest = await getManifest()
-		if (!manifestMayContainFile(manifest, filePath, strategy)) return null
-		return await span(trace, `storage:${filePath}`, () =>
-			getFileForRequest(did, rkey, filePath, strategy, manifest, options.signal),
-		)
-	}
-
-	return {
-		getManifest,
-		async findFirstExpectedFile(paths: Iterable<string>): Promise<FileForRequestResult | null> {
-			for (const filePath of orderedUniquePaths(paths)) {
-				if (attemptedPaths.has(filePath)) continue
-				attemptedPaths.add(filePath)
-
-				const result = await getExpectedFile(filePath)
-				if (result) return result
-				await missTracker.mark(filePath)
-			}
-			return null
-		},
-		findFallbackFile: async (filePath) =>
-			getFallbackFile(did, rkey, filePath, await getManifest(), strategy, trace, options.signal),
-		markExpectedMiss: (filePath) => missTracker.mark(filePath),
-		expectedMissResponse: () => missTracker.response(),
-	}
-}
-
-async function buildStreamFileResponse(
-	options: FileResolverOptions,
-	filePath: string,
-	result: StreamResult & { streamGzipMagic?: boolean },
-): Promise<Response> {
-	const { requestHeaders, settings, strategy, signal, requestMethod } = options
-	const initialRepresentation = createStoredFileRepresentation(
-		result,
-		filePath,
-		requestHeaders,
-		false,
-		result.streamGzipMagic,
-	)
-	const { metadata, hasGzipMagic, explicitlyGzipped, isGzipContent, shouldServeCompressed, varyByAcceptEncoding } =
-		initialRepresentation
-	if (explicitlyGzipped && !hasGzipMagic) {
-		disposeFileStream(result.stream)
-		return gzipFailure(filePath, 'invalid-gzip', varyByAcceptEncoding).response
-	}
-
-	let prepared = result
-	if (isGzipContent) {
-		const sizeStatus = getStoredGzipSizeStatus(metadata)
-		if (sizeStatus === 'over-limit') {
-			disposeFileStream(prepared.stream)
-			return gzipFailure(filePath, 'output-limit', varyByAcceptEncoding).response
-		}
-		if (!(sizeStatus === 'trusted' && shouldServeCompressed)) {
-			try {
-				prepared = await withGzipProcessingBudget(() =>
-					transformFileStream(result, shouldServeCompressed ? 'measure-gzip' : 'identity', signal),
-				)
-			} catch (error) {
-				return gzipFailure(filePath, getGzipFailureKind(error), varyByAcceptEncoding).response
-			}
-		}
-	}
-
-	const representation = createStoredFileRepresentation(prepared, filePath, requestHeaders, false, hasGzipMagic)
-	const etag = getRepresentationEtag(representation)
-	const notModified = buildNotModifiedResponse(etag, requestHeaders, varyByAcceptEncoding)
-	if (notModified) {
-		await disposeFileStreamAndWait(prepared.stream)
-		return notModified
-	}
-
-	const headers = buildStoredResponseHeaders(representation, etag)
-	if (shouldServeCompressed) headers['Content-Encoding'] = 'gzip'
-	applyFileResponseHeaders(headers, filePath, settings, strategy.sharedOrigin, varyByAcceptEncoding)
-	headers['Accept-Ranges'] = 'bytes'
-	const size = prepared.metadata.size
-	const range = requestedByteRange(requestHeaders, headers, size)
-	if (range === 'unsatisfiable') {
-		await disposeFileStreamAndWait(prepared.stream)
-		headers['Content-Range'] = `bytes */${size}`
-		headers['Content-Length'] = '0'
-		return new Response(null, { status: 416, headers })
-	}
-
-	let bodyStream: NodeJS.ReadableStream = prepared.stream
-	let status = 200
-	let bodySize = size
-	if (range) {
-		bodyStream = sliceReadableStream(prepared.stream as Readable, range)
-		bodySize = range.end - range.start + 1
-		status = 206
-		headers['Content-Range'] = `bytes ${range.start}-${range.end}/${size}`
-	}
-	headers['Content-Length'] = `${bodySize}`
-	if (requestMethod?.toUpperCase() === 'HEAD') {
-		if (range) await disposeFileStreamAndWait(prepared.stream)
-		await disposeFileStreamAndWait(bodyStream)
-		return new Response(null, { status, headers })
-	}
-	let webStream: ReadableStream<Uint8Array> | undefined
-	try {
-		webStream = getStreamResponseBody(bodyStream, signal)
-		return new Response(webStream, { status, headers })
-	} catch (error) {
-		if (webStream) await webStream.cancel().catch(() => undefined)
-		if (bodyStream !== prepared.stream) {
-			await disposeFileStreamAndWait(bodyStream).catch(() => undefined)
-		}
-		await disposeFileStreamAndWait(prepared.stream).catch(() => undefined)
-		throw error
-	}
 }
 
 function sliceReadableStream(source: Readable, range: ByteRange): Readable {
@@ -1591,39 +758,6 @@ function sliceReadableStream(source: Readable, range: ByteRange): Readable {
 	return sliced
 }
 
-async function buildFileResponse(options: FileResolverOptions, fileResult: FileForRequestResult): Promise<Response> {
-	const { did, rkey, requestHeaders, settings, strategy } = options
-	const { filePath, result, wasRewritten } = fileResult
-	if ('stream' in result) return await buildStreamFileResponse(options, filePath, result)
-	const meta = result.metadata.customMetadata as { encoding?: string; mimeType?: string } | undefined
-	const mimeType = resolveSafeMimeType(meta?.mimeType, filePath)
-	const shouldRewriteOnDemand =
-		strategy.rewriteMissingHtmlOnDemand && !wasRewritten && isHtmlContent(filePath, mimeType)
-
-	if (shouldRewriteOnDemand) {
-		void enqueueRevalidate(did, rkey, `rewrite-miss:${filePath}`)
-		return await buildRewrittenHtmlResponse(
-			result,
-			filePath,
-			strategy.basePath ?? '',
-			settings,
-			requestHeaders,
-			strategy.sharedOrigin,
-		)
-	}
-
-	return buildResponseFromStorageResult(result, filePath, settings, requestHeaders, strategy.sharedOrigin)
-}
-
-async function serveExpectedCandidates(
-	options: FileResolverOptions,
-	resolver: FileResolver,
-	candidates: Iterable<string>,
-): Promise<Response | null> {
-	const result = await resolver.findFirstExpectedFile(candidates)
-	return result ? await buildFileResponse(options, result) : null
-}
-
 async function serveDirectoryListing(
 	options: FileResolverOptions,
 	resolver: FileResolver,
@@ -1638,53 +772,6 @@ async function serveDirectoryListing(
 
 	const storageMissResponse = await resolver.expectedMissResponse()
 	return storageMissResponse ?? buildDirectoryListingResponse(requestPath, entries, status)
-}
-
-async function serveFallbackFile(
-	options: FileResolverOptions,
-	resolver: FileResolver,
-	filePath: string,
-	status?: number,
-): Promise<Response | null> {
-	const result = await resolver.findFallbackFile(filePath)
-	if (!result) {
-		await resolver.markExpectedMiss(filePath)
-		return null
-	}
-
-	const response = await buildFileResponse(options, result)
-	return status === undefined ? response : wrapResponseStatus(response, status)
-}
-
-async function serveFirstFallbackFile(
-	options: FileResolverOptions,
-	resolver: FileResolver,
-	filePaths: Iterable<string>,
-	status?: number,
-): Promise<Response | null> {
-	for (const filePath of orderedUniquePaths(filePaths)) {
-		const response = await serveFallbackFile(options, resolver, filePath, status)
-		if (response) return response
-	}
-	return null
-}
-
-async function serveConfiguredFallbacks(
-	options: FileResolverOptions,
-	resolver: FileResolver,
-): Promise<Response | null> {
-	const { custom404, spaMode } = options.settings ?? {}
-
-	if (spaMode) {
-		const spaResponse = await serveFallbackFile(options, resolver, spaMode)
-		if (spaResponse) return spaResponse
-	}
-
-	if (custom404) {
-		return await serveFallbackFile(options, resolver, custom404, 404)
-	}
-
-	return null
 }
 
 function adjustRedirectTarget(targetPath: string, strategy: FileServingStrategy): string {
@@ -1732,239 +819,1212 @@ async function serveRedirectTarget(
 	}
 }
 
-async function serveRedirectResponse(options: RedirectRequestOptions): Promise<Response | null> {
-	const { did, rkey, filePath, fullUrl, indexFiles, requestHeaders, resolveFile, strategy, trace } = options
-	if (!options.redirectsPresent) return null
-	const redirectRules = await cache.getOrFetch('redirectRules', `${did}:${rkey}`, () =>
-		span(trace, 'storage:redirectRules', () => loadRedirectRules(did, rkey, options.fileObjects)),
-	)
-	if (redirectRules.length === 0) return null
-
-	const requestPath = `/${filePath || ''}`
-	const redirectMatch = matchRedirectRule(requestPath, redirectRules, {
-		queryParams: fullUrl ? parseQueryString(fullUrl) : {},
-		headers: requestHeaders,
-		cookies: parseCookies(requestHeaders?.cookie),
-	})
-	if (!redirectMatch) return null
-
-	const { rule, status, targetPath } = redirectMatch
-	if (!rule.force && (await hasFileForNonForcedRedirect(did, rkey, filePath, indexFiles, trace))) {
-		return await resolveFile(filePath)
-	}
-
-	return await serveRedirectTarget(status, targetPath, strategy, resolveFile)
+/** The storage reads file serving issues; the streaming and hot-tier probes are optional per backend. */
+export interface FileServingStorage {
+	getWithMetadata(key: string, options: { borrowData: true }): Promise<FileStorageResult | null>
+	getStream?(key: string, options: { signal?: AbortSignal; borrowChunks: true }): Promise<StreamResult | null>
+	isInHotTier?(key: string): Promise<boolean>
+	get(key: string, options: { borrowData: true }): Promise<Uint8Array | null>
 }
 
-async function buildSourceCidStorageMissResponse(options: FileRequestOptions, filePath: string): Promise<Response> {
-	const sourcePath = sourceManifestPath(filePath)
-	recordStorageMiss(sourcePath)
-	const { result } = await enqueueRevalidate(options.did, options.rkey, `storage-miss:${sourcePath}`)
-	return buildStorageMissResponse({ reason: 'cid-mismatch', revalidate: result }, options.requestHeaders)
+/** Everything file serving reads, writes or schedules outside the request it is answering. */
+export interface FileServingDependencies {
+	storage: FileServingStorage
+	addPublicSourceCidIfChecksumMatches(key: string, expectedChecksum: string, sourceCid: string): Promise<boolean>
+	evictPublicCacheKey(key: string): Promise<void>
+	getSiteCache(did: string, rkey: string): Promise<SiteCache | null>
+	getCachedSettings(did: string, rkey: string): Promise<WispSettings | null>
+	enqueueRevalidate(did: string, rkey: string, reason: string): Promise<{ result: EnqueueResult }>
+	recordStorageMiss(path: string): void
+	isSiteUpdating(did: string, rkey: string): boolean
+	triggerSiteHtmlHotCacheWarmup: HtmlPrewarm['trigger']
+	gzipOperations: GzipOperations
+	/** Process-wide cap on concurrent gzip work; see resolveGzipProcessingConcurrency. */
+	gzipProcessingConcurrency: number
 }
 
-async function serveFileRequest(options: FileRequestOptions): Promise<Response> {
-	try {
-		return await resolveFileRequest(options)
-	} catch (error) {
-		if (isStorageUnavailableError(error)) {
-			return buildStorageMissResponse(STORAGE_UNAVAILABLE, options.requestHeaders)
+/**
+ * Build the request pipeline over its collaborators. The module exports one instance built from the
+ * real storage, database, queue and prewarm, so the process shares one gzip budget and one repair
+ * dedupe window; tests build their own.
+ */
+export function createFileServing(deps: FileServingDependencies) {
+	const {
+		storage,
+		addPublicSourceCidIfChecksumMatches,
+		evictPublicCacheKey,
+		getSiteCache,
+		getCachedSettings,
+		enqueueRevalidate,
+		recordStorageMiss,
+		isSiteUpdating,
+		triggerSiteHtmlHotCacheWarmup,
+		gzipOperations,
+		gzipProcessingConcurrency,
+	} = deps
+	// Bound once: a backend without streaming or a hot-tier probe is served from buffered reads.
+	const getStream = storage.getStream?.bind(storage)
+	const isInHotTier = storage.isInHotTier?.bind(storage)
+	let activeGzipProcessing = 0
+	const gzipProcessingWaiters: Array<() => void> = []
+
+	/**
+	 * Bounds CPU and memory-heavy gzip work across all requests in this process.
+	 * The releaser transfers its reserved slot directly to the next waiter.
+	 */
+	async function withGzipProcessingBudget<T>(work: () => Promise<T>): Promise<T> {
+		if (activeGzipProcessing >= gzipProcessingConcurrency) {
+			await new Promise<void>((resolve) => gzipProcessingWaiters.push(resolve))
+		} else {
+			activeGzipProcessing++
 		}
-		if (error instanceof SourceCidValidationError) {
-			return await buildSourceCidStorageMissResponse(options, error.filePath)
+
+		try {
+			return await work()
+		} finally {
+			const next = gzipProcessingWaiters.shift()
+			if (next) {
+				next()
+			} else {
+				activeGzipProcessing--
+			}
 		}
-		throw error
-	}
-}
-
-async function resolveFileRequest(options: FileRequestOptions): Promise<Response> {
-	const resolver = createFileResolver(options)
-	const indexFiles = getIndexFiles(options.settings)
-	const { isDirectoryPathRequest, requestPath } = normalizeRequestPath(options.filePath)
-	const fileRequestPath = requestPath || indexFiles[0] || 'index.html'
-	let response: Response | null = null
-
-	if (!requestPath || !hasFileExtension(requestPath)) {
-		response =
-			(await serveExpectedCandidates(
-				options,
-				resolver,
-				directoryRequestCandidates(requestPath, isDirectoryPathRequest, indexFiles),
-			)) ?? (await serveDirectoryListing(options, resolver, requestPath))
 	}
 
-	response ??= await serveExpectedCandidates(options, resolver, fileAndIndexCandidates(fileRequestPath, indexFiles))
-	if (options.settings?.cleanUrls && !hasFileExtension(fileRequestPath)) {
-		response ??= await serveExpectedCandidates(options, resolver, cleanUrlCandidates(fileRequestPath, indexFiles))
+	const pendingLegacySourceCidBackfills = new Map<string, number>()
+
+	async function repairLegacySourceCid(
+		did: string,
+		rkey: string,
+		key: string,
+		expectedChecksum: string,
+		sourceCid: string,
+	): Promise<void> {
+		const dedupeKey = key
+		const now = Date.now()
+		const previous = pendingLegacySourceCidBackfills.get(dedupeKey)
+		if (previous !== undefined && now - previous < LEGACY_SOURCE_CID_BACKFILL_TTL_MS) return
+		if (pendingLegacySourceCidBackfills.size >= MAX_PENDING_LEGACY_SOURCE_CID_BACKFILLS) {
+			const oldest = pendingLegacySourceCidBackfills.keys().next().value
+			if (oldest !== undefined) pendingLegacySourceCidBackfills.delete(oldest)
+		}
+		pendingLegacySourceCidBackfills.set(dedupeKey, now)
+
+		try {
+			if (await addPublicSourceCidIfChecksumMatches(key, expectedChecksum, sourceCid)) return
+		} catch {
+			logger.warn('Conditional legacy source CID metadata repair failed', { did, rkey })
+		}
+		// A backend without a conditional metadata update cannot safely heal this
+		// object. Fall back to the established durable full materialization.
+		try {
+			await enqueueRevalidate(did, rkey, 'storage-miss:legacy-source-cid-backfill')
+		} catch {
+			logger.warn('Failed to enqueue legacy source CID repair', { did, rkey })
+		}
 	}
 
-	if (!response) {
-		response =
-			(await serveConfiguredFallbacks(options, resolver)) ??
-			(await serveFirstFallbackFile(options, resolver, ['404.html', 'not_found.html'], 404)) ??
-			(await serveDirectoryListing(options, resolver, '', 404))
+	async function hasExpectedSourceCid(
+		result: FileStorageResult,
+		expectedSourceCid: string,
+		did: string,
+		rkey: string,
+		key: string,
+	): Promise<boolean> {
+		const metadata = result.metadata?.customMetadata as StoredFileCustomMetadata | undefined
+		if (hasSourceCidMetadata(metadata)) return metadata?.sourceCid === expectedSourceCid
+
+		if (result.data.byteLength > MAX_BLOB_SIZE || result.metadata.size > MAX_BLOB_SIZE) return false
+		if (computeCID(result.data) !== expectedSourceCid) return false
+
+		// Source CID verification is the serving boundary. Metadata repair may use
+		// a cold HEAD/copy round trip, so it must not delay a verified response.
+		void repairLegacySourceCid(did, rkey, key, result.metadata.checksum, expectedSourceCid).catch(() => {
+			logger.warn('Unexpected legacy source CID repair failure', { did, rkey })
+		})
+		return true
 	}
 
-	return response ?? (await resolver.expectedMissResponse()) ?? buildStyled404Response()
-}
+	/**
+	 * Retrieve a file and, when a manifest CID is available, verify that the
+	 * stored object is from that manifest version before it can be served.
+	 * The bytes are borrowed from the storage tiers: hash, decode or serve them,
+	 * never write to them.
+	 */
+	async function getFileWithMetadata(
+		did: string,
+		rkey: string,
+		filePath: string,
+		fileObjects: FileObjects | null,
+		expectedSourceCid?: string,
+	): Promise<FileStorageResult | null> {
+		const key = resolveStorageKey(did, rkey, filePath, fileObjects)
+		if (key === null) return null
+		if (expectedSourceCid === undefined) {
+			const result = await storage.getWithMetadata(key, { borrowData: true })
+			if (!result) return null
 
-async function resolveCachedRequest(options: CachedRequestOptions, trace: RequestTrace | null): Promise<Response> {
-	const { did, filePath, requestHeaders, rkey, strategy } = options
-	const manifest = await getSiteManifest(did, rkey, trace)
-	if (manifest === null) {
-		recordStorageMiss('manifest')
-		const { result } = await enqueueRevalidate(did, rkey, 'storage-miss:manifest')
-		return buildStorageMissResponse({ reason: 'manifest-miss', revalidate: result }, requestHeaders)
+			logStorageResult(did, rkey, filePath, result)
+			return result
+		}
+
+		const sourceCidMismatchKey = `${did}:${rkey}:${filePath}:${expectedSourceCid}:${key}`
+		// Dedupe the initial read, eviction, and one cold retry. Concurrent requests
+		// may all arrive while the upper tier still contains the same stale object;
+		// getOrFetch ensures that burst performs one complete validation attempt.
+		const lookupResult = await cache.getOrFetch<SourceCidMismatchResolution>(
+			SOURCE_CID_MISMATCH_NAMESPACE,
+			sourceCidMismatchKey,
+			async () => {
+				const result = await storage.getWithMetadata(key, { borrowData: true })
+				if (!result) return { kind: 'not-found' }
+
+				if (await hasExpectedSourceCid(result, expectedSourceCid, did, rkey, key)) {
+					return { kind: 'matched', result }
+				}
+
+				logger.warn('Stored file source CID does not match the manifest; retrying cold storage', {
+					did,
+					rkey,
+					filePath,
+					tier: result.source,
+				})
+
+				try {
+					// This only deletes hot/warm copies and is fenced against eager promotion.
+					// It deliberately never mutates the cold source of truth.
+					await evictPublicCacheKey(key)
+				} catch (error) {
+					if (isStorageUnavailableError(error)) throw error
+					logger.warn('Failed to evict mismatched local file cache entry', { did, rkey, filePath })
+					return { kind: 'mismatched' }
+				}
+
+				// With upper tiers evicted, this is the one allowed cold-source retry. Do
+				// not evict again if it still fails: a briefly stale DB replica must fail
+				// closed without destructive cache oscillation.
+				let coldResult: FileStorageResult | null
+				try {
+					coldResult = await storage.getWithMetadata(key, { borrowData: true })
+				} catch (error) {
+					// A transient cold-tier outage is not evidence that the manifest is stale.
+					// Let the request boundary return 503 without scheduling a repair.
+					if (isStorageUnavailableError(error)) throw error
+					logger.warn('Failed to retry cold storage after a source CID mismatch', { did, rkey, filePath })
+					return { kind: 'mismatched' }
+				}
+				if (!coldResult || !(await hasExpectedSourceCid(coldResult, expectedSourceCid, did, rkey, key))) {
+					logger.warn('Cold file source CID does not match the manifest', { did, rkey, filePath })
+					return { kind: 'mismatched' }
+				}
+
+				return { kind: 'matched', result: coldResult }
+			},
+			{
+				cacheIf: (value) => value.kind === 'mismatched',
+				ttl: SOURCE_CID_MISMATCH_TTL_MS,
+			},
+		)
+
+		if (lookupResult.kind === 'not-found') return null
+		if (lookupResult.kind === 'mismatched') throw new SourceCidValidationError(filePath)
+
+		logStorageResult(did, rkey, filePath, lookupResult.result)
+		return lookupResult.result
 	}
-	const settings = await span(trace, 'db:settings', () => getCachedSettings(did, rkey))
-	const indexFiles = getIndexFiles(settings)
-	const resolveFile = (path: string) =>
-		serveFileRequest({
+
+	/**
+	 * Fetch a per-site fallback file (SPA, custom 404, auto-detected 404 pages),
+	 * caching null results so repeated 404 responses don't re-hit S3 for files
+	 * that don't exist on the site. The expected source CID is part of the cache
+	 * key, so a DB manifest update never inherits a stale negative result.
+	 */
+	async function getFallbackFile(
+		did: string,
+		rkey: string,
+		filePath: string,
+		manifest: SiteManifest | null,
+		strategy: FileServingStrategy,
+		trace?: RequestTrace | null,
+		signal?: AbortSignal,
+	): Promise<FileForRequestResult | null> {
+		const fileCids = manifest?.fileCids ?? null
+		const expectedSourceCid = getExpectedSourceCid(fileCids, filePath)
+		if (fileCids !== null && expectedSourceCid === undefined) return null
+
+		const cacheKey = `${did}:${rkey}:${filePath}:${expectedSourceCid ?? 'no-manifest'}`
+		// null in the cache means we've confirmed this file doesn't exist
+		const negativeCached = cache.get<null>('siteFiles', cacheKey)
+		if (negativeCached === null) return null
+
+		const result = await span(trace, `storage:${filePath}`, () =>
+			getFileForRequest(did, rkey, filePath, strategy, manifest, signal),
+		)
+		if (result === null) {
+			cache.set('siteFiles', cacheKey, null)
+		}
+		return result
+	}
+
+	async function getSiteManifest(did: string, rkey: string, trace?: RequestTrace | null): Promise<SiteManifest | null> {
+		const siteCache = await span(trace, 'db:siteCache', () => getSiteCache(did, rkey))
+		if (!siteCache) return null
+		const memoized = manifestsBySiteCache.get(siteCache)
+		if (memoized) return memoized
+		const manifest = buildSiteManifest(siteCache)
+		manifestsBySiteCache.set(siteCache, manifest)
+		return manifest
+	}
+
+	async function hasFileForNonForcedRedirect(
+		did: string,
+		rkey: string,
+		filePath: string,
+		indexFiles: string[],
+		trace?: RequestTrace | null,
+	): Promise<boolean> {
+		let checkPath: string = filePath || indexFiles[0] || 'index.html'
+		if (checkPath.endsWith('/')) {
+			checkPath += indexFiles[0] || 'index.html'
+		}
+
+		const manifest = await getSiteManifest(did, rkey, trace)
+		if (manifest !== null) {
+			return manifestHasPath(manifest.fileCids, checkPath)
+		}
+
+		const fileInStorage = await span(trace, `storage:${checkPath}`, () =>
+			getFileWithMetadata(did, rkey, checkPath, null),
+		)
+		return fileInStorage !== null
+	}
+
+	async function isHotTierHit(
+		did: string,
+		rkey: string,
+		filePath: string,
+		fileObjects: FileObjects | null,
+	): Promise<boolean> {
+		if (!isInHotTier) return false
+		const key = resolveStorageKey(did, rkey, filePath, fileObjects)
+		return key !== null && (await isInHotTier(key))
+	}
+
+	async function getVerifiedFileStream(
+		did: string,
+		rkey: string,
+		filePath: string,
+		fileObjects: FileObjects | null,
+		expectedSourceCid: string | undefined,
+		signal?: AbortSignal,
+	): Promise<StreamResult | null> {
+		if (!getStream) return null
+		const key = resolveStorageKey(did, rkey, filePath, fileObjects)
+		if (key === null) return null
+		const read = () => getStream(key, { signal, borrowChunks: true })
+		const mismatchKey = `stream:${did}:${rkey}:${filePath}:${expectedSourceCid}:${key}`
+		if (
+			expectedSourceCid &&
+			cache.get<StreamCidMismatchResolution>(SOURCE_CID_MISMATCH_NAMESPACE, mismatchKey)?.kind === 'mismatched'
+		) {
+			throw new SourceCidValidationError(filePath)
+		}
+		const result = await read()
+		if (!result) return null
+
+		const verify = async (candidate: StreamResult): Promise<StreamResult> => {
+			if (!expectedSourceCid) return candidate
+			const metadata = candidate.metadata.customMetadata as StoredFileCustomMetadata | undefined
+			if (hasSourceCidMetadata(metadata)) {
+				if (metadata?.sourceCid === expectedSourceCid) return candidate
+				disposeFileStream(candidate.stream)
+				throw new FileStreamIntegrityError()
+			}
+			const verified = await verifyFileStream(candidate, expectedSourceCid, signal)
+			void repairLegacySourceCid(did, rkey, key, candidate.metadata.checksum, expectedSourceCid).catch(() => {
+				logger.warn('Unexpected legacy source CID repair failure', { did, rkey })
+			})
+			return verified
+		}
+
+		try {
+			return await verify(result)
+		} catch (error) {
+			if (!(error instanceof FileStreamIntegrityError) || !expectedSourceCid) throw error
+			logger.warn('Stored file source CID does not match the manifest; retrying cold storage', {
+				did,
+				rkey,
+				filePath,
+				tier: result.source,
+			})
+			const resolution = await cache.getOrFetch<StreamCidMismatchResolution>(
+				SOURCE_CID_MISMATCH_NAMESPACE,
+				mismatchKey,
+				async () => {
+					try {
+						await evictPublicCacheKey(key)
+					} catch (evictionError) {
+						signal?.throwIfAborted()
+						if (isStorageUnavailableError(evictionError)) throw evictionError
+						logger.warn('Failed to evict mismatched local file cache entry', { did, rkey, filePath })
+						return { kind: 'mismatched' }
+					}
+					let coldResult: StreamResult | null
+					try {
+						coldResult = await read()
+					} catch (readError) {
+						signal?.throwIfAborted()
+						if (isStorageUnavailableError(readError)) throw readError
+						logger.warn('Failed to retry cold storage after a source CID mismatch', { did, rkey, filePath })
+						return { kind: 'mismatched' }
+					}
+					signal?.throwIfAborted()
+					if (!coldResult) return { kind: 'mismatched' }
+					try {
+						const verified = await verify(coldResult)
+						disposeFileStream(verified.stream)
+						return { kind: 'matched' }
+					} catch (coldError) {
+						if (!(coldError instanceof FileStreamIntegrityError)) throw coldError
+						return { kind: 'mismatched' }
+					}
+				},
+				{
+					cacheIf: (value) => value.kind === 'mismatched',
+					ttl: SOURCE_CID_MISMATCH_TTL_MS,
+				},
+			)
+			if (resolution.kind === 'mismatched') throw new SourceCidValidationError(filePath)
+
+			const coldResult = await read()
+			if (!coldResult) throw new SourceCidValidationError(filePath)
+			try {
+				return await verify(coldResult)
+			} catch (coldError) {
+				if (coldError instanceof FileStreamIntegrityError) throw new SourceCidValidationError(filePath)
+				throw coldError
+			}
+		}
+	}
+
+	async function getFileForRequest(
+		did: string,
+		rkey: string,
+		filePath: string,
+		strategy: FileServingStrategy,
+		manifest: SiteManifest | null,
+		signal?: AbortSignal,
+	): Promise<FileForRequestResult | null> {
+		const fileCids = manifest?.fileCids ?? null
+		const fileObjects = manifest?.fileObjects ?? null
+		const expectedSourceCid = getExpectedSourceCid(fileCids, filePath)
+		if (fileCids !== null && expectedSourceCid === undefined) return null
+
+		let sourceCidValidationFailed = false
+		const readCandidate = async (candidatePath: string): Promise<FileStorageResult | null> => {
+			try {
+				return await getFileWithMetadata(did, rkey, candidatePath, fileObjects, expectedSourceCid)
+			} catch (error) {
+				if (error instanceof SourceCidValidationError) {
+					sourceCidValidationFailed = true
+					return null
+				}
+				throw error
+			}
+		}
+
+		const readStreamCandidate = async (
+			candidatePath: string,
+			wasRewritten: boolean,
+		): Promise<{ kind: 'stream'; file: FileForRequestResult } | { kind: 'fallback' | 'missing' | 'mismatch' }> => {
+			if (!getStream) return { kind: 'fallback' }
+			// A body already in the memory tier is served from its buffer: wrapping it in streams cost more
+			// than the rest of the request. Disk and object-store reads keep streaming.
+			if (await isHotTierHit(did, rkey, candidatePath, fileObjects)) return { kind: 'fallback' }
+			const guessedMimeType = lookup(candidatePath) || 'application/octet-stream'
+			if (strategy.rewriteMissingHtmlOnDemand && !wasRewritten && isHtmlContent(candidatePath, guessedMimeType)) {
+				return { kind: 'fallback' }
+			}
+			let streamed: StreamResult | null
+			try {
+				streamed = await getVerifiedFileStream(
+					did,
+					rkey,
+					candidatePath,
+					fileObjects,
+					getExpectedSourceCid(fileCids, candidatePath),
+					signal,
+				)
+			} catch (error) {
+				if (error instanceof SourceCidValidationError) {
+					sourceCidValidationFailed = true
+					return { kind: 'mismatch' }
+				}
+				throw error
+			}
+			if (!streamed) return { kind: 'missing' }
+			const { result, prefix } = await peekFileStream(streamed)
+			const metadata = result.metadata.customMetadata as StoredFileCustomMetadata | undefined
+			const mimeType = resolveSafeMimeType(metadata?.mimeType, candidatePath)
+			const shouldRewriteOnDemand =
+				strategy.rewriteMissingHtmlOnDemand && !wasRewritten && isHtmlContent(candidatePath, mimeType)
+			if (shouldRewriteOnDemand) {
+				disposeFileStream(result.stream)
+				return { kind: 'fallback' }
+			}
+			return {
+				kind: 'stream',
+				file: { result: { ...result, streamGzipMagic: isGzipped(prefix) }, filePath, wasRewritten },
+			}
+		}
+
+		const mimeTypeGuess = lookup(filePath) || 'application/octet-stream'
+		if (strategy.fileLookup === 'prefer-pre-rewritten-html' && isHtmlContent(filePath, mimeTypeGuess)) {
+			const rewrittenPath = `${REWRITTEN_PATH_PREFIX}${filePath}`
+			const rewrittenStream = await readStreamCandidate(rewrittenPath, true)
+			if (rewrittenStream.kind === 'stream') return rewrittenStream.file
+			if (rewrittenStream.kind === 'fallback') {
+				const rewritten = await readCandidate(rewrittenPath)
+				if (rewritten) return { result: rewritten, filePath, wasRewritten: true }
+			}
+		}
+
+		const streamed = await readStreamCandidate(filePath, false)
+		if (streamed.kind === 'stream') return streamed.file
+		if (streamed.kind === 'missing') {
+			if (sourceCidValidationFailed) throw new SourceCidValidationError(filePath)
+			return null
+		}
+		if (streamed.kind === 'mismatch') throw new SourceCidValidationError(filePath)
+		const result = await readCandidate(filePath)
+		if (result) return { result, filePath, wasRewritten: false }
+		if (sourceCidValidationFailed) throw new SourceCidValidationError(filePath)
+		return null
+	}
+
+	async function measureLegacyGzipPassthrough(
+		content: Uint8Array,
+		filePath: string,
+		varyByAcceptEncoding: boolean,
+	): Promise<GzipPreparation> {
+		try {
+			await withGzipProcessingBudget(async () => {
+				await gzipOperations.measureDecompressedSize(content, MAX_BLOB_SIZE)
+			})
+			return { kind: 'ready' }
+		} catch (error) {
+			return gzipFailure(filePath, getGzipFailureKind(error), varyByAcceptEncoding)
+		}
+	}
+
+	async function decodeStoredGzipIdentity(
+		content: Uint8Array,
+		filePath: string,
+		varyByAcceptEncoding: boolean,
+	): Promise<DecodedGzipIdentity> {
+		try {
+			const decoded = await withGzipProcessingBudget(() => gzipOperations.decompress(content, MAX_BLOB_SIZE))
+			return { kind: 'decoded', content: decoded }
+		} catch (error) {
+			return gzipFailure(filePath, getGzipFailureKind(error), varyByAcceptEncoding)
+		}
+	}
+
+	/**
+	 * Validate gzip state before a conditional response can be emitted. This makes
+	 * legacy gzip bytes safe for both negotiated passthrough and identity reads.
+	 */
+	async function prepareStoredGzipResponse(
+		representation: StoredFileRepresentation,
+		filePath: string,
+	): Promise<GzipPreparation> {
+		if (!representation.isGzipContent) return { kind: 'ready' }
+		if (representation.explicitlyGzipped && !representation.hasGzipMagic) {
+			return gzipFailure(filePath, 'invalid-gzip', representation.varyByAcceptEncoding)
+		}
+
+		const sizeStatus = getStoredGzipSizeStatus(representation.metadata)
+		if (sizeStatus === 'over-limit') {
+			return gzipFailure(filePath, 'output-limit', representation.varyByAcceptEncoding)
+		}
+		if (sizeStatus === 'trusted') return { kind: 'ready' }
+		if (representation.shouldServeCompressed) {
+			// A legacy object has no trusted firehose accounting metadata. Verify its
+			// logical size before returning compressed bytes to a gzip client.
+			return await measureLegacyGzipPassthrough(
+				getStoredFileContent(representation),
+				filePath,
+				representation.varyByAcceptEncoding,
+			)
+		}
+
+		// This branch must materialize identity bytes anyway. Decode once before
+		// conditionals so a malformed legacy object cannot receive a 304.
+		const decoded = await decodeStoredGzipIdentity(
+			getStoredFileContent(representation),
+			filePath,
+			representation.varyByAcceptEncoding,
+		)
+		if (decoded.kind === 'failure') return decoded
+		return { kind: 'ready', decodedIdentity: decoded.content }
+	}
+
+	async function getIdentityResponseContent(
+		representation: StoredFileRepresentation,
+		preparation: GzipPreparation,
+		filePath: string,
+	): Promise<IdentityResponseContent> {
+		if (preparation.kind === 'ready' && preparation.decodedIdentity) {
+			return { kind: 'content', content: preparation.decodedIdentity }
+		}
+
+		const decoded = await decodeStoredGzipIdentity(
+			getStoredFileContent(representation),
+			filePath,
+			representation.varyByAcceptEncoding,
+		)
+		if (decoded.kind === 'failure') return decoded
+		return { kind: 'content', content: decoded.content }
+	}
+
+	async function buildStoredFileBodyResponse(
+		representation: StoredFileRepresentation,
+		preparation: GzipPreparation,
+		filePath: string,
+		settings: WispSettings | null,
+		sharedOrigin: boolean,
+		etag: string | undefined,
+		requestHeaders?: Record<string, string>,
+	): Promise<Response> {
+		const headers = buildStoredResponseHeaders(representation, etag)
+		if (representation.isGzipContent && !representation.shouldServeCompressed) {
+			const identity = await getIdentityResponseContent(representation, preparation, filePath)
+			if (identity.kind === 'failure') return identity.response
+			return buildStorageBodyResponse(
+				identity.content,
+				headers,
+				filePath,
+				settings,
+				sharedOrigin,
+				representation.varyByAcceptEncoding,
+				requestHeaders,
+			)
+		}
+
+		if (representation.isGzipContent) headers['Content-Encoding'] = 'gzip'
+		return buildStorageBodyResponse(
+			getStoredFileContent(representation),
+			headers,
+			filePath,
+			settings,
+			sharedOrigin,
+			representation.varyByAcceptEncoding,
+			requestHeaders,
+		)
+	}
+
+	async function buildResponseFromStorageResult(
+		result: FileStorageResult,
+		filePath: string,
+		settings: WispSettings | null,
+		requestHeaders?: Record<string, string>,
+		sharedOrigin = false,
+	): Promise<Response> {
+		const representation = createStoredFileRepresentation(result, filePath, requestHeaders)
+		const preparation = await prepareStoredGzipResponse(representation, filePath)
+		if (preparation.kind === 'failure') return preparation.response
+
+		const etag = getRepresentationEtag(representation)
+		const notModified = buildNotModifiedResponse(etag, requestHeaders, representation.varyByAcceptEncoding)
+		if (notModified) return notModified
+		return await buildStoredFileBodyResponse(
+			representation,
+			preparation,
+			filePath,
+			settings,
+			sharedOrigin,
+			etag,
+			requestHeaders,
+		)
+	}
+
+	async function prepareHtmlRewriteSource(
+		representation: StoredFileRepresentation,
+		filePath: string,
+	): Promise<HtmlRewriteSource> {
+		if (representation.explicitlyGzipped && !representation.hasGzipMagic) {
+			return gzipFailure(filePath, 'invalid-gzip', representation.varyByAcceptEncoding)
+		}
+		if (!representation.isGzipContent) return { kind: 'content', content: getStoredFileContent(representation) }
+		if (getStoredGzipSizeStatus(representation.metadata) === 'over-limit') {
+			return gzipFailure(filePath, 'output-limit', representation.varyByAcceptEncoding)
+		}
+
+		const decoded = await decodeStoredGzipIdentity(
+			getStoredFileContent(representation),
+			filePath,
+			representation.varyByAcceptEncoding,
+		)
+		if (decoded.kind === 'failure') return decoded
+		return { kind: 'content', content: decoded.content }
+	}
+
+	async function compressRewrittenHtml(
+		output: Buffer,
+		filePath: string,
+		shouldCompress: boolean,
+		requestHeaders: Record<string, string> | undefined,
+	): Promise<RewrittenHtmlCompression> {
+		if (!shouldCompress || !clientAcceptsGzip(requestHeaders)) return { output }
+
+		try {
+			const compressed = await withGzipProcessingBudget(() => gzipOperations.compress(output))
+			return { output: Buffer.from(compressed), contentEncoding: 'gzip' }
+		} catch {
+			// The rewritten identity body is already safe. Do not fall back to the
+			// original representation merely because recompression failed.
+			logger.warn('Failed to recompress rewritten HTML, serving identity', {
+				filePath,
+				failureKind: 'gzip-compress-failed',
+			})
+			return { output }
+		}
+	}
+
+	async function buildRewrittenHtmlResponse(
+		result: FileStorageResult,
+		filePath: string,
+		basePath: string,
+		settings: WispSettings | null,
+		requestHeaders?: Record<string, string>,
+		sharedOrigin = false,
+	): Promise<Response> {
+		const representation = createStoredFileRepresentation(result, filePath, requestHeaders, true)
+		const source = await prepareHtmlRewriteSource(representation, filePath)
+		if (source.kind === 'failure') return source.response
+
+		const rewritten = await rewriteHtmlContent(source.content, basePath, filePath)
+		if (rewritten.kind === 'serve-original') {
+			return await buildResponseFromStorageResult(result, filePath, settings, requestHeaders, sharedOrigin)
+		}
+
+		const compressed = await compressRewrittenHtml(
+			rewritten.output,
+			filePath,
+			representation.shouldCompress,
+			requestHeaders,
+		)
+		const headers = buildStoredResponseHeaders(representation, undefined)
+		if (compressed.contentEncoding) headers['Content-Encoding'] = compressed.contentEncoding
+		return buildStorageBodyResponse(
+			compressed.output,
+			headers,
+			filePath,
+			settings,
+			sharedOrigin,
+			representation.varyByAcceptEncoding,
+			requestHeaders,
+		)
+	}
+
+	function createExpectedManifestMissTracker(
+		did: string,
+		rkey: string,
+		requestHeaders: Record<string, string> | undefined,
+		getManifest: () => Promise<SiteManifest | null>,
+		strategy: FileServingStrategy,
+	) {
+		let expectedMissPath: string | null = null
+
+		return {
+			async mark(filePath: string): Promise<void> {
+				if (expectedMissPath) return
+				const manifest = await getManifest()
+				if (!manifest) return
+
+				// A pre-rewritten cache entry is still derived from its original
+				// manifest path. If that original CID is absent, fail closed and
+				// request repair rather than falling through to a styled 404.
+				if (manifestLookupPaths(filePath, strategy).some((path) => manifestHasPath(manifest.fileCids, path))) {
+					expectedMissPath = sourceManifestPath(filePath)
+				}
+			},
+			async response(): Promise<Response | null> {
+				if (!expectedMissPath) return null
+				recordStorageMiss(expectedMissPath)
+				const { result } = await enqueueRevalidate(did, rkey, `storage-miss:${expectedMissPath}`)
+				return buildStorageMissResponse({ reason: 'cid-miss', revalidate: result }, requestHeaders)
+			},
+		}
+	}
+
+	function createFileResolver(options: FileResolverOptions): FileResolver {
+		const { did, rkey, requestHeaders, strategy, trace } = options
+		let loadedManifest = options.manifest
+		let manifestLoaded = options.manifest !== undefined
+		const attemptedPaths = new Set<string>()
+
+		const getManifest = async (): Promise<SiteManifest | null> => {
+			if (!manifestLoaded) {
+				loadedManifest = await getSiteManifest(did, rkey, trace)
+				manifestLoaded = true
+			}
+			return loadedManifest ?? null
+		}
+
+		const missTracker = createExpectedManifestMissTracker(did, rkey, requestHeaders, getManifest, strategy)
+
+		const getExpectedFile = async (filePath: string): Promise<FileForRequestResult | null> => {
+			const manifest = await getManifest()
+			if (!manifestMayContainFile(manifest, filePath, strategy)) return null
+			return await span(trace, `storage:${filePath}`, () =>
+				getFileForRequest(did, rkey, filePath, strategy, manifest, options.signal),
+			)
+		}
+
+		return {
+			getManifest,
+			async findFirstExpectedFile(paths: Iterable<string>): Promise<FileForRequestResult | null> {
+				for (const filePath of orderedUniquePaths(paths)) {
+					if (attemptedPaths.has(filePath)) continue
+					attemptedPaths.add(filePath)
+
+					const result = await getExpectedFile(filePath)
+					if (result) return result
+					await missTracker.mark(filePath)
+				}
+				return null
+			},
+			findFallbackFile: async (filePath) =>
+				getFallbackFile(did, rkey, filePath, await getManifest(), strategy, trace, options.signal),
+			markExpectedMiss: (filePath) => missTracker.mark(filePath),
+			expectedMissResponse: () => missTracker.response(),
+		}
+	}
+
+	async function buildStreamFileResponse(
+		options: FileResolverOptions,
+		filePath: string,
+		result: StreamResult & { streamGzipMagic?: boolean },
+	): Promise<Response> {
+		const { requestHeaders, settings, strategy, signal, requestMethod } = options
+		const initialRepresentation = createStoredFileRepresentation(
+			result,
+			filePath,
+			requestHeaders,
+			false,
+			result.streamGzipMagic,
+		)
+		const { metadata, hasGzipMagic, explicitlyGzipped, isGzipContent, shouldServeCompressed, varyByAcceptEncoding } =
+			initialRepresentation
+		if (explicitlyGzipped && !hasGzipMagic) {
+			disposeFileStream(result.stream)
+			return gzipFailure(filePath, 'invalid-gzip', varyByAcceptEncoding).response
+		}
+
+		let prepared = result
+		if (isGzipContent) {
+			const sizeStatus = getStoredGzipSizeStatus(metadata)
+			if (sizeStatus === 'over-limit') {
+				disposeFileStream(prepared.stream)
+				return gzipFailure(filePath, 'output-limit', varyByAcceptEncoding).response
+			}
+			if (!(sizeStatus === 'trusted' && shouldServeCompressed)) {
+				try {
+					prepared = await withGzipProcessingBudget(() =>
+						transformFileStream(result, shouldServeCompressed ? 'measure-gzip' : 'identity', signal),
+					)
+				} catch (error) {
+					return gzipFailure(filePath, getGzipFailureKind(error), varyByAcceptEncoding).response
+				}
+			}
+		}
+
+		const representation = createStoredFileRepresentation(prepared, filePath, requestHeaders, false, hasGzipMagic)
+		const etag = getRepresentationEtag(representation)
+		const notModified = buildNotModifiedResponse(etag, requestHeaders, varyByAcceptEncoding)
+		if (notModified) {
+			await disposeFileStreamAndWait(prepared.stream)
+			return notModified
+		}
+
+		const headers = buildStoredResponseHeaders(representation, etag)
+		if (shouldServeCompressed) headers['Content-Encoding'] = 'gzip'
+		applyFileResponseHeaders(headers, filePath, settings, strategy.sharedOrigin, varyByAcceptEncoding)
+		headers['Accept-Ranges'] = 'bytes'
+		const size = prepared.metadata.size
+		const range = requestedByteRange(requestHeaders, headers, size)
+		if (range === 'unsatisfiable') {
+			await disposeFileStreamAndWait(prepared.stream)
+			headers['Content-Range'] = `bytes */${size}`
+			headers['Content-Length'] = '0'
+			return new Response(null, { status: 416, headers })
+		}
+
+		let bodyStream: NodeJS.ReadableStream = prepared.stream
+		let status = 200
+		let bodySize = size
+		if (range) {
+			bodyStream = sliceReadableStream(prepared.stream as Readable, range)
+			bodySize = range.end - range.start + 1
+			status = 206
+			headers['Content-Range'] = `bytes ${range.start}-${range.end}/${size}`
+		}
+		headers['Content-Length'] = `${bodySize}`
+		if (requestMethod?.toUpperCase() === 'HEAD') {
+			if (range) await disposeFileStreamAndWait(prepared.stream)
+			await disposeFileStreamAndWait(bodyStream)
+			return new Response(null, { status, headers })
+		}
+		let webStream: ReadableStream<Uint8Array> | undefined
+		try {
+			webStream = getStreamResponseBody(bodyStream, signal)
+			return new Response(webStream, { status, headers })
+		} catch (error) {
+			if (webStream) await webStream.cancel().catch(() => undefined)
+			if (bodyStream !== prepared.stream) {
+				await disposeFileStreamAndWait(bodyStream).catch(() => undefined)
+			}
+			await disposeFileStreamAndWait(prepared.stream).catch(() => undefined)
+			throw error
+		}
+	}
+
+	async function buildFileResponse(options: FileResolverOptions, fileResult: FileForRequestResult): Promise<Response> {
+		const { did, rkey, requestHeaders, settings, strategy } = options
+		const { filePath, result, wasRewritten } = fileResult
+		if ('stream' in result) return await buildStreamFileResponse(options, filePath, result)
+		const meta = result.metadata.customMetadata as { encoding?: string; mimeType?: string } | undefined
+		const mimeType = resolveSafeMimeType(meta?.mimeType, filePath)
+		const shouldRewriteOnDemand =
+			strategy.rewriteMissingHtmlOnDemand && !wasRewritten && isHtmlContent(filePath, mimeType)
+
+		if (shouldRewriteOnDemand) {
+			void enqueueRevalidate(did, rkey, `rewrite-miss:${filePath}`)
+			return await buildRewrittenHtmlResponse(
+				result,
+				filePath,
+				strategy.basePath ?? '',
+				settings,
+				requestHeaders,
+				strategy.sharedOrigin,
+			)
+		}
+
+		return buildResponseFromStorageResult(result, filePath, settings, requestHeaders, strategy.sharedOrigin)
+	}
+
+	async function serveExpectedCandidates(
+		options: FileResolverOptions,
+		resolver: FileResolver,
+		candidates: Iterable<string>,
+	): Promise<Response | null> {
+		const result = await resolver.findFirstExpectedFile(candidates)
+		return result ? await buildFileResponse(options, result) : null
+	}
+
+	async function serveFallbackFile(
+		options: FileResolverOptions,
+		resolver: FileResolver,
+		filePath: string,
+		status?: number,
+	): Promise<Response | null> {
+		const result = await resolver.findFallbackFile(filePath)
+		if (!result) {
+			await resolver.markExpectedMiss(filePath)
+			return null
+		}
+
+		const response = await buildFileResponse(options, result)
+		return status === undefined ? response : wrapResponseStatus(response, status)
+	}
+
+	async function serveFirstFallbackFile(
+		options: FileResolverOptions,
+		resolver: FileResolver,
+		filePaths: Iterable<string>,
+		status?: number,
+	): Promise<Response | null> {
+		for (const filePath of orderedUniquePaths(filePaths)) {
+			const response = await serveFallbackFile(options, resolver, filePath, status)
+			if (response) return response
+		}
+		return null
+	}
+
+	async function serveConfiguredFallbacks(
+		options: FileResolverOptions,
+		resolver: FileResolver,
+	): Promise<Response | null> {
+		const { custom404, spaMode } = options.settings ?? {}
+
+		if (spaMode) {
+			const spaResponse = await serveFallbackFile(options, resolver, spaMode)
+			if (spaResponse) return spaResponse
+		}
+
+		if (custom404) {
+			return await serveFallbackFile(options, resolver, custom404, 404)
+		}
+
+		return null
+	}
+
+	async function serveRedirectResponse(options: RedirectRequestOptions): Promise<Response | null> {
+		const { did, rkey, filePath, fullUrl, indexFiles, requestHeaders, resolveFile, strategy, trace } = options
+		if (!options.redirectsPresent) return null
+		const redirectRules = await cache.getOrFetch('redirectRules', `${did}:${rkey}`, () =>
+			span(trace, 'storage:redirectRules', () => loadRedirectRules(storage, did, rkey, options.fileObjects)),
+		)
+		if (redirectRules.length === 0) return null
+
+		const requestPath = `/${filePath || ''}`
+		const redirectMatch = matchRedirectRule(requestPath, redirectRules, {
+			queryParams: fullUrl ? parseQueryString(fullUrl) : {},
+			headers: requestHeaders,
+			cookies: parseCookies(requestHeaders?.cookie),
+		})
+		if (!redirectMatch) return null
+
+		const { rule, status, targetPath } = redirectMatch
+		if (!rule.force && (await hasFileForNonForcedRedirect(did, rkey, filePath, indexFiles, trace))) {
+			return await resolveFile(filePath)
+		}
+
+		return await serveRedirectTarget(status, targetPath, strategy, resolveFile)
+	}
+
+	async function buildSourceCidStorageMissResponse(options: FileRequestOptions, filePath: string): Promise<Response> {
+		const sourcePath = sourceManifestPath(filePath)
+		recordStorageMiss(sourcePath)
+		const { result } = await enqueueRevalidate(options.did, options.rkey, `storage-miss:${sourcePath}`)
+		return buildStorageMissResponse({ reason: 'cid-mismatch', revalidate: result }, options.requestHeaders)
+	}
+
+	async function serveFileRequest(options: FileRequestOptions): Promise<Response> {
+		try {
+			return await resolveFileRequest(options)
+		} catch (error) {
+			if (isStorageUnavailableError(error)) {
+				return buildStorageMissResponse(STORAGE_UNAVAILABLE, options.requestHeaders)
+			}
+			if (error instanceof SourceCidValidationError) {
+				return await buildSourceCidStorageMissResponse(options, error.filePath)
+			}
+			throw error
+		}
+	}
+
+	async function resolveFileRequest(options: FileRequestOptions): Promise<Response> {
+		const resolver = createFileResolver(options)
+		const indexFiles = getIndexFiles(options.settings)
+		const { isDirectoryPathRequest, requestPath } = normalizeRequestPath(options.filePath)
+		const fileRequestPath = requestPath || indexFiles[0] || 'index.html'
+		let response: Response | null = null
+
+		if (!requestPath || !hasFileExtension(requestPath)) {
+			response =
+				(await serveExpectedCandidates(
+					options,
+					resolver,
+					directoryRequestCandidates(requestPath, isDirectoryPathRequest, indexFiles),
+				)) ?? (await serveDirectoryListing(options, resolver, requestPath))
+		}
+
+		response ??= await serveExpectedCandidates(options, resolver, fileAndIndexCandidates(fileRequestPath, indexFiles))
+		if (options.settings?.cleanUrls && !hasFileExtension(fileRequestPath)) {
+			response ??= await serveExpectedCandidates(options, resolver, cleanUrlCandidates(fileRequestPath, indexFiles))
+		}
+
+		if (!response) {
+			response =
+				(await serveConfiguredFallbacks(options, resolver)) ??
+				(await serveFirstFallbackFile(options, resolver, ['404.html', 'not_found.html'], 404)) ??
+				(await serveDirectoryListing(options, resolver, '', 404))
+		}
+
+		return response ?? (await resolver.expectedMissResponse()) ?? buildStyled404Response()
+	}
+
+	async function resolveCachedRequest(options: CachedRequestOptions, trace: RequestTrace | null): Promise<Response> {
+		const { did, filePath, requestHeaders, rkey, strategy } = options
+		const manifest = await getSiteManifest(did, rkey, trace)
+		if (manifest === null) {
+			recordStorageMiss('manifest')
+			const { result } = await enqueueRevalidate(did, rkey, 'storage-miss:manifest')
+			return buildStorageMissResponse({ reason: 'manifest-miss', revalidate: result }, requestHeaders)
+		}
+		const settings = await span(trace, 'db:settings', () => getCachedSettings(did, rkey))
+		const indexFiles = getIndexFiles(settings)
+		const resolveFile = (path: string) =>
+			serveFileRequest({
+				did,
+				rkey,
+				filePath: path,
+				settings,
+				requestHeaders,
+				requestMethod: options.requestMethod,
+				signal: options.signal,
+				trace,
+				strategy,
+				manifest,
+			})
+
+		const redirectResponse = await serveRedirectResponse({
+			...options,
+			indexFiles,
+			redirectsPresent: manifest.fileCids._redirects !== undefined,
+			fileObjects: manifest.fileObjects,
+			resolveFile,
+			trace,
+		})
+		const response = redirectResponse ?? (await resolveFile(filePath))
+		// Start the manifest-backed warmup only after the requested response has
+		// resolved, so unrelated HTML reads cannot delay this request.
+		triggerSiteHtmlHotCacheWarmup(did, rkey, () => Object.keys(manifest.fileCids), manifest.fileObjects)
+		return response
+	}
+
+	async function resolveCachedResponse(options: CachedRequestOptions): Promise<Response> {
+		const { did, filePath, requestHeaders, rkey } = options
+		if (isSiteUpdating(did, rkey)) {
+			return buildSiteUpdatingResponse(requestHeaders)
+		}
+
+		const trace = createTrace()
+		try {
+			return await resolveCachedRequest(options, trace)
+		} catch (error) {
+			if (!isStorageUnavailableError(error)) throw error
+			return buildStorageMissResponse(STORAGE_UNAVAILABLE, requestHeaders)
+		} finally {
+			logTrace(trace, filePath || '/', logger)
+		}
+	}
+
+	async function serveCachedRequest(options: CachedRequestOptions): Promise<Response> {
+		const response = await resolveCachedResponse(options)
+		const cause = unavailableCauses.get(response)
+		if (cause) unavailableLog.record(options.did, options.rkey, cause.reason, cause.revalidate)
+		return response
+	}
+
+	/**
+	 * Serve files for custom domains and subdomains.
+	 */
+	async function serveFromCache(
+		did: string,
+		rkey: string,
+		filePath: string,
+		fullUrl?: string,
+		headers?: Record<string, string>,
+		options?: FileServeRequestOptions,
+	): Promise<Response> {
+		return await serveCachedRequest({
 			did,
 			rkey,
-			filePath: path,
+			filePath,
+			fullUrl,
+			requestHeaders: headers,
+			requestMethod: options?.method,
+			signal: options?.signal,
+			strategy: ORIGINAL_FILE_STRATEGY,
+		})
+	}
+
+	/**
+	 * Resolve a file for custom domains and subdomains.
+	 */
+	async function serveFileInternal(
+		did: string,
+		rkey: string,
+		filePath: string,
+		settings: WispSettings | null = null,
+		requestHeaders?: Record<string, string>,
+		trace?: RequestTrace | null,
+		options?: FileServeRequestOptions,
+	): Promise<Response> {
+		return await serveFileRequest({
+			did,
+			rkey,
+			filePath,
 			settings,
 			requestHeaders,
-			requestMethod: options.requestMethod,
-			signal: options.signal,
+			requestMethod: options?.method,
+			signal: options?.signal,
 			trace,
-			strategy,
-			manifest,
+			strategy: ORIGINAL_FILE_STRATEGY,
 		})
-
-	const redirectResponse = await serveRedirectResponse({
-		...options,
-		indexFiles,
-		redirectsPresent: manifest.fileCids._redirects !== undefined,
-		fileObjects: manifest.fileObjects,
-		resolveFile,
-		trace,
-	})
-	const response = redirectResponse ?? (await resolveFile(filePath))
-	// Start the manifest-backed warmup only after the requested response has
-	// resolved, so unrelated HTML reads cannot delay this request.
-	triggerSiteHtmlHotCacheWarmup(did, rkey, () => Object.keys(manifest.fileCids), manifest.fileObjects)
-	return response
-}
-
-async function resolveCachedResponse(options: CachedRequestOptions): Promise<Response> {
-	const { did, filePath, requestHeaders, rkey } = options
-	if (isSiteUpdating(did, rkey)) {
-		return buildSiteUpdatingResponse(requestHeaders)
 	}
 
-	const trace = createTrace()
-	try {
-		return await resolveCachedRequest(options, trace)
-	} catch (error) {
-		if (!isStorageUnavailableError(error)) throw error
-		return buildStorageMissResponse(STORAGE_UNAVAILABLE, requestHeaders)
-	} finally {
-		logTrace(trace, filePath || '/', logger)
+	/**
+	 * Serve files for sites.wisp.place paths, including HTML path rewriting.
+	 */
+	async function serveFromCacheWithRewrite(
+		did: string,
+		rkey: string,
+		filePath: string,
+		basePath: string,
+		fullUrl?: string,
+		headers?: Record<string, string>,
+		options?: FileServeRequestOptions,
+	): Promise<Response> {
+		return await serveCachedRequest({
+			did,
+			rkey,
+			filePath,
+			fullUrl,
+			requestHeaders: headers,
+			requestMethod: options?.method,
+			signal: options?.signal,
+			strategy: createSharedOriginFileStrategy(basePath),
+		})
 	}
+
+	/**
+	 * Resolve a file for sites.wisp.place paths, including HTML path rewriting.
+	 */
+	async function serveFileInternalWithRewrite(
+		did: string,
+		rkey: string,
+		filePath: string,
+		basePath: string,
+		settings: WispSettings | null = null,
+		requestHeaders?: Record<string, string>,
+		trace?: RequestTrace | null,
+		options?: FileServeRequestOptions,
+	): Promise<Response> {
+		return await serveFileRequest({
+			did,
+			rkey,
+			filePath,
+			settings,
+			requestHeaders,
+			requestMethod: options?.method,
+			signal: options?.signal,
+			trace,
+			strategy: createSharedOriginFileStrategy(basePath),
+		})
+	}
+
+	return { serveFromCache, serveFileInternal, serveFromCacheWithRewrite, serveFileInternalWithRewrite }
 }
 
-async function serveCachedRequest(options: CachedRequestOptions): Promise<Response> {
-	const response = await resolveCachedResponse(options)
-	const cause = unavailableCauses.get(response)
-	if (cause) unavailableLog.record(options.did, options.rkey, cause.reason, cause.revalidate)
-	return response
-}
+export type FileServing = ReturnType<typeof createFileServing>
 
-/**
- * Serve files for custom domains and subdomains.
- */
-export async function serveFromCache(
-	did: string,
-	rkey: string,
-	filePath: string,
-	fullUrl?: string,
-	headers?: Record<string, string>,
-	options?: FileServeRequestOptions,
-): Promise<Response> {
-	return await serveCachedRequest({
-		did,
-		rkey,
-		filePath,
-		fullUrl,
-		requestHeaders: headers,
-		requestMethod: options?.method,
-		signal: options?.signal,
-		strategy: ORIGINAL_FILE_STRATEGY,
-	})
-}
+const fileServing = createFileServing({
+	storage,
+	addPublicSourceCidIfChecksumMatches,
+	evictPublicCacheKey,
+	getSiteCache,
+	getCachedSettings,
+	enqueueRevalidate,
+	recordStorageMiss,
+	isSiteUpdating,
+	triggerSiteHtmlHotCacheWarmup,
+	gzipOperations: defaultGzipOperations,
+	gzipProcessingConcurrency: resolveGzipProcessingConcurrency(process.env),
+})
 
-/**
- * Resolve a file for custom domains and subdomains.
- */
-export async function serveFileInternal(
-	did: string,
-	rkey: string,
-	filePath: string,
-	settings: WispSettings | null = null,
-	requestHeaders?: Record<string, string>,
-	trace?: RequestTrace | null,
-	options?: FileServeRequestOptions,
-): Promise<Response> {
-	return await serveFileRequest({
-		did,
-		rkey,
-		filePath,
-		settings,
-		requestHeaders,
-		requestMethod: options?.method,
-		signal: options?.signal,
-		trace,
-		strategy: ORIGINAL_FILE_STRATEGY,
-	})
-}
-
-/**
- * Serve files for sites.wisp.place paths, including HTML path rewriting.
- */
-export async function serveFromCacheWithRewrite(
-	did: string,
-	rkey: string,
-	filePath: string,
-	basePath: string,
-	fullUrl?: string,
-	headers?: Record<string, string>,
-	options?: FileServeRequestOptions,
-): Promise<Response> {
-	return await serveCachedRequest({
-		did,
-		rkey,
-		filePath,
-		fullUrl,
-		requestHeaders: headers,
-		requestMethod: options?.method,
-		signal: options?.signal,
-		strategy: createSharedOriginFileStrategy(basePath),
-	})
-}
-
-/**
- * Resolve a file for sites.wisp.place paths, including HTML path rewriting.
- */
-export async function serveFileInternalWithRewrite(
-	did: string,
-	rkey: string,
-	filePath: string,
-	basePath: string,
-	settings: WispSettings | null = null,
-	requestHeaders?: Record<string, string>,
-	trace?: RequestTrace | null,
-	options?: FileServeRequestOptions,
-): Promise<Response> {
-	return await serveFileRequest({
-		did,
-		rkey,
-		filePath,
-		settings,
-		requestHeaders,
-		requestMethod: options?.method,
-		signal: options?.signal,
-		trace,
-		strategy: createSharedOriginFileStrategy(basePath),
-	})
-}
+export const { serveFromCache, serveFileInternal, serveFromCacheWithRewrite, serveFileInternalWithRewrite } =
+	fileServing

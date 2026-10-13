@@ -1,5 +1,10 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test'
+import { beforeEach, describe, expect, test } from 'bun:test'
 import { casKey } from '@wispplace/fs-utils'
+import { isSiteUpdating } from './cache-invalidation'
+import { cache } from './cache-manager'
+import { createFileServing, defaultGzipOperations } from './file-serving'
+import { createHtmlPrewarm } from './html-prewarm'
+import { recordStorageMiss } from './revalidate-metrics'
 
 // Site files are read from the CAS key that the site's `file_objects` maps. A path with no mapping has
 // no stored body: that is a repair request, never a read of {did}/{rkey}/{path}. Only per-site
@@ -14,8 +19,6 @@ const storageData = new Map<string, Entry>()
 const storageReads: string[] = []
 const revalidateCalls: Array<{ did: string; rkey: string; reason: string }> = []
 const siteRows = new Map<string, { file_cids: Record<string, string>; file_objects?: unknown }>()
-
-class TestStorageUnavailableError extends Error {}
 
 const fakeStorage = {
 	async get(key: string) {
@@ -34,8 +37,10 @@ const fakeStorage = {
 				createdAt: new Date(),
 				lastAccessed: new Date(),
 				accessCount: 0,
+				compressed: false,
 				checksum: 'test-checksum',
-				customMetadata: { sourceCid: entry.sourceCid, mimeType: entry.mimeType },
+				// Legacy rows store absent fields as explicit undefined, which the tier types do not model.
+				customMetadata: { sourceCid: entry.sourceCid, mimeType: entry.mimeType } as Record<string, string>,
 			},
 			source: 'cold' as const,
 		}
@@ -43,36 +48,26 @@ const fakeStorage = {
 	async *listKeys(_prefix?: string): AsyncGenerator<string> {},
 }
 
-mock.module('./storage', () => ({
+const prewarm = createHtmlPrewarm({ storage: fakeStorage })
+const { serveFromCache, serveFromCacheWithRewrite } = createFileServing({
 	storage: fakeStorage,
-	hotTier: undefined,
-	warmTier: undefined,
-	StorageUnavailableError: TestStorageUnavailableError,
-	isStorageUnavailableError: (error: unknown) => error instanceof TestStorageUnavailableError,
 	addPublicSourceCidIfChecksumMatches: async () => true,
 	evictPublicCacheKey: async () => {},
-	getStorageConfig: () => ({}),
-}))
-mock.module('./db', () => ({
-	getSiteCache: async (did: string, rkey: string) => {
+	getSiteCache: async (did, rkey) => {
 		const row = siteRows.get(`${did}/${rkey}`)
 		return row ? { did, rkey, record_cid: 'record-cid', cached_at: 0, updated_at: 0, absent_since: null, ...row } : null
 	},
-	getSiteSettingsCache: async () => null,
-}))
-mock.module('./utils', () => ({ getCachedSettings: async () => null }))
-mock.module('./revalidate-metrics', () => ({ recordStorageMiss: () => {} }))
-mock.module('./revalidate-queue', () => ({
-	enqueueRevalidate: async (did: string, rkey: string, reason: string) => {
+	getCachedSettings: async () => null,
+	enqueueRevalidate: async (did, rkey, reason) => {
 		revalidateCalls.push({ did, rkey, reason })
-		return { enqueued: true, result: 'enqueued' as const }
+		return { result: 'enqueued' }
 	},
-	closeRevalidateQueue: async () => {},
-}))
-
-const { cache } = await import('./cache-manager')
-const { resetHtmlHotCacheWarmupForTests, waitForSiteHtmlHotCacheWarmupForTests } = await import('./html-prewarm')
-const { serveFromCache, serveFromCacheWithRewrite } = await import('./file-serving')
+	recordStorageMiss,
+	isSiteUpdating,
+	triggerSiteHtmlHotCacheWarmup: prewarm.trigger,
+	gzipOperations: defaultGzipOperations,
+	gzipProcessingConcurrency: 2,
+})
 
 const CID = (letter: string) => `bafkrei${letter.repeat(52)}`
 const key = (cid: string, path: string, mimeType = 'text/html') => casKey({ cid, path, mimeType })
@@ -99,7 +94,7 @@ beforeEach(() => {
 	for (const namespace of ['redirectRules', 'siteCache', 'siteFiles', 'sourceCidMismatches'] as const) {
 		cache.clear(namespace)
 	}
-	resetHtmlHotCacheWarmupForTests()
+	prewarm.resetAll()
 })
 
 describe('CAS reads', () => {
@@ -249,7 +244,7 @@ describe('CAS reads', () => {
 		storeAt(styleKey, 'body{}', CID('s'), 'text/css')
 
 		await serveFromCache(DID, RKEY, 'style.css', url('style.css'))
-		await waitForSiteHtmlHotCacheWarmupForTests(DID, RKEY)
+		await prewarm.settled(DID, RKEY)
 
 		expect(storageReads).toContain(objectKey)
 		expect(storageReads).not.toContain(legacyKey('index.html'))

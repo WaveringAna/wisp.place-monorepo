@@ -3,6 +3,7 @@ import { NodeOAuthClient, type RuntimeLock } from '@atproto/oauth-client-node'
 import { SQL } from 'bun'
 import { probeConnectionWithRetry } from './connection-warming'
 import { databaseConfiguration, db } from './db'
+import { forgetGrantedScope, rememberGrantedScope } from './granted-scopes'
 import { logger } from './logger'
 import { deleteExpiredOAuthRows } from './oauth-cleanup'
 import { createClientMetadata } from './oauth-client-metadata'
@@ -184,26 +185,11 @@ const stateStore = {
 	},
 }
 
-/**
- * The scope granted by the most recently stored session, per subject.
- *
- * The OAuth callback has to know what the authorization server actually granted
- * so it can detect a server that accepted the `include:place.wisp.*` permission
- * sets and then dropped them. Asking the session for it costs a full advisory
- * lock cycle and a read on the primary, microseconds after this process wrote
- * the very value being read. Only the scope string is remembered — never a
- * token — so nothing here can serve a stale credential to a refresh.
- */
-const grantedScopes = createTtlMemoryStore<string, string>({ ttlMs: 60_000, max: 500 })
-
-/** The granted scope recorded when this process last stored a session. */
-export const recentGrantedScope = (sub: string): string | undefined => grantedScopes.get(sub)
-
 const sessionStore = {
 	async set(sub: string, data: any) {
 		console.debug('[sessionStore] set', sub)
 		const scope = data?.tokenSet?.scope
-		if (typeof scope === 'string') grantedScopes.set(sub, scope)
+		if (typeof scope === 'string') rememberGrantedScope(sub, scope)
 		const expiresAt = Math.floor(Date.now() / 1000) + SESSION_TIMEOUT
 		await db`
             INSERT INTO oauth_sessions (sub, data, updated_at, expires_at)
@@ -235,7 +221,7 @@ const sessionStore = {
 	},
 	async del(sub: string) {
 		console.debug('[sessionStore] del', sub)
-		grantedScopes.del(sub)
+		forgetGrantedScope(sub)
 		await db`DELETE FROM oauth_sessions WHERE sub = ${sub}`
 	},
 }

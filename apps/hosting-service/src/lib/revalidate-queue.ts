@@ -10,29 +10,16 @@ import {
 import Redis from 'ioredis'
 import { recordRevalidateResult } from './revalidate-metrics'
 
-const redisUrl = process.env.REDIS_URL
-const streamName = process.env.WISP_REVALIDATE_STREAM || DEFAULT_REVALIDATE_STREAM
 const MAX_REVALIDATE_STREAM_CAPACITY = DEFAULT_REVALIDATE_STREAM_CAPACITY
 const MAX_REVALIDATE_DEDUPE_TTL_SECONDS = 7 * 24 * 60 * 60
-const streamMaxLen = parseBoundedPositiveInt(
-	process.env.WISP_REVALIDATE_STREAM_MAXLEN,
-	10_000,
-	MAX_REVALIDATE_STREAM_CAPACITY,
-)
-const dedupeTtlSeconds = parseBoundedPositiveInt(
-	process.env.WISP_REVALIDATE_DEDUPE_TTL_SECONDS,
-	60,
-	MAX_REVALIDATE_DEDUPE_TTL_SECONDS,
-)
-const storageMissDedupeTtlSeconds = parseBoundedPositiveInt(
-	process.env.WISP_REVALIDATE_STORAGE_MISS_DEDUPE_TTL_SECONDS,
-	Math.max(dedupeTtlSeconds, 600),
-	MAX_REVALIDATE_DEDUPE_TTL_SECONDS,
-)
 
-let client: Redis | null = null
-let stopKeepalive: (() => void) | null = null
-let loggedMissingRedis = false
+export type RevalidateQueueConfig = {
+	redisUrl: string | undefined
+	streamName: string
+	streamMaxLen: number
+	dedupeTtlSeconds: number
+	storageMissDedupeTtlSeconds: number
+}
 
 function parseBoundedPositiveInt(value: string | undefined, fallback: number, maximum: number): number {
 	if (!value) return fallback
@@ -40,50 +27,37 @@ function parseBoundedPositiveInt(value: string | undefined, fallback: number, ma
 	return Number.isSafeInteger(parsed) && parsed > 0 && parsed <= maximum ? parsed : fallback
 }
 
+export function resolveRevalidateQueueConfig(env: NodeJS.ProcessEnv = process.env): RevalidateQueueConfig {
+	const dedupeTtlSeconds = parseBoundedPositiveInt(
+		env.WISP_REVALIDATE_DEDUPE_TTL_SECONDS,
+		60,
+		MAX_REVALIDATE_DEDUPE_TTL_SECONDS,
+	)
+	return {
+		redisUrl: env.REDIS_URL,
+		streamName: env.WISP_REVALIDATE_STREAM || DEFAULT_REVALIDATE_STREAM,
+		streamMaxLen: parseBoundedPositiveInt(env.WISP_REVALIDATE_STREAM_MAXLEN, 10_000, MAX_REVALIDATE_STREAM_CAPACITY),
+		dedupeTtlSeconds,
+		storageMissDedupeTtlSeconds: parseBoundedPositiveInt(
+			env.WISP_REVALIDATE_STORAGE_MISS_DEDUPE_TTL_SECONDS,
+			Math.max(dedupeTtlSeconds, 600),
+			MAX_REVALIDATE_DEDUPE_TTL_SECONDS,
+		),
+	}
+}
+
+const defaultConfig = resolveRevalidateQueueConfig()
+
 function redisErrorKind(error: unknown): string {
 	if (error instanceof Error && error.name) return error.name
 	return 'UnknownError'
 }
 
-function getDedupeTtlSeconds(reasonCategory: RevalidateReasonCategory): number {
+function getDedupeTtlSeconds(config: RevalidateQueueConfig, reasonCategory: RevalidateReasonCategory): number {
 	if (reasonCategory === 'storage-miss') {
-		return storageMissDedupeTtlSeconds
+		return config.storageMissDedupeTtlSeconds
 	}
-	return dedupeTtlSeconds
-}
-
-function getRedisClient(): Redis | null {
-	if (!redisUrl) {
-		if (!loggedMissingRedis) {
-			console.warn('[Revalidate] REDIS_URL not set; skipping queue enqueue')
-			loggedMissingRedis = true
-		}
-		return null
-	}
-
-	if (!client) {
-		console.log('[Revalidate] Connecting to Redis')
-		client = new Redis(redisUrl, {
-			maxRetriesPerRequest: 2,
-			enableReadyCheck: true,
-		})
-
-		client.on('error', (err) => {
-			console.error(`[Revalidate] Redis error (${redisErrorKind(err)})`)
-		})
-
-		client.on('ready', () => {
-			console.log(`[Revalidate] Redis connected, stream: ${streamName}`)
-		})
-
-		// Enqueues are rare, so without a ping haproxy cuts the idle connection every 180 s.
-		const created = client
-		stopKeepalive = startRedisKeepalive(() => (created.status === 'ready' ? created.ping() : undefined), {
-			onError: (err) => console.warn(`[Revalidate] Redis keepalive failed (${redisErrorKind(err)})`),
-		})
-	}
-
-	return client
+	return config.dedupeTtlSeconds
 }
 
 export type EnqueueResult = 'enqueued' | 'deduped' | 'quarantined' | 'disabled' | 'error'
@@ -93,12 +67,14 @@ export async function enqueueRevalidateWithRedis(
 	did: string,
 	rkey: string,
 	reason: string,
+	config: RevalidateQueueConfig = defaultConfig,
 ): Promise<{ enqueued: boolean; result: Exclude<EnqueueResult, 'disabled'> }> {
+	const { streamName } = config
 	try {
 		const outcome = await enqueueSiteRevalidation(redis, {
 			stream: streamName,
-			maxLen: streamMaxLen,
-			dedupeTtlSeconds: getDedupeTtlSeconds(revalidateReasonCategory(reason)),
+			maxLen: config.streamMaxLen,
+			dedupeTtlSeconds: getDedupeTtlSeconds(config, revalidateReasonCategory(reason)),
 			did,
 			rkey,
 			reason,
@@ -118,26 +94,88 @@ export async function enqueueRevalidateWithRedis(
 	}
 }
 
-export async function enqueueRevalidate(
-	did: string,
-	rkey: string,
-	reason: string,
-): Promise<{ enqueued: boolean; result: EnqueueResult }> {
-	const redis = getRedisClient()
-	if (!redis) {
-		recordRevalidateResult('disabled')
-		return { enqueued: false, result: 'disabled' }
-	}
-
-	return await enqueueRevalidateWithRedis(redis, did, rkey, reason)
+/** The slice of an ioredis connection the queue uses. */
+export interface RevalidateRedisConnection extends RevalidateQueueClient {
+	readonly status: string
+	on(event: 'error' | 'ready', listener: (...args: unknown[]) => void): unknown
+	ping(): Promise<unknown>
+	quit(): Promise<unknown>
 }
 
-export async function closeRevalidateQueue(): Promise<void> {
-	if (client) {
-		const toClose = client
-		client = null
-		stopKeepalive?.()
-		stopKeepalive = null
-		await toClose.quit()
-	}
+export type RevalidateQueueDeps = {
+	config: RevalidateQueueConfig
+	connect: (redisUrl: string) => RevalidateRedisConnection
 }
+
+/** One lazily connected revalidation queue; nothing connects until the first enqueue. */
+export function createRevalidateQueue({ config, connect }: RevalidateQueueDeps) {
+	let client: RevalidateRedisConnection | null = null
+	let stopKeepalive: (() => void) | null = null
+	let loggedMissingRedis = false
+
+	function getRedisClient(): RevalidateRedisConnection | null {
+		if (!config.redisUrl) {
+			if (!loggedMissingRedis) {
+				console.warn('[Revalidate] REDIS_URL not set; skipping queue enqueue')
+				loggedMissingRedis = true
+			}
+			return null
+		}
+
+		if (!client) {
+			console.log('[Revalidate] Connecting to Redis')
+			const created = connect(config.redisUrl)
+			client = created
+
+			created.on('error', (err) => {
+				console.error(`[Revalidate] Redis error (${redisErrorKind(err)})`)
+			})
+
+			created.on('ready', () => {
+				console.log(`[Revalidate] Redis connected, stream: ${config.streamName}`)
+			})
+
+			// Enqueues are rare, so without a ping haproxy cuts the idle connection every 180 s.
+			stopKeepalive = startRedisKeepalive(() => (created.status === 'ready' ? created.ping() : undefined), {
+				onError: (err) => console.warn(`[Revalidate] Redis keepalive failed (${redisErrorKind(err)})`),
+			})
+		}
+
+		return client
+	}
+
+	async function enqueueRevalidate(
+		did: string,
+		rkey: string,
+		reason: string,
+	): Promise<{ enqueued: boolean; result: EnqueueResult }> {
+		const redis = getRedisClient()
+		if (!redis) {
+			recordRevalidateResult('disabled')
+			return { enqueued: false, result: 'disabled' }
+		}
+
+		return await enqueueRevalidateWithRedis(redis, did, rkey, reason, config)
+	}
+
+	async function closeRevalidateQueue(): Promise<void> {
+		if (client) {
+			const toClose = client
+			client = null
+			stopKeepalive?.()
+			stopKeepalive = null
+			await toClose.quit()
+		}
+	}
+
+	return { enqueueRevalidate, closeRevalidateQueue }
+}
+
+export const { enqueueRevalidate, closeRevalidateQueue } = createRevalidateQueue({
+	config: defaultConfig,
+	connect: (redisUrl) =>
+		new Redis(redisUrl, {
+			maxRetriesPerRequest: 2,
+			enableReadyCheck: true,
+		}),
+})

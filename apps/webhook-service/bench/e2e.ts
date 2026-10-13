@@ -26,6 +26,7 @@ import {
 	findBacklinkWebhooks,
 	findWebhooksForDid,
 	getWebhookSecretToken,
+	runDatabaseMigrations,
 	upsertWebhookRecord,
 } from '../src/lib/db'
 import { deliverWebhook, WebhookDeliveryWorker } from '../src/lib/delivery'
@@ -59,6 +60,8 @@ if (!PASSWORD) {
 	console.error('TEST_PDS_PASSWORD is required')
 	process.exit(1)
 }
+
+await runDatabaseMigrations()
 
 // ---------------------------------------------------------------------------
 // PDS helpers

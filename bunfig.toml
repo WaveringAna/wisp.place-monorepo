@@ -2,3 +2,6 @@
 # infrastructure selection never comes from ambient state. See the file for why.
 [test]
 preload = ["./scripts/test-env.ts"]
+# repos/ holds vendored reference checkouts (see AGENTS.md). Their suites only
+# load inside their own dependency trees, so a bare `bun test` must not find them.
+pathIgnorePatterns = ["repos/**"]

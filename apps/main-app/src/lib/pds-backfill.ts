@@ -7,8 +7,7 @@ import {
 	type RevalidateQueueClient,
 } from '@wispplace/constants'
 import { createLogger } from '@wispplace/observability'
-import { db } from './db'
-import { getConnectedRedisClient } from './redis'
+import type { RedisClient, SQL } from 'bun'
 
 const logger = createLogger('main-app:pds-backfill')
 
@@ -64,26 +63,6 @@ async function listSiteRecords(did: string, session: OAuthSession): Promise<Site
 	return records
 }
 
-async function cachedSites(did: string): Promise<Map<string, CachedSite>> {
-	const rows: { rkey: string; record_cid: string; cold_synced: boolean }[] =
-		await db`SELECT rkey, record_cid, cold_synced FROM site_cache WHERE did = ${did}`
-	return new Map(rows.map((row) => [row.rkey, { recordCid: row.record_cid, coldSynced: row.cold_synced }]))
-}
-
-/**
- * Lists a site immediately, before the firehose has fetched any of its files.
- * The row has no files and cold_synced = false, so the worker always does a
- * full download; DO NOTHING keeps a row the firehose wrote first untouched.
- */
-async function seedSiteCache(did: string, sites: readonly SiteRecordRef[]): Promise<void> {
-	if (sites.length === 0) return
-	const rows = sites.map(({ rkey, cid }) => ({ did, rkey, record_cid: cid, file_cids: {}, cold_synced: false }))
-	await db`
-		INSERT INTO site_cache ${db(rows, 'did', 'rkey', 'record_cid', 'file_cids', 'cold_synced')}
-		ON CONFLICT (did, rkey) DO NOTHING
-	`
-}
-
 export interface BackfillResult {
 	/** place.wisp.fs records found on the PDS. */
 	found: number
@@ -91,43 +70,75 @@ export interface BackfillResult {
 	queued: number
 }
 
-/**
- * Makes sure every site on the user's PDS is listed and cached. Missing sites
- * get a placeholder site_cache row right away so the dashboard shows them; the
- * firehose service's revalidation worker then downloads the files and fills in
- * the row, as it does for every other site.
- */
-export async function backfillSitesFromPds(did: string, session: OAuthSession): Promise<BackfillResult> {
-	const [records, cached] = await Promise.all([listSiteRecords(did, session), cachedSites(did)])
-	const pending = sitesToBackfill(records, cached)
-	if (pending.length === 0) return { found: records.length, queued: 0 }
-	await seedSiteCache(
-		did,
-		pending.filter(({ rkey }) => !cached.has(rkey)),
-	)
-
-	const redis = await getConnectedRedisClient()
-	if (!redis) {
-		logger.warn('[Backfill] REDIS_URL not set; cannot queue sites for the firehose worker', { did })
-		return { found: records.length, queued: 0 }
-	}
-	const queue: RevalidateQueueClient = {
-		eval: (script, keyCount, ...keysAndArgs) => redis.send('EVAL', [script, String(keyCount), ...keysAndArgs]),
-	}
-
-	const outcomes = await Promise.all(
-		pending.map(({ rkey }) =>
-			enqueueSiteRevalidation(queue, {
-				stream: STREAM,
-				maxLen: STREAM_MAX_LEN,
-				dedupeTtlSeconds: DEDUPE_TTL_SECONDS,
-				did,
-				rkey,
-				reason: PDS_BACKFILL_REASON,
-			}),
-		),
-	)
-	const queued = outcomes.filter((outcome) => outcome === 'enqueued' || outcome === 'deduped').length
-	logger.info('[Backfill] Queued sites missing from site_cache', { did, found: records.length, queued })
-	return { found: records.length, queued }
+/** What the backfill needs: site_cache on the primary, and the revalidation stream's Redis. */
+export interface PdsBackfillDeps {
+	db: SQL
+	connectRedis: () => Promise<Pick<RedisClient, 'send'> | null>
 }
+
+export const createPdsBackfill = ({ db, connectRedis }: PdsBackfillDeps) => {
+	const cachedSites = async (did: string): Promise<Map<string, CachedSite>> => {
+		const rows: { rkey: string; record_cid: string; cold_synced: boolean }[] =
+			await db`SELECT rkey, record_cid, cold_synced FROM site_cache WHERE did = ${did}`
+		return new Map(rows.map((row) => [row.rkey, { recordCid: row.record_cid, coldSynced: row.cold_synced }]))
+	}
+
+	/**
+	 * Lists a site immediately, before the firehose has fetched any of its files.
+	 * The row has no files and cold_synced = false, so the worker always does a
+	 * full download; DO NOTHING keeps a row the firehose wrote first untouched.
+	 */
+	const seedSiteCache = async (did: string, sites: readonly SiteRecordRef[]): Promise<void> => {
+		if (sites.length === 0) return
+		const rows = sites.map(({ rkey, cid }) => ({ did, rkey, record_cid: cid, file_cids: {}, cold_synced: false }))
+		await db`
+			INSERT INTO site_cache ${db(rows, 'did', 'rkey', 'record_cid', 'file_cids', 'cold_synced')}
+			ON CONFLICT (did, rkey) DO NOTHING
+		`
+	}
+
+	/**
+	 * Makes sure every site on the user's PDS is listed and cached. Missing sites
+	 * get a placeholder site_cache row right away so the dashboard shows them; the
+	 * firehose service's revalidation worker then downloads the files and fills in
+	 * the row, as it does for every other site.
+	 */
+	const backfillSitesFromPds = async (did: string, session: OAuthSession): Promise<BackfillResult> => {
+		const [records, cached] = await Promise.all([listSiteRecords(did, session), cachedSites(did)])
+		const pending = sitesToBackfill(records, cached)
+		if (pending.length === 0) return { found: records.length, queued: 0 }
+		await seedSiteCache(
+			did,
+			pending.filter(({ rkey }) => !cached.has(rkey)),
+		)
+
+		const redis = await connectRedis()
+		if (!redis) {
+			logger.warn('[Backfill] REDIS_URL not set; cannot queue sites for the firehose worker', { did })
+			return { found: records.length, queued: 0 }
+		}
+		const queue: RevalidateQueueClient = {
+			eval: (script, keyCount, ...keysAndArgs) => redis.send('EVAL', [script, String(keyCount), ...keysAndArgs]),
+		}
+
+		const outcomes = await Promise.all(
+			pending.map(({ rkey }) =>
+				enqueueSiteRevalidation(queue, {
+					stream: STREAM,
+					maxLen: STREAM_MAX_LEN,
+					dedupeTtlSeconds: DEDUPE_TTL_SECONDS,
+					did,
+					rkey,
+					reason: PDS_BACKFILL_REASON,
+				}),
+			),
+		)
+		const queued = outcomes.filter((outcome) => outcome === 'enqueued' || outcome === 'deduped').length
+		logger.info('[Backfill] Queued sites missing from site_cache', { did, found: records.length, queued })
+		return { found: records.length, queued }
+	}
+
+	return backfillSitesFromPds
+}
+
+export type BackfillSitesFromPds = ReturnType<typeof createPdsBackfill>

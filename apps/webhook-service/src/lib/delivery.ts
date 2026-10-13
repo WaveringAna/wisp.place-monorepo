@@ -484,6 +484,7 @@ export type WebhookDeliveryWorkerPersistence = Pick<
 	| 'getCurrentWebhookSubscription'
 	| 'getWebhookInlineSecret'
 	| 'getWebhookSecretToken'
+	| 'insertEventLog'
 	| 'markWebhookDeliverySucceeded'
 	| 'renewWebhookDeliveryLease'
 	| 'rescheduleWebhookDelivery'
@@ -513,6 +514,8 @@ export interface WebhookDeliveryWorkerOptions {
 	workerId?: string
 	/** Test seam; production uses the normal durable DB module. */
 	persistence?: WebhookDeliveryWorkerPersistence
+	/** Best-effort live audit notification; production publishes through Redis. */
+	publishAuditEvent?: typeof redis.publishWebhookEvent
 }
 
 interface BoundedWorkerOptions {
@@ -536,6 +539,7 @@ interface BoundedWorkerOptions {
 	random: () => number
 	workerId: string
 	persistence: WebhookDeliveryWorkerPersistence
+	publishAuditEvent: typeof redis.publishWebhookEvent
 }
 
 function boundWorkerOptions(options: WebhookDeliveryWorkerOptions): BoundedWorkerOptions {
@@ -581,6 +585,7 @@ function boundWorkerOptions(options: WebhookDeliveryWorkerOptions): BoundedWorke
 		random: options.random ?? Math.random,
 		workerId: boundedString(options.workerId, 256) ? options.workerId : `webhook-worker-${randomUUID()}`,
 		persistence: options.persistence ?? database,
+		publishAuditEvent: options.publishAuditEvent ?? redis.publishWebhookEvent,
 	}
 }
 function parseRetryAfter(value: string | null, now = Date.now()): number | undefined {
@@ -671,16 +676,16 @@ function auditFromPayload(row: ClaimedWebhookDelivery, status: DeliveryAuditEven
 	}
 }
 
-function persistDeliveryAudit(audit: DeliveryAuditEvent): Promise<void> {
+function persistDeliveryAudit(audit: DeliveryAuditEvent, options: BoundedWorkerOptions): Promise<void> {
 	// Audit/notification failure must never turn a durably completed delivery
 	// into an unhandled rejection or cause a second POST.
 	return Promise.all([
 		Promise.resolve()
-			.then(() => database.insertEventLog(audit))
+			.then(() => options.persistence.insertEventLog(audit))
 			.catch(() => logger.warn('[delivery] audit persistence failed')),
 		Promise.resolve()
 			.then(() =>
-				redis.publishWebhookEvent({
+				options.publishAuditEvent({
 					...audit,
 					url: '[redacted]',
 					status: audit.status === 'ok' ? 'ok' : 'failed',
@@ -924,7 +929,7 @@ export class WebhookDeliveryWorker {
 
 	private recordDeliveryAudit(audit: DeliveryAuditEvent): void {
 		if (this.stopping) return
-		const task = persistDeliveryAudit(audit)
+		const task = persistDeliveryAudit(audit, this.options)
 		this.auditTasks.add(task)
 		this.notifyActivity()
 		void task.finally(() => {

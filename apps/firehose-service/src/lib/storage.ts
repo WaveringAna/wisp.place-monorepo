@@ -4,7 +4,13 @@
  */
 
 import { createLogger } from '@wispplace/observability'
-import { DiskStorageTier, S3StorageTier, type StorageMetadata, TieredStorage } from '@wispplace/tiered-storage'
+import {
+	DiskStorageTier,
+	S3StorageTier,
+	type StorageMetadata,
+	type StorageTier,
+	TieredStorage,
+} from '@wispplace/tiered-storage'
 import { config } from '../config'
 import { StorageStatsCache, type StorageStatsSnapshot } from './storage-stats-cache'
 
@@ -63,14 +69,19 @@ const identityDeserialize = async (data: Uint8Array): Promise<unknown> => {
 	return data
 }
 
-let storage: TieredStorage<Uint8Array> | undefined
-
-export function getStorage(): TieredStorage<Uint8Array> {
-	storage ??= new TieredStorage<Uint8Array>({
-		tiers: { cold: getColdTier() },
+/** Cold-only storage of raw bytes, as the firehose writes and hosting reads it. */
+export function createColdStorage(cold: StorageTier): TieredStorage<Uint8Array> {
+	return new TieredStorage<Uint8Array>({
+		tiers: { cold },
 		compression: false,
 		serialization: { serialize: identitySerialize, deserialize: identityDeserialize },
 	})
+}
+
+let storage: TieredStorage<Uint8Array> | undefined
+
+export function getStorage(): TieredStorage<Uint8Array> {
+	storage ??= createColdStorage(getColdTier())
 	return storage
 }
 
@@ -96,44 +107,48 @@ export function stopStorageStatsRefresh(): void {
 }
 
 /**
- * Write a file to S3 (cold tier only)
+ * Site object operations over one cold-only storage. The tier and storage are
+ * resolved per call so importing this module never initializes a cache.
  */
-export async function writeFile(key: string, data: Uint8Array, metadata?: Record<string, string>): Promise<void> {
-	await getStorage().set(key, data, {
-		onlyTiers: ['cold'],
-		metadata,
-	})
-}
+export function createSiteObjectStore(getCold: () => StorageTier, getTiered: () => TieredStorage<Uint8Array>) {
+	return {
+		/** Write a file to the cold tier only. */
+		async writeFile(key: string, data: Uint8Array, metadata?: Record<string, string>): Promise<void> {
+			await getTiered().set(key, data, {
+				onlyTiers: ['cold'],
+				metadata,
+			})
+		},
 
-/**
- * Read object metadata from the cold source without buffering its body.
- */
-export async function getFileMetadata(key: string) {
-	return await getColdTier().getMetadata(key)
-}
+		/** Read object metadata from the cold source without buffering its body. */
+		async getFileMetadata(key: string): Promise<StorageMetadata | null> {
+			return await getCold().getMetadata(key)
+		},
 
-/**
- * Read a stored object and its metadata from S3, or null when it does not exist.
- */
-export async function readFile(key: string): Promise<{ data: Uint8Array; metadata: StorageMetadata } | null> {
-	const result = await getStorage().getWithMetadata(key)
-	return result ? { data: result.data, metadata: result.metadata } : null
-}
+		/** Read a stored object and its metadata, or null when it does not exist. */
+		async readFile(key: string): Promise<{ data: Uint8Array; metadata: StorageMetadata } | null> {
+			const result = await getTiered().getWithMetadata(key)
+			return result ? { data: result.data, metadata: result.metadata } : null
+		},
 
-/**
- * Delete a file from S3
- */
-export async function deleteFile(key: string): Promise<void> {
-	await getStorage().delete(key)
-}
+		async deleteFile(key: string): Promise<void> {
+			await getTiered().delete(key)
+		},
 
-/**
- * List all files with a given prefix
- */
-export async function listFiles(prefix: string): Promise<string[]> {
-	const keys: string[] = []
-	for await (const key of getStorage().listKeys(prefix)) {
-		keys.push(key)
+		/** List all files with a given prefix. */
+		async listFiles(prefix: string): Promise<string[]> {
+			const keys: string[] = []
+			for await (const key of getTiered().listKeys(prefix)) {
+				keys.push(key)
+			}
+			return keys
+		},
 	}
-	return keys
 }
+
+export type SiteObjectStore = ReturnType<typeof createSiteObjectStore>
+
+export const { writeFile, getFileMetadata, readFile, deleteFile, listFiles } = createSiteObjectStore(
+	getColdTier,
+	getStorage,
+)

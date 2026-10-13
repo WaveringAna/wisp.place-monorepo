@@ -1,18 +1,34 @@
-import { describe, expect, mock, test } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import type { OAuthSession } from '@atproto/oauth-client-node'
+import { forgetGrantedScope, rememberGrantedScope } from './granted-scopes'
+import {
+	authorizeWisp,
+	authorizeWispLegacy,
+	canSetSpindleSecrets,
+	grantedAddOns,
+	setupAddOn,
+	setupState,
+	stateValue,
+} from './oauth-authorize'
+import { OAUTH_SCOPE } from './oauth-client-metadata'
 
-mock.module('./oauth-client', () => ({
-	OAUTH_SCOPE: 'atproto include:place.wisp.authSites',
-	OAUTH_LEGACY_SCOPE: 'atproto repo:place.wisp.fs',
-	recentGrantedScope: (did: string) =>
-		({
-			'did:plc:granted': 'atproto rpc:sh.tangled.repo.addSecret?aud=* rpc:sh.tangled.repo.listSecrets?aud=*',
-			'did:plc:marque': 'atproto repo:place.wisp.fs repo:at.marque.dns?action=create&action=update',
-			'did:plc:marque-update-only': 'atproto repo:at.marque.dns?action=update',
-		})[did] ?? 'atproto repo:place.wisp.fs',
-}))
+const grants = {
+	'did:plc:granted': 'atproto rpc:sh.tangled.repo.addSecret?aud=* rpc:sh.tangled.repo.listSecrets?aud=*',
+	'did:plc:marque': 'atproto repo:place.wisp.fs repo:at.marque.dns?action=create&action=update',
+	'did:plc:marque-update-only': 'atproto repo:at.marque.dns?action=update',
+}
 
-const { authorizeWisp, authorizeWispLegacy, canSetSpindleSecrets, grantedAddOns, setupAddOn, setupState, stateValue } =
-	await import('./oauth-authorize')
+// Sessions this process just stored, as oauth-client records them. Any other
+// DID falls back to asking its session, which holds an ordinary grant.
+beforeAll(() => {
+	for (const [did, scope] of Object.entries(grants)) rememberGrantedScope(did, scope)
+})
+afterAll(() => {
+	for (const did of Object.keys(grants)) forgetGrantedScope(did)
+})
+
+const session = (did: string) =>
+	({ did, getTokenInfo: async () => ({ scope: 'atproto repo:place.wisp.fs' }) }) as unknown as OAuthSession
 
 const recordingClient = () => {
 	const requests: { scope?: string; state?: string }[] = []
@@ -30,7 +46,7 @@ describe('connecting tangled CI', () => {
 		const { client, requests } = recordingClient()
 		await authorizeWisp(client, 'did:plc:alice', { state: setupState('ci', []) })
 		expect(requests[0]?.scope).toBe(
-			'atproto include:place.wisp.authSites rpc:sh.tangled.repo.addSecret?aud=* rpc:sh.tangled.repo.listSecrets?aud=*',
+			`${OAUTH_SCOPE} rpc:sh.tangled.repo.addSecret?aud=* rpc:sh.tangled.repo.listSecrets?aud=*`,
 		)
 	})
 
@@ -44,12 +60,12 @@ describe('connecting tangled CI', () => {
 	test('leaves an ordinary sign-in alone', async () => {
 		const { client, requests } = recordingClient()
 		await authorizeWisp(client, 'alice.example', { state: crypto.randomUUID() })
-		expect(requests[0]?.scope).toBe('atproto include:place.wisp.authSites')
+		expect(requests[0]?.scope).toBe(`${OAUTH_SCOPE}`)
 	})
 
 	test('reads the grant to decide whether secrets can be set', async () => {
-		expect(await canSetSpindleSecrets({ did: 'did:plc:granted' } as never)).toBe(true)
-		expect(await canSetSpindleSecrets({ did: 'did:plc:other' } as never)).toBe(false)
+		expect(await canSetSpindleSecrets(session('did:plc:granted'))).toBe(true)
+		expect(await canSetSpindleSecrets(session('did:plc:other'))).toBe(false)
 	})
 })
 
@@ -57,16 +73,14 @@ describe('letting wisp edit marque dns', () => {
 	test('asks for the zone record on top of the usual scope', async () => {
 		const { client, requests } = recordingClient()
 		await authorizeWisp(client, 'did:plc:alice', { state: setupState('marque', []) })
-		expect(requests[0]?.scope).toBe(
-			'atproto include:place.wisp.authSites repo:at.marque.dns?action=create&action=update',
-		)
+		expect(requests[0]?.scope).toBe(`${OAUTH_SCOPE} repo:at.marque.dns?action=create&action=update`)
 	})
 
 	test('keeps the add-ons the session already holds, since the new grant replaces it', async () => {
 		const { client, requests } = recordingClient()
 		await authorizeWisp(client, 'did:plc:alice', { state: setupState('marque', ['ci']) })
 		expect(requests[0]?.scope).toBe(
-			'atproto include:place.wisp.authSites rpc:sh.tangled.repo.addSecret?aud=* rpc:sh.tangled.repo.listSecrets?aud=* repo:at.marque.dns?action=create&action=update',
+			`${OAUTH_SCOPE} rpc:sh.tangled.repo.addSecret?aud=* rpc:sh.tangled.repo.listSecrets?aud=* repo:at.marque.dns?action=create&action=update`,
 		)
 		expect(setupAddOn(requests[0]?.state)).toBe('marque')
 	})
@@ -76,11 +90,11 @@ describe('letting wisp edit marque dns', () => {
 	})
 
 	test('reads which add-ons a grant holds', async () => {
-		expect(await grantedAddOns({ did: 'did:plc:marque' } as never)).toEqual(['marque'])
-		expect(await grantedAddOns({ did: 'did:plc:granted' } as never)).toEqual(['ci'])
-		expect(await grantedAddOns({ did: 'did:plc:other' } as never)).toEqual([])
+		expect(await grantedAddOns(session('did:plc:marque'))).toEqual(['marque'])
+		expect(await grantedAddOns(session('did:plc:granted'))).toEqual(['ci'])
+		expect(await grantedAddOns(session('did:plc:other'))).toEqual([])
 		// putRecord needs create as well, so a grant from before that was known asks again.
-		expect(await grantedAddOns({ did: 'did:plc:marque-update-only' } as never)).toEqual([])
+		expect(await grantedAddOns(session('did:plc:marque-update-only'))).toEqual([])
 	})
 
 	test('ignores state that names no add-on', () => {

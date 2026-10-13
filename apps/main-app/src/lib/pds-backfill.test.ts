@@ -1,10 +1,6 @@
-import { describe, expect, mock, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import { DELETED_SITE_RECORD_CID } from '@wispplace/constants'
-
-mock.module('./db', () => ({ db: async () => [] }))
-mock.module('./redis', () => ({ getConnectedRedisClient: async () => null }))
-
-const { sitesToBackfill } = await import('./pds-backfill')
+import { sitesToBackfill } from './pds-backfill'
 
 describe('sitesToBackfill', () => {
 	test('queues sites the cache is missing, stale, deleted, or still waiting for files', () => {

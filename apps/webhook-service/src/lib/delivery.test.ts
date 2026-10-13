@@ -1,4 +1,6 @@
-import { describe, expect, mock, test } from 'bun:test'
+import '../test-env'
+import { describe, expect, test } from 'bun:test'
+import { parseConfig } from '../config'
 import type {
 	ClaimedWebhookDelivery,
 	NewWebhookDeliveryEventRow,
@@ -6,6 +8,8 @@ import type {
 	WebhookEntry,
 } from './db'
 import type { WebhookDeliveryWorkerPersistence } from './delivery'
+import { enqueueWebhookDeliveries, WebhookDeliveryWorker } from './delivery'
+import { createRedisPublisher } from './redis'
 import type { WebhookTransport } from './webhook-url'
 
 interface CapturedRow {
@@ -26,19 +30,6 @@ let calls = 0
 const persistedDeliveryIds = new Set<string>()
 const persistedEventIds = new Set<string>()
 
-mock.module('@wispplace/observability', () => ({
-	createLogger: () => ({
-		debug: () => undefined,
-		error: () => undefined,
-		info: () => undefined,
-		warn: () => undefined,
-	}),
-}))
-
-mock.module('./db', () => ({}))
-
-mock.module('./redis', () => ({ publishWebhookEvent: async () => ({ published: false, dropped: false }) }))
-
 const captureEnqueue = async (
 	event: NewWebhookDeliveryEventRow,
 	rows: readonly NewWebhookDeliveryOutboxRow[],
@@ -58,12 +49,15 @@ const captureEnqueue = async (
 	return { enqueued, deduplicated: rows.length - enqueued }
 }
 
+// A real publisher with no Redis configured: audit publication is best-effort and dropped.
+const { publishWebhookEvent: publishAuditEvent } = createRedisPublisher(
+	parseConfig({ NODE_ENV: 'test', WEBHOOK_ALLOW_INSECURE_DEV: '1' }),
+)
+
 const enqueueOptions = {
 	enqueueOutbox: captureEnqueue,
 	subscriptionFingerprint: () => 'fingerprint',
 }
-
-const { enqueueWebhookDeliveries, WebhookDeliveryWorker } = await import('./delivery')
 
 const reset = () => {
 	captured = []
@@ -184,6 +178,7 @@ describe('durable normalized webhook fanout', () => {
 			}),
 			getWebhookInlineSecret: async () => null,
 			getWebhookSecretToken: async () => null,
+			insertEventLog: async () => undefined,
 			markWebhookDeliverySucceeded: async () => true,
 			renewWebhookDeliveryLease: async () => true,
 			rescheduleWebhookDelivery: async () => true,
@@ -214,6 +209,7 @@ describe('durable normalized webhook fanout', () => {
 		const worker = new WebhookDeliveryWorker({
 			concurrency: 1,
 			batchSize: 1,
+			publishAuditEvent,
 			maxAttempts: 2,
 			resolver: async () => [{ address: '8.8.8.8', family: 4 }],
 			transport: async () => {
@@ -260,6 +256,7 @@ describe('durable normalized webhook fanout', () => {
 		const worker = new WebhookDeliveryWorker({
 			concurrency: 1,
 			batchSize: 1,
+			publishAuditEvent,
 			requestTimeoutMs: 100,
 			resolver: async () => [{ address: '8.8.8.8', family: 4 }],
 			transport: hungTransport,
@@ -279,6 +276,7 @@ describe('durable normalized webhook fanout', () => {
 		const reclaimer = new WebhookDeliveryWorker({
 			concurrency: 1,
 			batchSize: 1,
+			publishAuditEvent,
 			requestTimeoutMs: 100,
 			resolver: async () => [{ address: '8.8.8.8', family: 4 }],
 			transport: async () => new Response(null, { status: 204 }),
@@ -319,6 +317,7 @@ describe('durable normalized webhook fanout', () => {
 		const worker = new WebhookDeliveryWorker({
 			concurrency: 1,
 			batchSize: 1,
+			publishAuditEvent,
 			requestTimeoutMs: 3_000,
 			leaseMs: 8_000,
 			resolver: async () => [{ address: '8.8.8.8', family: 4 }],

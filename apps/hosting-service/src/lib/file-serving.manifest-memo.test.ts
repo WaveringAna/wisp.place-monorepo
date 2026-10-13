@@ -1,5 +1,11 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test'
+import { beforeEach, describe, expect, test } from 'bun:test'
+import type { SiteCache } from '@wispplace/database'
 import { casKey } from '@wispplace/fs-utils'
+import { isSiteUpdating } from './cache-invalidation'
+import { cache } from './cache-manager'
+import { createFileServing, defaultGzipOperations } from './file-serving'
+import { createHtmlPrewarm } from './html-prewarm'
+import { recordStorageMiss } from './revalidate-metrics'
 
 // A site manifest is normalized once per cached site row, not once per request. The row object is
 // replaced when the lookup entry expires or is invalidated, and the manifest must follow it.
@@ -13,8 +19,6 @@ const storageReads: string[] = []
 const revalidateCalls: Array<{ did: string; rkey: string; reason: string }> = []
 const siteRows = new Map<string, Record<string, unknown>>()
 let fileObjectReads = 0
-
-class TestStorageUnavailableError extends Error {}
 
 const fakeStorage = {
 	async get(key: string) {
@@ -33,8 +37,10 @@ const fakeStorage = {
 				createdAt: new Date(),
 				lastAccessed: new Date(),
 				accessCount: 0,
+				compressed: false,
 				checksum: 'test-checksum',
-				customMetadata: { sourceCid: entry.sourceCid, mimeType: entry.mimeType },
+				// Legacy rows store absent fields as explicit undefined, which the tier types do not model.
+				customMetadata: { sourceCid: entry.sourceCid, mimeType: entry.mimeType } as Record<string, string>,
 			},
 			source: 'cold' as const,
 		}
@@ -42,34 +48,25 @@ const fakeStorage = {
 	async *listKeys(_prefix?: string): AsyncGenerator<string> {},
 }
 
-mock.module('./storage', () => ({
+const prewarm = createHtmlPrewarm({ storage: fakeStorage })
+const { serveFromCache } = createFileServing({
 	storage: fakeStorage,
-	hotTier: undefined,
-	warmTier: undefined,
-	StorageUnavailableError: TestStorageUnavailableError,
-	isStorageUnavailableError: (error: unknown) => error instanceof TestStorageUnavailableError,
 	addPublicSourceCidIfChecksumMatches: async () => true,
 	evictPublicCacheKey: async () => {},
-	getStorageConfig: () => ({}),
-}))
-// The real lookup cache hands back the same row object until the entry expires or is invalidated,
-// so this stub does too: manifest memoization is keyed on that identity.
-mock.module('./db', () => ({
-	getSiteCache: async (did: string, rkey: string) => siteRows.get(`${did}/${rkey}`) ?? null,
-	getSiteSettingsCache: async () => null,
-}))
-mock.module('./utils', () => ({ getCachedSettings: async () => null }))
-mock.module('./revalidate-metrics', () => ({ recordStorageMiss: () => {} }))
-mock.module('./revalidate-queue', () => ({
-	enqueueRevalidate: async (did: string, rkey: string, reason: string) => {
+	// The real lookup cache hands back the same row object until the entry expires or is invalidated,
+	// so this stub does too: manifest memoization is keyed on that identity.
+	getSiteCache: async (did, rkey) => (siteRows.get(`${did}/${rkey}`) as SiteCache | undefined) ?? null,
+	getCachedSettings: async () => null,
+	enqueueRevalidate: async (did, rkey, reason) => {
 		revalidateCalls.push({ did, rkey, reason })
-		return { enqueued: true, result: 'enqueued' as const }
+		return { result: 'enqueued' }
 	},
-}))
-
-const { cache } = await import('./cache-manager')
-const { resetHtmlHotCacheWarmupForTests } = await import('./html-prewarm')
-const { serveFromCache } = await import('./file-serving')
+	recordStorageMiss,
+	isSiteUpdating,
+	triggerSiteHtmlHotCacheWarmup: prewarm.trigger,
+	gzipOperations: defaultGzipOperations,
+	gzipProcessingConcurrency: 2,
+})
 
 const CID = (letter: string) => `bafkrei${letter.repeat(52)}`
 const key = (cid: string, path: string, mimeType = 'text/html') => casKey({ cid, path, mimeType })
@@ -109,7 +106,7 @@ beforeEach(() => {
 	for (const namespace of ['redirectRules', 'siteCache', 'siteFiles', 'sourceCidMismatches'] as const) {
 		cache.clear(namespace)
 	}
-	resetHtmlHotCacheWarmupForTests()
+	prewarm.resetAll()
 })
 
 describe('manifest memoization', () => {

@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test'
+import { beforeEach, describe, expect, test } from 'bun:test'
+import { createPrivateSitesRepository, type PrivateSitesSql } from './private-sites-repository'
 
 type QueryCall = { source: 'primary' | 'transaction'; text: string; values: unknown[] }
 
@@ -57,8 +58,6 @@ const primarySql = Object.assign(
 	},
 )
 
-mock.module('./db', () => ({ db: primarySql }))
-
 const {
 	claimPrivateSiteDeletionForOwner,
 	claimPrivateSitesForReaping,
@@ -67,10 +66,7 @@ const {
 	hasLivePrivateSite,
 	markPrivateSiteReady,
 	renewPrivateSiteStagingLease,
-} = await import('./private-sites-db')
-
-// Keep this test's module replacement from leaking into unrelated test files.
-mock.restore()
+} = createPrivateSitesRepository(primarySql as unknown as PrivateSitesSql)
 
 const input = {
 	ownerDid: 'did:plc:owner',

@@ -4,7 +4,7 @@ import { BASE_HOST } from '@wispplace/constants'
 import { createLogger } from '@wispplace/observability'
 import { safeFetch } from '@wispplace/safe-fetch'
 import { Elysia, t } from 'elysia'
-import { consumeWebhookMutationRateLimit, eventualRead, withWebhookOwnerMutationLock } from '../lib/db'
+import type * as database from '../lib/db'
 import { canSetSpindleSecrets } from '../lib/oauth-authorize'
 import {
 	disablePreview,
@@ -77,107 +77,118 @@ async function listAll(agent: Agent, did: string, collection: string, max: numbe
 	return records
 }
 
-function httpPorts({ did, session }: AuthenticatedContext): PreviewSetupPorts {
-	const agent = new Agent((url, init) => session.fetchHandler(url, init))
+/** The webhook owner lock and rate limit on the primary, and the claims list on the replica. */
+export type PreviewPortDeps = Pick<
+	typeof database,
+	'consumeWebhookMutationRateLimit' | 'withWebhookOwnerMutationLock'
+> & {
+	eventualRead: Pick<typeof database.eventualRead, 'getDomainsForDid'>
+}
 
-	const spindleCall = async (repo: TangledRepo, lxm: string, init: RequestInit & { query?: string } = {}) => {
-		const { data } = await agent.com.atproto.server.getServiceAuth({
-			aud: `did:web:${repo.spindle}`,
-			lxm,
-			exp: Math.floor(Date.now() / 1000) + 60,
-		})
-		const response = await safeFetch(`https://${repo.spindle}/xrpc/${lxm}${init.query ?? ''}`, {
-			...init,
-			headers: { ...init.headers, Authorization: `Bearer ${data.token}` },
-			timeout: SPINDLE_TIMEOUT_MS,
-			maxRedirects: 0,
-		})
-		if (!response.ok) throw new Error(`spindle answered ${response.status}`)
-		return response
-	}
+/** Preview setup against the signed-in user's PDS, their spindles and the database. */
+export const httpPreviewPorts =
+	({ eventualRead, consumeWebhookMutationRateLimit, withWebhookOwnerMutationLock }: PreviewPortDeps) =>
+	({ did, session }: AuthenticatedContext): PreviewSetupPorts => {
+		const agent = new Agent((url, init) => session.fetchHandler(url, init))
 
-	const listHooks = async () =>
-		(await listAll(agent, did, 'place.wisp.v2.wh', MAX_WEBHOOKS_PER_OWNER)).flatMap((item) => {
-			const { uri, value } = item as { uri?: unknown; value?: unknown }
-			const rkey = typeof uri === 'string' ? (uri.split('/').pop() ?? '') : ''
-			const hook = parsePreviewHook(PREVIEW_BOT_URL, rkey, value)
-			return hook ? [hook] : []
-		})
-
-	return {
-		listRepos: async () => toTangledRepos(await listAll(agent, did, 'sh.tangled.repo', MAX_REPOS)),
-		listHooks,
-		claims: async () => {
-			const { wispDomains } = await eventualRead.getDomainsForDid(did)
-			const suffix = `.${BASE_HOST}`
-			return wispDomains.flatMap(({ domain }) => (domain.endsWith(suffix) ? [domain.slice(0, -suffix.length)] : []))
-		},
-		canSetSecrets: () => canSetSpindleSecrets(session),
-		hasSecret: async (repo) => {
-			const query = `?${new URLSearchParams({ repo: repoUri(did, repo) })}`
-			const body = (await (await spindleCall(repo, 'sh.tangled.repo.listSecrets', { query })).json()) as {
-				secrets?: { key?: unknown }[]
-			}
-			return (body.secrets ?? []).some((secret) => secret.key === PREVIEW_SECRET_KEY)
-		},
-		checkAppPassword: async (password) => {
-			const pds = (await session.getTokenInfo(false)).aud
-			const response = await safeFetch(`${pds.replace(/\/$/, '')}/xrpc/com.atproto.server.createSession`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ identifier: did, password }),
+		const spindleCall = async (repo: TangledRepo, lxm: string, init: RequestInit & { query?: string } = {}) => {
+			const { data } = await agent.com.atproto.server.getServiceAuth({
+				aud: `did:web:${repo.spindle}`,
+				lxm,
+				exp: Math.floor(Date.now() / 1000) + 60,
+			})
+			const response = await safeFetch(`https://${repo.spindle}/xrpc/${lxm}${init.query ?? ''}`, {
+				...init,
+				headers: { ...init.headers, Authorization: `Bearer ${data.token}` },
 				timeout: SPINDLE_TIMEOUT_MS,
 				maxRedirects: 0,
 			})
-			if (response.status === 401) return false
-			if (!response.ok) throw new Error(`pds answered ${response.status}`)
-			const created = (await response.json()) as { accessJwt?: unknown; refreshJwt?: unknown }
-			// The check made a session; end it so the only one left is the workflow's.
-			if (typeof created.refreshJwt === 'string') {
-				await safeFetch(`${pds.replace(/\/$/, '')}/xrpc/com.atproto.server.deleteSession`, {
+			if (!response.ok) throw new Error(`spindle answered ${response.status}`)
+			return response
+		}
+
+		const listHooks = async () =>
+			(await listAll(agent, did, 'place.wisp.v2.wh', MAX_WEBHOOKS_PER_OWNER)).flatMap((item) => {
+				const { uri, value } = item as { uri?: unknown; value?: unknown }
+				const rkey = typeof uri === 'string' ? (uri.split('/').pop() ?? '') : ''
+				const hook = parsePreviewHook(PREVIEW_BOT_URL, rkey, value)
+				return hook ? [hook] : []
+			})
+
+		return {
+			listRepos: async () => toTangledRepos(await listAll(agent, did, 'sh.tangled.repo', MAX_REPOS)),
+			listHooks,
+			claims: async () => {
+				const { wispDomains } = await eventualRead.getDomainsForDid(did)
+				const suffix = `.${BASE_HOST}`
+				return wispDomains.flatMap(({ domain }) => (domain.endsWith(suffix) ? [domain.slice(0, -suffix.length)] : []))
+			},
+			canSetSecrets: () => canSetSpindleSecrets(session),
+			hasSecret: async (repo) => {
+				const query = `?${new URLSearchParams({ repo: repoUri(did, repo) })}`
+				const body = (await (await spindleCall(repo, 'sh.tangled.repo.listSecrets', { query })).json()) as {
+					secrets?: { key?: unknown }[]
+				}
+				return (body.secrets ?? []).some((secret) => secret.key === PREVIEW_SECRET_KEY)
+			},
+			checkAppPassword: async (password) => {
+				const pds = (await session.getTokenInfo(false)).aud
+				const response = await safeFetch(`${pds.replace(/\/$/, '')}/xrpc/com.atproto.server.createSession`, {
 					method: 'POST',
-					headers: { Authorization: `Bearer ${created.refreshJwt}` },
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ identifier: did, password }),
 					timeout: SPINDLE_TIMEOUT_MS,
 					maxRedirects: 0,
-				}).catch(() => undefined)
-			}
-			// Only the access token's scope tells an app password apart from the account password.
-			return tokenScope(created.accessJwt)?.startsWith('com.atproto.appPass') === true
-		},
-		setSecret: async (repo, value) => {
-			await spindleCall(repo, 'sh.tangled.repo.addSecret', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ repo: repoUri(did, repo), key: PREVIEW_SECRET_KEY, value }),
-			})
-		},
-		putHook: (repo, claim) =>
-			withWebhookOwnerMutationLock(did, async () => {
-				if (!(await consumeWebhookMutationRateLimit(did, 'create'))) throw new PreviewLimitError()
-				const rkey = previewHookRkey(repo.name)
-				const existing = await listAll(agent, did, 'place.wisp.v2.wh', MAX_WEBHOOKS_PER_OWNER + 1)
-				const replacing = existing.some(
-					(item) => (item as { uri?: unknown }).uri === `at://${did}/place.wisp.v2.wh/${rkey}`,
-				)
-				if (!replacing && isWebhookOwnerAtCapacity(existing.length)) throw new PreviewLimitError()
-				const validated = validateWebhookCreateInput(previewHookRecord(PREVIEW_BOT_URL, did, repo.name, claim), {
-					allowLoopbackDev: false,
 				})
-				if (!validated.ok) throw new Error(`preview hook rejected: ${validated.kind}`)
-				await agent.com.atproto.repo.putRecord({
-					repo: did,
-					collection: 'place.wisp.v2.wh',
-					rkey,
-					record: validated.record,
+				if (response.status === 401) return false
+				if (!response.ok) throw new Error(`pds answered ${response.status}`)
+				const created = (await response.json()) as { accessJwt?: unknown; refreshJwt?: unknown }
+				// The check made a session; end it so the only one left is the workflow's.
+				if (typeof created.refreshJwt === 'string') {
+					await safeFetch(`${pds.replace(/\/$/, '')}/xrpc/com.atproto.server.deleteSession`, {
+						method: 'POST',
+						headers: { Authorization: `Bearer ${created.refreshJwt}` },
+						timeout: SPINDLE_TIMEOUT_MS,
+						maxRedirects: 0,
+					}).catch(() => undefined)
+				}
+				// Only the access token's scope tells an app password apart from the account password.
+				return tokenScope(created.accessJwt)?.startsWith('com.atproto.appPass') === true
+			},
+			setSecret: async (repo, value) => {
+				await spindleCall(repo, 'sh.tangled.repo.addSecret', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ repo: repoUri(did, repo), key: PREVIEW_SECRET_KEY, value }),
 				})
-			}),
-		deleteHook: (rkey) =>
-			withWebhookOwnerMutationLock(did, async () => {
-				if (!(await consumeWebhookMutationRateLimit(did, 'delete'))) throw new PreviewLimitError()
-				await agent.com.atproto.repo.deleteRecord({ repo: did, collection: 'place.wisp.v2.wh', rkey })
-			}),
+			},
+			putHook: (repo, claim) =>
+				withWebhookOwnerMutationLock(did, async () => {
+					if (!(await consumeWebhookMutationRateLimit(did, 'create'))) throw new PreviewLimitError()
+					const rkey = previewHookRkey(repo.name)
+					const existing = await listAll(agent, did, 'place.wisp.v2.wh', MAX_WEBHOOKS_PER_OWNER + 1)
+					const replacing = existing.some(
+						(item) => (item as { uri?: unknown }).uri === `at://${did}/place.wisp.v2.wh/${rkey}`,
+					)
+					if (!replacing && isWebhookOwnerAtCapacity(existing.length)) throw new PreviewLimitError()
+					const validated = validateWebhookCreateInput(previewHookRecord(PREVIEW_BOT_URL, did, repo.name, claim), {
+						allowLoopbackDev: false,
+					})
+					if (!validated.ok) throw new Error(`preview hook rejected: ${validated.kind}`)
+					await agent.com.atproto.repo.putRecord({
+						repo: did,
+						collection: 'place.wisp.v2.wh',
+						rkey,
+						record: validated.record,
+					})
+				}),
+			deleteHook: (rkey) =>
+				withWebhookOwnerMutationLock(did, async () => {
+					if (!(await consumeWebhookMutationRateLimit(did, 'delete'))) throw new PreviewLimitError()
+					await agent.com.atproto.repo.deleteRecord({ repo: did, collection: 'place.wisp.v2.wh', rkey })
+				}),
+		}
 	}
-}
 
 const failed = (set: { status?: number | string }, error: unknown, action: string) => {
 	if (error instanceof PreviewLimitError) {
@@ -192,58 +203,55 @@ const failed = (set: { status?: number | string }, error: unknown, action: strin
 }
 
 /** Pull-request previews for the signed-in user's tangled repos. */
-export const previewRoutes = (
-	client: NodeOAuthClient,
-	cookieSecret: string,
-	portsFor: (auth: AuthenticatedContext) => PreviewSetupPorts = httpPorts,
-) =>
-	new Elysia({ prefix: '/api/previews', cookie: { secrets: cookieSecret, sign: [SESSION_COOKIE_NAME] } })
-		.derive(async ({ cookie, request }) => ({
-			ports: portsFor(await requireAuth(client, cookie, request.headers.get('cookie'))),
-		}))
-		/** GET /api/previews: { repos, claims, canSetSecrets } */
-		.get('/', async ({ ports, set }) => {
-			try {
-				return { success: true, previewHost: PREVIEW_HOST, ...(await loadPreviews(ports)) }
-			} catch (error) {
-				return failed(set, error, 'list previews')
-			}
-		})
-		/** PUT /api/previews/:repo { claim, appPassword? }: store the deploy secret, then wake the bot on deploys. */
-		.put(
-			'/:repo',
-			async ({ ports, params, body, set }) => {
-				if (!isRepoName(params.repo) || !isClaimLabel(body.claim)) {
-					set.status = 400
-					return { success: false, error: 'invalid-request' }
-				}
+export const createPreviewRoutes =
+	(portsFor: (auth: AuthenticatedContext) => PreviewSetupPorts) => (client: NodeOAuthClient, cookieSecret: string) =>
+		new Elysia({ prefix: '/api/previews', cookie: { secrets: cookieSecret, sign: [SESSION_COOKIE_NAME] } })
+			.derive(async ({ cookie, request }) => ({
+				ports: portsFor(await requireAuth(client, cookie, request.headers.get('cookie'))),
+			}))
+			/** GET /api/previews: { repos, claims, canSetSecrets } */
+			.get('/', async ({ ports, set }) => {
 				try {
-					const result = await enablePreview(ports, { repo: params.repo, ...body })
-					if (result.ok) return { success: true }
-					set.status = STATUS[result.reason]
-					return { success: false, error: result.reason }
+					return { success: true, previewHost: PREVIEW_HOST, ...(await loadPreviews(ports)) }
 				} catch (error) {
-					return failed(set, error, 'enable previews')
+					return failed(set, error, 'list previews')
 				}
-			},
-			{
-				params: t.Object({ repo: t.String({ minLength: 1, maxLength: 100 }) }),
-				body: t.Object({
-					claim: t.String({ minLength: 1, maxLength: 63 }),
-					appPassword: t.Optional(t.String({ minLength: 1, maxLength: 256 })),
-				}),
-			},
-		)
-		/** DELETE /api/previews/:repo */
-		.delete(
-			'/:repo',
-			async ({ ports, params, set }) => {
-				try {
-					await disablePreview(ports, params.repo)
-					return { success: true }
-				} catch (error) {
-					return failed(set, error, 'disable previews')
-				}
-			},
-			{ params: t.Object({ repo: t.String({ minLength: 1, maxLength: 100 }) }) },
-		)
+			})
+			/** PUT /api/previews/:repo { claim, appPassword? }: store the deploy secret, then wake the bot on deploys. */
+			.put(
+				'/:repo',
+				async ({ ports, params, body, set }) => {
+					if (!isRepoName(params.repo) || !isClaimLabel(body.claim)) {
+						set.status = 400
+						return { success: false, error: 'invalid-request' }
+					}
+					try {
+						const result = await enablePreview(ports, { repo: params.repo, ...body })
+						if (result.ok) return { success: true }
+						set.status = STATUS[result.reason]
+						return { success: false, error: result.reason }
+					} catch (error) {
+						return failed(set, error, 'enable previews')
+					}
+				},
+				{
+					params: t.Object({ repo: t.String({ minLength: 1, maxLength: 100 }) }),
+					body: t.Object({
+						claim: t.String({ minLength: 1, maxLength: 63 }),
+						appPassword: t.Optional(t.String({ minLength: 1, maxLength: 256 })),
+					}),
+				},
+			)
+			/** DELETE /api/previews/:repo */
+			.delete(
+				'/:repo',
+				async ({ ports, params, set }) => {
+					try {
+						await disablePreview(ports, params.repo)
+						return { success: true }
+					} catch (error) {
+						return failed(set, error, 'disable previews')
+					}
+				},
+				{ params: t.Object({ repo: t.String({ minLength: 1, maxLength: 100 }) }) },
+			)

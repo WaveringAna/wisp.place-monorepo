@@ -1,32 +1,26 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test'
-
-process.env.BASE_HOST = 'wisp.place'
-process.env.PREVIEW_HOST = 'preview.wisp.place'
+import { beforeEach, describe, expect, test } from 'bun:test'
+import { createApp, resolveHostConfig } from './server'
 
 const OWNER_DID = 'did:plc:alice'
 const domainLookups: string[] = []
 const served: Array<{ did: string; rkey: string; path: string }> = []
 
-mock.module('./lib/db', () => ({
-	getWispDomain: async (domain: string) => {
+const app = createApp({
+	hosts: resolveHostConfig({ BASE_HOST: 'wisp.place', PREVIEW_HOST: 'preview.wisp.place' }),
+	getWispDomain: async (domain) => {
 		domainLookups.push(domain)
 		return domain === 'alice.wisp.place' ? { did: OWNER_DID, rkey: 'main-site' } : null
 	},
 	getCustomDomain: async () => null,
 	getCustomDomainByHash: async () => null,
-	getSiteCache: async () => null,
-	getSiteSettingsCache: async () => null,
-	closeDatabase: async () => {},
-}))
-mock.module('./lib/file-serving', () => ({
-	serveFromCache: async (did: string, rkey: string, path: string) => {
+	serveFromCache: async (did, rkey, path) => {
 		served.push({ did, rkey, path })
 		return new Response('preview body')
 	},
 	serveFromCacheWithRewrite: async () => new Response('unexpected'),
-}))
-
-const { default: app } = await import('./server')
+	metrics: { recordHostingResponse: () => {}, recordHostingNotFound: () => {} },
+	notFoundLog: { record: () => {} },
+})
 
 describe('preview host routing', () => {
 	beforeEach(() => {

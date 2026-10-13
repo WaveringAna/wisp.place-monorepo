@@ -1,30 +1,19 @@
-import { describe, expect, mock, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import { MAX_FILE_COUNT, MAX_FILE_SIZE, MAX_SITE_SIZE } from '@wispplace/constants'
-
-const SENTINEL = 'PDS_TOKEN_MUST_NOT_BE_EXPOSED'
-const logs: unknown[] = []
-
-mock.module('@wispplace/observability', () => ({
-	createLogger: () => ({
-		debug: (...args: unknown[]) => logs.push(args),
-		error: (...args: unknown[]) => logs.push(args),
-		info: (...args: unknown[]) => logs.push(args),
-		warn: (...args: unknown[]) => logs.push(args),
-	}),
-}))
-
-const { createUploadJob, getUploadJob, getUploadJobStats } = await import('../lib/upload-jobs')
-
-const {
+import { logsDuring } from '../lib/collected-logs'
+import {
 	INVALID_UPLOAD_MESSAGE,
+	PublicUploadError,
 	processUploadInBackground,
 	selectPublicUploadFiles,
-	PublicUploadError,
 	UPLOAD_CONFLICT_MESSAGE,
 	UPLOAD_FAILED_MESSAGE,
 	UPLOAD_TOO_LARGE_MESSAGE,
 	validatePublicUploadFiles,
-} = await import('../lib/public-upload')
+} from '../lib/public-upload'
+import { createUploadJob, getUploadJob, getUploadJobStats } from '../lib/upload-jobs'
+
+const SENTINEL = 'PDS_TOKEN_MUST_NOT_BE_EXPOSED'
 
 const fakeFile = (name: string, size: number, type = 'text/plain'): File =>
 	({
@@ -152,7 +141,6 @@ describe('public upload metadata validation', () => {
 
 describe('public upload failures and SubFS cleanup', () => {
 	test('does not expose a PDS failure or publish a partial manifest', async () => {
-		logs.length = 0
 		const did = `did:example:failure${crypto.randomUUID().replaceAll('-', '')}`
 		const jobId = createUploadJob(did, 'failure-site', 1)
 		let putRecordCalls = 0
@@ -178,16 +166,18 @@ describe('public upload failures and SubFS cleanup', () => {
 		}
 		const files = validatePublicUploadFiles([new File(['hello'], 'index.bin')], MAX_SITE_SIZE)
 
-		await processUploadInBackground(jobId, agent as never, did, 'failure-site', files, [])
+		const logs = await logsDuring('main-app', () =>
+			processUploadInBackground(jobId, agent as never, did, 'failure-site', files, []),
+		)
 
 		expect(putRecordCalls).toBe(0)
 		expect(getUploadJob(jobId)).toMatchObject({ status: 'failed', error: UPLOAD_FAILED_MESSAGE })
+		expect(logs.map((entry) => entry.message)).toContain('Public upload job failed')
 		expect(JSON.stringify(logs)).not.toContain(SENTINEL)
 		expect(getUploadJobStats().listeners).toBe(0)
 	})
 
 	test('fails closed before uploading blobs when the existing root cannot be read', async () => {
-		logs.length = 0
 		const did = `did:example:rootread${crypto.randomUUID().replaceAll('-', '')}`
 		const jobId = createUploadJob(did, 'root-read-site', 1)
 		let blobUploads = 0
@@ -212,9 +202,12 @@ describe('public upload failures and SubFS cleanup', () => {
 		}
 		const files = validatePublicUploadFiles([new File(['hello'], 'index.html')], MAX_SITE_SIZE)
 
-		await processUploadInBackground(jobId, agent as never, did, 'root-read-site', files, [])
+		const logs = await logsDuring('main-app', () =>
+			processUploadInBackground(jobId, agent as never, did, 'root-read-site', files, []),
+		)
 		expect(blobUploads).toBe(0)
 		expect(getUploadJob(jobId)).toMatchObject({ status: 'failed', error: UPLOAD_FAILED_MESSAGE, errorStatus: 500 })
+		expect(logs.map((entry) => entry.message)).toContain('Public upload job failed')
 		expect(JSON.stringify(logs)).not.toContain(SENTINEL)
 	})
 

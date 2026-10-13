@@ -1,24 +1,19 @@
-import { describe, expect, mock, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
+import { signCookie } from 'elysia/utils'
 import type { PreviewSetupPorts } from '../lib/preview-setup'
+import { clearSessionCache, SESSION_COOKIE_NAME } from '../lib/wisp-auth'
+import { createPreviewRoutes } from './previews'
 
 const DID = 'did:plc:3rwz3xfw2crswgifqgc3g7zh'
 
-mock.module('../lib/db', () => ({
-	consumeWebhookMutationRateLimit: async () => true,
-	eventualRead: { getDomainsForDid: async () => ({ wispDomains: [], customDomains: [] }) },
-	withWebhookOwnerMutationLock: async (_did: string, run: () => Promise<unknown>) => run(),
-}))
+const COOKIE_SECRET = 'test-cookie-secret'
+// The OAuth client is the boundary: requireAuth restores this DID's session from it.
+const client = { restore: async (did: string) => ({ did }) }
+const cookie = `${SESSION_COOKIE_NAME}=${await signCookie(DID, COOKIE_SECRET)}`
 
-mock.module('../lib/oauth-authorize', () => ({
-	canSetSpindleSecrets: async () => false,
-}))
-
-mock.module('../lib/wisp-auth', () => ({
-	SESSION_COOKIE_NAME: 'did',
-	requireAuth: async () => ({ did: DID, session: {} }),
-}))
-
-const { previewRoutes } = await import('./previews')
+afterEach(() => {
+	clearSessionCache()
+})
 
 function fakePorts(overrides: Partial<PreviewSetupPorts> = {}) {
 	const calls: string[] = []
@@ -52,7 +47,15 @@ function fakePorts(overrides: Partial<PreviewSetupPorts> = {}) {
 	return { ports, calls }
 }
 
-const app = (ports: PreviewSetupPorts) => previewRoutes({} as never, 'test-cookie-secret', () => ports)
+const withCookie = (request: Request): Request => {
+	const signedIn = new Request(request)
+	signedIn.headers.set('cookie', cookie)
+	return signedIn
+}
+const app = (ports: PreviewSetupPorts) => {
+	const routes = createPreviewRoutes(() => ports)(client as never, COOKIE_SECRET)
+	return { handle: (request: Request) => routes.handle(withCookie(request)) }
+}
 const put = (path: string, body: unknown) =>
 	new Request(`http://localhost/api/previews/${path}`, {
 		method: 'PUT',

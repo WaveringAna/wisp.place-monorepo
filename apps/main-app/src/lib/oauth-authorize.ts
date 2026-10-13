@@ -10,7 +10,8 @@ import {
 	wispAppRequiredCapabilities,
 } from '@wispplace/constants'
 import { createLogger } from '@wispplace/observability'
-import { OAUTH_LEGACY_SCOPE, OAUTH_SCOPE, recentGrantedScope } from './oauth-client'
+import { recentGrantedScope } from './granted-scopes'
+import { OAUTH_LEGACY_SCOPE, OAUTH_SCOPE } from './oauth-client-metadata'
 
 const logger = createLogger('main-app')
 

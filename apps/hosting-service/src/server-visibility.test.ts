@@ -1,13 +1,7 @@
-import { beforeEach, describe, expect, mock, spyOn, test } from 'bun:test'
-import { type HostingNotFoundReason, type HostingResponseEntry, metricsCollector } from '@wispplace/observability'
+import { beforeEach, describe, expect, spyOn, test } from 'bun:test'
+import type { HostingNotFoundReason, HostingResponseEntry } from '@wispplace/observability'
 import { markRedirectNotFound } from './lib/request-visibility'
-
-// Every host the router branches on is pinned here rather than inherited from a
-// local `.env`. Leaving PRIVATE_HOST unset made this file's 404 reasons depend
-// on whether the developer running it had one.
-process.env.BASE_HOST = 'wisp.place'
-process.env.PRIVATE_HOST = 'priv.wisp.place'
-process.env.PREVIEW_HOST = 'preview.wisp.place'
+import { createApp, resolveHostConfig } from './server'
 
 const OWNER_DID = 'did:plc:abcdefghijklmnopqrstuvwx'
 const SITE_BODIES: Record<string, () => Response> = {
@@ -16,41 +10,38 @@ const SITE_BODIES: Record<string, () => Response> = {
 	gone: () => markRedirectNotFound(new Response('gone', { status: 404, headers: { 'Content-Type': 'text/html' } })),
 }
 
-mock.module('./lib/db', () => ({
-	getWispDomain: async (domain: string) => {
+const serveSite = async (_did: string, _rkey: string, path: string) =>
+	SITE_BODIES[path]?.() ?? new Response('missing', { status: 404, headers: { 'Content-Type': 'text/html' } })
+
+const notFoundLines: Array<{ reason: HostingNotFoundReason; host: string }> = []
+const responses: HostingResponseEntry[] = []
+const reasons: HostingNotFoundReason[] = []
+
+// Every host the router branches on is pinned here rather than inherited from a
+// local `.env`. Leaving PRIVATE_HOST unset made this file's 404 reasons depend
+// on whether the developer running it had one.
+const app = createApp({
+	hosts: resolveHostConfig({
+		BASE_HOST: 'wisp.place',
+		PRIVATE_HOST: 'priv.wisp.place',
+		PREVIEW_HOST: 'preview.wisp.place',
+	}),
+	getWispDomain: async (domain) => {
 		if (domain === 'alice.wisp.place') return { did: OWNER_DID, rkey: 'blog' }
 		if (domain === 'idle.wisp.place') return { did: OWNER_DID, rkey: null }
 		return null
 	},
-	getCustomDomain: async (domain: string) =>
-		domain === 'blog.example.com' ? { id: 'h', domain, did: OWNER_DID, rkey: 'blog', verified: true } : null,
+	getCustomDomain: async (domain) => (domain === 'blog.example.com' ? { did: OWNER_DID, rkey: 'blog' } : null),
 	getCustomDomainByHash: async () => null,
-	getSiteCache: async () => null,
-	getSiteSettingsCache: async () => null,
-	closeDatabase: async () => {},
-}))
-const serveSite = async (_did: string, _rkey: string, path: string) =>
-	SITE_BODIES[path]?.() ?? new Response('missing', { status: 404, headers: { 'Content-Type': 'text/html' } })
-mock.module('./lib/file-serving', () => ({
 	serveFromCache: serveSite,
 	serveFromCacheWithRewrite: serveSite,
-}))
-
-const notFoundLines: Array<{ reason: HostingNotFoundReason; host: string }> = []
-mock.module('./lib/not-found-log', () => ({
-	notFoundLog: { record: (reason: HostingNotFoundReason, host: string) => notFoundLines.push({ reason, host }) },
-}))
-
-const responses: HostingResponseEntry[] = []
-const reasons: HostingNotFoundReason[] = []
-spyOn(metricsCollector, 'recordHostingResponse').mockImplementation((entry) => {
-	responses.push(entry)
+	// Both metrics are export-only, so they are observed where the router hands them over.
+	metrics: {
+		recordHostingResponse: (entry) => responses.push(entry),
+		recordHostingNotFound: (reason) => reasons.push(reason),
+	},
+	notFoundLog: { record: (reason, host) => notFoundLines.push({ reason, host }) },
 })
-spyOn(metricsCollector, 'recordHostingNotFound').mockImplementation((reason) => {
-	reasons.push(reason)
-})
-
-const { default: app } = await import('./server')
 
 beforeEach(() => {
 	responses.length = 0

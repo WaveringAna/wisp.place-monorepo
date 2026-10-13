@@ -20,14 +20,8 @@ import {
 	sessionCookieName,
 } from '@wispplace/private-sites'
 import { lookup } from 'mime-types'
-import {
-	type AuthorizedPrivateSite,
-	exchangePrivateHandoff,
-	exchangePrivateShareToken,
-	loadAuthorizedPrivateSite,
-	type PrivateSiteFile,
-	touchShare,
-} from './private-sites-db'
+import type { AuthorizedPrivateSite, PrivateSiteFile } from './private-sites-db'
+import * as privateSitesDb from './private-sites-db'
 import { isValidMimeType } from './request-utils'
 import { privateStorage } from './storage'
 
@@ -165,61 +159,6 @@ const sessionRedirect = (request: Request, url: URL, secret: GeneratedSecret): R
 	})
 }
 
-const resolveHandoffCredential = async (siteId: string, token: string): Promise<CredentialResolution> => {
-	const pendingSession = newPendingSession()
-	const input = {
-		siteId,
-		secretHash: hashSecret(token),
-		sessionId: pendingSession.sessionId,
-		sessionSecretHash: pendingSession.secret.hash,
-		expiresAt: pendingSession.expiresAt,
-	}
-	try {
-		const exchange = await exchangePrivateHandoff(input)
-		if (!exchange) return { kind: 'denied', source: 'handoff' }
-		return {
-			kind: 'sessionCreated',
-			pendingSession,
-			shareId: exchange.kind === 'share' ? exchange.shareId : null,
-		}
-	} catch {
-		return { kind: 'unavailable', source: 'handoff' }
-	}
-}
-
-const resolveShareCredential = async (siteId: string, token: string): Promise<CredentialResolution> => {
-	const pendingSession = newPendingSession()
-	const input = {
-		siteId,
-		tokenHash: hashShareTokenSync(token),
-		sessionId: pendingSession.sessionId,
-		sessionSecretHash: pendingSession.secret.hash,
-		expiresAt: pendingSession.expiresAt,
-	}
-	try {
-		const exchange = await exchangePrivateShareToken(input)
-		if (!exchange) return { kind: 'denied', source: 'share' }
-		if (exchange.kind === 'audienceMismatch') {
-			return { kind: 'audienceMismatch', shareToken: token, audienceDid: exchange.audienceDid }
-		}
-		return { kind: 'sessionCreated', pendingSession, shareId: exchange.shareId }
-	} catch {
-		return { kind: 'unavailable', source: 'share' }
-	}
-}
-
-const resolveCredential = (siteId: string, credential: PresentedCredential): Promise<CredentialResolution> => {
-	return credential.kind === 'handoff'
-		? resolveHandoffCredential(siteId, credential.token)
-		: resolveShareCredential(siteId, credential.token)
-}
-
-const touchGrantedShare = (siteId: string, shareId: string): void => {
-	void touchShare(shareId).catch(() => {
-		logger.warn('[PrivateSite] Could not record share use', { siteId, failureKind: 'share-touch-failed' })
-	})
-}
-
 const credentialFailureResponse = (siteId: string, resolution: CredentialFailure): Response => {
 	if (resolution.kind === 'audienceMismatch') {
 		logger.info('[PrivateSite] Scoped share needs sign-in', { siteId })
@@ -237,20 +176,6 @@ const credentialFailureResponse = (siteId: string, resolution: CredentialFailure
 	return privateNotFound()
 }
 
-const tryExchangeCredential = async (request: Request, siteId: string): Promise<CredentialExchangeOutcome> => {
-	const url = new URL(request.url)
-	const credential = credentialQueryFrom(url)
-	if (credential.kind === 'none') return { kind: 'notPresent' }
-
-	const resolution = await resolveCredential(siteId, credential)
-	if (resolution.kind !== 'sessionCreated') {
-		return { kind: 'response', response: credentialFailureResponse(siteId, resolution) }
-	}
-
-	if (resolution.shareId) touchGrantedShare(siteId, resolution.shareId)
-	return { kind: 'response', response: sessionRedirect(request, url, resolution.pendingSession.secret) }
-}
-
 const sessionCookieFrom = (request: Request): SessionCookieOutcome => {
 	const cookieHeader = request.headers.get('cookie')
 	const name = sessionCookieName(isSecureRequest(request))
@@ -259,20 +184,6 @@ const sessionCookieFrom = (request: Request): SessionCookieOutcome => {
 
 	const raw = parseCookieHeader(cookieHeader)[name]
 	return raw ? { kind: 'present', secretHash: hashSecret(raw) } : { kind: 'missing' }
-}
-
-/**
- * The primary-only aggregate query is the session authorization boundary. It
- * returns files only when the site, session, and any backing share are live.
- */
-const loadAuthorizedSite = async (siteId: string, secretHash: string): Promise<AuthorizedSiteLoadOutcome> => {
-	try {
-		const authorized = await loadAuthorizedPrivateSite(siteId, secretHash)
-		return authorized ? { kind: 'authorized', authorized } : { kind: 'missing' }
-	} catch {
-		logger.warn('[PrivateSite] Authorized site lookup failed', { siteId, failureKind: 'authorized-site-load-failed' })
-		return { kind: 'unavailable' }
-	}
 }
 
 const invalidPrivatePathResponse = (): Response => {
@@ -333,16 +244,6 @@ const resolvePrivateTarget = (requested: string, index: PrivateFileIndex): strin
 	return targetWithinRoot(requested, index.legacyRoot, index.known)
 }
 
-const loadPrivateFile = async (siteId: string, target: string): Promise<PrivateStorageReadOutcome> => {
-	const storageKey = buildPrivateStorageKey(siteId, target)
-	try {
-		const result = await privateStorage.get(storageKey)
-		return result ? { kind: 'found', bytes: result as Uint8Array } : { kind: 'missing' }
-	} catch {
-		return { kind: 'unavailable' }
-	}
-}
-
 const privateFileResponse = (target: string, bytes: Uint8Array, meta: PrivateSiteFile | undefined): Response => {
 	return new Response(Buffer.from(bytes), {
 		status: 200,
@@ -354,43 +255,157 @@ const privateFileResponse = (target: string, bytes: Uint8Array, meta: PrivateSit
 	})
 }
 
-const servePrivateStoredFile = async (siteId: string, target: string, index: PrivateFileIndex): Promise<Response> => {
-	const stored = await loadPrivateFile(siteId, target)
-	if (stored.kind === 'missing') {
-		logger.warn('[PrivateSite] Stored file missing', { siteId, path: target })
-		return privateNotFound()
-	}
-	if (stored.kind === 'unavailable') {
-		logger.warn('[PrivateSite] Stored file unavailable', {
+/** Postgres operations that authorize private requests; each is one primary-only statement. */
+export type PrivateServingDatabase = Pick<
+	typeof privateSitesDb,
+	'exchangePrivateHandoff' | 'exchangePrivateShareToken' | 'loadAuthorizedPrivateSite' | 'touchShare'
+>
+
+export interface PrivateServingDependencies {
+	db: PrivateServingDatabase
+	storage: { get(key: string): Promise<Uint8Array | null> }
+}
+
+export interface PrivateServing {
+	servePrivateSite(request: Request, siteId: string, filePath: string): Promise<Response>
+}
+
+export function createPrivateServing({ db, storage }: PrivateServingDependencies): PrivateServing {
+	const resolveHandoffCredential = async (siteId: string, token: string): Promise<CredentialResolution> => {
+		const pendingSession = newPendingSession()
+		const input = {
 			siteId,
-			path: target,
-			failureKind: 'private-storage-read-failed',
-		})
-		return privateNotFound()
+			secretHash: hashSecret(token),
+			sessionId: pendingSession.sessionId,
+			sessionSecretHash: pendingSession.secret.hash,
+			expiresAt: pendingSession.expiresAt,
+		}
+		try {
+			const exchange = await db.exchangePrivateHandoff(input)
+			if (!exchange) return { kind: 'denied', source: 'handoff' }
+			return {
+				kind: 'sessionCreated',
+				pendingSession,
+				shareId: exchange.kind === 'share' ? exchange.shareId : null,
+			}
+		} catch {
+			return { kind: 'unavailable', source: 'handoff' }
+		}
 	}
-	return privateFileResponse(target, stored.bytes, index.known.get(target))
+
+	const resolveShareCredential = async (siteId: string, token: string): Promise<CredentialResolution> => {
+		const pendingSession = newPendingSession()
+		const input = {
+			siteId,
+			tokenHash: hashShareTokenSync(token),
+			sessionId: pendingSession.sessionId,
+			sessionSecretHash: pendingSession.secret.hash,
+			expiresAt: pendingSession.expiresAt,
+		}
+		try {
+			const exchange = await db.exchangePrivateShareToken(input)
+			if (!exchange) return { kind: 'denied', source: 'share' }
+			if (exchange.kind === 'audienceMismatch') {
+				return { kind: 'audienceMismatch', shareToken: token, audienceDid: exchange.audienceDid }
+			}
+			return { kind: 'sessionCreated', pendingSession, shareId: exchange.shareId }
+		} catch {
+			return { kind: 'unavailable', source: 'share' }
+		}
+	}
+
+	const resolveCredential = (siteId: string, credential: PresentedCredential): Promise<CredentialResolution> => {
+		return credential.kind === 'handoff'
+			? resolveHandoffCredential(siteId, credential.token)
+			: resolveShareCredential(siteId, credential.token)
+	}
+
+	const touchGrantedShare = (siteId: string, shareId: string): void => {
+		void db.touchShare(shareId).catch(() => {
+			logger.warn('[PrivateSite] Could not record share use', { siteId, failureKind: 'share-touch-failed' })
+		})
+	}
+
+	const tryExchangeCredential = async (request: Request, siteId: string): Promise<CredentialExchangeOutcome> => {
+		const url = new URL(request.url)
+		const credential = credentialQueryFrom(url)
+		if (credential.kind === 'none') return { kind: 'notPresent' }
+
+		const resolution = await resolveCredential(siteId, credential)
+		if (resolution.kind !== 'sessionCreated') {
+			return { kind: 'response', response: credentialFailureResponse(siteId, resolution) }
+		}
+
+		if (resolution.shareId) touchGrantedShare(siteId, resolution.shareId)
+		return { kind: 'response', response: sessionRedirect(request, url, resolution.pendingSession.secret) }
+	}
+
+	/**
+	 * The primary-only aggregate query is the session authorization boundary. It
+	 * returns files only when the site, session, and any backing share are live.
+	 */
+	const loadAuthorizedSite = async (siteId: string, secretHash: string): Promise<AuthorizedSiteLoadOutcome> => {
+		try {
+			const authorized = await db.loadAuthorizedPrivateSite(siteId, secretHash)
+			return authorized ? { kind: 'authorized', authorized } : { kind: 'missing' }
+		} catch {
+			logger.warn('[PrivateSite] Authorized site lookup failed', { siteId, failureKind: 'authorized-site-load-failed' })
+			return { kind: 'unavailable' }
+		}
+	}
+
+	const loadPrivateFile = async (siteId: string, target: string): Promise<PrivateStorageReadOutcome> => {
+		const storageKey = buildPrivateStorageKey(siteId, target)
+		try {
+			const result = await storage.get(storageKey)
+			return result ? { kind: 'found', bytes: result as Uint8Array } : { kind: 'missing' }
+		} catch {
+			return { kind: 'unavailable' }
+		}
+	}
+
+	const servePrivateStoredFile = async (siteId: string, target: string, index: PrivateFileIndex): Promise<Response> => {
+		const stored = await loadPrivateFile(siteId, target)
+		if (stored.kind === 'missing') {
+			logger.warn('[PrivateSite] Stored file missing', { siteId, path: target })
+			return privateNotFound()
+		}
+		if (stored.kind === 'unavailable') {
+			logger.warn('[PrivateSite] Stored file unavailable', {
+				siteId,
+				path: target,
+				failureKind: 'private-storage-read-failed',
+			})
+			return privateNotFound()
+		}
+		return privateFileResponse(target, stored.bytes, index.known.get(target))
+	}
+
+	const servePrivateSite = async (request: Request, siteId: string, filePath: string): Promise<Response> => {
+		if (!isValidSiteId(siteId)) return privateNotFound()
+
+		const requested = normalizedPrivateRequestPath(filePath)
+		if (requested.kind === 'invalid') return invalidPrivatePathResponse()
+
+		const exchanged = await tryExchangeCredential(request, siteId)
+		if (exchanged.kind === 'response') return exchanged.response
+
+		const session = sessionCookieFrom(request)
+		if (session.kind === 'missing') return anonymousSignInPage(siteId)
+
+		const authorized = await loadAuthorizedSite(siteId, session.secretHash)
+		if (authorized.kind === 'unavailable') return privateNotFound()
+		if (authorized.kind === 'missing') return anonymousSignInPage(siteId)
+
+		const manifest = validateAndIndexPrivateFiles(authorized.authorized.files)
+		if (manifest.kind === 'invalid') return privateNotFound()
+
+		const target = resolvePrivateTarget(requested.path, manifest.index)
+		if (!target) return privateNotFound()
+		return await servePrivateStoredFile(siteId, target, manifest.index)
+	}
+
+	return { servePrivateSite }
 }
 
-export const servePrivateSite = async (request: Request, siteId: string, filePath: string): Promise<Response> => {
-	if (!isValidSiteId(siteId)) return privateNotFound()
-
-	const requested = normalizedPrivateRequestPath(filePath)
-	if (requested.kind === 'invalid') return invalidPrivatePathResponse()
-
-	const exchanged = await tryExchangeCredential(request, siteId)
-	if (exchanged.kind === 'response') return exchanged.response
-
-	const session = sessionCookieFrom(request)
-	if (session.kind === 'missing') return anonymousSignInPage(siteId)
-
-	const authorized = await loadAuthorizedSite(siteId, session.secretHash)
-	if (authorized.kind === 'unavailable') return privateNotFound()
-	if (authorized.kind === 'missing') return anonymousSignInPage(siteId)
-
-	const manifest = validateAndIndexPrivateFiles(authorized.authorized.files)
-	if (manifest.kind === 'invalid') return privateNotFound()
-
-	const target = resolvePrivateTarget(requested.path, manifest.index)
-	if (!target) return privateNotFound()
-	return await servePrivateStoredFile(siteId, target, manifest.index)
-}
+export const { servePrivateSite } = createPrivateServing({ db: privateSitesDb, storage: privateStorage })

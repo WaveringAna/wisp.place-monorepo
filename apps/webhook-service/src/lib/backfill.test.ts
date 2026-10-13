@@ -1,5 +1,14 @@
-import { describe, expect, mock, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import { MAX_IDENTITY_JSON_BYTES } from '@wispplace/atproto-utils'
+
+import '../test-env'
+import type { OwnerReconciliationStore, StartupBackfillOptions } from './backfill'
+import {
+	createReconciliationRetryScheduler,
+	fetchWhRecordPages,
+	fetchWhRecordsForDid,
+	runStartupBackfill,
+} from './backfill'
 
 let knownDids: string[] = []
 const began: Array<{ ownerDid: string; generation: number }> = []
@@ -9,40 +18,32 @@ const failed: Array<{ ownerDid: string; generation: number }> = []
 const transitions: Array<{ did: string; status: string }> = []
 let beginFailure = false
 
-mock.module('@wispplace/observability', () => ({
-	createLogger: () => ({
-		debug: () => undefined,
-		error: () => undefined,
-		info: () => undefined,
-		warn: () => undefined,
-	}),
-}))
-
-mock.module('./db', () => ({
-	listKnownWebhookOwnerDidsPage: async (after?: string, limit = 100) =>
-		knownDids.filter((did) => after === undefined || did > after).slice(0, limit),
-	listFailedWebhookReconciliationOwners: async () => [],
-	beginOwnerReconciliation: async (ownerDid: string) => {
+/** In-memory owner-snapshot fence that records every durable transition. */
+const store: OwnerReconciliationStore = {
+	beginOwnerReconciliation: async (ownerDid) => {
 		if (beginFailure) throw new Error('database credentials must remain private')
 		const token = { ownerDid, generation: began.length + 1 }
 		began.push(token)
 		return token
 	},
-	applyWebhookSnapshotPage: async (token: { ownerDid: string }, records: ReadonlyArray<{ rkey: string }>) => {
+	applyWebhookSnapshotPage: async (token, records) => {
 		appliedPages.push({ ownerDid: token.ownerDid, records })
 		return { applied: true, upserted: records.length }
 	},
-	completeOwnerReconciliation: async (token: { ownerDid: string; generation: number }) => {
+	completeOwnerReconciliation: async (token) => {
 		completed.push(token)
 		return { applied: true, deleted: 0, complete: true }
 	},
-	failOwnerReconciliation: async (token: { ownerDid: string; generation: number }) => {
+	failOwnerReconciliation: async (token) => {
 		failed.push(token)
 	},
-}))
+}
 
-const { createReconciliationRetryScheduler, fetchWhRecordPages, fetchWhRecordsForDid, runStartupBackfill } =
-	await import('./backfill')
+const listKnownOwners = async (after: string | undefined, limit: number) =>
+	knownDids.filter((did) => after === undefined || did > after).slice(0, limit)
+
+const backfill = (options: StartupBackfillOptions) =>
+	runStartupBackfill({ listOwnerPage: listKnownOwners, store, ...options })
 
 const DID = 'did:web:example.com'
 const OTHER_DID = 'did:web:other.example'
@@ -145,16 +146,18 @@ describe('webhook startup backfill PDS transport and snapshot validation', () =>
 	test('omits malformed records while applying valid rows and completing the owner snapshot', async () => {
 		reset()
 		knownDids = [DID]
-		const result = await runStartupBackfill(async (url) => {
-			if (url === 'https://example.com/.well-known/did.json') return didDocument('https://pds.example')
-			return new Response(
-				JSON.stringify({
-					records: [
-						{ uri: recordUri(DID, 'valid'), cid: 'a', value: validRecord },
-						{ uri: recordUri(DID, 'malformed'), cid: 'b', value: { $type: 'place.wisp.v2.wh', enabled: 'yes' } },
-					],
-				}),
-			)
+		const result = await backfill({
+			fetcher: async (url) => {
+				if (url === 'https://example.com/.well-known/did.json') return didDocument('https://pds.example')
+				return new Response(
+					JSON.stringify({
+						records: [
+							{ uri: recordUri(DID, 'valid'), cid: 'a', value: validRecord },
+							{ uri: recordUri(DID, 'malformed'), cid: 'b', value: { $type: 'place.wisp.v2.wh', enabled: 'yes' } },
+						],
+					}),
+				)
+			},
 		})
 		expect(result).toEqual({ found: 1, failed: 0 })
 		expect(appliedPages.map((page) => page.records.map((record) => record.rkey))).toEqual([['valid']])
@@ -164,7 +167,7 @@ describe('webhook startup backfill PDS transport and snapshot validation', () =>
 	test('treats an explicit repo-absence response as an authoritative empty snapshot', async () => {
 		reset()
 		knownDids = [DID]
-		const result = await runStartupBackfill({
+		const result = await backfill({
 			fetcher: async (url) => {
 				if (url === 'https://example.com/.well-known/did.json') return didDocument('https://pds.example')
 				return new Response(JSON.stringify({ error: 'RepoNotFound', message: 'Repo not found' }), { status: 400 })
@@ -187,7 +190,7 @@ describe('webhook startup backfill PDS transport and snapshot validation', () =>
 	test('treats the PDS InvalidRequest repo-absence form as an authoritative empty snapshot', async () => {
 		reset()
 		knownDids = [DID]
-		const result = await runStartupBackfill({
+		const result = await backfill({
 			fetcher: async (url) => {
 				if (url === 'https://example.com/.well-known/did.json') return didDocument('https://pds.example')
 				return new Response(JSON.stringify({ error: 'InvalidRequest', message: `Could not find repo: ${DID}` }), {
@@ -204,7 +207,7 @@ describe('webhook startup backfill PDS transport and snapshot validation', () =>
 	test('does not prune a partial snapshot when repo absence arrives after a page', async () => {
 		reset()
 		knownDids = [DID]
-		const result = await runStartupBackfill({
+		const result = await backfill({
 			fetcher: async (url) => {
 				if (url === 'https://example.com/.well-known/did.json') return didDocument('https://pds.example')
 				if (!new URL(url).searchParams.has('cursor')) {
@@ -228,7 +231,7 @@ describe('webhook startup backfill PDS transport and snapshot validation', () =>
 	test('does not treat an empty cursor page followed by repo absence as complete', async () => {
 		reset()
 		knownDids = [DID]
-		const result = await runStartupBackfill({
+		const result = await backfill({
 			fetcher: async (url) => {
 				if (url === 'https://example.com/.well-known/did.json') return didDocument('https://pds.example')
 				if (!new URL(url).searchParams.has('cursor')) {
@@ -251,7 +254,7 @@ describe('webhook startup backfill PDS transport and snapshot validation', () =>
 		]) {
 			reset()
 			knownDids = [DID]
-			const result = await runStartupBackfill({
+			const result = await backfill({
 				fetcher: async (url) =>
 					url === 'https://example.com/.well-known/did.json' ? didDocument('https://pds.example') : response,
 			})
@@ -282,15 +285,17 @@ describe('webhook startup backfill PDS transport and snapshot validation', () =>
 		}
 
 		knownDids = [DID]
-		const result = await runStartupBackfill(async (url) => {
-			if (url === 'https://example.com/.well-known/did.json') return didDocument('https://pds.example')
-			return new Response(
-				JSON.stringify({
-					records: [
-						{ uri: recordUri(DID, 'unsafe'), cid: 'a', value: { ...validRecord, url: 'https://127.0.0.1/internal' } },
-					],
-				}),
-			)
+		const result = await backfill({
+			fetcher: async (url) => {
+				if (url === 'https://example.com/.well-known/did.json') return didDocument('https://pds.example')
+				return new Response(
+					JSON.stringify({
+						records: [
+							{ uri: recordUri(DID, 'unsafe'), cid: 'a', value: { ...validRecord, url: 'https://127.0.0.1/internal' } },
+						],
+					}),
+				)
+			},
 		})
 		expect(result).toEqual({ found: 0, failed: 0 })
 		expect(appliedPages).toEqual([{ ownerDid: DID, records: [] }])
@@ -301,16 +306,16 @@ describe('webhook startup backfill PDS transport and snapshot validation', () =>
 		reset()
 		knownDids = [DID]
 		let calls = 0
-		const result = await runStartupBackfill(
-			async (url) => {
+		const result = await backfill({
+			fetcher: async (url) => {
 				calls++
 				if (url === 'https://example.com/.well-known/did.json') return didDocument('https://pds.example')
 				return new Response('x'.repeat(MAX_IDENTITY_JSON_BYTES + 1))
 			},
-			(did, status) => {
+			onOwnerTransition: (did, status) => {
 				transitions.push({ did, status })
 			},
-		)
+		})
 
 		expect(result).toEqual({ found: 0, failed: 1 })
 		expect(calls).toBe(2)
@@ -326,7 +331,7 @@ describe('webhook startup backfill PDS transport and snapshot validation', () =>
 	test('continues reconciling healthy owners after another owner fails', async () => {
 		reset()
 		knownDids = [DID, OTHER_DID]
-		const result = await runStartupBackfill({
+		const result = await backfill({
 			fetcher: async (url) => {
 				if (url === 'https://example.com/.well-known/did.json') return didDocument('https://pds.example')
 				if (url === 'https://other.example/.well-known/did.json') return didDocument('https://pds.example')
@@ -365,7 +370,7 @@ describe('webhook startup backfill PDS transport and snapshot validation', () =>
 			return new Response(JSON.stringify({ records: [] }))
 		}
 
-		const first = await runStartupBackfill({
+		const first = await backfill({
 			fetcher,
 			listOwnerPage,
 			maxOwnersPerPass: 2,
@@ -379,7 +384,7 @@ describe('webhook startup backfill PDS transport and snapshot validation', () =>
 		// The source never receives a larger request than the fixed queue page.
 		expect(requests.every((request) => request.limit === 1)).toBe(true)
 
-		const continuation = await runStartupBackfill({
+		const continuation = await backfill({
 			fetcher,
 			listOwnerPage,
 			maxOwnersPerPass: 2,
@@ -403,12 +408,12 @@ describe('webhook startup backfill PDS transport and snapshot validation', () =>
 				? didDocument('https://pds.example')
 				: new Response(JSON.stringify({ records: [] }))
 
-		const first = await runStartupBackfill({ fetcher, listOwnerPage })
+		const first = await backfill({ fetcher, listOwnerPage })
 		expect(first).toEqual({ found: 0, failed: 0, nextOwnerCursor: owners[999] })
 		expect(Math.max(...requestedLimits)).toBe(50)
 		expect(began).toHaveLength(1_000)
 
-		const resumed = await runStartupBackfill({ fetcher, listOwnerPage, startAfter: first.nextOwnerCursor })
+		const resumed = await backfill({ fetcher, listOwnerPage, startAfter: first.nextOwnerCursor })
 		expect(resumed).toEqual({ found: 0, failed: 0 })
 		expect(began).toHaveLength(1_001)
 		expect(began[began.length - 1]?.ownerDid).toBe(owners[1_000])
@@ -418,7 +423,7 @@ describe('webhook startup backfill PDS transport and snapshot validation', () =>
 		reset()
 		knownDids = [DID]
 		beginFailure = true
-		await expect(runStartupBackfill(async () => new Response('{}'))).rejects.toThrow(
+		await expect(backfill({ fetcher: async () => new Response('{}') })).rejects.toThrow(
 			'Webhook reconciliation infrastructure failed',
 		)
 		expect(failed).toEqual([])
@@ -474,6 +479,7 @@ describe('failed owner reconciliation retry scheduler', () => {
 		const completedRetry = deferred<void>()
 		const scheduler = createReconciliationRetryScheduler({
 			baseDelayMs: 1_000,
+			store,
 			clearTimer: timers.clearTimer,
 			discoveryIntervalMs: 10_000,
 			listFailedOwners: async () => [DID],
@@ -511,6 +517,7 @@ describe('failed owner reconciliation retry scheduler', () => {
 		const retryTimerCreated = deferred<void>()
 		const scheduler = createReconciliationRetryScheduler({
 			baseDelayMs: 1_000,
+			store,
 			clearTimer: timers.clearTimer,
 			discoveryIntervalMs: 10_000,
 			listFailedOwners: async () => [DID, OTHER_DID],
@@ -548,6 +555,7 @@ describe('failed owner reconciliation retry scheduler', () => {
 		const ownerFinished = deferred<void>()
 		const scheduler = createReconciliationRetryScheduler({
 			baseDelayMs: 1_000,
+			store,
 			clearTimer: timers.clearTimer,
 			discoveryIntervalMs: 10_000,
 			listFailedOwners: async () => [DID],

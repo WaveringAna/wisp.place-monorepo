@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test'
+import { beforeEach, describe, expect, test } from 'bun:test'
 import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -6,6 +6,10 @@ import { Readable } from 'node:stream'
 import { gzipSync } from 'node:zlib'
 import { computeCID } from '@wispplace/atproto-utils'
 import { casKey } from '@wispplace/fs-utils'
+import { isSiteUpdating } from './cache-invalidation'
+import { cache } from './cache-manager'
+import { createFileServing, defaultGzipOperations } from './file-serving'
+import { recordStorageMiss } from './revalidate-metrics'
 
 const DID = 'did:plc:stream-test'
 const RKEY = 'site'
@@ -112,7 +116,7 @@ const fakeStorage = {
 	},
 }
 
-mock.module('./storage', () => ({
+const { serveFileInternal, serveFileInternalWithRewrite } = createFileServing({
 	storage: fakeStorage,
 	addPublicSourceCidIfChecksumMatches: async () => {
 		legacyCidRepairs++
@@ -121,9 +125,6 @@ mock.module('./storage', () => ({
 	evictPublicCacheKey: async () => {
 		evictions++
 	},
-	isStorageUnavailableError: () => false,
-}))
-mock.module('./db', () => ({
 	getSiteCache: async () => ({
 		did: DID,
 		rkey: RKEY,
@@ -137,19 +138,15 @@ mock.module('./db', () => ({
 		updated_at: 0,
 		absent_since: null,
 	}),
-	getSiteSettingsCache: async () => null,
-}))
-mock.module('./utils', () => ({ getCachedSettings: async () => null }))
-mock.module('./revalidate-queue', () => ({
-	enqueueRevalidate: async () => ({ enqueued: true, result: 'enqueued' }),
-	closeRevalidateQueue: async () => {},
-}))
-mock.module('./revalidate-metrics', () => ({ recordStorageMiss: () => {} }))
-mock.module('./cache-invalidation', () => ({ isSiteUpdating: () => false }))
-mock.module('./html-prewarm', () => ({ triggerSiteHtmlHotCacheWarmup: () => {} }))
-
-const { cache } = await import('./cache-manager')
-const { serveFileInternal, serveFileInternalWithRewrite } = await import('./file-serving')
+	getCachedSettings: async () => null,
+	enqueueRevalidate: async () => ({ result: 'enqueued' }),
+	recordStorageMiss,
+	isSiteUpdating,
+	// These requests measure the stream path alone; background warmup reads would be counted as buffered.
+	triggerSiteHtmlHotCacheWarmup: () => {},
+	gzipOperations: defaultGzipOperations,
+	gzipProcessingConcurrency: 2,
+})
 
 describe('file serving streams', () => {
 	beforeEach(() => {

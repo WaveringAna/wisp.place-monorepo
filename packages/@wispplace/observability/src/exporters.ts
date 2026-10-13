@@ -538,8 +538,10 @@ class MetricsExporter {
 		metrics.setGlobalMeterProvider(meterProvider)
 		this.meterProvider = meterProvider
 
-		// Create metrics instruments
-		const meter = metrics.getMeter(this.config.serviceName || 'wisp-app')
+		// Create metrics instruments on this provider, not the global one: OpenTelemetry keeps the
+		// first global registration, so after a shutdown and re-initialize the global meter would
+		// belong to the provider that was shut down and nothing would be exported.
+		const meter = meterProvider.getMeter(serviceName)
 
 		this.requestCounter = meter.createCounter('http_requests_total', {
 			description: 'Total number of HTTP requests',

@@ -6,7 +6,7 @@ import {
 } from '@wispplace/fs-utils'
 import { createLogger } from '@wispplace/observability'
 import { resolveStorageKey } from './site-storage-keys'
-import { isStorageUnavailableError, storage } from './storage'
+import { isStorageUnavailableError } from './storage'
 
 const logger = createLogger('redirects')
 
@@ -21,10 +21,16 @@ export {
 	type RedirectRule,
 } from '@wispplace/fs-utils'
 
+/** The buffered read redirect loading needs from site storage. */
+export interface RedirectRulesStorage {
+	get(key: string, options: { borrowData: true }): Promise<Uint8Array | null>
+}
+
 /**
  * Load redirect rules from a cached site.
  */
 export async function loadRedirectRules(
+	storage: RedirectRulesStorage,
 	did: string,
 	rkey: string,
 	fileObjects: FileObjects | null,

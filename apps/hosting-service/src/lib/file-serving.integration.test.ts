@@ -3,9 +3,18 @@ import { gunzipSync, gzipSync } from 'node:zlib'
 import { computeCID } from '@wispplace/atproto-utils'
 import { MAX_BLOB_SIZE } from '@wispplace/constants'
 import { casKey } from '@wispplace/fs-utils'
-
-const previousGzipProcessingConcurrency = process.env.HOSTING_GZIP_PROCESSING_CONCURRENCY
-process.env.HOSTING_GZIP_PROCESSING_CONCURRENCY = '2'
+import {
+	applyCacheInvalidationForTests,
+	isSiteUpdating,
+	markSiteUpdating,
+	resetUpdatingSitesForTests,
+} from './cache-invalidation'
+import { cache } from './cache-manager'
+import { createFileServing, type GzipOperations, SOURCE_CID_MISMATCH_TTL_MS } from './file-serving'
+import { createHtmlPrewarm } from './html-prewarm'
+import { siteNotFoundReason } from './request-visibility'
+import { StorageUnavailableError } from './storage'
+import { unavailableLog } from './unavailable-log'
 
 // Fake storage shared across tests; reset in beforeEach
 type FakeEntry = {
@@ -18,20 +27,6 @@ type FakeEntry = {
 	useManifestSourceCid?: boolean
 	metadataSize?: number
 }
-class TestStorageUnavailableError extends Error {
-	constructor(
-		readonly operation = 'getWithMetadata',
-		readonly kind = 'timeout',
-	) {
-		super('Storage temporarily unavailable')
-		this.name = 'StorageUnavailableError'
-	}
-}
-
-function isTestStorageUnavailableError(error: unknown): error is TestStorageUnavailableError {
-	return error instanceof TestStorageUnavailableError
-}
-
 type FakeReadOutcome = FakeEntry | null | Error
 
 const storageData = new Map<string, FakeEntry>()
@@ -182,13 +177,15 @@ const fakeStorage = {
 				createdAt: new Date(),
 				lastAccessed: new Date(),
 				accessCount: 0,
+				compressed: false,
 				checksum: entry.checksum ?? 'test-checksum',
+				// Absent mimeType/encoding stay explicit undefined, which the tier types do not model.
 				customMetadata: {
 					...(manifestSourceCid ? { sourceCid: manifestSourceCid } : {}),
 					...entry.customMetadata,
 					mimeType: entry.mimeType,
 					encoding: entry.encoding,
-				},
+				} as Record<string, string>,
 			},
 			source: entry.source ?? ('cold' as const),
 		}
@@ -196,132 +193,79 @@ const fakeStorage = {
 	async *listKeys(_prefix?: string): AsyncGenerator<string> {},
 }
 
-const noopTier = {
-	async get() {
-		return null
+const prewarm = createHtmlPrewarm({ storage: fakeStorage })
+const fakeGzipOperations: GzipOperations = {
+	async compress(data: Uint8Array) {
+		gzipWorkState.compressCalls++
+		return await runFakeGzipWork(() => new Uint8Array(gzipSync(Buffer.from(data))))
 	},
-	async getWithMetadata() {
-		return null
+	async decompress(data: Uint8Array, maxOutputBytes: number) {
+		gzipWorkState.decompressCalls++
+		return await runFakeGzipWork(() => {
+			if (gzipWorkState.forceDecompressLimitError) throw new TestDecompressionLimitError()
+			if (!isTestGzip(data)) throw new Error('Invalid gzip data: missing magic bytes')
+			const output = gunzipSync(Buffer.from(data))
+			if (output.byteLength > maxOutputBytes) throw new TestDecompressionLimitError()
+			return output
+		})
 	},
-	async set() {},
-	async delete() {},
-	async deleteMany() {},
-	async exists() {
-		return false
+	async measureDecompressedSize(data: Uint8Array, maxOutputBytes: number) {
+		gzipWorkState.measureCalls++
+		return await runFakeGzipWork(() => {
+			if (gzipWorkState.forceMeasureLimitError) throw new TestDecompressionLimitError()
+			if (!isTestGzip(data)) throw new Error('Invalid gzip data: missing magic bytes')
+			const output = gunzipSync(Buffer.from(data))
+			if (output.byteLength > maxOutputBytes) throw new TestDecompressionLimitError()
+			return output.byteLength
+		})
 	},
-	async *listKeys() {},
-	async getMetadata() {
-		return null
-	},
-	async setMetadata() {},
-	async getStats() {
-		return { entries: 0, sizeBytes: 0 }
-	},
-	async clear() {},
 }
 
-mock.module('./storage', () => ({
-	storage: fakeStorage,
-	hotTier: noopTier,
-	warmTier: undefined,
-	StorageUnavailableError: TestStorageUnavailableError,
-	isStorageUnavailableError: isTestStorageUnavailableError,
-	addPublicSourceCidIfChecksumMatches: async (key: string, checksum: string, sourceCid: string) => {
-		legacyMetadataHealCalls.push({ key, checksum, sourceCid })
-		if (legacyMetadataHealResult instanceof Error) throw legacyMetadataHealResult
-		return legacyMetadataHealResult
-	},
-	evictPublicCacheKey: async (key: string) => {
-		evictedPublicCacheKeys.push(key)
-		if (evictPublicCacheKeyFailure) throw evictPublicCacheKeyFailure
-		if (evictPublicCacheKeyGate) {
-			evictPublicCacheKeyStarted?.()
-			evictPublicCacheKeyStarted = null
-			await evictPublicCacheKeyGate
-		}
-	},
-	getStorageConfig: () => ({}),
-}))
-mock.module('./db', () => ({
-	getSiteCache: async () => {
-		const fileCids = currentFileCids()
-		return fileCids
-			? {
-					did: DID,
-					rkey: RKEY,
-					record_cid: 'record-cid',
-					file_cids: fileCids,
-					file_objects: siteFileObjects(fileCids),
-					cached_at: 0,
-					updated_at: 0,
-					absent_since: siteAbsentSince,
-				}
-			: null
-	},
-	getSiteSettingsCache: async () => null,
-}))
-mock.module('./utils', () => ({
-	getCachedSettings: async () => null,
-}))
-mock.module('./revalidate-metrics', () => ({
-	recordStorageMiss: (path: string) => recordedStorageMisses.push(path),
-}))
-mock.module('./revalidate-queue', () => ({
-	enqueueRevalidate: async (did: string, rkey: string, reason: string) => {
-		revalidateCalls.push({ did, rkey, reason })
-		return { enqueued: true, result: 'enqueued' as const }
-	},
-	closeRevalidateQueue: async () => {},
-}))
-const { cache } = await import('./cache-manager')
-const { resetHtmlHotCacheWarmupForTests } = await import('./html-prewarm')
-const { applyCacheInvalidationForTests, markSiteUpdating, resetUpdatingSitesForTests } = await import(
-	'./cache-invalidation'
-)
-const { unavailableLog } = await import('./unavailable-log')
-const { siteNotFoundReason } = await import('./request-visibility')
-const {
-	serveFileInternal,
-	serveFileInternalWithRewrite,
-	serveFromCache,
-	serveFromCacheWithRewrite,
-	setGzipOperationsForTests,
-	SOURCE_CID_MISMATCH_TTL_MS,
-} = await import('./file-serving')
-if (previousGzipProcessingConcurrency === undefined) {
-	delete process.env.HOSTING_GZIP_PROCESSING_CONCURRENCY
-} else {
-	process.env.HOSTING_GZIP_PROCESSING_CONCURRENCY = previousGzipProcessingConcurrency
-}
-
-function installFakeGzipOperations() {
-	setGzipOperationsForTests({
-		async compress(data: Uint8Array) {
-			gzipWorkState.compressCalls++
-			return await runFakeGzipWork(() => new Uint8Array(gzipSync(Buffer.from(data))))
+const { serveFileInternal, serveFileInternalWithRewrite, serveFromCache, serveFromCacheWithRewrite } =
+	createFileServing({
+		storage: fakeStorage,
+		addPublicSourceCidIfChecksumMatches: async (key, checksum, sourceCid) => {
+			legacyMetadataHealCalls.push({ key, checksum, sourceCid })
+			if (legacyMetadataHealResult instanceof Error) throw legacyMetadataHealResult
+			return legacyMetadataHealResult
 		},
-		async decompress(data: Uint8Array, maxOutputBytes: number) {
-			gzipWorkState.decompressCalls++
-			return await runFakeGzipWork(() => {
-				if (gzipWorkState.forceDecompressLimitError) throw new TestDecompressionLimitError()
-				if (!isTestGzip(data)) throw new Error('Invalid gzip data: missing magic bytes')
-				const output = gunzipSync(Buffer.from(data))
-				if (output.byteLength > maxOutputBytes) throw new TestDecompressionLimitError()
-				return output
-			})
+		evictPublicCacheKey: async (key) => {
+			evictedPublicCacheKeys.push(key)
+			if (evictPublicCacheKeyFailure) throw evictPublicCacheKeyFailure
+			if (evictPublicCacheKeyGate) {
+				evictPublicCacheKeyStarted?.()
+				evictPublicCacheKeyStarted = null
+				await evictPublicCacheKeyGate
+			}
 		},
-		async measureDecompressedSize(data: Uint8Array, maxOutputBytes: number) {
-			gzipWorkState.measureCalls++
-			return await runFakeGzipWork(() => {
-				if (gzipWorkState.forceMeasureLimitError) throw new TestDecompressionLimitError()
-				if (!isTestGzip(data)) throw new Error('Invalid gzip data: missing magic bytes')
-				const output = gunzipSync(Buffer.from(data))
-				if (output.byteLength > maxOutputBytes) throw new TestDecompressionLimitError()
-				return output.byteLength
-			})
+		getSiteCache: async () => {
+			const fileCids = currentFileCids()
+			return fileCids
+				? {
+						did: DID,
+						rkey: RKEY,
+						record_cid: 'record-cid',
+						file_cids: fileCids,
+						file_objects: siteFileObjects(fileCids),
+						cached_at: 0,
+						updated_at: 0,
+						absent_since: siteAbsentSince,
+					}
+				: null
 		},
+		getCachedSettings: async () => null,
+		enqueueRevalidate: async (did, rkey, reason) => {
+			revalidateCalls.push({ did, rkey, reason })
+			return { result: 'enqueued' }
+		},
+		recordStorageMiss: (path) => {
+			recordedStorageMisses.push(path)
+		},
+		isSiteUpdating,
+		triggerSiteHtmlHotCacheWarmup: prewarm.trigger,
+		gzipOperations: fakeGzipOperations,
+		gzipProcessingConcurrency: 2,
 	})
-}
 
 const DID = 'did:plc:test'
 const RKEY = 'hydrant-docs'
@@ -365,11 +309,8 @@ function resetServingState() {
 	cache.clear('siteFiles')
 	cache.clear('sourceCidMismatches')
 	resetGzipWorkState()
-	installFakeGzipOperations()
-	resetHtmlHotCacheWarmupForTests()
+	prewarm.resetAll()
 }
-
-afterEach(() => setGzipOperationsForTests())
 
 describe('serveFileInternal directory-index fallback for extensioned paths', () => {
 	beforeEach(resetServingState)
@@ -653,7 +594,7 @@ describe('storage availability responses', () => {
 
 	test('returns no-store 503 without repair for a transient expected-file read failure', async () => {
 		siteFileCids = { 'unavailable.txt': 'expected-cid' }
-		queueStorageReads('unavailable.txt', [new TestStorageUnavailableError('getWithMetadata', 'timeout')])
+		queueStorageReads('unavailable.txt', [new StorageUnavailableError('getWithMetadata', 'timeout')])
 
 		const response = await serveFromCache(DID, RKEY, 'unavailable.txt', 'https://example.com/unavailable.txt', {
 			accept: 'application/octet-stream',
@@ -676,7 +617,7 @@ describe('storage availability responses', () => {
 				source: 'warm',
 				customMetadata: { sourceCid: 'old-cid' },
 			},
-			new TestStorageUnavailableError('getWithMetadata', 'circuit-open'),
+			new StorageUnavailableError('getWithMetadata', 'circuit-open'),
 		])
 
 		const response = await serveFromCache(
@@ -703,7 +644,7 @@ describe('storage availability responses', () => {
 				source: 'warm',
 				customMetadata: { sourceCid: 'old-cid' },
 			},
-			new TestStorageUnavailableError('getWithMetadata', 'timeout'),
+			new StorageUnavailableError('getWithMetadata', 'timeout'),
 		])
 
 		const unavailable = await serveFromCache(DID, RKEY, 'retry-recovery.txt', 'https://example.com/retry-recovery.txt')
@@ -723,7 +664,7 @@ describe('storage availability responses', () => {
 
 	test('returns no-store 503 instead of ignoring a transient _redirects read failure', async () => {
 		siteFileCids = { _redirects: 'redirects-cid' }
-		failStorageGet('_redirects', new TestStorageUnavailableError('get', 'timeout'))
+		failStorageGet('_redirects', new StorageUnavailableError('get', 'timeout'))
 
 		const response = await serveFromCache(DID, RKEY, 'old', 'https://example.com/old')
 
@@ -1694,11 +1635,11 @@ describe('fail-closed 503 visibility', () => {
 
 	test('names a storage outage on a file read and on a _redirects read', async () => {
 		siteFileCids = { 'unavailable.txt': 'expected-cid' }
-		queueStorageReads('unavailable.txt', [new TestStorageUnavailableError('getWithMetadata', 'timeout')])
+		queueStorageReads('unavailable.txt', [new StorageUnavailableError('getWithMetadata', 'timeout')])
 		expect(await failClosedCauses(() => serve('unavailable.txt'))).toEqual([[DID, RKEY, 'storage-unavailable', 'none']])
 
 		siteFileCids = { _redirects: 'redirects-cid' }
-		failStorageGet('_redirects', new TestStorageUnavailableError('get', 'timeout'))
+		failStorageGet('_redirects', new StorageUnavailableError('get', 'timeout'))
 		expect(await failClosedCauses(() => serve('old'))).toEqual([[DID, RKEY, 'storage-unavailable', 'none']])
 	})
 

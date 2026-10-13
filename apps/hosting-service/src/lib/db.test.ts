@@ -1,14 +1,13 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { CAS_SCHEMA_STATEMENTS } from '@wispplace/database'
 import postgres from 'postgres'
+import { CacheManager } from './cache-manager'
+import { type ClosableDatabasePool, createDatabasePoolCloser, createHostingDb } from './db'
 
-// The module binds its connection at import, so point it at a throwaway schema first:
+// The lookups read through their own pool on a throwaway schema:
 //   WISP_TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/wisp bun test src/lib/db.test.ts
 const url = process.env.WISP_TEST_DATABASE_URL
 const schema = `hosting_db_${Math.random().toString(36).slice(2, 10)}`
-if (url) process.env.DATABASE_URL = `${url}${url.includes('?') ? '&' : '?'}search_path=${schema}`
-const { createDatabasePoolCloser, getSiteCache } = await import('./db')
-type ClosableDatabasePool = Parameters<typeof createDatabasePoolCloser>[0]
 
 describe('database pool closer', () => {
 	test('ends the pool once across repeated calls', async () => {
@@ -46,9 +45,16 @@ const suite = url ? describe : describe.skip
 
 suite('getSiteCache (postgres)', () => {
 	let admin: postgres.Sql
+	let reader: postgres.Sql
+	let getSiteCache: ReturnType<typeof createHostingDb>['getSiteCache']
 
 	beforeAll(async () => {
 		admin = postgres(url as string, { max: 1, onnotice: () => {} })
+		reader = postgres(`${url}${url?.includes('?') ? '&' : '?'}search_path=${schema}`, { max: 1 })
+		;({ getSiteCache } = createHostingDb({
+			sql: reader,
+			cache: new CacheManager({ domains: {}, customDomains: {}, settings: {}, siteCache: {} }),
+		}))
 		await admin.unsafe(`CREATE SCHEMA ${schema}`)
 		await admin.unsafe(`SET search_path TO ${schema}`)
 		await admin.unsafe(
@@ -58,6 +64,7 @@ suite('getSiteCache (postgres)', () => {
 	})
 
 	afterAll(async () => {
+		await reader.end()
 		await admin.unsafe(`DROP SCHEMA ${schema} CASCADE`)
 		await admin.end()
 	})

@@ -14,16 +14,11 @@ import {
 	startRedisKeepalive,
 } from '@wispplace/constants'
 import { createLogger } from '@wispplace/observability'
-import Redis from 'ioredis'
+import Redis, { type RedisOptions } from 'ioredis'
 import { config } from '../config'
 import { isSiteDeleteTombstoneReason } from './revalidate-queue'
 
 const logger = createLogger('firehose-service')
-
-let publisher: Redis | null = null
-let stopPublisherKeepalive: (() => void) | null = null
-let publisherReadyTimeoutMs = 5_000
-let loggedMissingRedis = false
 
 export interface CacheInvalidationPublisherReadiness {
 	readonly status: string
@@ -55,89 +50,6 @@ export async function waitForCacheInvalidationPublisherReady(
 		redis.once('ready', onReady)
 		redis.once('error', onError)
 	})
-}
-
-function getPublisher(): Redis | null {
-	if (!config.redisUrl) {
-		if (!loggedMissingRedis) {
-			logger.warn('[CacheInvalidation] REDIS_URL not set; cache invalidation publishing disabled')
-			loggedMissingRedis = true
-		}
-		return null
-	}
-
-	if (!publisher) {
-		logger.info('[CacheInvalidation] Connecting to Redis for publishing')
-		const commandTimeout = Math.max(100, Math.min(5_000, Math.floor(config.leaderTtlMs / 4)))
-		publisherReadyTimeoutMs = commandTimeout
-		publisher = new Redis(config.redisUrl, {
-			maxRetriesPerRequest: 0,
-			enableReadyCheck: true,
-			enableOfflineQueue: false,
-			connectTimeout: commandTimeout,
-			commandTimeout,
-		})
-
-		publisher.on('error', (err) => {
-			logger.error('[CacheInvalidation] Redis error', err)
-		})
-
-		publisher.on('ready', () => {
-			logger.info('[CacheInvalidation] Redis publisher connected')
-		})
-
-		// Publishes are rare, so without a ping haproxy cuts the idle connection
-		// every 180 s and the next publish has to wait for the reconnect.
-		const created = publisher
-		stopPublisherKeepalive = startRedisKeepalive(() => (created.status === 'ready' ? created.ping() : undefined), {
-			onError: (err) =>
-				logger.warn('[CacheInvalidation] Redis publisher keepalive failed', { errorKind: revalidationErrorKind(err) }),
-		})
-	}
-
-	return publisher
-}
-
-type CacheInvalidationPublisher = CacheInvalidationPublisherReadiness &
-	Parameters<typeof publishCacheInvalidationEvent>[0]
-
-/** Require durable insertion and publication before reporting a repair complete. */
-export async function publishCacheInvalidationStrict(
-	did: string,
-	rkey: string,
-	action: 'updating' | 'update' | 'delete' | 'settings',
-	token?: string,
-	redis: CacheInvalidationPublisher | null = getPublisher(),
-): Promise<string> {
-	if (!redis) throw new Error('Cache invalidation requires Redis')
-	await waitForCacheInvalidationPublisherReady(redis, publisherReadyTimeoutMs)
-	const streamId = await publishCacheInvalidationEvent(
-		redis,
-		{ did, rkey, action, token },
-		DEFAULT_CACHE_INVALIDATION_CHANNEL,
-		config.cacheInvalidationStream,
-		config.cacheInvalidationStreamMaxLen,
-	)
-	if (!/^\d+-\d+$/.test(streamId)) throw new Error('Cache invalidation did not return a stream ID')
-	logger.debug(
-		`[CacheInvalidation] Publishing ${action} for ${did}/${rkey} to ${DEFAULT_CACHE_INVALIDATION_CHANNEL} (stream ${streamId})`,
-	)
-	return streamId
-}
-
-export async function publishCacheInvalidation(
-	did: string,
-	rkey: string,
-	action: 'updating' | 'update' | 'delete' | 'settings',
-	token?: string,
-): Promise<void> {
-	const redis = getPublisher()
-	if (!redis) return
-	try {
-		await publishCacheInvalidationStrict(did, rkey, action, token, redis)
-	} catch (err) {
-		logger.error('[CacheInvalidation] Failed to publish', err)
-	}
 }
 
 type RevalidationDedupeCategory = 'delete-tombstone' | 'settings' | 'rewrite-miss' | 'storage-miss' | 'full-repair'
@@ -246,30 +158,143 @@ export async function enqueueSiteRevalidationWithRedis(
 	}
 }
 
-export async function enqueueSiteRevalidation(
-	did: string,
-	rkey: string,
-	reason: string,
-	sourceVersion = '',
-): Promise<SiteRevalidationEnqueueResult> {
-	const redis = getPublisher()
-	if (!redis) return 'unavailable'
-	return enqueueSiteRevalidationWithRedis(redis, did, rkey, reason, sourceVersion)
+type CacheInvalidationAction = 'updating' | 'update' | 'delete' | 'settings'
+
+type CacheInvalidationPublisher = CacheInvalidationPublisherReadiness &
+	Parameters<typeof publishCacheInvalidationEvent>[0]
+
+/** The commands the shared publisher connection needs; ioredis satisfies it. */
+export interface CacheInvalidationRedis extends CacheInvalidationPublisher, RevalidationQueueClient {
+	on(event: string, listener: (...args: unknown[]) => void): unknown
+	ping(): PromiseLike<unknown>
+	quit(): PromiseLike<unknown>
+}
+
+export interface CacheInvalidationPublisherDependencies {
+	/** Read at call time, so the publisher stays disabled until REDIS_URL is configured. */
+	readonly config: Pick<
+		typeof config,
+		'redisUrl' | 'leaderTtlMs' | 'cacheInvalidationStream' | 'cacheInvalidationStreamMaxLen'
+	>
+	readonly createRedis: (redisUrl: string, options: RedisOptions) => CacheInvalidationRedis
 }
 
 /**
- * Record a successfully reconciled repo revision and clear only an older DLQ
- * fence. ATProto repo revisions are monotonic TIDs, so relay replays of the
- * same or an older event cannot reopen hosting repair work.
+ * One lazily connected publisher connection and the operations that share it.
+ * The module exports the instance bound to the service config and ioredis.
  */
-export async function recordSiteReconciliation(did: string, rkey: string, revision: string): Promise<boolean> {
-	if (!config.redisUrl) return true
-	const redis = getPublisher()
-	if (!redis || !/^[a-z2-7]{13}$/.test(revision)) return false
-	try {
+export function createCacheInvalidationPublisher({ config, createRedis }: CacheInvalidationPublisherDependencies) {
+	let publisher: CacheInvalidationRedis | null = null
+	let stopPublisherKeepalive: (() => void) | null = null
+	let publisherReadyTimeoutMs = 5_000
+	let loggedMissingRedis = false
+
+	function getPublisher(): CacheInvalidationRedis | null {
+		if (!config.redisUrl) {
+			if (!loggedMissingRedis) {
+				logger.warn('[CacheInvalidation] REDIS_URL not set; cache invalidation publishing disabled')
+				loggedMissingRedis = true
+			}
+			return null
+		}
+
+		if (!publisher) {
+			logger.info('[CacheInvalidation] Connecting to Redis for publishing')
+			const commandTimeout = Math.max(100, Math.min(5_000, Math.floor(config.leaderTtlMs / 4)))
+			publisherReadyTimeoutMs = commandTimeout
+			publisher = createRedis(config.redisUrl, {
+				maxRetriesPerRequest: 0,
+				enableReadyCheck: true,
+				enableOfflineQueue: false,
+				connectTimeout: commandTimeout,
+				commandTimeout,
+			})
+
+			publisher.on('error', (err: unknown) => {
+				logger.error('[CacheInvalidation] Redis error', err)
+			})
+
+			publisher.on('ready', () => {
+				logger.info('[CacheInvalidation] Redis publisher connected')
+			})
+
+			// Publishes are rare, so without a ping haproxy cuts the idle connection
+			// every 180 s and the next publish has to wait for the reconnect.
+			const created = publisher
+			stopPublisherKeepalive = startRedisKeepalive(() => (created.status === 'ready' ? created.ping() : undefined), {
+				onError: (err) =>
+					logger.warn('[CacheInvalidation] Redis publisher keepalive failed', {
+						errorKind: revalidationErrorKind(err),
+					}),
+			})
+		}
+
+		return publisher
+	}
+
+	/** Require durable insertion and publication before reporting a repair complete. */
+	async function publishCacheInvalidationStrict(
+		did: string,
+		rkey: string,
+		action: CacheInvalidationAction,
+		token?: string,
+		redis: CacheInvalidationPublisher | null = getPublisher(),
+	): Promise<string> {
+		if (!redis) throw new Error('Cache invalidation requires Redis')
 		await waitForCacheInvalidationPublisherReady(redis, publisherReadyTimeoutMs)
-		const result = await redis.eval(
-			`local current = redis.call('GET', KEYS[1])
+		const streamId = await publishCacheInvalidationEvent(
+			redis,
+			{ did, rkey, action, token },
+			DEFAULT_CACHE_INVALIDATION_CHANNEL,
+			config.cacheInvalidationStream,
+			config.cacheInvalidationStreamMaxLen,
+		)
+		if (!/^\d+-\d+$/.test(streamId)) throw new Error('Cache invalidation did not return a stream ID')
+		logger.debug(
+			`[CacheInvalidation] Publishing ${action} for ${did}/${rkey} to ${DEFAULT_CACHE_INVALIDATION_CHANNEL} (stream ${streamId})`,
+		)
+		return streamId
+	}
+
+	async function publishCacheInvalidation(
+		did: string,
+		rkey: string,
+		action: CacheInvalidationAction,
+		token?: string,
+	): Promise<void> {
+		const redis = getPublisher()
+		if (!redis) return
+		try {
+			await publishCacheInvalidationStrict(did, rkey, action, token, redis)
+		} catch (err) {
+			logger.error('[CacheInvalidation] Failed to publish', err)
+		}
+	}
+
+	async function enqueueSiteRevalidation(
+		did: string,
+		rkey: string,
+		reason: string,
+		sourceVersion = '',
+	): Promise<SiteRevalidationEnqueueResult> {
+		const redis = getPublisher()
+		if (!redis) return 'unavailable'
+		return enqueueSiteRevalidationWithRedis(redis, did, rkey, reason, sourceVersion)
+	}
+
+	/**
+	 * Record a successfully reconciled repo revision and clear only an older DLQ
+	 * fence. ATProto repo revisions are monotonic TIDs, so relay replays of the
+	 * same or an older event cannot reopen hosting repair work.
+	 */
+	async function recordSiteReconciliation(did: string, rkey: string, revision: string): Promise<boolean> {
+		if (!config.redisUrl) return true
+		const redis = getPublisher()
+		if (!redis || !/^[a-z2-7]{13}$/.test(revision)) return false
+		try {
+			await waitForCacheInvalidationPublisherReady(redis, publisherReadyTimeoutMs)
+			const result = await redis.eval(
+				`local current = redis.call('GET', KEYS[1])
 if current and current >= ARGV[1] then return {0, current, 0} end
 redis.call('SET', KEYS[1], ARGV[1])
 local quarantine = redis.call('GET', KEYS[2])
@@ -278,28 +303,45 @@ if quarantine and ARGV[1] > quarantine then
   return {1, ARGV[1], 1}
 end
 return {1, ARGV[1], 0}`,
-			2,
-			revalidationSiteVersionKey(did, rkey),
-			revalidationQuarantineKey(did, rkey),
-			revision,
-		)
-		return Array.isArray(result) && (result[0] === 0 || result[0] === 1)
-	} catch (error) {
-		logger.error('[Revalidate] Failed to record successful site reconciliation', undefined, {
-			did,
-			rkey,
-			errorKind: revalidationErrorKind(error),
-		})
-		return false
+				2,
+				revalidationSiteVersionKey(did, rkey),
+				revalidationQuarantineKey(did, rkey),
+				revision,
+			)
+			return Array.isArray(result) && (result[0] === 0 || result[0] === 1)
+		} catch (error) {
+			logger.error('[Revalidate] Failed to record successful site reconciliation', undefined, {
+				did,
+				rkey,
+				errorKind: revalidationErrorKind(error),
+			})
+			return false
+		}
+	}
+
+	async function closeCacheInvalidationPublisher(): Promise<void> {
+		if (publisher) {
+			const toClose = publisher
+			publisher = null
+			stopPublisherKeepalive?.()
+			stopPublisherKeepalive = null
+			await toClose.quit()
+		}
+	}
+
+	return {
+		publishCacheInvalidationStrict,
+		publishCacheInvalidation,
+		enqueueSiteRevalidation,
+		recordSiteReconciliation,
+		closeCacheInvalidationPublisher,
 	}
 }
 
-export async function closeCacheInvalidationPublisher(): Promise<void> {
-	if (publisher) {
-		const toClose = publisher
-		publisher = null
-		stopPublisherKeepalive?.()
-		stopPublisherKeepalive = null
-		await toClose.quit()
-	}
-}
+export const {
+	publishCacheInvalidationStrict,
+	publishCacheInvalidation,
+	enqueueSiteRevalidation,
+	recordSiteReconciliation,
+	closeCacheInvalidationPublisher,
+} = createCacheInvalidationPublisher({ config, createRedis: (redisUrl, options) => new Redis(redisUrl, options) })

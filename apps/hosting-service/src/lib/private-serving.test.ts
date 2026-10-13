@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test'
+import { beforeEach, describe, expect, test } from 'bun:test'
 import { PRIVATE_SHARE_QUERY_PARAM } from '@wispplace/constants'
 import {
 	hashSecret,
@@ -8,6 +8,7 @@ import {
 	sessionCookieName,
 } from '@wispplace/private-sites'
 import { Hono } from 'hono'
+import { createPrivateServing, privateNotFound } from './private-serving'
 import type {
 	AuthorizedPrivateSite,
 	PrivateHandoffExchangeInput,
@@ -33,35 +34,32 @@ let loadAuthorized: (siteId: string, secretHash: string) => Promise<AuthorizedPr
 let readStorage: (key: string) => Promise<Uint8Array | null>
 let touchGrantedShare: (shareId: string) => Promise<void>
 
-mock.module('./private-sites-db', () => ({
-	exchangePrivateHandoff: (input: PrivateHandoffExchangeInput) => {
-		calls.handoffs.push(input)
-		return exchangeHandoff(input)
+const { servePrivateSite } = createPrivateServing({
+	db: {
+		exchangePrivateHandoff: (input: PrivateHandoffExchangeInput) => {
+			calls.handoffs.push(input)
+			return exchangeHandoff(input)
+		},
+		exchangePrivateShareToken: (input: PrivateShareTokenExchangeInput) => {
+			calls.shares.push(input)
+			return exchangeShare(input)
+		},
+		loadAuthorizedPrivateSite: (siteId: string, secretHash: string) => {
+			calls.loads.push({ siteId, secretHash })
+			return loadAuthorized(siteId, secretHash)
+		},
+		touchShare: (shareId: string) => {
+			calls.touchedShares.push(shareId)
+			return touchGrantedShare(shareId)
+		},
 	},
-	exchangePrivateShareToken: (input: PrivateShareTokenExchangeInput) => {
-		calls.shares.push(input)
-		return exchangeShare(input)
-	},
-	loadAuthorizedPrivateSite: (siteId: string, secretHash: string) => {
-		calls.loads.push({ siteId, secretHash })
-		return loadAuthorized(siteId, secretHash)
-	},
-	touchShare: (shareId: string) => {
-		calls.touchedShares.push(shareId)
-		return touchGrantedShare(shareId)
-	},
-}))
-
-mock.module('./storage', () => ({
-	privateStorage: {
+	storage: {
 		get: (key: string) => {
 			calls.storageKeys.push(key)
 			return readStorage(key)
 		},
 	},
-}))
-
-const { privateNotFound, servePrivateSite } = await import('./private-serving')
+})
 
 const file = (path: string, mimeType: string | null = 'text/plain') => ({ path, size: 4, mimeType })
 const readyAuthorized = (files: AuthorizedPrivateSite['files']): AuthorizedPrivateSite => ({

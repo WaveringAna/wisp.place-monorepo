@@ -8,24 +8,12 @@
  * including streamed responses that carry no Content-Length.
  */
 
-// The loopback PDS escape hatch is evaluated when ./cache-writer is imported,
-// so the dev gates must be in place before the module graph loads. bun test
-// --isolate gives this file its own module registry.
-process.env.NODE_ENV = 'development'
-process.env.LOCAL_DEV = 'true'
-process.env.WISP_ALLOW_LOCALHOST_FETCH = '1'
-// cache-writer's import graph resolves the storage config; development mode
-// needs the disk-storage stand-in because no S3 bucket is configured here.
-process.env.FIREHOSE_ALLOW_DISK_STORAGE = 'true'
-
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { createServer, type Server } from 'node:http'
 import type { SubfsSubject } from '@wispplace/atproto-utils'
+import { fetchSubfsRecord, MAX_PDS_RECORD_RESPONSE_BYTES } from './cache-writer'
+import { allowLoopbackFetch } from './local-pds.fixture'
 import { createRevalidationResourceContext } from './revalidate-resources'
-
-// Static imports are hoisted above the env setup above, so the module under
-// test must be imported dynamically once the dev gates are visible to it.
-const { MAX_PDS_RECORD_RESPONSE_BYTES, fetchSubfsRecord } = await import('./cache-writer')
 
 const ABOVE_LEGACY_64_KIB = 70 * 1024
 const ABOVE_1_MIB = MAX_PDS_RECORD_RESPONSE_BYTES + 1024
@@ -103,13 +91,16 @@ function startPdsServer(): Promise<{ server: Server; url: string }> {
 
 describe('PDS getRecord response size boundaries', () => {
 	let pds: { server: Server; url: string }
+	let restoreLoopbackFetch: () => void
 
 	beforeAll(async () => {
+		restoreLoopbackFetch = allowLoopbackFetch()
 		pds = await startPdsServer()
 	})
 
 	afterAll(() => {
 		pds.server.close()
+		restoreLoopbackFetch()
 	})
 
 	function resolveEndpoint(): Promise<string> {
@@ -123,6 +114,7 @@ describe('PDS getRecord response size boundaries', () => {
 				{ ...subject, rkey: `record-${bytes}${chunked ? '-chunked' : ''}` },
 				resolveEndpoint,
 				resources,
+				{ allowLocalhost: true },
 			)
 		} finally {
 			resources.close()

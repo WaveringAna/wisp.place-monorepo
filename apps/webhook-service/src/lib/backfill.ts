@@ -36,6 +36,21 @@ const MAX_OWNERS_PER_PASS = 10_000
 const DEFAULT_OWNER_CONCURRENCY = 1
 const MAX_OWNER_CONCURRENCY = 4
 
+/** The durable owner-snapshot fence one reconciliation pass writes through. */
+export interface OwnerReconciliationStore {
+	beginOwnerReconciliation: typeof beginOwnerReconciliation
+	applyWebhookSnapshotPage: typeof applyWebhookSnapshotPage
+	completeOwnerReconciliation: typeof completeOwnerReconciliation
+	failOwnerReconciliation: typeof failOwnerReconciliation
+}
+
+const databaseReconciliationStore: OwnerReconciliationStore = {
+	beginOwnerReconciliation,
+	applyWebhookSnapshotPage,
+	completeOwnerReconciliation,
+	failOwnerReconciliation,
+}
+
 type PageHandler = (records: readonly WebhookSnapshotRecord[]) => Promise<void> | void
 
 interface ListRecordsResponse {
@@ -67,6 +82,8 @@ export interface StartupBackfillOptions {
 	onOwnerTransition?: OwnerTransitionCallback
 	/** Bounded keyset page source; injectable for tests and explicit continuation jobs. */
 	listOwnerPage?: (after: string | undefined, limit: number) => Promise<readonly string[]>
+	/** Owner-snapshot fence; production uses the database. */
+	store?: OwnerReconciliationStore
 	ownerPageSize?: number
 	maxOwnersPerPass?: number
 	concurrency?: number
@@ -354,12 +371,13 @@ async function notifyOwnerTransition(
 }
 
 async function markOwnerFailed(
+	store: OwnerReconciliationStore,
 	token: OwnerReconciliationToken,
 	did: string,
 	callback: OwnerTransitionCallback | undefined,
 ): Promise<void> {
 	try {
-		await failOwnerReconciliation(token)
+		await store.failOwnerReconciliation(token)
 	} catch {
 		throw new ReconciliationInfrastructureFailure()
 	}
@@ -367,6 +385,7 @@ async function markOwnerFailed(
 }
 
 async function reconcileOwner(
+	store: OwnerReconciliationStore,
 	did: string,
 	fetcher: IdentityGetFetcher,
 	onOwnerTransition: OwnerTransitionCallback | undefined,
@@ -374,7 +393,7 @@ async function reconcileOwner(
 ): Promise<number> {
 	let token: OwnerReconciliationToken
 	try {
-		token = await beginOwnerReconciliation(did)
+		token = await store.beginOwnerReconciliation(did)
 	} catch {
 		throw new ReconciliationInfrastructureFailure()
 	}
@@ -382,7 +401,7 @@ async function reconcileOwner(
 		await notifyOwnerTransition(did, 'scanning', onOwnerTransition)
 	} catch {
 		try {
-			await markOwnerFailed(token, did, onOwnerTransition)
+			await markOwnerFailed(store, token, did, onOwnerTransition)
 		} catch {
 			// The scan remains `scanning` (and therefore unmatchable) if the DB is down.
 		}
@@ -396,7 +415,7 @@ async function reconcileOwner(
 			async (records) => {
 				let result: { applied: boolean; upserted: number }
 				try {
-					result = await applyWebhookSnapshotPage(token, records)
+					result = await store.applyWebhookSnapshotPage(token, records)
 				} catch {
 					throw new ReconciliationInfrastructureFailure()
 				}
@@ -408,7 +427,7 @@ async function reconcileOwner(
 		)
 	} catch (error) {
 		if (error instanceof ReconciliationInfrastructureFailure) throw error
-		await markOwnerFailed(token, did, onOwnerTransition)
+		await markOwnerFailed(store, token, did, onOwnerTransition)
 		throw new OwnerScanFailure()
 	}
 
@@ -416,7 +435,7 @@ async function reconcileOwner(
 	try {
 		do {
 			if (signal?.aborted) throw new OwnerScanFailure()
-			complete = await completeOwnerReconciliation(token)
+			complete = await store.completeOwnerReconciliation(token)
 			if (!complete.applied) break
 			// Each DB call finalizes one bounded, timeout-protected transaction.
 			// Continue only after that durable batch commits, so a restart safely
@@ -424,21 +443,21 @@ async function reconcileOwner(
 		} while (!complete.complete)
 	} catch (error) {
 		if (error instanceof OwnerScanFailure) {
-			await markOwnerFailed(token, did, onOwnerTransition)
+			await markOwnerFailed(store, token, did, onOwnerTransition)
 			throw error
 		}
 		// A transient finalization failure should become retryable once the DB
 		// returns. If that write also fails, the stale-scanning recovery query
 		// eventually admits this owner after its grace period.
 		try {
-			await markOwnerFailed(token, did, onOwnerTransition)
+			await markOwnerFailed(store, token, did, onOwnerTransition)
 		} catch {
 			// Preserve the infrastructure failure without assuming DB availability.
 		}
 		throw new ReconciliationInfrastructureFailure()
 	}
 	if (!complete!.applied || !complete!.complete) {
-		await markOwnerFailed(token, did, onOwnerTransition)
+		await markOwnerFailed(store, token, did, onOwnerTransition)
 		throw new OwnerScanFailure()
 	}
 	await notifyOwnerTransition(did, 'complete', onOwnerTransition)
@@ -448,7 +467,13 @@ async function reconcileOwner(
 /** Retry one already-degraded owner. Infrastructure failures remain fatal to the caller. */
 async function retryFailedWebhookOwner(did: string, options: StartupBackfillOptions = {}): Promise<boolean> {
 	try {
-		await reconcileOwner(did, options.fetcher ?? backfillIdentityGet, options.onOwnerTransition, options.signal)
+		await reconcileOwner(
+			options.store ?? databaseReconciliationStore,
+			did,
+			options.fetcher ?? backfillIdentityGet,
+			options.onOwnerTransition,
+			options.signal,
+		)
 		return true
 	} catch (error) {
 		if (error instanceof ReconciliationInfrastructureFailure) throw error
@@ -460,6 +485,8 @@ export interface ReconciliationRetrySchedulerOptions {
 	fetcher?: IdentityGetFetcher
 	onOwnerTransition?: OwnerTransitionCallback
 	listFailedOwners?: (limit: number) => Promise<readonly string[]>
+	/** Owner-snapshot fence; production uses the database. */
+	store?: OwnerReconciliationStore
 	now?: () => number
 	random?: () => number
 	setTimer?: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>
@@ -527,6 +554,7 @@ class OwnerRetryScheduler implements ReconciliationRetryScheduler {
 	readonly #fetcher: IdentityGetFetcher
 	readonly #transition: OwnerTransitionCallback | undefined
 	readonly #listFailedOwners: (limit: number) => Promise<readonly string[]>
+	readonly #store: OwnerReconciliationStore
 	readonly #now: () => number
 	readonly #random: () => number
 	readonly #setTimer: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>
@@ -552,6 +580,7 @@ class OwnerRetryScheduler implements ReconciliationRetryScheduler {
 		this.#fetcher = options.fetcher ?? backfillIdentityGet
 		this.#transition = options.onOwnerTransition
 		this.#listFailedOwners = options.listFailedOwners ?? listFailedWebhookReconciliationOwners
+		this.#store = options.store ?? databaseReconciliationStore
 		this.#now = options.now ?? Date.now
 		this.#random = options.random ?? Math.random
 		this.#setTimer = options.setTimer ?? setTimeout
@@ -730,6 +759,7 @@ class OwnerRetryScheduler implements ReconciliationRetryScheduler {
 			const recovered = await retryFailedWebhookOwner(did, {
 				fetcher: this.#fetcher,
 				onOwnerTransition: this.#transition,
+				store: this.#store,
 				signal,
 			})
 			if (recovered) {
@@ -783,6 +813,7 @@ export async function runStartupBackfill(
 	const fetcher = options.fetcher ?? backfillIdentityGet
 	const onOwnerTransition = options.onOwnerTransition ?? callback
 	const listOwnerPage = options.listOwnerPage ?? listKnownWebhookOwnerDidsPage
+	const store = options.store ?? databaseReconciliationStore
 	const pageSize = boundedBackfillOption(
 		options.ownerPageSize,
 		DEFAULT_OWNER_PAGE_SIZE,
@@ -833,7 +864,7 @@ export async function runStartupBackfill(
 		await mapBounded(page, concurrency, async (did) => {
 			if (options.signal?.aborted) return
 			try {
-				found += await reconcileOwner(did, fetcher, onOwnerTransition, options.signal)
+				found += await reconcileOwner(store, did, fetcher, onOwnerTransition, options.signal)
 			} catch (error) {
 				if (error instanceof ReconciliationInfrastructureFailure) throw error
 				failed++

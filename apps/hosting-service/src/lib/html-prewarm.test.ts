@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test'
+import { beforeEach, describe, expect, test } from 'bun:test'
 import { casKey } from '@wispplace/fs-utils'
+import { createHtmlPrewarm } from './html-prewarm'
 
 const promotedKeys: string[] = []
 const failingKeys = new Set<string>()
@@ -44,14 +45,7 @@ const fakeStorage = {
 	},
 }
 
-mock.module('./storage', () => ({ storage: fakeStorage }))
-
-const {
-	resetHtmlHotCacheWarmupForTests,
-	resetSiteHtmlHotCacheWarmup,
-	triggerSiteHtmlHotCacheWarmup,
-	waitForSiteHtmlHotCacheWarmupForTests,
-} = await import('./html-prewarm')
+const prewarm = createHtmlPrewarm({ storage: fakeStorage })
 
 const DID = 'did:plc:test'
 const RKEY = 'site'
@@ -66,7 +60,7 @@ const objectsFor = (paths: readonly string[]) =>
 		}),
 	)
 const trigger = (did: string, rkey: string, paths: readonly string[]) =>
-	triggerSiteHtmlHotCacheWarmup(did, rkey, paths, objectsFor(paths))
+	prewarm.trigger(did, rkey, paths, objectsFor(paths))
 
 function warmup(paths: readonly string[]): Promise<void> {
 	return warmupSite(DID, RKEY, paths)
@@ -74,7 +68,7 @@ function warmup(paths: readonly string[]): Promise<void> {
 
 function warmupSite(did: string, rkey: string, paths: readonly string[]): Promise<void> {
 	trigger(did, rkey, paths)
-	return waitForSiteHtmlHotCacheWarmupForTests(did, rkey)
+	return prewarm.settled(did, rkey)
 }
 
 describe('HTML prewarm', () => {
@@ -85,7 +79,7 @@ describe('HTML prewarm', () => {
 		blockWarmupReads = false
 		blockedWarmupReads = 0
 		releaseWarmupReads.length = 0
-		resetHtmlHotCacheWarmupForTests()
+		prewarm.resetAll()
 	})
 
 	test('warms only HTML paths from the authoritative manifest without listing storage', async () => {
@@ -109,13 +103,13 @@ describe('HTML prewarm', () => {
 			listed++
 			return ['index.html']
 		}
-		triggerSiteHtmlHotCacheWarmup(DID, RKEY, paths, objectsFor(['index.html']))
-		await waitForSiteHtmlHotCacheWarmupForTests(DID, RKEY)
+		prewarm.trigger(DID, RKEY, paths, objectsFor(['index.html']))
+		await prewarm.settled(DID, RKEY)
 		expect(listed).toBe(1)
 		expect(promotedKeys).toEqual([key('index.html')])
 
 		// Already warm: later requests of the site must not pay for listing the manifest again.
-		for (let i = 0; i < 5; i++) triggerSiteHtmlHotCacheWarmup(DID, RKEY, paths, objectsFor(['index.html']))
+		for (let i = 0; i < 5; i++) prewarm.trigger(DID, RKEY, paths, objectsFor(['index.html']))
 		expect(listed).toBe(1)
 	})
 
@@ -145,7 +139,7 @@ describe('HTML prewarm', () => {
 		await warmup(['index.html'])
 		expect(promotedKeys).toHaveLength(1)
 
-		resetSiteHtmlHotCacheWarmup(DID, RKEY)
+		prewarm.resetSite(DID, RKEY)
 		await warmup(['index.html'])
 		expect(promotedKeys).toHaveLength(2)
 	})
@@ -157,19 +151,19 @@ describe('HTML prewarm', () => {
 		await Promise.resolve()
 		expect(blockedWarmupReads).toBe(2)
 
-		const first = waitForSiteHtmlHotCacheWarmupForTests(DID, 'active-0')
-		resetSiteHtmlHotCacheWarmup(DID, 'active-0')
+		const first = prewarm.settled(DID, 'active-0')
+		prewarm.resetSite(DID, 'active-0')
 
 		// Forgetting active work must not release its admission slot.
 		trigger(DID, 'skipped', ['index.html'])
-		resetSiteHtmlHotCacheWarmup(DID, 'skipped')
+		prewarm.resetSite(DID, 'skipped')
 		trigger(DID, 'skipped', ['index.html'])
 		await Promise.resolve()
 		expect(promotedKeys).toHaveLength(2)
 
 		for (const release of releaseWarmupReads.splice(0)) release()
 		await first
-		await waitForSiteHtmlHotCacheWarmupForTests(DID, 'active-1')
+		await prewarm.settled(DID, 'active-1')
 
 		await warmupSite(DID, 'skipped', ['index.html'])
 		expect(promotedKeys).toHaveLength(3)
@@ -180,13 +174,13 @@ describe('HTML prewarm', () => {
 		trigger(DID, RKEY, ['index.html'])
 		await Promise.resolve()
 		expect(blockedWarmupReads).toBe(1)
-		const stale = waitForSiteHtmlHotCacheWarmupForTests(DID, RKEY)
+		const stale = prewarm.settled(DID, RKEY)
 
-		resetSiteHtmlHotCacheWarmup(DID, RKEY)
+		prewarm.resetSite(DID, RKEY)
 		trigger(DID, RKEY, ['index.html'])
 		await Promise.resolve()
 		expect(blockedWarmupReads).toBe(2)
-		const fresh = waitForSiteHtmlHotCacheWarmupForTests(DID, RKEY)
+		const fresh = prewarm.settled(DID, RKEY)
 
 		// Resolve the stale read first. The fresh entry remains pending, so a
 		// request now must deduplicate rather than start a third read.
@@ -213,8 +207,8 @@ describe('HTML prewarm', () => {
 	})
 
 	test('legacy callers without a manifest do not trigger a storage scan', async () => {
-		triggerSiteHtmlHotCacheWarmup(DID, RKEY)
-		await waitForSiteHtmlHotCacheWarmupForTests(DID, RKEY)
+		prewarm.trigger(DID, RKEY)
+		await prewarm.settled(DID, RKEY)
 
 		expect(promotedKeys).toHaveLength(0)
 		expect(listKeysCalls).toBe(0)

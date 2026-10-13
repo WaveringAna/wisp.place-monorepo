@@ -1,8 +1,122 @@
 import type { CustomDomainLookup, DomainLookup, SiteCache, SiteSettingsCache } from '@wispplace/database'
-import { metricsCollector } from '@wispplace/observability'
+import { type HostingDbReadRetryOutcome, metricsCollector } from '@wispplace/observability'
 import postgres from 'postgres'
-import { cache } from './cache-manager'
+import { type CacheManager, cache } from './cache-manager'
 import { retryTransientRead } from './read-retry'
+
+/** The tagged-template query the lookups issue; a `postgres` pool is one. */
+export type HostingSql = <T extends readonly (object | undefined)[]>(
+	strings: TemplateStringsArray,
+	...parameters: readonly postgres.ParameterOrFragment<never>[]
+) => Promise<T>
+
+export type HostingDbDeps = {
+	sql: HostingSql
+	cache: Pick<CacheManager<'domains' | 'customDomains' | 'settings' | 'siteCache'>, 'getOrFetch'>
+	onReadRetry?: (outcome: HostingDbReadRetryOutcome) => void
+}
+
+// Short TTL for negative / unmapped lookups so newly-mapped domains appear quickly.
+const NEGATIVE_TTL_MS = 10_000
+
+/** The hosting service's read-only lookups over one query function and one lookup cache. */
+export function createHostingDb({ sql, cache, onReadRetry }: HostingDbDeps) {
+	// Every query here is an idempotent read, and the pool can hand out a connection
+	// that a proxy or the network already closed, so `read` is `sql` plus a short retry.
+	const read = <T extends readonly (object | undefined)[]>(
+		strings: TemplateStringsArray,
+		...parameters: readonly postgres.ParameterOrFragment<never>[]
+	): Promise<T> => retryTransientRead(() => sql<T>(strings, ...parameters), { onOutcome: onReadRetry })
+
+	async function getWispDomain(domain: string): Promise<DomainLookup | null> {
+		const key = domain.toLowerCase()
+		return cache.getOrFetch(
+			'domains',
+			key,
+			async () => {
+				const result = await read<DomainLookup[]>`
+        SELECT did, rkey FROM domains WHERE domain = ${key} LIMIT 1
+      `
+				return result[0] || null
+			},
+			{ ttl: (v) => (!v?.rkey ? NEGATIVE_TTL_MS : undefined) },
+		)
+	}
+
+	async function getCustomDomain(domain: string): Promise<CustomDomainLookup | null> {
+		const key = domain.toLowerCase()
+		return cache.getOrFetch(
+			'customDomains',
+			key,
+			async () => {
+				const result = await read<CustomDomainLookup[]>`
+        SELECT cd.id, cd.domain, cd.did, cd.rkey, cd.verified
+        FROM custom_domains cd
+        LEFT JOIN site_cache sc
+          ON sc.did = cd.did
+         AND sc.rkey = cd.rkey
+        WHERE cd.domain = ${key} AND cd.verified = true
+        ORDER BY
+          (cd.rkey IS NOT NULL) DESC,
+          (sc.did IS NOT NULL) DESC,
+          cd.last_verified_at DESC NULLS LAST,
+          cd.created_at DESC
+        LIMIT 1
+      `
+				return result[0] || null
+			},
+			{ ttl: (v) => (!v?.rkey ? NEGATIVE_TTL_MS : undefined) },
+		)
+	}
+
+	async function getCustomDomainByHash(hash: string): Promise<CustomDomainLookup | null> {
+		return cache.getOrFetch(
+			'customDomains',
+			`hash:${hash}`,
+			async () => {
+				const result = await read<CustomDomainLookup[]>`
+        SELECT id, domain, did, rkey, verified FROM custom_domains
+        WHERE id = ${hash} AND verified = true LIMIT 1
+      `
+				return result[0] || null
+			},
+			{ ttl: (v) => (!v?.rkey ? NEGATIVE_TTL_MS : undefined) },
+		)
+	}
+
+	async function getSiteSettingsCache(did: string, rkey: string): Promise<SiteSettingsCache | null> {
+		return cache.getOrFetch('settings', `${did}:${rkey}`, async () => {
+			const result = await read<SiteSettingsCache[]>`
+        SELECT did, rkey, record_cid, directory_listing, spa_mode, custom_404, index_files, clean_urls, headers, cached_at, updated_at
+        FROM site_settings_cache
+        WHERE did = ${did} AND rkey = ${rkey}
+        LIMIT 1
+      `
+			return result[0] || null
+		})
+	}
+
+	async function getSiteCache(did: string, rkey: string): Promise<SiteCache | null> {
+		return cache.getOrFetch(
+			'siteCache',
+			`${did}:${rkey}`,
+			async () => {
+				const result = await read<SiteCache[]>`
+          SELECT did, rkey, record_cid, file_cids, file_objects, cached_at, updated_at, absent_since
+          FROM site_cache
+          WHERE did = ${did} AND rkey = ${rkey}
+          LIMIT 1
+        `
+				return result[0] || null
+			},
+			{ cacheIf: (v) => v !== null },
+		)
+	}
+
+	return { getWispDomain, getCustomDomain, getCustomDomainByHash, getSiteSettingsCache, getSiteCache }
+}
+
+export type HostingDb = ReturnType<typeof createHostingDb>
 
 // The hosting service only reads. Prefer the read replica, fall back to the primary.
 const databaseUrl =
@@ -13,74 +127,8 @@ const sql = postgres(databaseUrl, {
 	idle_timeout: 20,
 })
 
-// Every query here is an idempotent read, and the pool can hand out a connection
-// that a proxy or the network already closed, so `read` is `sql` plus a short retry.
-const read = <T extends readonly (object | undefined)[]>(
-	strings: TemplateStringsArray,
-	...parameters: readonly postgres.ParameterOrFragment<never>[]
-): Promise<postgres.RowList<T>> =>
-	retryTransientRead(() => sql<T>(strings, ...parameters), {
-		onOutcome: metricsCollector.recordHostingDbReadRetry,
-	})
-
-// Short TTL for negative / unmapped lookups so newly-mapped domains appear quickly.
-const NEGATIVE_TTL_MS = 10_000
-
-export async function getWispDomain(domain: string): Promise<DomainLookup | null> {
-	const key = domain.toLowerCase()
-	return cache.getOrFetch(
-		'domains',
-		key,
-		async () => {
-			const result = await read<DomainLookup[]>`
-      SELECT did, rkey FROM domains WHERE domain = ${key} LIMIT 1
-    `
-			return result[0] || null
-		},
-		{ ttl: (v) => (!v?.rkey ? NEGATIVE_TTL_MS : undefined) },
-	)
-}
-
-export async function getCustomDomain(domain: string): Promise<CustomDomainLookup | null> {
-	const key = domain.toLowerCase()
-	return cache.getOrFetch(
-		'customDomains',
-		key,
-		async () => {
-			const result = await read<CustomDomainLookup[]>`
-      SELECT cd.id, cd.domain, cd.did, cd.rkey, cd.verified
-      FROM custom_domains cd
-      LEFT JOIN site_cache sc
-        ON sc.did = cd.did
-       AND sc.rkey = cd.rkey
-      WHERE cd.domain = ${key} AND cd.verified = true
-      ORDER BY
-        (cd.rkey IS NOT NULL) DESC,
-        (sc.did IS NOT NULL) DESC,
-        cd.last_verified_at DESC NULLS LAST,
-        cd.created_at DESC
-      LIMIT 1
-    `
-			return result[0] || null
-		},
-		{ ttl: (v) => (!v?.rkey ? NEGATIVE_TTL_MS : undefined) },
-	)
-}
-
-export async function getCustomDomainByHash(hash: string): Promise<CustomDomainLookup | null> {
-	return cache.getOrFetch(
-		'customDomains',
-		`hash:${hash}`,
-		async () => {
-			const result = await read<CustomDomainLookup[]>`
-      SELECT id, domain, did, rkey, verified FROM custom_domains
-      WHERE id = ${hash} AND verified = true LIMIT 1
-    `
-			return result[0] || null
-		},
-		{ ttl: (v) => (!v?.rkey ? NEGATIVE_TTL_MS : undefined) },
-	)
-}
+export const { getWispDomain, getCustomDomain, getCustomDomainByHash, getSiteSettingsCache, getSiteCache } =
+	createHostingDb({ sql, cache, onReadRetry: metricsCollector.recordHostingDbReadRetry })
 
 export interface ClosableDatabasePool {
 	end(options?: { timeout?: number }): Promise<void>
@@ -121,35 +169,4 @@ export function closeDatabase(): Promise<void> {
 		console.log('[DB] Database connections closed')
 	})()
 	return databaseClosePromise
-}
-
-// Site cache queries
-
-export async function getSiteSettingsCache(did: string, rkey: string): Promise<SiteSettingsCache | null> {
-	return cache.getOrFetch('settings', `${did}:${rkey}`, async () => {
-		const result = await read<SiteSettingsCache[]>`
-      SELECT did, rkey, record_cid, directory_listing, spa_mode, custom_404, index_files, clean_urls, headers, cached_at, updated_at
-      FROM site_settings_cache
-      WHERE did = ${did} AND rkey = ${rkey}
-      LIMIT 1
-    `
-		return result[0] || null
-	})
-}
-
-export async function getSiteCache(did: string, rkey: string): Promise<SiteCache | null> {
-	return cache.getOrFetch(
-		'siteCache',
-		`${did}:${rkey}`,
-		async () => {
-			const result = await read<SiteCache[]>`
-        SELECT did, rkey, record_cid, file_cids, file_objects, cached_at, updated_at, absent_since
-        FROM site_cache
-        WHERE did = ${did} AND rkey = ${rkey}
-        LIMIT 1
-      `
-			return result[0] || null
-		},
-		{ cacheIf: (v) => v !== null },
-	)
 }

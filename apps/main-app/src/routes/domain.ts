@@ -6,22 +6,7 @@ import { createLogger } from '@wispplace/observability'
 import { isValidSiteId, siteIdFromHostname } from '@wispplace/private-sites'
 import { Elysia } from 'elysia'
 import { publishDomainCacheInvalidation } from '../lib/cache-invalidation'
-import {
-	claimCustomDomain,
-	claimDomain,
-	deleteCustomDomain,
-	deleteWispDomain,
-	getCustomDomainById,
-	getCustomDomainInfo,
-	getDomainByDid,
-	isDomainAvailable,
-	isDomainRegistered,
-	updateCustomDomainRkey,
-	updateCustomDomainVerification,
-	updateDomain,
-	updateWispDomainSite,
-	waitForSiteCache,
-} from '../lib/db'
+import type * as database from '../lib/db'
 import { lookupNameservers, verifyCustomDomain } from '../lib/dns-verify'
 import { extractWispHandle, isValidHandle, normalizeDomain, toDomain, validateCustomDomain } from '../lib/domain-utils'
 import {
@@ -33,7 +18,7 @@ import {
 } from '../lib/marque-dns'
 import { grantedAddOns } from '../lib/oauth-authorize'
 import { privateHostname } from '../lib/private-site-origin'
-import { hasLivePrivateSite } from '../lib/private-sites-db'
+import type { hasLivePrivateSite } from '../lib/private-sites-db'
 import { type AuthenticatedContext, requireAuth, SESSION_COOKIE_NAME } from '../lib/wisp-auth'
 
 const logger = createLogger('main-app')
@@ -94,505 +79,542 @@ const marquePorts = ({ did, session }: AuthenticatedContext): MarquePorts => {
 	}
 }
 
-export const domainRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
-	new Elysia({
-		prefix: '/api/domain',
-		cookie: {
-			secrets: cookieSecret,
-			sign: [SESSION_COOKIE_NAME],
-		},
-	})
-		// Public endpoints (no auth required)
-		/**
-		 * GET /api/domain/check
-		 * Success: { available, domain } or { available: false, reason: 'invalid' }.
-		 * Failure: { available: false }.
-		 */
-		.get('/check', async ({ query }) => {
-			try {
-				const handle = (query.handle || '').trim().toLowerCase()
+/** The domain tables on the primary, and the private-site predicate Caddy's ask relies on. */
+export type DomainRouteDeps = Pick<
+	typeof database,
+	| 'claimCustomDomain'
+	| 'claimDomain'
+	| 'deleteCustomDomain'
+	| 'deleteWispDomain'
+	| 'getCustomDomainById'
+	| 'getCustomDomainInfo'
+	| 'getDomainByDid'
+	| 'isDomainAvailable'
+	| 'isDomainRegistered'
+	| 'updateCustomDomainRkey'
+	| 'updateCustomDomainVerification'
+	| 'updateDomain'
+	| 'updateWispDomainSite'
+	| 'waitForSiteCache'
+> & { hasLivePrivateSite: typeof hasLivePrivateSite }
 
-				if (!isValidHandle(handle)) {
+export const createDomainRoutes =
+	({
+		claimCustomDomain,
+		claimDomain,
+		deleteCustomDomain,
+		deleteWispDomain,
+		getCustomDomainById,
+		getCustomDomainInfo,
+		getDomainByDid,
+		isDomainAvailable,
+		isDomainRegistered,
+		updateCustomDomainRkey,
+		updateCustomDomainVerification,
+		updateDomain,
+		updateWispDomainSite,
+		waitForSiteCache,
+		hasLivePrivateSite,
+	}: DomainRouteDeps) =>
+	(client: NodeOAuthClient, cookieSecret: string) =>
+		new Elysia({
+			prefix: '/api/domain',
+			cookie: {
+				secrets: cookieSecret,
+				sign: [SESSION_COOKIE_NAME],
+			},
+		})
+			// Public endpoints (no auth required)
+			/**
+			 * GET /api/domain/check
+			 * Success: { available, domain } or { available: false, reason: 'invalid' }.
+			 * Failure: { available: false }.
+			 */
+			.get('/check', async ({ query }) => {
+				try {
+					const handle = (query.handle || '').trim().toLowerCase()
+
+					if (!isValidHandle(handle)) {
+						return {
+							available: false,
+							reason: 'invalid',
+						}
+					}
+
+					const available = await isDomainAvailable(handle)
+					return {
+						available,
+						domain: toDomain(handle),
+					}
+				} catch (err) {
+					logger.error('[Domain] Check error', err)
 					return {
 						available: false,
-						reason: 'invalid',
 					}
 				}
-
-				const available = await isDomainAvailable(handle)
-				return {
-					available,
-					domain: toDomain(handle),
-				}
-			} catch (err) {
-				logger.error('[Domain] Check error', err)
-				return {
-					available: false,
-				}
-			}
-		})
-		/**
-		 * GET /api/domain/registered
-		 * 200: public domain registration, or { registered: true, type: 'private', domain } for a live private site.
-		 * 404: { registered: false }
-		 * 400: { error: 'Domain parameter required' }
-		 */
-		.get('/registered', async ({ query, set }) => {
-			try {
-				const domain = normalizeDomain(String(query.domain || ''))
-
-				if (!domain) {
-					set.status = 400
-					return { error: 'Domain parameter required' }
-				}
-
-				const configuredPrivateHost = privateHostname()
-				const isPrivateDomain = domain === configuredPrivateHost || domain.endsWith(`.${configuredPrivateHost}`)
-
-				if (isPrivateDomain) {
-					// Private hostnames are reserved. Only one generated site-id label may
-					// receive a certificate. The helper performs a direct, uncached primary
-					// database lookup so readiness and expiry cannot use a lagging replica.
-					const siteId = siteIdFromHostname(domain, configuredPrivateHost)
-					if (!siteId || !isValidSiteId(siteId) || !(await hasLivePrivateSite(siteId))) {
-						set.status = 404
-						return { registered: false }
-					}
-
-					set.status = 200
-					return { registered: true, type: 'private' as const, domain }
-				}
-
-				const previewHost = normalizeDomain(process.env.PREVIEW_HOST || '')
-				if (previewHost && isPreviewHostname(domain, previewHost)) {
-					const preview = parsePreviewHostname(domain, previewHost)
-					if (!preview) {
-						set.status = 404
-						return { registered: false }
-					}
-					const claim = await isDomainRegistered(toDomain(preview.claim))
-					if (!claim.registered || claim.type !== 'wisp') {
-						set.status = 404
-						return { registered: false }
-					}
-					return { ...claim, domain, rkey: preview.rkey }
-				}
-
-				const result = await isDomainRegistered(domain)
-
-				// For Caddy on-demand TLS: 200 = allow, 404 = deny
-				if (result.registered) {
-					set.status = 200
-					return result
-				} else {
-					set.status = 404
-					return { registered: false }
-				}
-			} catch (err) {
-				logger.error('[Domain] Registered check error', err)
-				set.status = 500
-				return { error: 'Failed to check domain' }
-			}
-		})
-		// Authenticated endpoints (require auth)
-		.derive(async ({ cookie, request }) => {
-			const auth = await requireAuth(client, cookie, request.headers.get('cookie'))
-			return { auth }
-		})
-		/**
-		 * POST /api/domain/claim
-		 * Success: { success: true, domain }
-		 */
-		.post('/claim', async ({ body, auth, set }) => {
-			try {
-				const { handle } = body as { handle?: string }
-				const normalizedHandle = (handle || '').trim().toLowerCase()
-
-				if (!isValidHandle(normalizedHandle)) {
-					set.status = 400
-					throw new Error('Invalid handle')
-				}
-
-				// Check if user already has 3 domains (handled in claimDomain)
-				// claim in DB
-				let domain: string
+			})
+			/**
+			 * GET /api/domain/registered
+			 * 200: public domain registration, or { registered: true, type: 'private', domain } for a live private site.
+			 * 404: { registered: false }
+			 * 400: { error: 'Domain parameter required' }
+			 */
+			.get('/registered', async ({ query, set }) => {
 				try {
-					domain = await claimDomain(auth.did, normalizedHandle)
-				} catch (err) {
-					const message = err instanceof Error ? err.message : 'Unknown error'
-					if (message === 'domain_limit_reached') {
+					const domain = normalizeDomain(String(query.domain || ''))
+
+					if (!domain) {
 						set.status = 400
-						throw new Error('Domain limit reached: You can only claim up to 3 wisp.place domains')
+						return { error: 'Domain parameter required' }
 					}
-					set.status = 409
-					throw new Error('Handle taken or error claiming domain')
-				}
 
-				// write place.wisp.domain record with unique rkey
-				const agent = new Agent((url, init) => auth.session.fetchHandler(url, init))
-				const rkey = normalizedHandle // Use handle as rkey for uniqueness
-				await agent.com.atproto.repo.putRecord({
-					repo: auth.did,
-					collection: 'place.wisp.domain',
-					rkey,
-					record: {
-						$type: 'place.wisp.domain',
-						domain,
-						createdAt: new Date().toISOString(),
-					} as any,
-					validate: false,
-				})
-				await publishDomainCacheInvalidation(domain, 'wisp')
+					const configuredPrivateHost = privateHostname()
+					const isPrivateDomain = domain === configuredPrivateHost || domain.endsWith(`.${configuredPrivateHost}`)
 
-				return { success: true, domain }
-			} catch (err) {
-				logger.error('[Domain] Claim error', err)
-				throw new Error(`Failed to claim: ${err instanceof Error ? err.message : 'Unknown error'}`)
-			}
-		})
-		/**
-		 * POST /api/domain/update
-		 * Success: { success: true, domain }
-		 */
-		.post('/update', async ({ body, auth, set }) => {
-			try {
-				const { handle } = body as { handle?: string }
-				const normalizedHandle = (handle || '').trim().toLowerCase()
+					if (isPrivateDomain) {
+						// Private hostnames are reserved. Only one generated site-id label may
+						// receive a certificate. The helper performs a direct, uncached primary
+						// database lookup so readiness and expiry cannot use a lagging replica.
+						const siteId = siteIdFromHostname(domain, configuredPrivateHost)
+						if (!siteId || !isValidSiteId(siteId) || !(await hasLivePrivateSite(siteId))) {
+							set.status = 404
+							return { registered: false }
+						}
 
-				if (!isValidHandle(normalizedHandle)) {
-					set.status = 400
-					throw new Error('Invalid handle')
-				}
-
-				const desiredDomain = toDomain(normalizedHandle)
-				const current = await getDomainByDid(auth.did)
-
-				if (current === desiredDomain) {
-					return { success: true, domain: current }
-				}
-
-				let domain: string
-				try {
-					domain = await updateDomain(auth.did, normalizedHandle)
-				} catch (_err) {
-					set.status = 409
-					throw new Error('Handle taken')
-				}
-
-				const agent = new Agent((url, init) => auth.session.fetchHandler(url, init))
-				await agent.com.atproto.repo.putRecord({
-					repo: auth.did,
-					collection: 'place.wisp.domain',
-					rkey: 'self',
-					record: {
-						$type: 'place.wisp.domain',
-						domain,
-						createdAt: new Date().toISOString(),
-					} as any,
-					validate: false,
-				})
-				if (current) await publishDomainCacheInvalidation(current, 'wisp')
-				await publishDomainCacheInvalidation(domain, 'wisp')
-
-				return { success: true, domain }
-			} catch (err) {
-				logger.error('[Domain] Update error', err)
-				throw new Error(`Failed to update: ${err instanceof Error ? err.message : 'Unknown error'}`)
-			}
-		})
-		/**
-		 * POST /api/domain/custom/add
-		 * Success: { success: true, id, domain, verified: false }
-		 */
-		.post('/custom/add', async ({ body, auth, set }) => {
-			try {
-				const { domain } = body as { domain: string }
-				const domainLower = normalizeDomain(domain || '')
-
-				const domainError = validateCustomDomain(domainLower)
-				if (domainError) {
-					set.status = 400
-					throw new Error(`Invalid domain: ${domainError}`)
-				}
-
-				// Verified claims are DID-locked. Pending claims can be reclaimed.
-				const existing = await getCustomDomainInfo(domainLower)
-				if (existing?.verified && existing.did !== auth.did) {
-					set.status = 409
-					throw new Error('Domain already claimed')
-				}
-
-				if (existing && existing.did === auth.did) {
-					await publishDomainCacheInvalidation(domainLower, 'custom', existing.id)
-					return {
-						success: true,
-						id: existing.id,
-						domain: domainLower,
-						verified: Boolean(existing.verified),
+						set.status = 200
+						return { registered: true, type: 'private' as const, domain }
 					}
+
+					const previewHost = normalizeDomain(process.env.PREVIEW_HOST || '')
+					if (previewHost && isPreviewHostname(domain, previewHost)) {
+						const preview = parsePreviewHostname(domain, previewHost)
+						if (!preview) {
+							set.status = 404
+							return { registered: false }
+						}
+						const claim = await isDomainRegistered(toDomain(preview.claim))
+						if (!claim.registered || claim.type !== 'wisp') {
+							set.status = 404
+							return { registered: false }
+						}
+						return { ...claim, domain, rkey: preview.rkey }
+					}
+
+					const result = await isDomainRegistered(domain)
+
+					// For Caddy on-demand TLS: 200 = allow, 404 = deny
+					if (result.registered) {
+						set.status = 200
+						return result
+					} else {
+						set.status = 404
+						return { registered: false }
+					}
+				} catch (err) {
+					logger.error('[Domain] Registered check error', err)
+					set.status = 500
+					return { error: 'Failed to check domain' }
 				}
-
-				// Create hash for ID
-				const hash = createHash('sha256').update(`${auth.did}:${domainLower}`).digest('hex').substring(0, 16)
-
-				// Store in database only
-				await claimCustomDomain(auth.did, domainLower, hash)
-				await publishDomainCacheInvalidation(domainLower, 'custom', hash)
-
-				return {
-					success: true,
-					id: hash,
-					domain: domainLower,
-					verified: false,
-				}
-			} catch (err) {
-				logger.error('[Domain] Custom domain add error', err)
-				throw new Error(`Failed to add domain: ${err instanceof Error ? err.message : 'Unknown error'}`)
-			}
-		})
-		/**
-		 * POST /api/domain/custom/verify
-		 * Success: { success: true, verified, error, found }
-		 */
-		.post('/custom/verify', async ({ body, auth, set }) => {
-			try {
-				const { id } = body as { id: string }
-
-				// Get domain from database
-				const domainInfo = await getCustomDomainById(id)
-				if (!domainInfo) {
-					set.status = 404
-					throw new Error('Domain not found')
-				}
-
-				// Verify DNS records (TXT + CNAME)
-				logger.debug(`[Domain] Verifying custom domain: ${domainInfo.domain}`)
-				const result = await verifyCustomDomain(domainInfo.domain, auth.did, id)
-
-				// Update verification status in database
-				await updateCustomDomainVerification(id, result.verified)
-				await publishDomainCacheInvalidation(domainInfo.domain, 'custom', id)
-
-				return {
-					success: true,
-					verified: result.verified,
-					error: result.error,
-					warning: result.warning,
-					found: result.found,
-				}
-			} catch (err) {
-				logger.error('[Domain] Custom domain verify error', err)
-				throw new Error(`Failed to verify domain: ${err instanceof Error ? err.message : 'Unknown error'}`)
-			}
-		})
-		/**
-		 * DELETE /api/domain/custom/:id
-		 * Success: { success: true }
-		 */
-		.delete('/custom/:id', async ({ params, auth, set }) => {
-			try {
-				const { id } = params
-
-				// Verify ownership before deleting
-				const domainInfo = await getCustomDomainById(id)
-				if (!domainInfo) {
-					set.status = 404
-					throw new Error('Domain not found')
-				}
-
-				if (domainInfo.did !== auth.did) {
-					set.status = 403
-					throw new Error('Unauthorized: You do not own this domain')
-				}
-
-				// Delete from database
-				await deleteCustomDomain(id)
-				await publishDomainCacheInvalidation(domainInfo.domain, 'custom', id)
-
-				return { success: true }
-			} catch (err) {
-				logger.error('[Domain] Custom domain delete error', err)
-				throw new Error(`Failed to delete domain: ${err instanceof Error ? err.message : 'Unknown error'}`)
-			}
-		})
-		/**
-		 * POST /api/domain/wisp/map-site
-		 * Success: { success: true }
-		 */
-		.post('/wisp/map-site', async ({ body, auth, set }) => {
-			try {
-				const { domain, siteRkey } = body as { domain: string; siteRkey: string | null }
-
-				if (!domain) {
-					set.status = 400
-					throw new Error('Domain parameter required')
-				}
-
-				// Verify domain belongs to user
-				const domainLower = normalizeDomain(domain)
-				const info = await isDomainRegistered(domainLower)
-
-				if (!info.registered || info.type !== 'wisp') {
-					set.status = 404
-					throw new Error('Domain not found')
-				}
-
-				if (info.did !== auth.did) {
-					set.status = 403
-					throw new Error('Unauthorized: You do not own this domain')
-				}
-
-				if (siteRkey && !(await waitForSiteCache(auth.did, siteRkey))) {
-					set.status = 503
-					throw new Error('Site is still being processed. Please try again in a moment.')
-				}
-
-				// Update wisp.place domain to point to this site
-				await updateWispDomainSite(domainLower, siteRkey)
-				await publishDomainCacheInvalidation(domainLower, 'wisp')
-
-				return { success: true }
-			} catch (err) {
-				logger.error('[Domain] Wisp domain map error', err)
-				throw new Error(`Failed to map site: ${err instanceof Error ? err.message : 'Unknown error'}`)
-			}
-		})
-		/**
-		 * DELETE /api/domain/wisp/:domain
-		 * Success: { success: true }
-		 */
-		.delete('/wisp/:domain', async ({ params, auth, set }) => {
-			try {
-				const { domain } = params
-
-				// Verify domain belongs to user
-				const domainLower = normalizeDomain(domain)
-				const info = await isDomainRegistered(domainLower)
-
-				if (!info.registered || info.type !== 'wisp') {
-					set.status = 404
-					throw new Error('Domain not found')
-				}
-
-				if (info.did !== auth.did) {
-					set.status = 403
-					throw new Error('Unauthorized: You do not own this domain')
-				}
-
-				// Delete from database
-				await deleteWispDomain(domainLower)
-				await publishDomainCacheInvalidation(domainLower, 'wisp')
-
-				// Delete from PDS
-				const agent = new Agent((url, init) => auth.session.fetchHandler(url, init))
-				const handle = extractWispHandle(domainLower)
-				if (!handle) {
-					set.status = 400
-					throw new Error('Invalid wisp domain')
-				}
+			})
+			// Authenticated endpoints (require auth)
+			.derive(async ({ cookie, request }) => {
+				const auth = await requireAuth(client, cookie, request.headers.get('cookie'))
+				return { auth }
+			})
+			/**
+			 * POST /api/domain/claim
+			 * Success: { success: true, domain }
+			 */
+			.post('/claim', async ({ body, auth, set }) => {
 				try {
-					await agent.com.atproto.repo.deleteRecord({
+					const { handle } = body as { handle?: string }
+					const normalizedHandle = (handle || '').trim().toLowerCase()
+
+					if (!isValidHandle(normalizedHandle)) {
+						set.status = 400
+						throw new Error('Invalid handle')
+					}
+
+					// Check if user already has 3 domains (handled in claimDomain)
+					// claim in DB
+					let domain: string
+					try {
+						domain = await claimDomain(auth.did, normalizedHandle)
+					} catch (err) {
+						const message = err instanceof Error ? err.message : 'Unknown error'
+						if (message === 'domain_limit_reached') {
+							set.status = 400
+							throw new Error('Domain limit reached: You can only claim up to 3 wisp.place domains')
+						}
+						set.status = 409
+						throw new Error('Handle taken or error claiming domain')
+					}
+
+					// write place.wisp.domain record with unique rkey
+					const agent = new Agent((url, init) => auth.session.fetchHandler(url, init))
+					const rkey = normalizedHandle // Use handle as rkey for uniqueness
+					await agent.com.atproto.repo.putRecord({
 						repo: auth.did,
 						collection: 'place.wisp.domain',
-						rkey: handle,
+						rkey,
+						record: {
+							$type: 'place.wisp.domain',
+							domain,
+							createdAt: new Date().toISOString(),
+						} as any,
+						validate: false,
 					})
+					await publishDomainCacheInvalidation(domain, 'wisp')
+
+					return { success: true, domain }
 				} catch (err) {
-					// Record might not exist in PDS, continue anyway
-					logger.warn('[Domain] Could not delete wisp domain from PDS', err as any)
+					logger.error('[Domain] Claim error', err)
+					throw new Error(`Failed to claim: ${err instanceof Error ? err.message : 'Unknown error'}`)
 				}
+			})
+			/**
+			 * POST /api/domain/update
+			 * Success: { success: true, domain }
+			 */
+			.post('/update', async ({ body, auth, set }) => {
+				try {
+					const { handle } = body as { handle?: string }
+					const normalizedHandle = (handle || '').trim().toLowerCase()
 
-				return { success: true }
-			} catch (err) {
-				logger.error('[Domain] Wisp domain delete error', err)
-				throw new Error(`Failed to delete domain: ${err instanceof Error ? err.message : 'Unknown error'}`)
-			}
-		})
-		/**
-		 * POST /api/domain/custom/:id/map-site
-		 * Success: { success: true }
-		 */
-		.post('/custom/:id/map-site', async ({ params, body, auth, set }) => {
-			try {
-				const { id } = params
-				const { siteRkey } = body as { siteRkey: string | null }
+					if (!isValidHandle(normalizedHandle)) {
+						set.status = 400
+						throw new Error('Invalid handle')
+					}
 
-				// Verify ownership before updating
-				const domainInfo = await getCustomDomainById(id)
-				if (!domainInfo) {
-					set.status = 404
-					throw new Error('Domain not found')
-				}
+					const desiredDomain = toDomain(normalizedHandle)
+					const current = await getDomainByDid(auth.did)
 
-				if (domainInfo.did !== auth.did) {
-					set.status = 403
-					throw new Error('Unauthorized: You do not own this domain')
-				}
+					if (current === desiredDomain) {
+						return { success: true, domain: current }
+					}
 
-				if (siteRkey && !(await waitForSiteCache(auth.did, siteRkey))) {
-					set.status = 503
-					throw new Error('Site is still being processed. Please try again in a moment.')
-				}
+					let domain: string
+					try {
+						domain = await updateDomain(auth.did, normalizedHandle)
+					} catch (_err) {
+						set.status = 409
+						throw new Error('Handle taken')
+					}
 
-				// Update custom domain to point to this site
-				await updateCustomDomainRkey(id, siteRkey)
-				await publishDomainCacheInvalidation(domainInfo.domain, 'custom', id)
+					const agent = new Agent((url, init) => auth.session.fetchHandler(url, init))
+					await agent.com.atproto.repo.putRecord({
+						repo: auth.did,
+						collection: 'place.wisp.domain',
+						rkey: 'self',
+						record: {
+							$type: 'place.wisp.domain',
+							domain,
+							createdAt: new Date().toISOString(),
+						} as any,
+						validate: false,
+					})
+					if (current) await publishDomainCacheInvalidation(current, 'wisp')
+					await publishDomainCacheInvalidation(domain, 'wisp')
 
-				return { success: true }
-			} catch (err) {
-				logger.error('[Domain] Custom domain map error', err)
-				throw new Error(`Failed to map site: ${err instanceof Error ? err.message : 'Unknown error'}`)
-			}
-		})
-		/**
-		 * GET /api/domain/custom/:id/marque
-		 * Whether marque.at serves this domain's dns, and whether wisp may add its records there.
-		 * Success: { managed: false } or { managed: true, apex, state: 'ready' | 'done' | 'conflict', conflicts, canWrite }
-		 */
-		.get('/custom/:id/marque', async ({ params, auth, set }) => {
-			try {
-				const domainInfo = await getCustomDomainById(params.id)
-				if (!domainInfo || domainInfo.did !== auth.did) {
-					set.status = 404
-					throw new Error('Domain not found')
+					return { success: true, domain }
+				} catch (err) {
+					logger.error('[Domain] Update error', err)
+					throw new Error(`Failed to update: ${err instanceof Error ? err.message : 'Unknown error'}`)
 				}
-				const [status, addOns] = await Promise.all([
-					marqueStatus(marquePorts(auth), marqueTarget(domainInfo, auth.did)),
-					grantedAddOns(auth.session),
-				])
-				return { ...status, canWrite: addOns.includes('marque') }
-			} catch (err) {
-				logger.error('[Domain] Marque status error', err)
-				throw new Error(`Failed to check marque: ${err instanceof Error ? err.message : 'Unknown error'}`)
-			}
-		})
-		/**
-		 * POST /api/domain/custom/:id/marque
-		 * Adds the domain's CNAME and ownership TXT to its marque.at zone. Records
-		 * already in the way are only replaced when `replace` is true.
-		 * Success: { state: 'done' }
-		 * 409: { state: 'conflict', conflicts }
-		 */
-		.post('/custom/:id/marque', async ({ params, body, auth, set }) => {
-			try {
-				const domainInfo = await getCustomDomainById(params.id)
-				if (!domainInfo || domainInfo.did !== auth.did) {
-					set.status = 404
-					throw new Error('Domain not found')
+			})
+			/**
+			 * POST /api/domain/custom/add
+			 * Success: { success: true, id, domain, verified: false }
+			 */
+			.post('/custom/add', async ({ body, auth, set }) => {
+				try {
+					const { domain } = body as { domain: string }
+					const domainLower = normalizeDomain(domain || '')
+
+					const domainError = validateCustomDomain(domainLower)
+					if (domainError) {
+						set.status = 400
+						throw new Error(`Invalid domain: ${domainError}`)
+					}
+
+					// Verified claims are DID-locked. Pending claims can be reclaimed.
+					const existing = await getCustomDomainInfo(domainLower)
+					if (existing?.verified && existing.did !== auth.did) {
+						set.status = 409
+						throw new Error('Domain already claimed')
+					}
+
+					if (existing && existing.did === auth.did) {
+						await publishDomainCacheInvalidation(domainLower, 'custom', existing.id)
+						return {
+							success: true,
+							id: existing.id,
+							domain: domainLower,
+							verified: Boolean(existing.verified),
+						}
+					}
+
+					// Create hash for ID
+					const hash = createHash('sha256').update(`${auth.did}:${domainLower}`).digest('hex').substring(0, 16)
+
+					// Store in database only
+					await claimCustomDomain(auth.did, domainLower, hash)
+					await publishDomainCacheInvalidation(domainLower, 'custom', hash)
+
+					return {
+						success: true,
+						id: hash,
+						domain: domainLower,
+						verified: false,
+					}
+				} catch (err) {
+					logger.error('[Domain] Custom domain add error', err)
+					throw new Error(`Failed to add domain: ${err instanceof Error ? err.message : 'Unknown error'}`)
 				}
-				if (!(await grantedAddOns(auth.session)).includes('marque')) {
-					set.status = 403
-					throw new Error('Wisp has not been allowed to edit your marque dns')
+			})
+			/**
+			 * POST /api/domain/custom/verify
+			 * Success: { success: true, verified, error, found }
+			 */
+			.post('/custom/verify', async ({ body, auth, set }) => {
+				try {
+					const { id } = body as { id: string }
+
+					// Get domain from database
+					const domainInfo = await getCustomDomainById(id)
+					if (!domainInfo) {
+						set.status = 404
+						throw new Error('Domain not found')
+					}
+
+					// Verify DNS records (TXT + CNAME)
+					logger.debug(`[Domain] Verifying custom domain: ${domainInfo.domain}`)
+					const result = await verifyCustomDomain(domainInfo.domain, auth.did, id)
+
+					// Update verification status in database
+					await updateCustomDomainVerification(id, result.verified)
+					await publishDomainCacheInvalidation(domainInfo.domain, 'custom', id)
+
+					return {
+						success: true,
+						verified: result.verified,
+						error: result.error,
+						warning: result.warning,
+						found: result.found,
+					}
+				} catch (err) {
+					logger.error('[Domain] Custom domain verify error', err)
+					throw new Error(`Failed to verify domain: ${err instanceof Error ? err.message : 'Unknown error'}`)
 				}
-				const { replace } = (body ?? {}) as { replace?: boolean }
-				const result = await applyMarqueDns(marquePorts(auth), marqueTarget(domainInfo, auth.did), replace === true)
-				if (result.state === 'unmanaged') {
-					set.status = 409
-					throw new Error('This domain is not on marque.at')
+			})
+			/**
+			 * DELETE /api/domain/custom/:id
+			 * Success: { success: true }
+			 */
+			.delete('/custom/:id', async ({ params, auth, set }) => {
+				try {
+					const { id } = params
+
+					// Verify ownership before deleting
+					const domainInfo = await getCustomDomainById(id)
+					if (!domainInfo) {
+						set.status = 404
+						throw new Error('Domain not found')
+					}
+
+					if (domainInfo.did !== auth.did) {
+						set.status = 403
+						throw new Error('Unauthorized: You do not own this domain')
+					}
+
+					// Delete from database
+					await deleteCustomDomain(id)
+					await publishDomainCacheInvalidation(domainInfo.domain, 'custom', id)
+
+					return { success: true }
+				} catch (err) {
+					logger.error('[Domain] Custom domain delete error', err)
+					throw new Error(`Failed to delete domain: ${err instanceof Error ? err.message : 'Unknown error'}`)
 				}
-				if (result.state === 'conflict') set.status = 409
-				return result
-			} catch (err) {
-				logger.error('[Domain] Marque setup error', err)
-				throw new Error(`Failed to set up marque dns: ${err instanceof Error ? err.message : 'Unknown error'}`)
-			}
-		})
+			})
+			/**
+			 * POST /api/domain/wisp/map-site
+			 * Success: { success: true }
+			 */
+			.post('/wisp/map-site', async ({ body, auth, set }) => {
+				try {
+					const { domain, siteRkey } = body as { domain: string; siteRkey: string | null }
+
+					if (!domain) {
+						set.status = 400
+						throw new Error('Domain parameter required')
+					}
+
+					// Verify domain belongs to user
+					const domainLower = normalizeDomain(domain)
+					const info = await isDomainRegistered(domainLower)
+
+					if (!info.registered || info.type !== 'wisp') {
+						set.status = 404
+						throw new Error('Domain not found')
+					}
+
+					if (info.did !== auth.did) {
+						set.status = 403
+						throw new Error('Unauthorized: You do not own this domain')
+					}
+
+					if (siteRkey && !(await waitForSiteCache(auth.did, siteRkey))) {
+						set.status = 503
+						throw new Error('Site is still being processed. Please try again in a moment.')
+					}
+
+					// Update wisp.place domain to point to this site
+					await updateWispDomainSite(domainLower, siteRkey)
+					await publishDomainCacheInvalidation(domainLower, 'wisp')
+
+					return { success: true }
+				} catch (err) {
+					logger.error('[Domain] Wisp domain map error', err)
+					throw new Error(`Failed to map site: ${err instanceof Error ? err.message : 'Unknown error'}`)
+				}
+			})
+			/**
+			 * DELETE /api/domain/wisp/:domain
+			 * Success: { success: true }
+			 */
+			.delete('/wisp/:domain', async ({ params, auth, set }) => {
+				try {
+					const { domain } = params
+
+					// Verify domain belongs to user
+					const domainLower = normalizeDomain(domain)
+					const info = await isDomainRegistered(domainLower)
+
+					if (!info.registered || info.type !== 'wisp') {
+						set.status = 404
+						throw new Error('Domain not found')
+					}
+
+					if (info.did !== auth.did) {
+						set.status = 403
+						throw new Error('Unauthorized: You do not own this domain')
+					}
+
+					// Delete from database
+					await deleteWispDomain(domainLower)
+					await publishDomainCacheInvalidation(domainLower, 'wisp')
+
+					// Delete from PDS
+					const agent = new Agent((url, init) => auth.session.fetchHandler(url, init))
+					const handle = extractWispHandle(domainLower)
+					if (!handle) {
+						set.status = 400
+						throw new Error('Invalid wisp domain')
+					}
+					try {
+						await agent.com.atproto.repo.deleteRecord({
+							repo: auth.did,
+							collection: 'place.wisp.domain',
+							rkey: handle,
+						})
+					} catch (err) {
+						// Record might not exist in PDS, continue anyway
+						logger.warn('[Domain] Could not delete wisp domain from PDS', err as any)
+					}
+
+					return { success: true }
+				} catch (err) {
+					logger.error('[Domain] Wisp domain delete error', err)
+					throw new Error(`Failed to delete domain: ${err instanceof Error ? err.message : 'Unknown error'}`)
+				}
+			})
+			/**
+			 * POST /api/domain/custom/:id/map-site
+			 * Success: { success: true }
+			 */
+			.post('/custom/:id/map-site', async ({ params, body, auth, set }) => {
+				try {
+					const { id } = params
+					const { siteRkey } = body as { siteRkey: string | null }
+
+					// Verify ownership before updating
+					const domainInfo = await getCustomDomainById(id)
+					if (!domainInfo) {
+						set.status = 404
+						throw new Error('Domain not found')
+					}
+
+					if (domainInfo.did !== auth.did) {
+						set.status = 403
+						throw new Error('Unauthorized: You do not own this domain')
+					}
+
+					if (siteRkey && !(await waitForSiteCache(auth.did, siteRkey))) {
+						set.status = 503
+						throw new Error('Site is still being processed. Please try again in a moment.')
+					}
+
+					// Update custom domain to point to this site
+					await updateCustomDomainRkey(id, siteRkey)
+					await publishDomainCacheInvalidation(domainInfo.domain, 'custom', id)
+
+					return { success: true }
+				} catch (err) {
+					logger.error('[Domain] Custom domain map error', err)
+					throw new Error(`Failed to map site: ${err instanceof Error ? err.message : 'Unknown error'}`)
+				}
+			})
+			/**
+			 * GET /api/domain/custom/:id/marque
+			 * Whether marque.at serves this domain's dns, and whether wisp may add its records there.
+			 * Success: { managed: false } or { managed: true, apex, state: 'ready' | 'done' | 'conflict', conflicts, canWrite }
+			 */
+			.get('/custom/:id/marque', async ({ params, auth, set }) => {
+				try {
+					const domainInfo = await getCustomDomainById(params.id)
+					if (!domainInfo || domainInfo.did !== auth.did) {
+						set.status = 404
+						throw new Error('Domain not found')
+					}
+					const [status, addOns] = await Promise.all([
+						marqueStatus(marquePorts(auth), marqueTarget(domainInfo, auth.did)),
+						grantedAddOns(auth.session),
+					])
+					return { ...status, canWrite: addOns.includes('marque') }
+				} catch (err) {
+					logger.error('[Domain] Marque status error', err)
+					throw new Error(`Failed to check marque: ${err instanceof Error ? err.message : 'Unknown error'}`)
+				}
+			})
+			/**
+			 * POST /api/domain/custom/:id/marque
+			 * Adds the domain's CNAME and ownership TXT to its marque.at zone. Records
+			 * already in the way are only replaced when `replace` is true.
+			 * Success: { state: 'done' }
+			 * 409: { state: 'conflict', conflicts }
+			 */
+			.post('/custom/:id/marque', async ({ params, body, auth, set }) => {
+				try {
+					const domainInfo = await getCustomDomainById(params.id)
+					if (!domainInfo || domainInfo.did !== auth.did) {
+						set.status = 404
+						throw new Error('Domain not found')
+					}
+					if (!(await grantedAddOns(auth.session)).includes('marque')) {
+						set.status = 403
+						throw new Error('Wisp has not been allowed to edit your marque dns')
+					}
+					const { replace } = (body ?? {}) as { replace?: boolean }
+					const result = await applyMarqueDns(marquePorts(auth), marqueTarget(domainInfo, auth.did), replace === true)
+					if (result.state === 'unmanaged') {
+						set.status = 409
+						throw new Error('This domain is not on marque.at')
+					}
+					if (result.state === 'conflict') set.status = 409
+					return result
+				} catch (err) {
+					logger.error('[Domain] Marque setup error', err)
+					throw new Error(`Failed to set up marque dns: ${err instanceof Error ? err.message : 'Unknown error'}`)
+				}
+			})

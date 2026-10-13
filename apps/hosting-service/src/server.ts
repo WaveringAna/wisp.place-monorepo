@@ -10,6 +10,7 @@ import {
 	createLogger,
 	type HostingNotFoundReason,
 	isClientAbort,
+	metricsCollector,
 } from '@wispplace/observability'
 import { observabilityErrorHandler, observabilityMiddleware } from '@wispplace/observability/middleware/hono'
 import { siteIdFromHostname } from '@wispplace/private-sites'
@@ -19,9 +20,10 @@ import { type CacheInvalidationHealthSnapshot, getCacheInvalidationHealthSnapsho
 import { cache } from './lib/cache-manager'
 import { getCustomDomain, getCustomDomainByHash, getWispDomain } from './lib/db'
 import { serveFromCache, serveFromCacheWithRewrite } from './lib/file-serving'
+import { notFoundLog } from './lib/not-found-log'
 import { privateNotFound, servePrivateSite } from './lib/private-serving'
 import { decodeRequestPathname, extractHeaders, isValidRkey } from './lib/request-utils'
-import { requestVisibility, tagNotFound, tagSiteNotFound } from './lib/request-visibility'
+import { notFoundRecorder, requestVisibility, tagNotFound, tagSiteNotFound } from './lib/request-visibility'
 import { recordSiteResponse } from './lib/site-metrics'
 import { getStorageReadHealthSnapshot, type StorageReadHealthSnapshot } from './lib/storage'
 import { isValidAtprotoIdentifier, resolveDid } from './lib/utils'
@@ -129,17 +131,18 @@ export function resolveHostConfig(env: NodeJS.ProcessEnv = process.env): Hosting
 	}
 }
 
-const hostConfig = resolveHostConfig()
+type DomainLookup = (key: string) => Promise<PublicDomainMapping | null>
 
-const {
-	baseHost: BASE_HOST,
-	sharedSitesHost: SHARED_SITES_HOST,
-	privateHost: PRIVATE_HOST,
-	previewHost: PREVIEW_HOST,
-} = hostConfig
-
-if (PREVIEW_HOST && (PREVIEW_HOST === BASE_HOST || PREVIEW_HOST.endsWith(`.${BASE_HOST}`))) {
-	logger.warn(`PREVIEW_HOST ${PREVIEW_HOST} is under ${BASE_HOST}; previews will share its cookie scope`)
+/** Everything the router reaches outside itself: hosts, domain lookups, site serving and visibility sinks. */
+export type HostingAppDeps = {
+	hosts: HostingHostConfig
+	getWispDomain: DomainLookup
+	getCustomDomain: DomainLookup
+	getCustomDomainByHash: DomainLookup
+	serveFromCache: typeof serveFromCache
+	serveFromCacheWithRewrite: typeof serveFromCacheWithRewrite
+	metrics: Pick<typeof metricsCollector, 'recordHostingResponse' | 'recordHostingNotFound'>
+	notFoundLog: Pick<typeof notFoundLog, 'record'>
 }
 
 type NotFound = { reason: HostingNotFoundReason; message: string }
@@ -158,6 +161,7 @@ function notFound(c: Context, { reason, message }: NotFound): Response {
 }
 
 async function serveMappedPublicDomain(
+	deps: HostingAppDeps,
 	c: Context,
 	domain: PublicDomainMapping | null,
 	path: string,
@@ -180,42 +184,12 @@ async function serveMappedPublicDomain(
 		c.req.raw,
 		domain.did,
 		domain.rkey,
-		serveFromCache(domain.did, domain.rkey, path, c.req.url, headers, {
+		deps.serveFromCache(domain.did, domain.rkey, path, c.req.url, headers, {
 			method: c.req.method,
 			signal: c.req.raw.signal,
 		}),
 	)
 }
-
-const app = new Hono()
-
-// Never allow cross-origin credentialed reads of private content.
-app.use(
-	'*',
-	cors({
-		origin: '*',
-		allowMethods: ['GET', 'HEAD', 'OPTIONS'],
-		allowHeaders: ['Content-Type', 'Authorization'],
-		exposeHeaders: [
-			'Content-Length',
-			'Content-Type',
-			'Content-Encoding',
-			'Content-Range',
-			'Accept-Ranges',
-			'Cache-Control',
-			'ETag',
-		],
-		maxAge: 86400, // 24 hours
-		credentials: false,
-	}),
-)
-
-// Add observability middleware
-app.use('*', observabilityMiddleware('hosting-service'))
-app.use('*', requestVisibility())
-
-// Error handler
-app.onError(observabilityErrorHandler('hosting-service'))
 
 /**
  * Build the constant-time hosting health response without issuing disk or S3 I/O.
@@ -261,20 +235,6 @@ export function getCacheInvalidationHealthResponse(
 		},
 	}
 }
-
-app.get('/health', (c) => {
-	const response = getCacheInvalidationHealthResponse(
-		getCacheInvalidationHealthSnapshot(),
-		Boolean(process.env.REDIS_URL),
-	)
-	// Fail closed: a degraded invalidation pipeline must surface as an unhealthy
-	// probe (HTTP 503), not a 200 that orchestrators read as ready.
-	return c.json(response, response.status === 'ok' ? 200 : 503)
-})
-
-// Liveness only: the process is up and serving HTTP. Dependency readiness is
-// /health, which fails closed whenever invalidation or storage is degraded.
-app.get('/live', (c) => c.json({ status: 'ok' }))
 
 type SiteRequest = {
 	url: URL
@@ -353,7 +313,12 @@ function needsSharedSiteRootRedirect(request: SiteRequest, sitePath: SharedSiteP
 	return !sitePath.filePath && !request.url.pathname.endsWith('/')
 }
 
-function serveSharedSiteFile(c: Context, sitePath: SharedSitePath, did: string): Promise<Response> {
+function serveSharedSiteFile(
+	deps: HostingAppDeps,
+	c: Context,
+	sitePath: SharedSitePath,
+	did: string,
+): Promise<Response> {
 	logger.debug(
 		`sites.wisp.place request: identifier=${sitePath.identifier}, site=${sitePath.site}, filePath=${sitePath.filePath}`,
 	)
@@ -364,15 +329,15 @@ function serveSharedSiteFile(c: Context, sitePath: SharedSitePath, did: string):
 		c.req.raw,
 		did,
 		sitePath.site,
-		serveFromCacheWithRewrite(did, sitePath.site, sitePath.filePath, basePath, c.req.url, headers, {
+		deps.serveFromCacheWithRewrite(did, sitePath.site, sitePath.filePath, basePath, c.req.url, headers, {
 			method: c.req.method,
 			signal: c.req.raw.signal,
 		}),
-		`${SHARED_SITES_HOST}/${sitePath.identifier}/${sitePath.site}`,
+		`${deps.hosts.sharedSitesHost}/${sitePath.identifier}/${sitePath.site}`,
 	)
 }
 
-async function serveSharedSite(c: Context, request: SiteRequest): Promise<Response> {
+async function serveSharedSite(deps: HostingAppDeps, c: Context, request: SiteRequest): Promise<Response> {
 	const sitePath = parseSharedSitePath(request.normalizedPath)
 	if (!sitePath) return sharedSiteErrorResponse(c, 'invalidPathFormat')
 
@@ -383,13 +348,17 @@ async function serveSharedSite(c: Context, request: SiteRequest): Promise<Respon
 	if (!did) return sharedSiteErrorResponse(c, 'invalidIdentifier')
 	if (needsSharedSiteRootRedirect(request, sitePath))
 		return c.redirect(`${request.url.pathname}/${request.url.search}`, 301)
-	return serveSharedSiteFile(c, sitePath, did)
+	return serveSharedSiteFile(deps, c, sitePath, did)
 }
 
-function privateSiteResponse(c: Context, request: SiteRequest): Response | Promise<Response> | null {
-	const privateSiteId = siteIdFromHostname(request.hostname, PRIVATE_HOST)
+function privateSiteResponse(
+	{ privateHost }: HostingHostConfig,
+	c: Context,
+	request: SiteRequest,
+): Response | Promise<Response> | null {
+	const privateSiteId = siteIdFromHostname(request.hostname, privateHost)
 	if (privateSiteId !== null) return servePrivateSite(c.req.raw, privateSiteId, request.normalizedPath)
-	return request.hostname === PRIVATE_HOST ? privateNotFound() : null
+	return request.hostname === privateHost ? privateNotFound() : null
 }
 
 async function servePrivateHost(c: Context, privateResponse: Response | Promise<Response>): Promise<Response> {
@@ -398,13 +367,18 @@ async function servePrivateHost(c: Context, privateResponse: Response | Promise<
 	return response
 }
 
-async function servePreviewSite(c: Context, request: SiteRequest, previewHost: string): Promise<Response> {
+async function servePreviewSite(
+	deps: HostingAppDeps,
+	c: Context,
+	request: SiteRequest,
+	previewHost: string,
+): Promise<Response> {
 	const preview = parsePreviewHostname(request.hostname, previewHost)
 	if (!preview) return notFound(c, PREVIEW_MISSING)
 
-	const owner = await getWispDomain(`${preview.claim}.${BASE_HOST}`)
+	const owner = await deps.getWispDomain(`${preview.claim}.${deps.hosts.baseHost}`)
 	if (!owner) return notFound(c, PREVIEW_MISSING)
-	return serveMappedPublicDomain(c, { did: owner.did, rkey: preview.rkey }, request.publicPath, PREVIEW_MISSING)
+	return serveMappedPublicDomain(deps, c, { did: owner.did, rkey: preview.rkey }, request.publicPath, PREVIEW_MISSING)
 }
 
 function parseDnsHashHostname(hostname: string): DnsHashHostname | null {
@@ -413,48 +387,118 @@ function parseDnsHashHostname(hostname: string): DnsHashHostname | null {
 	return { hash: dnsMatch[1] ?? '', baseDomain: dnsMatch[2] ?? '' }
 }
 
-async function serveDnsHashDomain(c: Context, request: SiteRequest): Promise<Response | null> {
+async function serveDnsHashDomain(deps: HostingAppDeps, c: Context, request: SiteRequest): Promise<Response | null> {
 	const dnsHostname = parseDnsHashHostname(request.hostname)
 	if (!dnsHostname) return null
 	if (!dnsHostname.hash) return c.text('Invalid DNS hash', 400)
-	if (dnsHostname.baseDomain !== BASE_HOST) return c.text('Invalid base domain', 400)
+	if (dnsHostname.baseDomain !== deps.hosts.baseHost) return c.text('Invalid base domain', 400)
 
-	const customDomain = await getCustomDomainByHash(dnsHostname.hash)
-	return serveMappedPublicDomain(c, customDomain, request.publicPath, CUSTOM_DOMAIN_MISSING)
+	const customDomain = await deps.getCustomDomainByHash(dnsHostname.hash)
+	return serveMappedPublicDomain(deps, c, customDomain, request.publicPath, CUSTOM_DOMAIN_MISSING)
 }
 
-async function servePublicDomain(c: Context, request: SiteRequest): Promise<Response> {
-	const dnsResponse = await serveDnsHashDomain(c, request)
+async function servePublicDomain(deps: HostingAppDeps, c: Context, request: SiteRequest): Promise<Response> {
+	const dnsResponse = await serveDnsHashDomain(deps, c, request)
 	if (dnsResponse) return dnsResponse
 
-	if (request.hostname.endsWith(`.${BASE_HOST}`)) {
-		const domainInfo = await getWispDomain(request.hostname)
-		return serveMappedPublicDomain(c, domainInfo, request.publicPath, SUBDOMAIN_MISSING)
+	if (request.hostname.endsWith(`.${deps.hosts.baseHost}`)) {
+		const domainInfo = await deps.getWispDomain(request.hostname)
+		return serveMappedPublicDomain(deps, c, domainInfo, request.publicPath, SUBDOMAIN_MISSING)
 	}
 
-	const customDomain = await getCustomDomain(request.hostname)
-	return serveMappedPublicDomain(c, customDomain, request.publicPath, CUSTOM_DOMAIN_MISSING)
+	const customDomain = await deps.getCustomDomain(request.hostname)
+	return serveMappedPublicDomain(deps, c, customDomain, request.publicPath, CUSTOM_DOMAIN_MISSING)
 }
 
 function logSiteRequest(request: SiteRequest): void {
 	logger.debug(`Request: hostname=${request.hostname} path=${request.publicPath}`)
 }
 
-async function routeSiteRequest(c: Context, request: SiteRequest): Promise<Response> {
+async function routeSiteRequest(deps: HostingAppDeps, c: Context, request: SiteRequest): Promise<Response> {
+	const { sharedSitesHost, previewHost } = deps.hosts
 	logSiteRequest(request)
-	const privateResponse = privateSiteResponse(c, request)
+	const privateResponse = privateSiteResponse(deps.hosts, c, request)
 	if (privateResponse) return await servePrivateHost(c, privateResponse)
-	if (request.hostname === SHARED_SITES_HOST) return await serveSharedSite(c, request)
-	if (PREVIEW_HOST && isPreviewHostname(request.hostname, PREVIEW_HOST))
-		return await servePreviewSite(c, request, PREVIEW_HOST)
-	return await servePublicDomain(c, request)
+	if (request.hostname === sharedSitesHost) return await serveSharedSite(deps, c, request)
+	if (previewHost && isPreviewHostname(request.hostname, previewHost))
+		return await servePreviewSite(deps, c, request, previewHost)
+	return await servePublicDomain(deps, c, request)
 }
 
-// Main site serving route
-app.get('/*', (c) => {
-	const requestResult = parseSiteRequest(c.req.url)
-	if (requestResult.kind !== 'valid') return siteRequestErrorResponse(c, requestResult.kind)
-	return routeSiteRequest(c, requestResult.request)
-})
+/** Build the hosting router over its collaborators; the default export applies it to the real ones. */
+export function createApp(deps: HostingAppDeps): Hono {
+	const { baseHost, previewHost } = deps.hosts
+	if (previewHost && (previewHost === baseHost || previewHost.endsWith(`.${baseHost}`))) {
+		logger.warn(`PREVIEW_HOST ${previewHost} is under ${baseHost}; previews will share its cookie scope`)
+	}
 
-export default app
+	const app = new Hono()
+
+	// Never allow cross-origin credentialed reads of private content.
+	app.use(
+		'*',
+		cors({
+			origin: '*',
+			allowMethods: ['GET', 'HEAD', 'OPTIONS'],
+			allowHeaders: ['Content-Type', 'Authorization'],
+			exposeHeaders: [
+				'Content-Length',
+				'Content-Type',
+				'Content-Encoding',
+				'Content-Range',
+				'Accept-Ranges',
+				'Cache-Control',
+				'ETag',
+			],
+			maxAge: 86400, // 24 hours
+			credentials: false,
+		}),
+	)
+
+	// Add observability middleware
+	app.use('*', observabilityMiddleware('hosting-service'))
+	app.use(
+		'*',
+		requestVisibility({
+			recordResponse: deps.metrics.recordHostingResponse,
+			recordNotFound: notFoundRecorder(deps),
+		}),
+	)
+
+	// Error handler
+	app.onError(observabilityErrorHandler('hosting-service'))
+
+	app.get('/health', (c) => {
+		const response = getCacheInvalidationHealthResponse(
+			getCacheInvalidationHealthSnapshot(),
+			Boolean(process.env.REDIS_URL),
+		)
+		// Fail closed: a degraded invalidation pipeline must surface as an unhealthy
+		// probe (HTTP 503), not a 200 that orchestrators read as ready.
+		return c.json(response, response.status === 'ok' ? 200 : 503)
+	})
+
+	// Liveness only: the process is up and serving HTTP. Dependency readiness is
+	// /health, which fails closed whenever invalidation or storage is degraded.
+	app.get('/live', (c) => c.json({ status: 'ok' }))
+
+	// Main site serving route
+	app.get('/*', (c) => {
+		const requestResult = parseSiteRequest(c.req.url)
+		if (requestResult.kind !== 'valid') return siteRequestErrorResponse(c, requestResult.kind)
+		return routeSiteRequest(deps, c, requestResult.request)
+	})
+
+	return app
+}
+
+export default createApp({
+	hosts: resolveHostConfig(),
+	getWispDomain,
+	getCustomDomain,
+	getCustomDomainByHash,
+	serveFromCache,
+	serveFromCacheWithRewrite,
+	metrics: metricsCollector,
+	notFoundLog,
+})

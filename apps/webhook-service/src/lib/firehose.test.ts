@@ -1,35 +1,10 @@
 import '../test-env'
-import { afterEach, describe, expect, mock, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 import type { Main as WhRecord } from '@wispplace/lexicons/types/place/wisp/v2/wh'
+import { WebhookDeliveryInputError } from './delivery'
 import type { CursorRepository, PriorReferenceRepository } from './firehose'
+import { getEventStats, initScopeDids, resetFirehoseForTests, startFirehose } from './firehose'
 import type { JetstreamClient, JetstreamEvent, JetstreamOptions } from './jetstream'
-
-// Firehose imports its database namespace at module load. Keep unit tests fully
-// in-memory; the real DB behavior is covered by db/backfill tests.
-mock.module('./db', () => ({
-	MAX_BACKLINK_REFERENCES_PER_EVENT: 100,
-	MAX_BACKLINK_REFERENCE_ROWS: 100_000,
-	loadCursor: async () => undefined,
-	saveCursor: async () => undefined,
-	loadCursorForStream: async () => undefined,
-	saveCursorForStream: async () => undefined,
-	loadPriorReferenceIndex: async () => undefined,
-	savePriorReferenceIndex: async () => 'stored',
-	deletePriorReferenceIndex: async () => false,
-	loadPriorReferenceKeys: async () => ({ keys: [], complete: true }),
-	runIntakeBatch: async (work: (sql: unknown) => Promise<unknown>) => work(undefined),
-	enqueueWebhookDeliveries: async () => ({ enqueued: 0, deduplicated: 0 }),
-	recordWebhookIntakeQuarantine: async () => undefined,
-	getWebhookRecord: async () => undefined,
-	upsertWebhookRecord: async () => false,
-	deleteWebhookRecord: async () => false,
-	loadActiveWebhooks: async () => ({ rows: [], overflow: false }),
-	loadActiveWebhooksForOwner: async () => ({ rows: [], overflow: false }),
-}))
-
-const firehose = await import('./firehose')
-const delivery = await import('./delivery')
-const { getEventStats, initScopeDids, resetFirehoseForTests, startFirehose } = firehose
 
 const OWNER = 'did:plc:aaaaaaaaaaaaaaaaaaaaaaaa'
 const SCOPE = 'did:plc:bbbbbbbbbbbbbbbbbbbbbbbb'
@@ -139,6 +114,8 @@ function testDependencies(created: FakeJetstream[], references: PriorReferenceRe
 	return {
 		cursorRepository: cursor,
 		referenceRepository: references,
+		// Postgres is external infrastructure: one batch is just its work, without a transaction.
+		runIntakeBatch: async <T>(work: (sql: undefined) => Promise<T>) => work(undefined),
 		createJetstreamClient: (options: JetstreamOptions) => {
 			const client = new FakeJetstream(options)
 			created.push(client)
@@ -187,7 +164,7 @@ describe('firehose admitted in-memory candidate index', () => {
 			enqueueWebhookDeliveries: async (entries) => {
 				if (poison) {
 					poison = false
-					throw new delivery.WebhookDeliveryInputError('payload_too_large', 'too large')
+					throw new WebhookDeliveryInputError('payload_too_large', 'too large')
 				}
 				return { enqueued: entries.length, deduplicated: 0 }
 			},

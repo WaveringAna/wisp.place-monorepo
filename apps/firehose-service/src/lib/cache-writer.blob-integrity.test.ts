@@ -1,15 +1,22 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test'
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import { gzipSync } from 'node:zlib'
 import { BlobRef } from '@atproto/api'
-import * as atproto from '@wispplace/atproto-utils'
 import { casKey } from '@wispplace/fs-utils'
 import type { Entry, Record as WispFsRecord } from '@wispplace/lexicons/types/place/wisp/fs'
-import * as safeFetch from '@wispplace/safe-fetch'
 import { CID } from 'multiformats/cid'
 import { sha256 } from 'multiformats/hashes/sha2'
-import { handleSiteCreateOrUpdate, verifySiteBlobs } from './cache-writer'
+import { handleSiteCreateOrUpdate, type SiteMaterializerDependencies, verifySiteBlobs } from './cache-writer'
+import {
+	allowLoopbackFetch,
+	type BlobRequest,
+	createMemorySiteObjectStore,
+	type LocalPds,
+	recordNotFound,
+	startLocalPds,
+} from './local-pds.fixture'
 import { createRevalidationResourceContext } from './revalidate-resources'
 import { fingerprintSiteManifest } from './site-repair-protocol'
+import type { SiteObjectStore } from './storage'
 
 const did = 'did:plc:root'
 const recordCid = 'current-record'
@@ -22,8 +29,8 @@ let strictFailure = false
 let rewriteFailure = false
 let quotaAdmission: (signal?: AbortSignal) => Promise<boolean> = async () => false
 let oldLedger: Record<string, string> = {}
-const cache = new Map<string, Uint8Array>()
-let blobsFetched: Array<{ did: string | null; cid: string | null; pds: string }> = []
+let store: SiteObjectStore
+let blobsFetched: BlobRequest[] = []
 let writes: Array<{ key: string; bytes: Uint8Array }> = []
 let deleted: string[] = []
 let commits = 0
@@ -31,70 +38,73 @@ let strictPublications = 0
 let subfsRecord: unknown
 const events: string[] = []
 
-mock.module('@wispplace/atproto-utils', () => ({
-	...atproto,
-	getPdsForDid: async (source: string) => (source === did ? 'https://root.pds' : 'https://sub.pds'),
-}))
-mock.module('@wispplace/safe-fetch', () => ({
-	...safeFetch,
-	safeFetch: async (url: string) => {
-		const parsed = new URL(url)
-		if (parsed.pathname.endsWith('getBlob')) {
-			blobsFetched.push({
-				did: parsed.searchParams.get('did'),
-				cid: parsed.searchParams.get('cid'),
-				pds: parsed.origin,
-			})
-			return new Response(body === null ? null : new Uint8Array(body), { status })
-		}
-		return new Response(null, { status: 404 })
-	},
-	safeFetchJson: async () => ({ value: subfsRecord }),
-}))
-mock.module('./db', () => ({
-	deleteSiteSettingsCache: async () => undefined,
-	getSiteCache: async () => ({ cold_synced: true, file_cids: oldLedger }),
-	isSupporter: async (_did: string, signal?: AbortSignal) => quotaAdmission(signal),
-	markSiteCacheDeleted: async () => undefined,
-	registerCasObject: async () => undefined,
-	touchCasObjects: async (keys: string[]) => keys,
-	upsertSiteCache: async () => {
-		commits++
-		events.push('commit')
-	},
-	upsertSiteSettingsCache: async () => undefined,
-	withSiteWriteLock: async (
-		_did: string,
-		_rkey: string,
-		operation: (signal: AbortSignal) => Promise<unknown>,
-		signal?: AbortSignal,
-	) => operation(signal ?? new AbortController().signal),
-}))
-mock.module('./storage', () => ({
-	deleteFile: async (key: string) => {
-		cache.delete(key)
-		deleted.push(key)
-	},
-	getFileMetadata: async () => null,
-	readFile: async () => null,
-	listFiles: async () => [],
-	writeFile: async (key: string, content: Uint8Array) => {
-		if (rewriteFailure && key.includes('/.rewritten/')) throw new Error('rewrite storage unavailable')
-		cache.set(key, content)
-		writes.push({ key, bytes: content })
-		events.push('write')
-	},
-}))
-mock.module('./cache-invalidation', () => ({
-	publishCacheInvalidation: async () => undefined,
-	publishCacheInvalidationStrict: async () => {
-		strictPublications++
-		events.push('publish')
-		if (strictFailure) throw new Error('redis unavailable')
-		return '123-0'
-	},
-	closeCacheInvalidationPublisher: async () => {},
-}))
+// Both PDSes answer from the same per-test state; which one served a blob is
+// visible in its origin.
+function respond(url: URL, origin: string): Response {
+	if (url.pathname === '/xrpc/com.atproto.sync.getBlob') {
+		blobsFetched.push({ did: url.searchParams.get('did'), cid: url.searchParams.get('cid'), pds: origin })
+		return new Response(body === null ? null : new Uint8Array(body), { status })
+	}
+	if (
+		url.pathname === '/xrpc/com.atproto.repo.getRecord' &&
+		url.searchParams.get('collection') === 'place.wisp.subfs'
+	) {
+		return Response.json({ uri: `at://${url.searchParams.get('repo')}`, cid: 'subfs-cid', value: subfsRecord })
+	}
+	return recordNotFound()
+}
+
+let rootPds: LocalPds
+let subPds: LocalPds
+let restoreLoopbackFetch: () => void
+
+beforeAll(() => {
+	restoreLoopbackFetch = allowLoopbackFetch()
+	rootPds = startLocalPds(respond)
+	subPds = startLocalPds(respond)
+})
+
+afterAll(async () => {
+	await Promise.all([rootPds.stop(), subPds.stop()])
+	restoreLoopbackFetch()
+})
+
+function dependencies(): SiteMaterializerDependencies {
+	return {
+		getFileMetadata: store.getFileMetadata,
+		readFile: store.readFile,
+		writeFile: async (key, content, metadata) => {
+			if (rewriteFailure && key.includes('/.rewritten/')) throw new Error('rewrite storage unavailable')
+			await store.writeFile(key, content, metadata)
+			writes.push({ key, bytes: content })
+			events.push('write')
+		},
+		deleteFile: async (key) => {
+			await store.deleteFile(key)
+			deleted.push(key)
+		},
+		getSiteCache: async () => ({ cold_synced: true, file_cids: oldLedger, file_objects: null }),
+		isSupporter: async (_did, signal) => quotaAdmission(signal),
+		registerCasObject: async () => undefined,
+		touchCasObjects: async (keys) => [...keys],
+		upsertSiteCache: async () => {
+			commits++
+			events.push('commit')
+		},
+		upsertSiteSettingsCache: async () => undefined,
+		publishCacheInvalidation: async () => undefined,
+		publishCacheInvalidationStrict: async () => {
+			strictPublications++
+			events.push('publish')
+			if (strictFailure) throw new Error('redis unavailable')
+			return '123-0'
+		},
+		resolvePdsEndpoint: async (source) => (source === did ? rootPds.url : subPds.url),
+		allowLocalhostPds: true,
+	}
+}
+
+const stored = async (key: string) => (await store.readFile(key))?.data
 
 async function fileEntry(name: string, content = bytes): Promise<Entry> {
 	const cid = CID.createV1(0x55, await sha256.digest(content))
@@ -123,7 +133,7 @@ beforeEach(async () => {
 	rewriteFailure = false
 	quotaAdmission = async () => false
 	oldLedger = { 'index.html': blobCid, 'old.txt': 'old' }
-	cache.clear()
+	store = createMemorySiteObjectStore()
 	blobsFetched = []
 	writes = []
 	deleted = []
@@ -136,6 +146,7 @@ function update(options: Parameters<typeof handleSiteCreateOrUpdate>[4] = {}) {
 	return handleSiteCreateOrUpdate(did, 'site', record, recordCid, options, {
 		fetchAuthoritativeSiteRecord: async () => ({ record, cid: recordCid }),
 		withSiteWriteLock: async (_did, _rkey, operation) => operation(new AbortController().signal),
+		materializer: dependencies(),
 	})
 }
 
@@ -147,7 +158,7 @@ describe('verified cache materialization', () => {
 			if (failure === 'corrupt') body = Buffer.alloc(bytes.length, 'x')
 			await expect(update({ forceDownload: true })).rejects.toMatchObject({
 				name: 'BlobIntegrityError',
-				details: { pds: 'https://root.pds', recordCid, path: 'index.html', blobCid, expectedSize: bytes.length },
+				details: { pds: rootPds.url, recordCid, path: 'index.html', blobCid, expectedSize: bytes.length },
 			})
 			expect(blobsFetched).toHaveLength(2)
 			expect(writes).toEqual([])
@@ -167,9 +178,9 @@ describe('verified cache materialization', () => {
 			root: { type: 'directory', entries: [await fileEntry('index.html')] },
 			createdAt: '2024-01-01T00:00:00.000Z',
 		}
-		const result = await verifySiteBlobs(did, 'site', record, recordCid)
+		const result = await verifySiteBlobs(did, 'site', record, recordCid, undefined, dependencies())
 		expect(result).toMatchObject({ recordCid, fileCount: 1, totalBytes: bytes.length })
-		expect(blobsFetched).toEqual([{ did: 'did:plc:other', cid: blobCid, pds: 'https://sub.pds' }])
+		expect(blobsFetched).toEqual([{ did: 'did:plc:other', cid: blobCid, pds: subPds.url }])
 		expect(writes).toEqual([])
 		expect(commits).toBe(0)
 	})
@@ -188,7 +199,7 @@ describe('verified cache materialization', () => {
 	})
 
 	test('same-CID repair downloads every blob and reports proof only after strict publication', async () => {
-		const preflight = await verifySiteBlobs(did, 'site', record, recordCid)
+		const preflight = await verifySiteBlobs(did, 'site', record, recordCid, undefined, dependencies())
 		blobsFetched = []
 		await update({
 			verifiedRepair: { token: 'token', ...preflight },
@@ -210,7 +221,7 @@ describe('verified cache materialization', () => {
 			name: '.rewritten',
 			node: { $type: 'place.wisp.fs#directory', type: 'directory', entries: [await fileEntry('index.html')] },
 		})
-		await expect(verifySiteBlobs(did, 'site', record, recordCid)).rejects.toThrow(
+		await expect(verifySiteBlobs(did, 'site', record, recordCid, undefined, dependencies())).rejects.toThrow(
 			'overlapping original and derived paths',
 		)
 		const verifiedRepair = {
@@ -233,17 +244,17 @@ describe('verified cache materialization', () => {
 
 	test('does not delete a new derived output because it was an old original ledger path', async () => {
 		oldLedger['.rewritten/index.html'] = 'old-raw-cid'
-		const preflight = await verifySiteBlobs(did, 'site', record, recordCid)
+		const preflight = await verifySiteBlobs(did, 'site', record, recordCid, undefined, dependencies())
 		await update({ verifiedRepair: { token: 'token', ...preflight } })
 		const derived = `${did}/site/.rewritten/index.html`
 		expect(deleted).not.toContain(derived)
-		expect(cache.get(derived)).toEqual(bytes)
+		expect(await stored(derived)).toEqual(bytes)
 	})
 
 	test('removes MIME-only HTML variants rather than reporting a stale .shtml repair', async () => {
 		record.root.entries = [await fileEntry('page.shtml')]
 		const key = `${did}/site/.rewritten/page.shtml`
-		cache.set(key, Buffer.from('stale rewritten html'))
+		await store.writeFile(key, Buffer.from('stale rewritten html'))
 		const verifiedRepair = {
 			token: 'token',
 			recordCid,
@@ -252,8 +263,8 @@ describe('verified cache materialization', () => {
 		await update({
 			verifiedRepair,
 			onVerifiedRepairComplete: async () => {
-				expect(cache.has(key)).toBe(false)
-				expect(cache.get(casKey({ cid: blobCid, path: 'page.shtml', mimeType: 'text/html' }))).toEqual(bytes)
+				expect(await store.readFile(key)).toBeNull()
+				expect(await stored(casKey({ cid: blobCid, path: 'page.shtml', mimeType: 'text/html' }))).toEqual(bytes)
 			},
 		})
 		expect(deleted).toContain(key)
@@ -268,7 +279,7 @@ describe('verified cache materialization', () => {
 				signal?.addEventListener('abort', () => reject(signal.reason), { once: true })
 			})
 		try {
-			await expect(verifySiteBlobs(did, 'site', record, recordCid, resources)).rejects.toMatchObject({
+			await expect(verifySiteBlobs(did, 'site', record, recordCid, resources, dependencies())).rejects.toMatchObject({
 				name: 'RevalidationDeadlineError',
 			})
 			expect(blobsFetched).toEqual([])
@@ -281,7 +292,7 @@ describe('verified cache materialization', () => {
 	test('does not report repair while a stale rewritten object survives a failed replacement', async () => {
 		const key = `${did}/site/.rewritten/index.html`
 		const stale = Buffer.from('corrupted rewritten html')
-		cache.set(key, stale)
+		await store.writeFile(key, stale)
 		rewriteFailure = true
 		const verifiedRepair = {
 			token: 'token',
@@ -298,7 +309,7 @@ describe('verified cache materialization', () => {
 			}),
 		).rejects.toThrow('Failed to download files')
 		expect(blobsFetched).toHaveLength(2)
-		expect(cache.get(key)).toBe(stale)
+		expect(await stored(key)).toEqual(stale)
 		expect(proofs).toBe(0)
 		expect(commits).toBe(0)
 		expect(strictPublications).toBe(0)

@@ -1,4 +1,7 @@
-import { afterEach, beforeEach, expect, jest, mock, test } from 'bun:test'
+import { afterEach, beforeEach, expect, jest, test } from 'bun:test'
+import { createRevalidateQueue, resolveRevalidateQueueConfig } from './revalidate-queue'
+
+// Redis is the one piece faked here, at the connection the queue opens.
 
 class FakeIORedis {
 	static instances: FakeIORedis[] = []
@@ -30,10 +33,10 @@ class FakeIORedis {
 	}
 }
 
-mock.module('ioredis', () => ({ default: FakeIORedis }))
-
-process.env.REDIS_URL = 'redis://redis.test:6379'
-const { closeRevalidateQueue, enqueueRevalidate } = await import('./revalidate-queue')
+const { closeRevalidateQueue, enqueueRevalidate } = createRevalidateQueue({
+	config: resolveRevalidateQueueConfig({ REDIS_URL: 'redis://redis.test:6379' }),
+	connect: () => new FakeIORedis(),
+})
 
 beforeEach(() => {
 	jest.useFakeTimers()
