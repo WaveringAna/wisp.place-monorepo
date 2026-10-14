@@ -64,8 +64,12 @@ def probe(check, leader):
         if not healthy(app, body):
             raise ValueError("degraded app")
         push(check["destination"], True)
-        if app == "firehose-service" and active_leader(body):
-            push(leader, True)
+        if app == "firehose-service":
+            if active_leader(body):
+                push(leader, True)
+            elif (state := body.get("leadership", {}).get("state")) != "standby":
+                # A plain standby withholds every minute; anything else explains a site-publishing gap.
+                print(f"{app}: site-publishing withheld (leadership {state}, ready {body.get('ready')})", flush=True)
         print(f"{app}: healthy; status accepted", flush=True)
         return True
     except Exception as error:

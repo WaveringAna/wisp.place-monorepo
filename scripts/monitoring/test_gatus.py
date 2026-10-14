@@ -68,6 +68,32 @@ class GatusTests(unittest.TestCase):
                 self.assertEqual(probe.probe(check, None), expected)
                 self.assertEqual(push.call_count, int(expected))
 
+    def test_firehose_says_why_it_withholds_site_publishing(self):
+        check = dict(app="firehose-service", container="firehose", port=3002, path="/health",
+                     destination={"token": "secret"})
+        container = [{"State": {"Running": True}, "NetworkSettings": {
+            "Networks": {"proxy_network": {"IPAddress": "172.18.0.3"}},
+        }}]
+        cases = (
+            ({"state": "acquired"}, True, 2, ""),
+            ({"state": "acquired"}, False, 1, "site-publishing withheld (leadership acquired, ready False)"),
+            ({"state": "standby"}, False, 1, ""),
+        )
+        for leadership, ready, pushes, note in cases:
+            response = io.BytesIO(json.dumps({"status": "healthy", "ready": ready, "leadership": leadership}).encode())
+            response.status = 200
+            response.url = "http://172.18.0.3:3002/health"
+            opener = MagicMock()
+            opener.open.return_value.__enter__.return_value = response
+            output = io.StringIO()
+            with patch.object(probe.subprocess, "check_output", return_value=json.dumps(container)), \
+                 patch.object(probe.urllib.request, "build_opener", return_value=opener), \
+                 patch.object(probe, "push") as push, redirect_stdout(output):
+                self.assertTrue(probe.probe(check, {"token": "leader"}))
+            self.assertEqual(push.call_count, pushes)
+            self.assertEqual("withheld" in output.getvalue(), bool(note))
+            self.assertIn(note, output.getvalue())
+
     def test_failure_withholds_status_and_redacts_exception(self):
         output = io.StringIO()
         with patch.object(probe.subprocess, "check_output", side_effect=ValueError("secret")), \
