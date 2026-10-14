@@ -43,7 +43,6 @@ import {
 import { createRevalidationResourceContext } from './lib/revalidate-resources'
 import { getRevalidateWorkerState, startRevalidateWorker, stopRevalidateWorker } from './lib/revalidate-worker'
 import { createStartupGate } from './lib/startup-gate'
-import { getStorageStatsSnapshot, startStorageStatsRefresh, stopStorageStatsRefresh } from './lib/storage'
 import { SupervisorClient } from './lib/supervisor-client'
 import { assertSignallableWorkerPid } from './lib/supervisor-config'
 
@@ -170,7 +169,6 @@ function closeHealthServer(): Promise<void> {
 // Health endpoint
 app.get('/health', (c) => {
 	const firehoseHealth = getFirehoseHealth()
-	const storageStats = getStorageStatsSnapshot()
 	const revalidationState = getRevalidateWorkerState()
 	const revalidationConfigured = Boolean(config.redisUrl)
 	const workerExpected = !config.leadershipSupervisorEnabled || leadershipState === 'acquired'
@@ -208,14 +206,6 @@ app.get('/health', (c) => {
 			reconnecting: revalidation.reconnecting,
 			...revalidationState,
 		},
-		// Keep the former storage-stat fields at this level for existing callers.
-		storage: {
-			...(storageStats.stats ?? {}),
-			lastSuccessAgeMs: storageStats.lastSuccessAgeMs,
-			lastErrorKind: storageStats.lastErrorKind,
-			stale: storageStats.stale,
-			refreshing: storageStats.refreshing,
-		},
 		...(config.leaderElection &&
 			!config.leadershipSupervisorEnabled && {
 				leader: getLeaderInfo(),
@@ -251,7 +241,6 @@ async function shutdownInternal(signal: string): Promise<void> {
 	serviceLifecycle = 'draining'
 	leadershipState = config.leadershipSupervisorEnabled ? 'releasing' : leadershipState
 	logger.info(`Received ${signal}; stopping intake and draining work`)
-	stopStorageStatsRefresh()
 
 	// Calling close() synchronously stops new accepts before any potentially long
 	// drain. Its completion is awaited before process exit.
@@ -584,9 +573,6 @@ async function startProtectedWork(
 		return false
 	}
 	startFirehose(cursor, onFailure)
-	// A full storage listing is only worth its cost on the one active worker;
-	// standbys report no capacity data (`stale: true`, `lastSuccessAgeMs: null`).
-	startStorageStatsRefresh()
 	firehoseStartGate.open()
 	return true
 }
@@ -656,7 +642,6 @@ async function main() {
 				)
 			},
 			async () => {
-				stopStorageStatsRefresh()
 				const drain = await stopFirehose()
 				const workerStop = await stopRevalidateWorker({ gracePeriodMs: config.firehoseDrainGraceMs })
 				await stopCursorSaving()

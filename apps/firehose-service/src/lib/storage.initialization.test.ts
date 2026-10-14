@@ -8,7 +8,7 @@ async function importStorage(cache: string, operation: string): Promise<void> {
 		[
 			process.execPath,
 			'-e',
-			`import { getStorage, getStorageStatsSnapshot } from ${JSON.stringify(join(import.meta.dir, 'storage.ts'))}; ${operation}`,
+			`import { getStorage } from ${JSON.stringify(join(import.meta.dir, 'storage.ts'))}; ${operation}`,
 		],
 		{
 			cwd: join(import.meta.dir, '../..'),
@@ -31,13 +31,13 @@ async function importStorage(cache: string, operation: string): Promise<void> {
 	expect(exit).toBe(0)
 }
 
-test('read-only imports and health snapshots leave invalidated cache files untouched', async () => {
+test('a read-only import leaves invalidated cache files untouched', async () => {
 	const directory = await mkdtemp(join(tmpdir(), 'wisp-storage-readonly-'))
 	try {
 		const retired = join(directory, '.invalidated', 'recoverable')
 		await mkdir(retired, { recursive: true })
 		await writeFile(join(retired, 'index.html'), 'recoverable')
-		await importStorage(directory, 'getStorageStatsSnapshot()')
+		await importStorage(directory, 'void getStorage')
 		expect(await readFile(join(retired, 'index.html'), 'utf8')).toBe('recoverable')
 	} finally {
 		await rm(directory, { recursive: true, force: true })

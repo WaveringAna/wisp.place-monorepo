@@ -12,16 +12,6 @@ import {
 	TieredStorage,
 } from '@wispplace/tiered-storage'
 import { config } from '../config'
-import { StorageStatsCache, type StorageStatsSnapshot } from './storage-stats-cache'
-
-export {
-	STORAGE_STATS_REFRESH_INTERVAL_MS,
-	STORAGE_STATS_STALE_AFTER_MS,
-	StorageStatsCache,
-	type StorageStatsErrorKind,
-	type StorageStatsFetcher,
-	type StorageStatsSnapshot,
-} from './storage-stats-cache'
 
 const logger = createLogger('firehose-service')
 
@@ -84,27 +74,6 @@ let storage: TieredStorage<Uint8Array> | undefined
 export function getStorage(): TieredStorage<Uint8Array> {
 	storage ??= createColdStorage(getColdTier())
 	return storage
-}
-
-/**
- * S3 statistics require a full paginated ListObjects scan. The cache is started
- * explicitly by the service lifecycle, never by a health request or module import.
- */
-const storageStatsCache = new StorageStatsCache(() => getStorage().getStats())
-
-/** Returns an in-memory snapshot and never starts or awaits a storage scan. */
-export function getStorageStatsSnapshot(): StorageStatsSnapshot {
-	return storageStatsCache.getSnapshot()
-}
-
-/** Start the single background S3 statistics scan schedule. */
-export function startStorageStatsRefresh(): void {
-	storageStatsCache.start()
-}
-
-/** Stop future background scans without waiting for an in-flight provider call. */
-export function stopStorageStatsRefresh(): void {
-	storageStatsCache.stop()
 }
 
 /**
