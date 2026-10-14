@@ -183,6 +183,8 @@ class OperationsTests(unittest.TestCase):
         self.assertEqual(result["endpoints"], before["endpoints"])
         self.assertEqual(result["external-endpoints"][0], before["external-endpoints"][0])
         self.assertEqual(len(result["external-endpoints"]), 13)
+        for endpoint in result["external-endpoints"][1:]:
+            self.assertEqual([alert["type"] for alert in endpoint["alerts"]], ["discord", "custom"])
         with self.assertRaises(ValueError):
             overlay.extend(result)
 

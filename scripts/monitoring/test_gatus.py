@@ -30,6 +30,17 @@ class GatusTests(unittest.TestCase):
             self.assertEqual(endpoint["heartbeat"]["interval"], "3m")
         self.assertEqual(data["alerting"]["discord"]["webhook-url"], "${DISCORD_WEBHOOK_URL}")
 
+    def test_every_alert_also_reaches_albedo_through_the_local_relay(self):
+        data = config.configuration()
+        custom = data["alerting"]["custom"]
+        self.assertEqual(custom["url"], "http://127.0.0.1:8091/")
+        self.assertEqual(custom["default-alert"], data["alerting"]["discord"]["default-alert"])
+        self.assertEqual(json.loads(custom["body"])["status"], "[ALERT_TRIGGERED_OR_RESOLVED]")
+        for endpoint in data["endpoints"] + data["external-endpoints"]:
+            discord, albedo = endpoint["alerts"]
+            self.assertEqual((discord.pop("type"), albedo.pop("type")), ("discord", "custom"))
+            self.assertEqual(discord, albedo)
+
     def test_health_policy_and_leader(self):
         self.assertTrue(probe.healthy("webhook-service", {"status": "healthy"}))
         self.assertFalse(probe.healthy("main-app", {"status": "degraded"}))

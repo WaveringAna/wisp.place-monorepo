@@ -5,6 +5,18 @@ import json
 
 REGIONS = ("us-west", "eu", "us-east", "singapore")
 APPS = ("main-app", "hosting-service", "firehose-service")
+# gatus-relay.ts listens here inside gatus's network namespace and signs alerts for the albedo webhook.
+ALBEDO_RELAY_URL = "http://127.0.0.1:8091/"
+ALBEDO_ALERT_BODY = json.dumps({
+    "status": "[ALERT_TRIGGERED_OR_RESOLVED]", "endpoint": "[ENDPOINT_GROUP]/[ENDPOINT_NAME]",
+    "url": "[ENDPOINT_URL]", "errors": "[RESULT_ERRORS]", "conditions": "[RESULT_CONDITIONS]",
+}, separators=(",", ":"))
+DEFAULT_ALERT = {"failure-threshold": 2, "success-threshold": 2, "send-on-resolved": True}
+
+
+def alerts(**overrides):
+    """The same alert to discord and to albedo."""
+    return [{"type": kind, **overrides} for kind in ("discord", "custom")]
 
 
 def token_name(group, name):
@@ -17,7 +29,7 @@ def configuration():
             "group": group, "name": name, "url": url, "interval": "60s",
             "client": {"timeout": "15s", "ignore-redirect": True},
             "conditions": ["[STATUS] == 200"] + (["[BODY].status == ok"] if health else []),
-            "alerts": [{"type": "discord"}],
+            "alerts": alerts(),
         }
 
     endpoints = [
@@ -42,18 +54,23 @@ def configuration():
             "type": "sqlite", "path": "/data/gatus.db",
             "maximum-number-of-results": 1440, "maximum-number-of-events": 200,
         },
-        "alerting": {"discord": {
-            "webhook-url": "${DISCORD_WEBHOOK_URL}", "title": "wisp.place status",
-            "default-alert": {
-                "failure-threshold": 2, "success-threshold": 2, "send-on-resolved": True,
+        "alerting": {
+            "discord": {
+                "webhook-url": "${DISCORD_WEBHOOK_URL}", "title": "wisp.place status",
+                "default-alert": DEFAULT_ALERT,
             },
-        }},
+            "custom": {
+                "url": ALBEDO_RELAY_URL, "method": "POST",
+                "headers": {"Content-Type": "application/json"}, "body": ALBEDO_ALERT_BODY,
+                "default-alert": DEFAULT_ALERT,
+            },
+        },
         "endpoints": endpoints,
         "external-endpoints": [
             {
                 "group": group, "name": name, "token": "${" + token_name(group, name) + "}",
                 "heartbeat": {"interval": "3m"},
-                "alerts": [{"type": "discord", "failure-threshold": 1}],
+                "alerts": alerts(**{"failure-threshold": 1}),
             }
             for group, name in external
         ],

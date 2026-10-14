@@ -1,0 +1,24 @@
+[Unit]
+Description=Signs gatus alerts for the albedo webhook
+BindsTo=gatus.service
+After=gatus.service
+
+[Container]
+Image=docker.io/oven/bun:1-alpine@sha256:3cab0e73b1e5f6d4431a03ef7d66e5dc139a41979dccb5672fedcd778df2aeed
+ContainerName=gatus-relay
+Network=container:gatus
+EnvironmentFile=/opt/wisp-status/gatus-relay.env
+Volume=/opt/wisp-status/gatus-relay.ts:/relay.ts:ro,Z
+Exec=bun /relay.ts
+ReadOnly=true
+NoNewPrivileges=true
+DropCapability=all
+PodmanArgs=--memory=96m
+LogDriver=journald
+
+[Service]
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target gatus.service

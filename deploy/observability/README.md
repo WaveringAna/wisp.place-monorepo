@@ -197,6 +197,23 @@ units. keep state/config backups. stopping a timer without removing its heartbea
 correctly alerts. the existing status host remains a single failure domain; its
 own outage cannot deliver discord notifications.
 
+## albedo alerts
+
+every gatus alert also goes to an albedo session webhook, through the `custom`
+provider `scripts/monitoring/gatus-config.py` defines (same thresholds as discord):
+
+- gatus posts to `http://127.0.0.1:8091/`, where `scripts/monitoring/gatus-relay.ts`
+  runs as the `gatus-relay` quadlet inside gatus's network namespace
+  (`Network=container:gatus`, nothing published). it signs the raw body
+  (`x-albedo-signature: sha256=<hmac-sha256 hex>`) and forwards it to the hook url.
+- install: `gatus-relay.ts` to `/opt/wisp-status/`, `gatus-relay.container` to
+  `/etc/containers/systemd/`, then `/opt/wisp-status/gatus-relay.env` (0600) with
+  `ALBEDO_WEBHOOK_URL` and `ALBEDO_WEBHOOK_SECRET`; `systemctl daemon-reload &&
+  systemctl start gatus-relay`. never write the secret into this repository.
+- if the relay or albedo is unreachable only the custom alert fails; discord still delivers.
+- rollback: drop the `custom` provider and alerts from the config, stop the unit and
+  remove the quadlet.
+
 ## activation evidence (2026-09-12)
 
 - gatus config/secrets/compose backup:

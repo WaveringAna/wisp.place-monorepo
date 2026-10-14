@@ -25,8 +25,9 @@ def extend(config):
         endpoints.append({
             "group": group, "name": name, "token": "${" + token_name(group, name) + "}",
             "heartbeat": {"interval": "4m"},
-            "alerts": [{"type": "discord", "failure-threshold": 1,
-                        "success-threshold": 2, "send-on-resolved": True}],
+            # discord, and albedo through the custom provider gatus-config.py defines
+            "alerts": [{"type": kind, "failure-threshold": 1, "success-threshold": 2, "send-on-resolved": True}
+                       for kind in ("discord", "custom")],
         })
     return result
 
