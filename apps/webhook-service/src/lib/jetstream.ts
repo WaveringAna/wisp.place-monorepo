@@ -186,8 +186,9 @@ export function buildJetstreamSubscriptionUrl(
 
 /**
  * A bounded Jetstream consumer. Events are not considered acknowledged until the
- * async handler and optional durable-cursor callback both resolve. Queue overflow,
- * parse errors, and handler errors deliberately reconnect from the last acked cursor.
+ * async handler and optional durable-cursor callback both resolve. Queue overflow
+ * closes the socket and resumes after the newest queued event once half the queue
+ * is free; parse and handler errors drop the queue and replay from the last ack.
  */
 export class JetstreamClient {
 	private ws: WebSocket | null = null
@@ -215,6 +216,8 @@ export class JetstreamClient {
 	private generation = 0
 	private readonly drainWaiters = new Set<() => void>()
 	private readonly maxQueue: number
+	/** Queue length at which a stream paused by queue pressure reconnects. */
+	private readonly resumeQueueLength: number
 	private readonly batchMax: number
 	private readonly maxEventBytes: number
 	private readonly reconnectMinMs: number
@@ -245,6 +248,7 @@ export class JetstreamClient {
 		}
 		this.lastAckedCursor = opts.cursor
 		this.maxQueue = opts.maxQueue ?? config.intakeQueueMax
+		this.resumeQueueLength = Math.floor(this.maxQueue / 2)
 		// A batch is drawn from the queue, so it can never usefully exceed it.
 		this.batchMax = Math.min(opts.batchMax ?? config.intakeBatchMax, this.maxQueue)
 		this.maxEventBytes = opts.maxEventBytes ?? config.intakeEventMaxBytes
@@ -279,7 +283,13 @@ export class JetstreamClient {
 		this.connect()
 	}
 
-	private buildUrl(cursor = this.lastAckedCursor): string {
+	/**
+	 * Every event up to the newest one still queued is either acknowledged or
+	 * held here, so a connection resumes after it. Paths that drop the queue
+	 * (handler failure, quarantine) fall back to the last durable ack. Playback
+	 * is inclusive, so that one event arrives twice, as every replay does.
+	 */
+	private buildUrl(cursor = this.queue[this.queue.length - 1]?.time_us ?? this.lastAckedCursor): string {
 		return buildJetstreamSubscriptionUrl(this.opts, cursor)
 	}
 
@@ -392,6 +402,7 @@ export class JetstreamClient {
 		} finally {
 			this.running = false
 			this.pump()
+			this.reconnectAfterDrain()
 			this.notifyDrained()
 		}
 	}
@@ -440,19 +451,22 @@ export class JetstreamClient {
 		this.reconnectAfterDrain()
 	}
 
+	/**
+	 * Queue pressure is flow control, not failure: once half the queue is free
+	 * the stream reconnects at once, so the relay refills it while the rest
+	 * drains. Any other close waits for a full drain and backs off.
+	 */
 	private reconnectAfterDrain(): void {
-		if (
-			(!this.backpressured && !this.reconnectWhenDrained) ||
-			this.destroyed ||
-			!this.accepting ||
-			this.ws ||
-			this.queue.length !== 0 ||
-			this.running
-		)
-			return
+		if (this.destroyed || !this.accepting || this.ws) return
+		const flowControl = this.backpressured
+		const ready = flowControl
+			? this.queue.length <= this.resumeQueueLength
+			: this.reconnectWhenDrained && this.queue.length === 0 && !this.running
+		if (!ready) return
 		this.backpressured = false
 		this.reconnectWhenDrained = false
-		this.scheduleReconnect()
+		if (flowControl) this.connect()
+		else this.scheduleReconnect()
 	}
 
 	private quarantine(error: Error): void {

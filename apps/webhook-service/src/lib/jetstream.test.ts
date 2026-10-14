@@ -308,6 +308,83 @@ describe('JetstreamClient durable batch acknowledgement and protocol quarantine'
 		client.destroy()
 	})
 
+	test('resumes once half the queue is free, after the newest queued event, without backoff', async () => {
+		globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
+		const releases: Array<() => void> = []
+		const processed: number[] = []
+		const client = new JetstreamClient({
+			url: 'wss://relay.example/subscribe',
+			cursor: 10,
+			maxQueue: 4,
+			batchMax: 1,
+			// Any backoff would outlast the test: flow control must not wait.
+			reconnectMinMs: 60_000,
+			reconnectMaxMs: 60_000,
+			onEvents: async (events) => {
+				await new Promise<void>((resolve) => releases.push(resolve))
+				for (const value of events) processed.push(value.time_us)
+			},
+		})
+		client.start()
+		const socket = FakeWebSocket.instances[0]
+		socket?.open()
+		for (const timeUs of [11, 12, 13, 14]) socket?.message(event(timeUs))
+		await flush()
+		expect(client.failureKind).toBe('queue')
+		expect(FakeWebSocket.instances).toHaveLength(1)
+		releases.shift()?.()
+		await flush()
+		// 11 acked, three still queued: more than half, so still closed.
+		expect(FakeWebSocket.instances).toHaveLength(1)
+		releases.shift()?.()
+		await flush()
+		expect(processed).toEqual([11, 12])
+		expect(client.cursor).toBe(12)
+		const resumed = FakeWebSocket.instances[1]
+		expect(resumed?.url).toContain('cursor=14')
+		resumed?.open()
+		resumed?.message(event(15))
+		for (let index = 0; index < 3; index++) {
+			releases.shift()?.()
+			await flush()
+		}
+		expect(processed).toEqual([11, 12, 13, 14, 15])
+		client.destroy()
+	})
+
+	test('a batch that keeps failing after an early resume still replays from the last ack', async () => {
+		globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
+		let releaseFirst: (() => void) | undefined
+		const client = new JetstreamClient({
+			url: 'wss://relay.example/subscribe',
+			cursor: 10,
+			maxQueue: 2,
+			batchMax: 1,
+			batchMaxAttempts: 1,
+			reconnectMinMs: 1,
+			reconnectMaxMs: 1,
+			reconnectMaxExponent: 0,
+			onEvents: async (events) => {
+				if (events[0]?.time_us === 11) return new Promise<void>((resolve) => (releaseFirst = resolve))
+				throw new Error('durable batch failed')
+			},
+		})
+		client.start()
+		const socket = FakeWebSocket.instances[0]
+		socket?.open()
+		socket?.message(event(11))
+		socket?.message(event(12))
+		await flush()
+		releaseFirst?.()
+		await flush()
+		expect(FakeWebSocket.instances[1]?.url).toContain('cursor=12')
+		expect(client.failureKind).toBe('handler')
+		expect(client.cursor).toBe(11)
+		await Bun.sleep(5)
+		expect(FakeWebSocket.instances[FakeWebSocket.instances.length - 1]?.url).toContain('cursor=11')
+		client.destroy()
+	})
+
 	test('replays from the last durable batch when a batch keeps failing', async () => {
 		globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
 		const client = new JetstreamClient({
