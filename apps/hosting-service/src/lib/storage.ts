@@ -13,7 +13,7 @@
 import { createHash } from 'node:crypto'
 import { existsSync, realpathSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { createLogger } from '@wispplace/observability'
+import { createLogger, metricsCollector } from '@wispplace/observability'
 import {
 	DiskStorageTier,
 	MemoryStorageTier,
@@ -847,6 +847,7 @@ function initializeStorage(): TieredStorage<Uint8Array> {
 					? { accessKeyId: AWS_ACCESS_KEY_ID, secretAccessKey: AWS_SECRET_ACCESS_KEY }
 					: undefined,
 			prefix: S3_PREFIX,
+			onRequest: metricsCollector.recordS3Request,
 		})
 
 		// Hosting service is read-only: always wrap S3 tier to make it read-only
@@ -995,6 +996,7 @@ function initializePrivateStorage(): TieredStorage<Uint8Array> {
 						? { accessKeyId: AWS_ACCESS_KEY_ID, secretAccessKey: AWS_SECRET_ACCESS_KEY }
 						: undefined,
 				prefix: PRIVATE_PREFIX,
+				onRequest: metricsCollector.recordS3Request,
 			}),
 			privateS3ReadHealth,
 		)

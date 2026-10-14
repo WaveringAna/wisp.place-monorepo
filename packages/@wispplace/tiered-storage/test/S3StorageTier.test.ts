@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { Readable } from 'node:stream'
 import { gzipSync } from 'node:zlib'
 import { CopyObjectCommand, DeleteObjectsCommand, ListObjectsV2Command, PutObjectCommand } from '@aws-sdk/client-s3'
-import { S3StorageTier } from '../src/tiers/S3StorageTier.js'
+import { type S3Request, S3StorageTier } from '../src/tiers/S3StorageTier.js'
 
 describe('S3StorageTier metadata fallback', () => {
 	test('getWithMetadata should synthesize metadata when S3 metadata headers are missing', async () => {
@@ -506,5 +506,48 @@ describe('S3StorageTier copyObject', () => {
 		})
 
 		await expect(tier.copyObject('a', 'b', metadata, 'sum-1')).rejects.toThrow('connection reset')
+	})
+})
+
+describe('S3StorageTier request reporting', () => {
+	/** A tier whose client runs its real middleware stack but answers from `answer` instead of the network. */
+	function reportingTier(answer: (commandName: string) => unknown) {
+		const reports: S3Request[] = []
+		const tier = new S3StorageTier({
+			bucket: 'test-bucket',
+			region: 'us-east-1',
+			credentials: { accessKeyId: 'test', secretAccessKey: 'test' },
+			onRequest: (request) => reports.push(request),
+		})
+		;(tier as any).client.middlewareStack.add(
+			(_next: unknown, context: { commandName: string }) => async () => ({
+				output: answer(context.commandName),
+				response: {},
+			}),
+			{ step: 'build', name: 'fakeS3' },
+		)
+		return { tier, reports }
+	}
+
+	const failure = (name: string) => () => {
+		throw Object.assign(new Error(name), { name })
+	}
+
+	test('reports a successful command by operation', async () => {
+		const { tier, reports } = reportingTier(() => ({ $metadata: {} }))
+		await tier.delete('site/index.html')
+		expect(reports).toHaveLength(1)
+		expect(reports[0]).toMatchObject({ operation: 'DeleteObject', outcome: 'ok' })
+		expect(reports[0]?.durationMs).toBeGreaterThanOrEqual(0)
+	})
+
+	test('reports a missing key as not-found and other failures as error', async () => {
+		const missing = reportingTier(failure('NotFound'))
+		expect(await missing.tier.exists('gone')).toBe(false)
+		expect(missing.reports).toMatchObject([{ operation: 'HeadObject', outcome: 'not-found' }])
+
+		const broken = reportingTier(failure('InternalError'))
+		await expect(broken.tier.exists('any')).rejects.toThrow('InternalError')
+		expect(broken.reports).toMatchObject([{ operation: 'HeadObject', outcome: 'error' }])
 	})
 })

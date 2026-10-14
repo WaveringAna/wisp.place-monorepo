@@ -3,7 +3,7 @@
  * Writes directly to cold tier (S3) - hosting-service pulls to warm/hot as needed
  */
 
-import { createLogger } from '@wispplace/observability'
+import { createLogger, metricsCollector } from '@wispplace/observability'
 import {
 	DiskStorageTier,
 	S3StorageTier,
@@ -41,6 +41,7 @@ function getColdTier(): S3StorageTier | DiskStorageTier {
 					: undefined,
 			prefix: config.s3Prefix,
 			forcePathStyle: config.s3ForcePathStyle,
+			onRequest: metricsCollector.recordS3Request,
 		})
 		logger.info('[Storage] Using S3 cold tier', { endpointConfigured: Boolean(config.s3Endpoint), mode: 's3' })
 	} else {

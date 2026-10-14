@@ -22,7 +22,12 @@ export {
 } from './tiers/DiskStorageTier.js'
 // Built-in tier implementations
 export { MemoryStorageTier, type MemoryStorageTierConfig } from './tiers/MemoryStorageTier.js'
-export { S3StorageTier, type S3StorageTierConfig } from './tiers/S3StorageTier.js'
+export {
+	type S3Request,
+	type S3RequestOutcome,
+	S3StorageTier,
+	type S3StorageTierConfig,
+} from './tiers/S3StorageTier.js'
 
 // Types
 export type {

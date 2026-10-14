@@ -86,6 +86,26 @@ export interface S3StorageTierConfig {
 	 * making a maintenance operation loop forever.
 	 */
 	maxListPages?: number
+
+	/**
+	 * Called once per S3 command with its operation, outcome and duration.
+	 *
+	 * @remarks
+	 * Duration runs until response headers arrive, so a GetObject is timed
+	 * before its body streams, and it includes SDK retries. Multipart uploads
+	 * report each of their commands.
+	 */
+	onRequest?: (request: S3Request) => void
+}
+
+/** How one S3 command ended. */
+export type S3RequestOutcome = 'ok' | 'not-found' | 'error'
+
+export interface S3Request {
+	/** SDK command name without its `Command` suffix, e.g. `GetObject`. */
+	operation: string
+	outcome: S3RequestOutcome
+	durationMs: number
 }
 
 /**
@@ -147,6 +167,29 @@ export class S3StorageTier implements StorageTier {
 		}
 
 		this.client = new S3Client(clientConfig)
+		const { onRequest } = config
+		if (onRequest) {
+			this.client.middlewareStack.add(
+				(next, context) => async (args) => {
+					const started = performance.now()
+					const report = (outcome: S3RequestOutcome) =>
+						onRequest({
+							operation: (context.commandName ?? 'Unknown').replace(/Command$/, ''),
+							outcome,
+							durationMs: performance.now() - started,
+						})
+					try {
+						const result = await next(args)
+						report('ok')
+						return result
+					} catch (error) {
+						report(this.isNoSuchKeyError(error) ? 'not-found' : 'error')
+						throw error
+					}
+				},
+				{ step: 'initialize', name: 'wispRequestTiming' },
+			)
+		}
 		this.prefix = config.prefix ?? ''
 		this.maxListPages = maxListPages
 	}

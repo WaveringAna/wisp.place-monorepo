@@ -31,6 +31,7 @@ import type {
 	RevalidateQuarantineClass,
 	RevalidateQuarantineRetryOutcome,
 	RevalidateQuarantineSnapshot,
+	S3RequestEntry,
 	SiteRequestEntry,
 } from './core'
 import { createProcessMemoryInstruments } from './process-memory'
@@ -429,6 +430,20 @@ export function createHostingInstruments(meter: Meter): HostingInstruments {
 	}
 }
 
+/**
+ * S3 command latency by operation and outcome; `_count` is the request count.
+ * Operations are the SDK commands the S3 tier sends (about ten), and outcomes
+ * a closed set of three, so series never grow with keys or sites.
+ */
+export function createS3Instruments(meter: Meter): (entry: S3RequestEntry) => void {
+	const duration = meter.createHistogram('s3_request_duration_ms', {
+		description: 'S3 command time to response headers by operation and outcome',
+		unit: 'ms',
+		advice: { explicitBucketBoundaries: HOSTING_RESPONSE_BUCKETS_MS },
+	})
+	return (entry) => duration.record(entry.durationMs, { operation: entry.operation, outcome: entry.outcome })
+}
+
 export type RevalidateQuarantineInstruments = {
 	setSnapshot(snapshot: RevalidateQuarantineSnapshot | null): void
 	recordRetry(outcome: RevalidateQuarantineRetryOutcome): void
@@ -491,6 +506,7 @@ class MetricsExporter {
 	private siteRequestCounter?: Counter
 	private hosting?: HostingInstruments
 	private quarantine?: RevalidateQuarantineInstruments
+	private s3?: (entry: S3RequestEntry) => void
 	private serviceInfo?: ObservableGauge
 	private shutdownPromise?: Promise<void>
 	private config: GrafanaConfig = {}
@@ -564,6 +580,7 @@ class MetricsExporter {
 
 		this.hosting = createHostingInstruments(meter)
 		this.quarantine = createRevalidateQuarantineInstruments(meter)
+		this.s3 = createS3Instruments(meter)
 		createProcessMemoryInstruments(meter)
 
 		this.serviceInfo = meter.createObservableGauge('service_instance_info', {
@@ -635,6 +652,11 @@ class MetricsExporter {
 	recordHostingDbReadRetry(outcome: HostingDbReadRetryOutcome) {
 		if (!this.config.enabled) return
 		this.hosting?.recordDbReadRetry(outcome)
+	}
+
+	recordS3Request(entry: S3RequestEntry) {
+		if (!this.config.enabled) return
+		this.s3?.(entry)
 	}
 
 	setRevalidateQuarantineSnapshot(snapshot: RevalidateQuarantineSnapshot | null) {

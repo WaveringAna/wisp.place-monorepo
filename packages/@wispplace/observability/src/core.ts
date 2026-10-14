@@ -79,6 +79,16 @@ export type HostingNotFoundReason =
 /** What a retried replica read ended as: it succeeded on a retry, or ran out of retries. Closed so it can be a metric label. */
 export type HostingDbReadRetryOutcome = 'recovered' | 'exhausted'
 
+/** How one S3 command ended. Closed so it can be a metric label. */
+export type S3RequestOutcome = 'ok' | 'not-found' | 'error'
+
+export interface S3RequestEntry {
+	/** SDK command name without its `Command` suffix, e.g. `GetObject`. */
+	operation: string
+	outcome: S3RequestOutcome
+	durationMs: number
+}
+
 /** How a fenced site's latest dead-letter record classifies it; `unknown` when that record is unreadable. */
 export type RevalidateQuarantineClass = 'transient' | 'permanent' | 'unknown'
 
@@ -395,6 +405,11 @@ export const metricsCollector = {
 	/** Hosting replica reads that needed a retry after a dropped connection, by outcome; exported only. */
 	recordHostingDbReadRetry(outcome: HostingDbReadRetryOutcome) {
 		metricsExporter.recordHostingDbReadRetry(outcome)
+	},
+
+	/** S3 commands by operation and outcome; exported only. */
+	recordS3Request(entry: S3RequestEntry) {
+		metricsExporter.recordS3Request(entry)
 	},
 
 	/** Firehose leader quarantine gauges; `null` stops reporting them (lost leadership). Exported only. */

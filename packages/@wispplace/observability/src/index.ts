@@ -12,6 +12,7 @@ export * from './core'
 export {
 	createHostingInstruments,
 	createRevalidateQuarantineInstruments,
+	createS3Instruments,
 	type GrafanaConfig,
 	grafanaConfig,
 	HOSTING_RESPONSE_BUCKETS_MS,
