@@ -204,8 +204,8 @@ pub async fn run(mut args: DeployArgs) -> Result<()> {
             "Deploy cancelled",
             "Missing site name: pass --site <name>",
         )?,
-    }
-    .to_lowercase();
+    };
+
     if !valid_site(&site) {
         bail!("Invalid site name: {site}. Must be 1-512 chars of [a-zA-Z0-9._~:-]");
     }
