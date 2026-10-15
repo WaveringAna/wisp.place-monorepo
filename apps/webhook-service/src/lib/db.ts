@@ -1545,6 +1545,13 @@ function relayId(relay: string): string {
 
 export type JetstreamConsumer = 'direct' | 'backlink' | 'registry'
 const CURSOR_REWIND_US = 2_000_000 // two seconds in microseconds
+/**
+ * Each Jetstream instance stamps time_us when it ingests an event, so the same
+ * event can carry a slightly different time on another instance. A cursor
+ * carried to a new relay rewinds far enough to cover that skew. Event identity
+ * includes the relay, so receivers may get the replayed overlap a second time.
+ */
+const RELAY_SWITCH_REWIND_US = 60_000_000
 
 function assertCursorInput(consumer: JetstreamConsumer, relay: string, sequence?: number): string {
 	if (consumer !== 'direct' && consumer !== 'backlink' && consumer !== 'registry')
@@ -1555,15 +1562,27 @@ function assertCursorInput(consumer: JetstreamConsumer, relay: string, sequence?
 }
 
 /**
- * Load a rewind-safe independent cursor. Legacy singleton state is migrated to
- * direct only when it represents the same normalized relay identity.
+ * Load a rewind-safe independent cursor. Jetstream cursors are unix
+ * microseconds, not relay sequence numbers, so the latest progress saved on any
+ * relay is where this consumer resumes, even right after a relay switch, and a
+ * relay used long ago never pulls it back to that old position. Legacy
+ * singleton state is migrated to direct only for the same relay identity.
  */
 export async function loadJetstreamCursor(consumer: JetstreamConsumer, relay: string): Promise<number | undefined> {
 	const id = assertCursorInput(consumer, relay)
-	const existing = await db<Array<{ seq: number | string | bigint }>>`
-    SELECT seq FROM jetstream_cursors WHERE consumer_id = ${consumer} AND relay_id = ${id} LIMIT 1
+	const latest = await db<Array<{ relay_id: string; seq: number | string | bigint }>>`
+    SELECT relay_id, seq FROM jetstream_cursors WHERE consumer_id = ${consumer}
+    ORDER BY saved_at DESC, seq DESC LIMIT 1
   `
-	if (existing[0]) return Math.max(0, parseSafeSequence(existing[0].seq, 'Invalid Jetstream cursor') - CURSOR_REWIND_US)
+	const row = latest[0]
+	if (!row) return loadLegacyDirectCursor(consumer, id)
+	const sequence = parseSafeSequence(row.seq, 'Invalid Jetstream cursor')
+	if (row.relay_id === id) return Math.max(0, sequence - CURSOR_REWIND_US)
+	logger.info(`[DB] ${consumer} cursor carried over from another relay`)
+	return Math.max(0, sequence - RELAY_SWITCH_REWIND_US)
+}
+
+async function loadLegacyDirectCursor(consumer: JetstreamConsumer, id: string): Promise<number | undefined> {
 	if (consumer !== 'direct') return undefined
 
 	const legacy = await db<Array<{ seq: number | string | bigint; jetstream_url: string | null }>>`
