@@ -25,6 +25,8 @@ export interface JetstreamEvent {
 	time_us: number
 	kind: 'commit' | 'identity' | 'account'
 	commit?: JetstreamCommit
+	/** The relay message a commit with a record came from, so a consumer can rule it out without walking the record. */
+	raw?: string
 }
 
 export interface JetstreamOptions {
@@ -135,6 +137,12 @@ export function parseJetstreamEvent(value: unknown): JetstreamEvent | null {
 			...(commit.cid === undefined ? {} : { cid: commit.cid }),
 		},
 	}
+}
+
+/** Parse and validate one relay message, keeping the text of a commit that carries a record. Throws on invalid JSON. */
+export function parseJetstreamMessage(text: string): JetstreamEvent | null {
+	const event = parseJetstreamEvent(JSON.parse(text))
+	return event?.commit?.record === undefined ? event : { ...event, raw: text }
 }
 
 /** A credential-free, query-free relay identity for cursors and delivery identities. */
@@ -339,7 +347,7 @@ export class JetstreamClient {
 			}
 			let event: JetstreamEvent | null
 			try {
-				event = parseJetstreamEvent(JSON.parse(text))
+				event = parseJetstreamMessage(text)
 			} catch {
 				event = null
 			}

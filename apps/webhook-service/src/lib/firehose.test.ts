@@ -4,7 +4,7 @@ import type { Main as WhRecord } from '@wispplace/lexicons/types/place/wisp/v2/w
 import { WebhookDeliveryInputError } from './delivery'
 import type { CursorRepository, PriorReferenceRepository } from './firehose'
 import { getEventStats, initScopeDids, resetFirehoseForTests, startFirehose } from './firehose'
-import type { JetstreamClient, JetstreamEvent, JetstreamOptions } from './jetstream'
+import { type JetstreamClient, type JetstreamEvent, type JetstreamOptions, parseJetstreamMessage } from './jetstream'
 
 const OWNER = 'did:plc:aaaaaaaaaaaaaaaaaaaaaaaa'
 const SCOPE = 'did:plc:bbbbbbbbbbbbbbbbbbbbbbbb'
@@ -283,19 +283,28 @@ function backlinkRecord(): WhRecord {
 	}
 }
 
-function likeCommit(timeUs: number, references: readonly string[], operation: 'create' | 'update' = 'create') {
-	return {
-		did: VISITOR,
-		time_us: timeUs,
-		kind: 'commit' as const,
-		commit: {
-			rev: REV,
-			operation,
-			collection: 'app.bsky.feed.like',
-			rkey: 'like',
-			record: references.length > 0 ? { subject: { uri: references[0] } } : { text: 'unrelated' },
-		},
-	}
+function likeCommit(
+	timeUs: number,
+	references: readonly string[],
+	operation: 'create' | 'update' = 'create',
+): JetstreamEvent {
+	// Parsed from relay text, so the backlink pre-check sees what production does.
+	const event = parseJetstreamMessage(
+		JSON.stringify({
+			did: VISITOR,
+			time_us: timeUs,
+			kind: 'commit',
+			commit: {
+				rev: REV,
+				operation,
+				collection: 'app.bsky.feed.like',
+				rkey: 'like',
+				record: references.length > 0 ? { subject: { uri: references[0] } } : { text: 'unrelated' },
+			},
+		}),
+	)
+	if (!event) throw new Error('invalid test event')
+	return event
 }
 
 async function startBacklinkIntake(created: FakeJetstream[], probe: ReferenceProbe) {

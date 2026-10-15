@@ -227,6 +227,30 @@ export function collectRelevantAtUriReferences(
 	return { references: [...references], tooComplex: overflow || !complete }
 }
 
+/** A byte that can appear in a canonical DID: `[a-z0-9._:-]`. */
+function isDidCode(code: number): boolean {
+	return (code >= 97 && code <= 122) || (code >= 48 && code <= 58) || code === 46 || code === 45 || code === 95
+}
+
+/**
+ * Can a record whose relay JSON is `json` reference any of `dids`? `false` is a
+ * proof, so the caller may skip walking the parsed record; `true` only means
+ * "walk it". Without `\u` or `\/` escapes every decoded `at://<did>` appears
+ * verbatim in the JSON text, and the DID run ends at the same character as the
+ * parsed authority, give or take the trailing dots that reference trimming
+ * removes. Mentions are rare, so any mention facet answers `true`.
+ */
+export function jsonMayReferenceDids(json: string, dids: ReadonlySet<string>): boolean {
+	if (json.includes('\\u') || json.includes('\\/') || json.includes('app.bsky.richtext.facet#mention')) return true
+	for (let at = json.indexOf('at://'); at !== -1; at = json.indexOf('at://', at + 5)) {
+		let end = at + 5
+		while (end < json.length && isDidCode(json.charCodeAt(end))) end++
+		while (end > at + 5 && json.charCodeAt(end - 1) === 46) end--
+		if (dids.has(json.slice(at + 5, end))) return true
+	}
+	return false
+}
+
 /** Return a bounded, prototype-safe snapshot of all AT-URI reference values. */
 export function collectAtUriReferences(value: unknown, partial?: Partial<TraversalLimits>): string[] {
 	const maximum = partial?.maxReferences ?? DEFAULT_TRAVERSAL_LIMITS.maxReferences

@@ -16,6 +16,7 @@ import {
 	collectRelevantAtUriReferences,
 	type EventKind,
 	isDid,
+	jsonMayReferenceDids,
 	matchWebhooks,
 	parseAtUri,
 	scopeDid,
@@ -1016,6 +1017,9 @@ function isBacklinkNoOp(event: JetstreamEvent): boolean {
 	if (commit.collection === WH_COLLECTION || directWantedDids.has(did) || backlinkScopeDids.size === 0) return true
 	if (mayOwnPriorReferences(eventAtUri(did, commit.collection, commit.rkey))) return false
 	if (commit.operation === 'delete') return true
+	// A record whose relay text names no scope DID cannot match, however complex
+	// its walk; skipping it drops only the too-complex warning and counter.
+	if (event.raw !== undefined && !jsonMayReferenceDids(event.raw, backlinkScopeDids)) return true
 	const current = currentReferences(commit.record)
 	return !current.tooComplex && current.references.length === 0
 }
