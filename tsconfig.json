@@ -110,6 +110,7 @@
 	},
 	"exclude": [
 		"docs",
+		"blog",
 		"node_modules",
 		"apps/hosting-service/cache",
 		"**/dist",
