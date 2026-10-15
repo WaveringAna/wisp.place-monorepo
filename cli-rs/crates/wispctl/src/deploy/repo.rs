@@ -25,6 +25,7 @@ pub trait SiteRepo {
     async fn put<R: Collection + Serialize + Clone>(&self, rkey: &str, record: R) -> Result<()>;
     async fn delete<R: Collection + Serialize>(&self, rkey: &str) -> Result<()>;
     async fn upload(&self, bytes: bytes::Bytes) -> Result<BlobRef>;
+    async fn list_sites(&self, did: &str) -> Result<Vec<String>>;
 }
 
 fn record_key(rkey: &str) -> Result<RecordKey<Rkey>> {
@@ -69,6 +70,43 @@ impl<A: AgentSession + IdentityResolver> SiteRepo for Agent<A> {
             .upload_blob(bytes, MimeType::new("application/octet-stream"))
             .await?;
         Ok(BlobRef::Blob(blob))
+    }
+
+    async fn list_sites(&self, did: &str) -> Result<Vec<String>> {
+        use jacquard::xrpc::XrpcClient;
+        use jacquard_api::com_atproto::repo::list_records::ListRecords;
+        use jacquard_common::deps::smol_str::SmolStr;
+        use jacquard_common::types::ident::AtIdentifier;
+        use jacquard_common::types::string::Nsid;
+
+        let mut cursor: Option<SmolStr> = None;
+        let mut sites = Vec::new();
+        loop {
+            let request = ListRecords::<SmolStr> {
+                collection: Nsid::new_static(wispplace_core::constants::FS_COLLECTION)?,
+                repo: AtIdentifier::new_owned(did)?,
+                cursor: cursor.clone(),
+                limit: Some(100),
+                reverse: None,
+            };
+            let response =
+                retry_transport(|| async { Ok(self.send(request.clone()).await?.into_output()?) })
+                    .await?;
+            for record in response.records {
+                if let Some(rkey) = record.uri.rkey() {
+                    sites.push(rkey.as_str().to_owned());
+                }
+            }
+            if let Some(next) = response.cursor
+                && !next.is_empty()
+                && cursor.as_ref() != Some(&next)
+            {
+                cursor = Some(next);
+                continue;
+            }
+            break;
+        }
+        Ok(sites)
     }
 }
 

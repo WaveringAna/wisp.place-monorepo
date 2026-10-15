@@ -161,6 +161,17 @@ fn valid_site(site: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || b"._~:-".contains(&c))
 }
 
+/// Find existing sites whose names match `site` case-insensitively, but differ in case.
+fn find_casing_conflicts<'a>(
+    site: &str,
+    existing: impl IntoIterator<Item = &'a str>,
+) -> Vec<&'a str> {
+    existing
+        .into_iter()
+        .filter(|existing_site| existing_site.eq_ignore_ascii_case(site) && *existing_site != site)
+        .collect()
+}
+
 pub async fn run(mut args: DeployArgs) -> Result<()> {
     args.site = args.preview_site.or(args.site);
     let known = if args.handle.is_none() && args.password.is_none() {
@@ -187,7 +198,7 @@ pub async fn run(mut args: DeployArgs) -> Result<()> {
         )?
         .into(),
     };
-    let site = match args.site {
+    let mut site = match args.site {
         Some(site) => site,
         None => prompts::required_text(
             TextPrompt::new("Site name")
@@ -303,15 +314,77 @@ pub async fn run(mut args: DeployArgs) -> Result<()> {
         wispplace_ui::warning("This file may not be cached by the hosting service.");
     }
     let spinner = wispplace_ui::spinner("Checking for existing site...");
-    let existing = fetch_existing(&agent, &did, &site).await;
-    spinner.succeed(
-        if existing.is_some() {
-            "Found existing site, will reuse unchanged files"
+    let mut existing = fetch_existing(&agent, &did, &site).await;
+    if existing.is_none() && !is_preview_site(&site) {
+        if let Ok(sites) = agent.list_sites(&did).await {
+            let candidates = find_casing_conflicts(&site, sites.iter().map(String::as_str));
+            if !candidates.is_empty() {
+                drop(spinner);
+                let chosen = if candidates.len() == 1 {
+                    let candidate = candidates[0];
+                    let reuse = if args.yes {
+                        true
+                    } else {
+                        prompts::confirm(
+                            &format!(
+                                "Site '{candidate}' already exists with different casing. Do you want to reuse that site?"
+                            ),
+                            "Deploy cancelled",
+                            "Pass --yes to reuse the existing site",
+                        )?
+                    };
+                    if reuse {
+                        Some(candidate.to_owned())
+                    } else {
+                        None
+                    }
+                } else if args.yes {
+                    Some(candidates[0].to_owned())
+                } else {
+                    let mut choices = Vec::new();
+                    for c in &candidates {
+                        choices.push(wispplace_ui::Choice::new(
+                            Some((*c).to_owned()),
+                            format!("Reuse '{c}'"),
+                        ));
+                    }
+                    choices.push(wispplace_ui::Choice::new(
+                        None,
+                        format!("Create new site '{site}'"),
+                    ));
+                    prompts::select(
+                        "Multiple sites exist with different casing. Which would you like to use?",
+                        choices,
+                        "Deploy cancelled",
+                        "Pass --yes to pick the first match",
+                    )?
+                };
+
+                if let Some(reused) = chosen {
+                    site = reused;
+                    existing = fetch_existing(&agent, &did, &site).await;
+                    wispplace_ui::success(format!(
+                        "Found existing site '{site}', will reuse unchanged files"
+                    ));
+                } else {
+                    wispplace_ui::success("No existing site found, uploading all files");
+                }
+            } else {
+                spinner.succeed("No existing site found, uploading all files".to_owned());
+            }
         } else {
-            "No existing site found, uploading all files"
+            spinner.succeed("No existing site found, uploading all files".to_owned());
         }
-        .to_owned(),
-    );
+    } else {
+        spinner.succeed(
+            if existing.is_some() {
+                "Found existing site, will reuse unchanged files"
+            } else {
+                "No existing site found, uploading all files"
+            }
+            .to_owned(),
+        );
+    }
     let empty = BTreeMap::new();
     let blobs = existing.as_ref().map(|site| &site.blobs).unwrap_or(&empty);
     let mut uploads = upload::process(
@@ -563,6 +636,24 @@ fn labelled(label: &str, value: wispplace_ui::Span<'static>) -> wispplace_ui::Li
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn detects_casing_conflicts() {
+        assert_eq!(
+            find_casing_conflicts("site", ["Site", "other"]),
+            vec!["Site"]
+        );
+        assert_eq!(
+            find_casing_conflicts("Site", ["site", "other"]),
+            vec!["site"]
+        );
+        assert!(find_casing_conflicts("site", ["site"]).is_empty());
+        assert!(find_casing_conflicts("site", ["other", "foo"]).is_empty());
+        assert_eq!(
+            find_casing_conflicts("site", ["Site", "SITE", "other"]),
+            vec!["Site", "SITE"]
+        );
+    }
+
     #[test]
     fn rkeys_match_typescript() {
         for key in ["a", "A._~:-9", &"x".repeat(512)] {

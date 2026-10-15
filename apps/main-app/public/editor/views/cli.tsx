@@ -12,27 +12,27 @@ const BINARIES = [
 	{
 		platform: 'macos · apple silicon',
 		filename: 'wisp-cli-aarch64-darwin',
-		sha256: '30218d511de9ccefb4933b51f259a6dab1b5ee991d2f7fb72ef90620ac08c2f7',
+		sha256: '2738704f670cac0476f5164980fd017f4a08f115e85ee57368da9657fc83c360',
 	},
 	{
 		platform: 'macos · intel',
 		filename: 'wisp-cli-x86_64-darwin',
-		sha256: '5b3eb41f698ec912d4721aeed05f2478a7feed1d1196cbcea8af1d0eeef0d500',
+		sha256: 'b7eb1f60cc88f776dd660fc80679cdd84c3b4f240b65291786913aee8f0edbfd',
 	},
 	{
 		platform: 'linux · arm64',
 		filename: 'wisp-cli-aarch64-linux',
-		sha256: '183f5ce0719638f26ec61d17f0bfbbe092d1da07dbd691d0b545aace9fc75e5b',
+		sha256: 'c06292611e4f755736cfd14cc2503658f617d49d913950af56436ef113036382',
 	},
 	{
 		platform: 'linux · x86_64',
 		filename: 'wisp-cli-x86_64-linux',
-		sha256: '3122cb4b618195c62f8742b05a94f27f6bb0ab6dcf97b7905bf01107b0b8c427',
+		sha256: '27735a43c7ce97923854d2f1d55cbbf1ff28717751be783a2471b988b53df49e',
 	},
 	{
 		platform: 'windows · x86_64',
 		filename: 'wisp-cli-x86_64-windows.exe',
-		sha256: 'f20090172b8f931305d608fd40fdec76960296c741889c7f969f895350af30e6',
+		sha256: '1da4893270ede9a6c90c5210e38a507a335abbdd49af15d64df4cf95d49d3257',
 	},
 ] as const
 

@@ -1,4 +1,4 @@
-export const WISPCTL_VERSION = '2.1.0'
+export const WISPCTL_VERSION = '2.1.1'
 
 export interface PreviewWorkflowInput {
 	/** Pull requests into this branch get previews. */
