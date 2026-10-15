@@ -615,8 +615,8 @@
     </style>
 </head>
 <body>
-    <script>
-        // Signed-in people go straight to their dashboard.
+    <script data-signed-in-redirect>
+        // Signed-in people go straight to their dashboard. /home serves the page without this script.
         fetch('/api/user/info')
             .then((response) => { if (response.ok) window.location.href = '/editor'; })
             .catch(() => {});

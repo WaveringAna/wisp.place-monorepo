@@ -23,6 +23,7 @@ import { resolveDnsVerificationPolicy } from './lib/dns-verification-schedule'
 import { createDnsVerificationStore } from './lib/dns-verification-store'
 import { type DNSVerificationLogLevel, DNSVerificationWorker } from './lib/dns-verification-worker'
 import { verifyCustomDomain } from './lib/dns-verify'
+import { withoutSignedInRedirect } from './lib/landing-page'
 import { startPeriodicSingleFlightTask, stopServerWithGracePeriod } from './lib/lifecycle'
 import {
 	cleanupExpiredSessions,
@@ -298,7 +299,7 @@ export const app = new Elysia({
 	.get('/home', async ({ set }) => {
 		// Same as / but without the auto-redirect script for signed-in users
 		set.headers['Content-Type'] = 'text/html; charset=utf-8'
-		return (await landingPage()).replace(/<script>\s*\/\/ Check if user is already signed in[\s\S]*?<\/script>/, '')
+		return withoutSignedInRedirect(await landingPage())
 	})
 	.use(authRoutes(client, cookieSecret))
 	.use(wispRoutes(client, cookieSecret))
