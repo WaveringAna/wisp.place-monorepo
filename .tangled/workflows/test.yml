@@ -21,10 +21,12 @@ steps:
       export PATH="$HOME/.nix-profile/bin:$PATH"
       bun run check
 
+  # Biome's glibc build is dynamically linked, which NixOS cannot run; its musl
+  # build is static, and the npm launcher runs whichever BIOME_BINARY names.
   - name: lint
     command: |
       export PATH="$HOME/.nix-profile/bin:$PATH"
-      bun run lint
+      BIOME_BINARY=@biomejs/cli-linux-x64-musl/biome bun run lint
 
   # Scoped to the first-party workspaces on purpose. A bare `bun test` with no
   # path filter also matches any directory whose path contains "packages",
