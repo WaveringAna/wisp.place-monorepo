@@ -2,6 +2,7 @@ import '../test-env'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { MAX_JETSTREAM_SUBSCRIPTION_URL_BYTES } from './admission'
 import { buildJetstreamSubscriptionUrl, JetstreamClient, parseJetstreamEvent } from './jetstream'
+import type { JetstreamSocketLike } from './jetstream-socket'
 
 const DID = 'did:plc:aaaaaaaaaaaaaaaaaaaaaaaa'
 const REV = '3lq6x5f2abcde'
@@ -15,6 +16,8 @@ class FakeWebSocket {
 	onmessage: ((message: { data: unknown }) => void) | null = null
 	closeImmediately = true
 	closeRequested = false
+	// Recorded but not enforced, so a test can still deliver past a pause.
+	paused = false
 	#closed = false
 
 	constructor(url: string) {
@@ -24,6 +27,14 @@ class FakeWebSocket {
 
 	open(): void {
 		this.onopen?.()
+	}
+
+	pause(): void {
+		this.paused = true
+	}
+
+	resume(): void {
+		this.paused = false
 	}
 
 	message(value: unknown): void {
@@ -42,7 +53,7 @@ class FakeWebSocket {
 	}
 }
 
-const realWebSocket = globalThis.WebSocket
+const fakeSocket = { createSocket: (url: string) => new FakeWebSocket(url) as unknown as JetstreamSocketLike }
 
 function event(timeUs: number) {
 	return JSON.stringify({
@@ -58,19 +69,18 @@ async function flush(): Promise<void> {
 }
 
 afterEach(() => {
-	globalThis.WebSocket = realWebSocket
 	FakeWebSocket.instances = []
 })
 
 describe('JetstreamClient durable batch acknowledgement and protocol quarantine', () => {
 	test('does not advance the cursor until the batch commits', async () => {
-		globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
 		let release: (() => void) | undefined
 		const committed = new Promise<void>((resolve) => {
 			release = resolve
 		})
 		const batches: number[][] = []
 		const client = new JetstreamClient({
+			...fakeSocket,
 			url: 'wss://relay.example/subscribe',
 			cursor: 10,
 			onEvents: (events) => {
@@ -93,13 +103,13 @@ describe('JetstreamClient durable batch acknowledgement and protocol quarantine'
 	})
 
 	test('hands the queued events to one batch and advances to its last event', async () => {
-		globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
 		const batches: number[][] = []
 		let release: (() => void) | undefined
 		const firstBatch = new Promise<void>((resolve) => {
 			release = resolve
 		})
 		const client = new JetstreamClient({
+			...fakeSocket,
 			url: 'wss://relay.example/subscribe',
 			cursor: 50,
 			onEvents: (events) => {
@@ -128,9 +138,9 @@ describe('JetstreamClient durable batch acknowledgement and protocol quarantine'
 	})
 
 	test('never hands over more than the batch bound at once', async () => {
-		globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
 		const sizes: number[] = []
 		const client = new JetstreamClient({
+			...fakeSocket,
 			url: 'wss://relay.example/subscribe',
 			cursor: 80,
 			batchMax: 2,
@@ -151,12 +161,12 @@ describe('JetstreamClient durable batch acknowledgement and protocol quarantine'
 	})
 
 	test('stays healthy while a bounded queue drains, and stops when progress stalls', async () => {
-		globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
 		let release: (() => void) | undefined
 		const held = new Promise<void>((resolve) => {
 			release = resolve
 		})
 		const client = new JetstreamClient({
+			...fakeSocket,
 			url: 'wss://relay.example/subscribe',
 			cursor: 60,
 			maxQueue: 2,
@@ -172,15 +182,16 @@ describe('JetstreamClient durable batch acknowledgement and protocol quarantine'
 		socket.message(event(61))
 		socket.message(event(62))
 		await flush()
-		// Backpressure closed the socket; the retained queue is still real work.
-		expect(client.isConnected).toBe(false)
-		expect(client.failureKind).toBe('queue')
+		// A full queue pauses reads; the connection stays open while it drains.
+		expect(socket.paused).toBe(true)
+		expect(client.isConnected).toBe(true)
 		release?.()
 		await flush()
 		expect(client.cursor).toBe(62)
 		expect(client.isProgressing).toBe(true)
 
 		const stalled = new JetstreamClient({
+			...fakeSocket,
 			url: 'wss://relay.example/subscribe',
 			onEvents: async () => undefined,
 			progressStaleMs: 1,
@@ -192,9 +203,9 @@ describe('JetstreamClient durable batch acknowledgement and protocol quarantine'
 	})
 
 	test('retries a failed batch in place instead of replaying the stream', async () => {
-		globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
 		let failures = 0
 		const client = new JetstreamClient({
+			...fakeSocket,
 			url: 'wss://relay.example/subscribe',
 			cursor: 70,
 			batchRetryDelayMs: 1,
@@ -223,8 +234,8 @@ describe('JetstreamClient durable batch acknowledgement and protocol quarantine'
 	})
 
 	test('quarantines malformed bytes, ignores late frames, then resets only after an acked replay', async () => {
-		globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
 		const client = new JetstreamClient({
+			...fakeSocket,
 			url: 'wss://relay.example/subscribe',
 			cursor: 40,
 			onEvents: async () => undefined,
@@ -260,59 +271,51 @@ describe('JetstreamClient durable batch acknowledgement and protocol quarantine'
 		client.destroy()
 	})
 
-	test('retains a full bounded queue, drains it in order, then reconnects from the latest ack', async () => {
-		globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
-		let releaseFirst: (() => void) | undefined
-		const first = new Promise<void>((resolve) => {
-			releaseFirst = resolve
-		})
+	test('pauses reads at a full queue and resumes them at half, on the same connection', async () => {
+		const releases: Array<() => void> = []
 		const processed: number[] = []
 		const client = new JetstreamClient({
+			...fakeSocket,
 			url: 'wss://relay.example/subscribe',
 			cursor: 10,
-			maxQueue: 2,
+			maxQueue: 4,
 			batchMax: 1,
-			reconnectMinMs: 1,
-			reconnectMaxMs: 1,
-			reconnectMaxExponent: 0,
 			onEvents: async (events) => {
+				await new Promise<void>((resolve) => releases.push(resolve))
 				for (const value of events) processed.push(value.time_us)
-				if (events[0]?.time_us === 11) await first
 			},
 		})
 		client.start()
 		const socket = FakeWebSocket.instances[0]
 		socket?.open()
-		socket?.message(event(11))
-		socket?.message(event(12))
+		for (const timeUs of [11, 12, 13, 14]) socket?.message(event(timeUs))
 		await flush()
-		expect(client.queued).toBe(2)
-		expect(client.failureKind).toBe('queue')
-		expect(client.isConnected).toBe(false)
+		expect(socket?.paused).toBe(true)
+		expect(socket?.closeRequested).toBe(false)
+		releases.shift()?.()
+		await flush()
+		// 11 acked, three still queued: more than half, so reads stay paused.
+		expect(socket?.paused).toBe(true)
+		releases.shift()?.()
+		await flush()
+		expect(socket?.paused).toBe(false)
+		socket?.message(event(15))
+		for (let index = 0; index < 3; index++) {
+			releases.shift()?.()
+			await flush()
+		}
+		expect(processed).toEqual([11, 12, 13, 14, 15])
+		expect(client.cursor).toBe(15)
 		expect(FakeWebSocket.instances).toHaveLength(1)
-		// A frame delivered after the close is ignored locally and will be replayed
-		// from the durable cursor on the replacement connection.
-		socket?.message(event(13))
-		releaseFirst?.()
-		await flush()
-		expect(processed).toEqual([11, 12])
-		expect(client.cursor).toBe(12)
-		await Bun.sleep(5)
-		expect(FakeWebSocket.instances.length).toBeGreaterThanOrEqual(2)
-		const replay = FakeWebSocket.instances[FakeWebSocket.instances.length - 1]
-		expect(replay?.url).toContain('cursor=12')
-		replay?.open()
-		replay?.message(event(13))
-		await flush()
-		expect(processed).toEqual([11, 12, 13])
+		expect(client.failureKind).toBeUndefined()
 		client.destroy()
 	})
 
-	test('resumes once half the queue is free, after the newest queued event, without backoff', async () => {
-		globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
+	test('a frame delivered past the pause closes, then resumes after the newest queued event without backoff', async () => {
 		const releases: Array<() => void> = []
 		const processed: number[] = []
 		const client = new JetstreamClient({
+			...fakeSocket,
 			url: 'wss://relay.example/subscribe',
 			cursor: 10,
 			maxQueue: 4,
@@ -328,19 +331,20 @@ describe('JetstreamClient durable batch acknowledgement and protocol quarantine'
 		client.start()
 		const socket = FakeWebSocket.instances[0]
 		socket?.open()
-		for (const timeUs of [11, 12, 13, 14]) socket?.message(event(timeUs))
+		// The fake ignores pause(), so the fifth frame reaches a full queue.
+		for (const timeUs of [11, 12, 13, 14, 15]) socket?.message(event(timeUs))
 		await flush()
 		expect(client.failureKind).toBe('queue')
-		expect(FakeWebSocket.instances).toHaveLength(1)
+		expect(socket?.closeRequested).toBe(true)
 		releases.shift()?.()
 		await flush()
-		// 11 acked, three still queued: more than half, so still closed.
 		expect(FakeWebSocket.instances).toHaveLength(1)
 		releases.shift()?.()
 		await flush()
 		expect(processed).toEqual([11, 12])
 		expect(client.cursor).toBe(12)
 		const resumed = FakeWebSocket.instances[1]
+		// 15 was dropped at the full queue, so playback starts at the newest queued event.
 		expect(resumed?.url).toContain('cursor=14')
 		resumed?.open()
 		resumed?.message(event(15))
@@ -352,10 +356,10 @@ describe('JetstreamClient durable batch acknowledgement and protocol quarantine'
 		client.destroy()
 	})
 
-	test('a batch that keeps failing after an early resume still replays from the last ack', async () => {
-		globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
+	test('a batch that keeps failing after a flow-control resume still replays from the last ack', async () => {
 		let releaseFirst: (() => void) | undefined
 		const client = new JetstreamClient({
+			...fakeSocket,
 			url: 'wss://relay.example/subscribe',
 			cursor: 10,
 			maxQueue: 2,
@@ -372,8 +376,7 @@ describe('JetstreamClient durable batch acknowledgement and protocol quarantine'
 		client.start()
 		const socket = FakeWebSocket.instances[0]
 		socket?.open()
-		socket?.message(event(11))
-		socket?.message(event(12))
+		for (const timeUs of [11, 12, 13]) socket?.message(event(timeUs))
 		await flush()
 		releaseFirst?.()
 		await flush()
@@ -386,8 +389,8 @@ describe('JetstreamClient durable batch acknowledgement and protocol quarantine'
 	})
 
 	test('replays from the last durable batch when a batch keeps failing', async () => {
-		globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
 		const client = new JetstreamClient({
+			...fakeSocket,
 			url: 'wss://relay.example/subscribe',
 			cursor: 20,
 			reconnectMinMs: 1,
@@ -423,6 +426,7 @@ describe('JetstreamClient durable batch acknowledgement and protocol quarantine'
 		expect(
 			() =>
 				new JetstreamClient({
+					...fakeSocket,
 					url: 'wss://relay.example/subscribe?wantedDids=did:plc:evil',
 					onEvents: async () => undefined,
 				}),

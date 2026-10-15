@@ -7,6 +7,7 @@ import {
 	MAX_JETSTREAM_WANTED_DIDS,
 } from './admission'
 import { isValidAtprotoRevision } from './atproto-revision'
+import { JetstreamSocket, type JetstreamSocketLike } from './jetstream-socket'
 
 const logger = createLogger('webhook-service:jetstream')
 
@@ -51,7 +52,12 @@ export interface JetstreamOptions {
 	/** Handler attempts for one batch before the whole stream replays. */
 	batchMaxAttempts?: number
 	batchRetryDelayMs?: number
+	/** Opens the relay socket; tests substitute a fake. */
+	createSocket?: (url: string, maxMessageBytes: number) => JetstreamSocketLike
 }
+
+const openSocket = (url: string, maxMessageBytes: number): JetstreamSocketLike =>
+	new JetstreamSocket(url, { maxMessageBytes })
 
 function isStableDid(value: string): boolean {
 	return isCanonicalWebhookDid(value)
@@ -186,15 +192,19 @@ export function buildJetstreamSubscriptionUrl(
 
 /**
  * A bounded Jetstream consumer. Events are not considered acknowledged until the
- * async handler and optional durable-cursor callback both resolve. Queue overflow
- * closes the socket and resumes after the newest queued event once half the queue
- * is free; parse and handler errors drop the queue and replay from the last ack.
+ * async handler and optional durable-cursor callback both resolve. A full queue
+ * pauses socket reads until half of it is free, so TCP pushes back to the relay;
+ * a frame that still arrives at a full queue closes the socket, which resumes
+ * after the newest queued event. Parse and handler errors drop the queue and
+ * replay from the last ack.
  */
 export class JetstreamClient {
-	private ws: WebSocket | null = null
+	private ws: JetstreamSocketLike | null = null
 	private destroyed = false
 	private accepting = true
 	private paused = false
+	/** Socket reads stopped by a full queue; the connection stays open meanwhile. */
+	private readPaused = false
 	private connected = false
 	private reconnectTimer: ReturnType<typeof setTimeout> | null = null
 	private reconnectAttempts = 0
@@ -297,9 +307,10 @@ export class JetstreamClient {
 		if (this.destroyed || !this.accepting || this.ws || this.backpressured || this.reconnectWhenDrained) return
 		this.failed = false
 		const generation = ++this.generation
-		let ws: WebSocket
+		this.readPaused = false
+		let ws: JetstreamSocketLike
 		try {
-			ws = new WebSocket(this.buildUrl())
+			ws = (this.opts.createSocket ?? openSocket)(this.buildUrl(), this.maxEventBytes)
 		} catch {
 			this.scheduleReconnect(new Error('Jetstream connection setup failed'), 'connect')
 			return
@@ -345,7 +356,12 @@ export class JetstreamClient {
 			}
 			this.queue.push(event)
 			this.pump()
-			if (this.queue.length >= this.maxQueue) this.applyBackpressure(new Error('Jetstream intake queue is full'))
+			if (this.queue.length >= this.maxQueue) {
+				// Stop reading rather than reconnecting: TCP pushes back to the relay,
+				// and the stream resumes on this connection once half the queue drains.
+				this.readPaused = true
+				ws.pause()
+			}
 		}
 		ws.onerror = () => {
 			if (this.ws !== ws || generation !== this.generation || this.destroyed || !this.accepting) return
@@ -402,6 +418,7 @@ export class JetstreamClient {
 		} finally {
 			this.running = false
 			this.pump()
+			this.resumeReading()
 			this.reconnectAfterDrain()
 			this.notifyDrained()
 		}
@@ -426,6 +443,12 @@ export class JetstreamClient {
 			this.pump()
 		}, this.batchRetryDelayMs * this.attempts)
 		this.retryTimers.add(timer)
+	}
+
+	private resumeReading(): void {
+		if (!this.readPaused || this.queue.length > this.resumeQueueLength) return
+		this.readPaused = false
+		this.ws?.resume()
 	}
 
 	private report(error: Error): void {

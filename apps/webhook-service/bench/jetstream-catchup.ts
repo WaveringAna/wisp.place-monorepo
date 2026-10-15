@@ -32,8 +32,10 @@ const client = new JetstreamClient({
 		connects++
 	},
 })
+const cpuBefore = process.cpuUsage()
 client.start()
 await Bun.sleep(seconds * 1_000)
+const cpu = process.cpuUsage(cpuBefore)
 const reached = client.cursor ?? start
 client.destroy()
 
@@ -46,5 +48,6 @@ console.log(
 		connects,
 		replayedSeconds: Math.round(replayedSeconds),
 		realtimeMultiple: Number((replayedSeconds / seconds).toFixed(1)),
+		cpuPercent: Math.round((cpu.user + cpu.system) / (seconds * 10_000)),
 	}),
 )
