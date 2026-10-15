@@ -170,9 +170,7 @@ describe('JetstreamSocket', () => {
 		expect(head).toContain('Sec-WebSocket-Version: 13')
 		expect(head).toContain('User-Agent: wisp-test/1')
 		expect(Buffer.from(requestKey(head), 'base64').byteLength).toBe(16)
-		expect(head.toLowerCase()).toContain(
-			'sec-websocket-extensions: permessage-deflate; server_no_context_takeover; client_no_context_takeover',
-		)
+		expect(head.toLowerCase()).not.toContain('sec-websocket-extensions')
 	})
 
 	test('receives binary as Uint8Array', async () => {
@@ -468,7 +466,7 @@ describe('JetstreamSocket', () => {
 				]),
 			)
 		})
-		const client = connect(url)
+		const client = connect(url, { compress: true })
 		await until(() => client.messages.length === 3)
 		expect(client.messages).toEqual(['{"kind":"commit"}', 'fragmented and deflated', 'plain'])
 		client.socket.close()
@@ -478,7 +476,7 @@ describe('JetstreamSocket', () => {
 		const url = await rawServer((socket, request) => {
 			socket.write(deflateResponse(websocketAccept(requestKey(request)), 'permessage-deflate'))
 		})
-		const client = connect(url)
+		const client = connect(url, { compress: true })
 		await client.closed
 		await settle()
 		expect(client.events).toEqual(['error', 'close'])
@@ -494,7 +492,7 @@ describe('JetstreamSocket', () => {
 				]),
 			)
 		})
-		const client = connect(url, { maxMessageBytes: 1024 })
+		const client = connect(url, { maxMessageBytes: 1024, compress: true })
 		await client.closed
 		await settle()
 		expect(bomb.byteLength).toBeLessThan(1024)
@@ -512,11 +510,28 @@ describe('JetstreamSocket', () => {
 				]),
 			)
 		})
-		const client = connect(url)
+		const client = connect(url, { compress: true })
 		await client.closed
 		await settle()
 		expect(client.messages).toEqual([])
 		expect(client.events).toEqual(['open', 'error', 'close'])
+	})
+
+	test('offers deflate only when asked, and refuses an extension it did not offer', async () => {
+		let offered = ''
+		const url = await rawServer((socket, request) => {
+			offered = request
+			socket.write(deflateResponse(websocketAccept(requestKey(request))))
+		})
+		const plain = connect(url)
+		await plain.closed
+		await settle()
+		expect(offered.toLowerCase()).not.toContain('sec-websocket-extensions')
+		expect(plain.events).toEqual(['error', 'close'])
+		const deflate = connect(url, { compress: true })
+		await deflate.opened
+		expect(offered.toLowerCase()).toContain(`sec-websocket-extensions: ${DEFLATE_ACCEPT}`)
+		deflate.socket.close()
 	})
 
 	test('a masked server frame is a protocol error', async () => {

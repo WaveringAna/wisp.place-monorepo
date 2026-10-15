@@ -24,6 +24,12 @@ export interface JetstreamSocketOptions {
 	/** Covers TCP, TLS and the HTTP upgrade. */
 	connectTimeoutMs?: number
 	userAgent?: string
+	/**
+	 * Offer permessage-deflate. It saves bandwidth, but Jetstream sends deflated
+	 * frames slower (~34k/s per connection, against 41-60k/s plain) and inflating
+	 * costs our CPU, so only bandwidth-bound hosts gain.
+	 */
+	compress?: boolean
 }
 
 const WEBSOCKET_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
@@ -73,7 +79,7 @@ export function websocketAccept(key: string): string {
 		.digest('base64')
 }
 
-export function upgradeRequest(url: URL, key: string, userAgent?: string): string {
+export function upgradeRequest(url: URL, key: string, userAgent?: string, compress = false): string {
 	const secure = url.protocol === 'wss:'
 	const defaultPort = secure ? '443' : '80'
 	const host = url.port && url.port !== defaultPort ? `${url.hostname}:${url.port}` : url.hostname
@@ -84,14 +90,14 @@ export function upgradeRequest(url: URL, key: string, userAgent?: string): strin
 		'Connection: Upgrade',
 		`Sec-WebSocket-Key: ${key}`,
 		'Sec-WebSocket-Version: 13',
-		`Sec-WebSocket-Extensions: ${DEFLATE_OFFER}`,
+		...(compress ? [`Sec-WebSocket-Extensions: ${DEFLATE_OFFER}`] : []),
 		...(userAgent ? [`User-Agent: ${userAgent}`] : []),
 	]
 	return `${lines.join('\r\n')}\r\n\r\n`
 }
 
 /** Returns why an upgrade response is unacceptable, or null when it completes the handshake. */
-export function upgradeResponseError(head: string, key: string): string | null {
+export function upgradeResponseError(head: string, key: string, deflateOffered = false): string | null {
 	const [statusLine = '', ...headerLines] = head.split('\r\n')
 	if (!/^HTTP\/1\.1 101(?: |$)/.test(statusLine)) return 'unexpected upgrade status'
 	const headers = new Map<string, string>()
@@ -111,7 +117,8 @@ export function upgradeResponseError(head: string, key: string): string | null {
 	if (!tokens('connection').includes('upgrade')) return 'missing connection upgrade'
 	if (headers.get('sec-websocket-accept') !== websocketAccept(key)) return 'invalid websocket accept'
 	const extensions = headers.get('sec-websocket-extensions')
-	if (extensions !== undefined && !acceptableDeflate(extensions)) return 'unsupported websocket extension'
+	if (extensions !== undefined && !(deflateOffered && acceptableDeflate(extensions)))
+		return 'unsupported websocket extension'
 	// We offered no subprotocol, so a server that picks one speaks a protocol we cannot parse.
 	if (headers.has('sec-websocket-protocol')) return 'unrequested websocket subprotocol'
 	return null
@@ -226,6 +233,7 @@ export class JetstreamSocket implements JetstreamSocketLike {
 	private readonly socket: net.Socket
 	private readonly key = randomBytes(16).toString('base64')
 	private readonly maxMessageBytes: number
+	private readonly deflateOffered: boolean
 	private handshake: Buffer | null = Buffer.alloc(0)
 	private readonly received = new ByteQueue()
 	private fragments: Buffer[] = []
@@ -247,10 +255,11 @@ export class JetstreamSocket implements JetstreamSocketLike {
 		if (target.protocol !== 'wss:' && target.protocol !== 'ws:')
 			throw new SyntaxError('JetstreamSocket needs a ws: or wss: URL')
 		this.maxMessageBytes = options.maxMessageBytes ?? DEFAULT_MAX_MESSAGE_BYTES
+		this.deflateOffered = options.compress === true
 		const secure = target.protocol === 'wss:'
 		const host = target.hostname.replace(/^\[(.*)\]$/, '$1')
 		const port = Number(target.port || (secure ? 443 : 80))
-		const request = upgradeRequest(target, this.key, options.userAgent)
+		const request = upgradeRequest(target, this.key, options.userAgent, options.compress)
 		const sendRequest = () => {
 			if (this.state === 'connecting') this.socket.write(request)
 		}
@@ -318,7 +327,7 @@ export class JetstreamSocket implements JetstreamSocketLike {
 			return
 		}
 		const head = buffered.toString('latin1', 0, end)
-		if (upgradeResponseError(head, this.key) !== null) {
+		if (upgradeResponseError(head, this.key, this.deflateOffered) !== null) {
 			this.fail()
 			return
 		}
