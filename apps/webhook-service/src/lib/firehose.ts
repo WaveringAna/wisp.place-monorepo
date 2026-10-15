@@ -1,5 +1,5 @@
 import type { Main as WhRecord } from '@wispplace/lexicons/types/place/wisp/v2/wh'
-import { createLogger } from '@wispplace/observability'
+import { createLogger, metricsCollector } from '@wispplace/observability'
 import { config } from '../config'
 import type { PriorReferenceWrite, WebhookEntry } from './db'
 import * as database from './db'
@@ -1118,8 +1118,19 @@ function createClient(
 		reconnectMinMs: config.jetstreamReconnectMinMs,
 		reconnectMaxMs: config.jetstreamReconnectMaxMs,
 		reconnectMaxExponent: config.jetstreamReconnectMaxExponent,
-		onEvents: (events) => handleStreamEvents(stream, events),
-		onConnect: () => logger.info(`[${stream}] Jetstream connected`),
+		onEvents: async (events) => {
+			const started = performance.now()
+			await handleStreamEvents(stream, events)
+			metricsCollector.recordWebhookIntakeBatch({
+				stream,
+				events: events.length,
+				durationMs: performance.now() - started,
+			})
+		},
+		onConnect: () => {
+			metricsCollector.recordWebhookIntakeConnect(stream)
+			logger.info(`[${stream}] Jetstream connected`)
+		},
 		onDisconnect: () => logger.warn(`[${stream}] Jetstream disconnected`),
 		onError: () => safeError(stream),
 	})
@@ -1379,6 +1390,14 @@ export async function drainFirehose(timeoutMs = config.shutdownTimeoutMs): Promi
 		dependencies = null
 	}
 }
+
+const toSeconds = (ms: number | undefined) => (ms === undefined ? undefined : ms / 1_000)
+
+metricsCollector.setWebhookIntakeCursorAges(() => ({
+	direct: toSeconds(directJetstream?.cursorAgeMs),
+	backlink: toSeconds(backlinkJetstream?.cursorAgeMs),
+	registry: toSeconds(registryJetstream?.cursorAgeMs),
+}))
 
 export function getFirehoseHealth() {
 	const directRequired = directWantedDids.size > 0

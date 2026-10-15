@@ -13,6 +13,7 @@ export {
 	createHostingInstruments,
 	createRevalidateQuarantineInstruments,
 	createS3Instruments,
+	createWebhookIntakeInstruments,
 	type GrafanaConfig,
 	grafanaConfig,
 	HOSTING_RESPONSE_BUCKETS_MS,

@@ -33,6 +33,9 @@ import type {
 	RevalidateQuarantineSnapshot,
 	S3RequestEntry,
 	SiteRequestEntry,
+	WebhookIntakeBatchEntry,
+	WebhookIntakeCursorAges,
+	WebhookIntakeStream,
 } from './core'
 import { createProcessMemoryInstruments } from './process-memory'
 import { sanitizeContext, sanitizeForLog, sanitizeLogString } from './redact'
@@ -444,6 +447,51 @@ export function createS3Instruments(meter: Meter): (entry: S3RequestEntry) => vo
 	return (entry) => duration.record(entry.durationMs, { operation: entry.operation, outcome: entry.outcome })
 }
 
+export type WebhookIntakeInstruments = {
+	recordBatch(entry: WebhookIntakeBatchEntry): void
+	recordConnect(stream: WebhookIntakeStream): void
+}
+
+/**
+ * Webhook intake throughput by stream (3 values): batch commit time, events and
+ * connections, plus each stream's cursor age read from `cursorAges` at export.
+ * Per-event cost is `rate(batch_ms_sum) / rate(events_total)`.
+ */
+export function createWebhookIntakeInstruments(
+	meter: Meter,
+	cursorAges: () => WebhookIntakeCursorAges,
+): WebhookIntakeInstruments {
+	const batchTime = meter.createHistogram('webhook_intake_batch_ms', {
+		description: 'Time to commit one webhook intake batch, cursor included, by stream',
+		unit: 'ms',
+		advice: { explicitBucketBoundaries: HOSTING_RESPONSE_BUCKETS_MS },
+	})
+	const events = meter.createCounter('webhook_intake_events_total', {
+		description: 'Jetstream events committed by webhook intake, by stream',
+	})
+	const connects = meter.createCounter('webhook_intake_connects_total', {
+		description: 'Jetstream connections opened by webhook intake, by stream',
+	})
+	const cursorAge = meter.createObservableGauge('webhook_intake_cursor_age_seconds', {
+		description: 'How far behind now each webhook intake stream cursor is',
+		unit: 's',
+	})
+	cursorAge.addCallback((result) => {
+		for (const [stream, seconds] of Object.entries(cursorAges())) {
+			if (seconds !== undefined) result.observe(seconds, { stream })
+		}
+	})
+	return {
+		recordBatch(entry) {
+			batchTime.record(entry.durationMs, { stream: entry.stream })
+			events.add(entry.events, { stream: entry.stream })
+		},
+		recordConnect(stream) {
+			connects.add(1, { stream })
+		},
+	}
+}
+
 export type RevalidateQuarantineInstruments = {
 	setSnapshot(snapshot: RevalidateQuarantineSnapshot | null): void
 	recordRetry(outcome: RevalidateQuarantineRetryOutcome): void
@@ -507,6 +555,8 @@ class MetricsExporter {
 	private hosting?: HostingInstruments
 	private quarantine?: RevalidateQuarantineInstruments
 	private s3?: (entry: S3RequestEntry) => void
+	private webhookIntake?: WebhookIntakeInstruments
+	private webhookIntakeCursorAges: () => WebhookIntakeCursorAges = () => ({})
 	private serviceInfo?: ObservableGauge
 	private shutdownPromise?: Promise<void>
 	private config: GrafanaConfig = {}
@@ -581,6 +631,7 @@ class MetricsExporter {
 		this.hosting = createHostingInstruments(meter)
 		this.quarantine = createRevalidateQuarantineInstruments(meter)
 		this.s3 = createS3Instruments(meter)
+		this.webhookIntake = createWebhookIntakeInstruments(meter, () => this.webhookIntakeCursorAges())
 		createProcessMemoryInstruments(meter)
 
 		this.serviceInfo = meter.createObservableGauge('service_instance_info', {
@@ -657,6 +708,21 @@ class MetricsExporter {
 	recordS3Request(entry: S3RequestEntry) {
 		if (!this.config.enabled) return
 		this.s3?.(entry)
+	}
+
+	recordWebhookIntakeBatch(entry: WebhookIntakeBatchEntry) {
+		if (!this.config.enabled) return
+		this.webhookIntake?.recordBatch(entry)
+	}
+
+	recordWebhookIntakeConnect(stream: WebhookIntakeStream) {
+		if (!this.config.enabled) return
+		this.webhookIntake?.recordConnect(stream)
+	}
+
+	/** Kept even before the exporter starts, so the gauge reads it once it does. */
+	setWebhookIntakeCursorAges(read: () => WebhookIntakeCursorAges) {
+		this.webhookIntakeCursorAges = read
 	}
 
 	setRevalidateQuarantineSnapshot(snapshot: RevalidateQuarantineSnapshot | null) {

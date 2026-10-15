@@ -89,6 +89,19 @@ export interface S3RequestEntry {
 	durationMs: number
 }
 
+/** A webhook-service Jetstream stream. Closed so it can be a metric label. */
+export type WebhookIntakeStream = 'direct' | 'backlink' | 'registry'
+
+export interface WebhookIntakeBatchEntry {
+	stream: WebhookIntakeStream
+	events: number
+	/** Time the handler took to commit the batch, cursor included. */
+	durationMs: number
+}
+
+/** Seconds each running stream's cursor is behind now; absent streams are not running. */
+export type WebhookIntakeCursorAges = Partial<Record<WebhookIntakeStream, number>>
+
 /** How a fenced site's latest dead-letter record classifies it; `unknown` when that record is unreadable. */
 export type RevalidateQuarantineClass = 'transient' | 'permanent' | 'unknown'
 
@@ -410,6 +423,21 @@ export const metricsCollector = {
 	/** S3 commands by operation and outcome; exported only. */
 	recordS3Request(entry: S3RequestEntry) {
 		metricsExporter.recordS3Request(entry)
+	},
+
+	/** Webhook intake batches by stream; exported only. */
+	recordWebhookIntakeBatch(entry: WebhookIntakeBatchEntry) {
+		metricsExporter.recordWebhookIntakeBatch(entry)
+	},
+
+	/** Webhook intake Jetstream connections by stream; exported only. */
+	recordWebhookIntakeConnect(stream: WebhookIntakeStream) {
+		metricsExporter.recordWebhookIntakeConnect(stream)
+	},
+
+	/** Read at each export to report how far behind every intake stream is. */
+	setWebhookIntakeCursorAges(read: () => WebhookIntakeCursorAges) {
+		metricsExporter.setWebhookIntakeCursorAges(read)
 	},
 
 	/** Firehose leader quarantine gauges; `null` stops reporting them (lost leadership). Exported only. */

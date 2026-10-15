@@ -1,5 +1,5 @@
 import { onceAsync, remainingShutdownTimeout, settleBeforeDeadline } from '@wispplace/graceful-shutdown'
-import { createLogger, shutdownGrafanaExporters } from '@wispplace/observability'
+import { createLogger, initializeGrafanaExporters, shutdownGrafanaExporters } from '@wispplace/observability'
 import { config } from './config'
 import {
 	createReconciliationRetryScheduler,
@@ -19,6 +19,12 @@ import {
 import { isWebhookServingReady } from './lib/readiness'
 import { closeRedisPublisher, getRedisPublisherHealth } from './lib/redis'
 import { canCloseSharedClients } from './lib/shutdown-policy'
+
+// Initialize Grafana exporters if configured
+initializeGrafanaExporters({
+	serviceName: 'webhook-service',
+	serviceVersion: '1.0.0',
+})
 
 const logger = createLogger('webhook-service')
 
