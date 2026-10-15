@@ -22,6 +22,7 @@ import {
 	type StorageTier,
 	TieredStorage,
 } from '@wispplace/tiered-storage'
+import { logS3Read } from './s3-read-log'
 
 const logger = createLogger('hosting-storage')
 
@@ -847,7 +848,11 @@ function initializeStorage(): TieredStorage<Uint8Array> {
 					? { accessKeyId: AWS_ACCESS_KEY_ID, secretAccessKey: AWS_SECRET_ACCESS_KEY }
 					: undefined,
 			prefix: S3_PREFIX,
-			onRequest: metricsCollector.recordS3Request,
+			// Public bucket only: private-site reads stay out of the read log.
+			onRequest: (request) => {
+				metricsCollector.recordS3Request(request)
+				logS3Read(request)
+			},
 		})
 
 		// Hosting service is read-only: always wrap S3 tier to make it read-only

@@ -537,7 +537,7 @@ describe('S3StorageTier request reporting', () => {
 		const { tier, reports } = reportingTier(() => ({ $metadata: {} }))
 		await tier.delete('site/index.html')
 		expect(reports).toHaveLength(1)
-		expect(reports[0]).toMatchObject({ operation: 'DeleteObject', outcome: 'ok' })
+		expect(reports[0]).toMatchObject({ operation: 'DeleteObject', outcome: 'ok', key: 'site/index.html' })
 		expect(reports[0]?.durationMs).toBeGreaterThanOrEqual(0)
 	})
 
@@ -549,5 +549,14 @@ describe('S3StorageTier request reporting', () => {
 		const broken = reportingTier(failure('InternalError'))
 		await expect(broken.tier.exists('any')).rejects.toThrow('InternalError')
 		expect(broken.reports).toMatchObject([{ operation: 'HeadObject', outcome: 'error' }])
+	})
+
+	test('names no key for a command without one', async () => {
+		const { tier, reports } = reportingTier(() => ({ Contents: [], IsTruncated: false, $metadata: {} }))
+		for await (const _ of tier.listKeys()) {
+		}
+		expect(reports).toHaveLength(1)
+		expect(reports[0]?.operation).toBe('ListObjectsV2')
+		expect(reports[0]).not.toHaveProperty('key')
 	})
 })

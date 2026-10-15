@@ -93,7 +93,8 @@ export interface S3StorageTierConfig {
 	 * @remarks
 	 * Duration runs until response headers arrive, so a GetObject is timed
 	 * before its body streams, and it includes SDK retries. Multipart uploads
-	 * report each of their commands.
+	 * report each of their commands. `key` is the object key the command named,
+	 * prefix included, for commands that name one.
 	 */
 	onRequest?: (request: S3Request) => void
 }
@@ -106,6 +107,7 @@ export interface S3Request {
 	operation: string
 	outcome: S3RequestOutcome
 	durationMs: number
+	key?: string
 }
 
 /**
@@ -172,11 +174,13 @@ export class S3StorageTier implements StorageTier {
 			this.client.middlewareStack.add(
 				(next, context) => async (args) => {
 					const started = performance.now()
+					const { Key } = args.input as { Key?: unknown }
 					const report = (outcome: S3RequestOutcome) =>
 						onRequest({
 							operation: (context.commandName ?? 'Unknown').replace(/Command$/, ''),
 							outcome,
 							durationMs: performance.now() - started,
+							...(typeof Key === 'string' && { key: Key }),
 						})
 					try {
 						const result = await next(args)
