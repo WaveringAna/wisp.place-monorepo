@@ -174,6 +174,9 @@ function boundedStringWalk(
 }
 
 function referencesInString(text: string, visit: (aturi: string) => boolean): boolean {
+	// Only a value starting with `at://` can parse, so most strings (post text)
+	// stop here, before trimming, parsing or entering the parse cache.
+	if (!text.includes('at://')) return false
 	// Backlinks intentionally use only values that are themselves AT-URIs. This
 	// avoids interpreting arbitrary prose as a link. Sentence punctuation is not
 	// part of a reference value; trim it before parsing rather than extending an

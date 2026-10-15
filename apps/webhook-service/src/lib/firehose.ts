@@ -1004,6 +1004,22 @@ async function clearPriorReferenceState(event: JetstreamEvent, sql?: BatchSql): 
 	)
 }
 
+/**
+ * Nearly all of the full relay touches nothing in backlink scope. Deciding that
+ * synchronously keeps those events off the per-record executor and its awaits,
+ * which cost more than the decision. It mirrors processCommit's early returns
+ * and its empty reference lifecycle, so a skipped event changes nothing durable.
+ */
+function isBacklinkNoOp(event: JetstreamEvent): boolean {
+	const { did, commit } = event
+	if (event.kind !== 'commit' || !commit) return true
+	if (commit.collection === WH_COLLECTION || directWantedDids.has(did) || backlinkScopeDids.size === 0) return true
+	if (mayOwnPriorReferences(eventAtUri(did, commit.collection, commit.rkey))) return false
+	if (commit.operation === 'delete') return true
+	const current = currentReferences(commit.record)
+	return !current.tooComplex && current.references.length === 0
+}
+
 async function processCommit(stream: StreamName, event: JetstreamEvent, sql?: BatchSql): Promise<void> {
 	if (event.kind !== 'commit' || !event.commit) return
 	const { did, commit } = event
@@ -1089,6 +1105,7 @@ async function handleStreamEvents(stream: StreamName, events: readonly Jetstream
 	try {
 		await dependencies.runIntakeBatch(async (sql) => {
 			for (const event of events) {
+				if (stream === BACKLINK_STREAM && isBacklinkNoOp(event)) continue
 				if (event.kind !== 'commit' || !event.commit) continue
 				const key = `${event.did}/${event.commit.collection}/${event.commit.rkey}`
 				await recordExecutor.run(key, () => processCommit(stream, event, sql))
