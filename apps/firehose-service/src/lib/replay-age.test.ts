@@ -49,6 +49,15 @@ describe('replay age', () => {
 		}
 	})
 
+	test('an old timestamp after a fresh one does not pull a caught-up stream behind', () => {
+		const fresh = observeSourceEvent(resetSourceProgress('primary'), { seq: 1, time: iso(-1_000) }, now)
+		const old = observeSourceEvent(fresh, { seq: 2, time: iso(-2 * 24 * 3_600_000) }, now)
+		expect(old.sequence).toBe(2)
+		expect(evaluateReplayAge(old, now)).toEqual({ status: 'caught-up', replayAgeMs: 1_000, ready: true })
+		// Progress still ages when nothing newer arrives.
+		expect(evaluateReplayAge(old, now + REPLAY_READY_MAX_AGE_MS).ready).toBe(false)
+	})
+
 	test('reset on start or relay switch forgets prior age', () => {
 		const fresh = observeSourceEvent(resetSourceProgress('primary'), { seq: 1, time: iso(-1_000) }, now)
 		expect(evaluateReplayAge(fresh, now).ready).toBe(true)

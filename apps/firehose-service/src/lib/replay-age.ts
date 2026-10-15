@@ -38,16 +38,21 @@ export function parseSourceTime(time: unknown, now: number): number | undefined 
 	return ms
 }
 
-/** Record an accepted event. An invalid timestamp drops the trusted age instead of keeping a stale one. */
+/**
+ * Record an accepted event. An invalid timestamp drops the trusted age instead of keeping a stale one.
+ * Relays forward the time each PDS stamped on its event, so a PDS re-emitting old events stamps them
+ * in the past; progress is the newest trusted time, which such an event cannot pull back.
+ */
 export function observeSourceEvent(
 	progress: SourceProgress,
 	event: { seq: number; time?: unknown },
 	now: number,
 ): SourceProgress {
-	const sourceEventTimeMs = parseSourceTime(event.time, now)
-	if (sourceEventTimeMs === undefined) {
+	const eventTimeMs = parseSourceTime(event.time, now)
+	if (eventTimeMs === undefined) {
 		return { relay: progress.relay, sequence: event.seq, invalidTimestamp: true, observed: true }
 	}
+	const sourceEventTimeMs = Math.max(progress.sourceEventTimeMs ?? eventTimeMs, eventTimeMs)
 	return { relay: progress.relay, sourceEventTimeMs, sequence: event.seq, invalidTimestamp: false, observed: true }
 }
 
