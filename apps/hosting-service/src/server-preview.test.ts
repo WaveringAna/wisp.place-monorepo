@@ -18,6 +18,7 @@ const app = createApp({
 		return new Response('preview body')
 	},
 	serveFromCacheWithRewrite: async () => new Response('unexpected'),
+	isTakenDown: () => false,
 	metrics: { recordHostingResponse: () => {}, recordHostingNotFound: () => {} },
 	notFoundLog: { record: () => {} },
 })

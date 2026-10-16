@@ -20,12 +20,14 @@ import { type CacheInvalidationHealthSnapshot, getCacheInvalidationHealthSnapsho
 import { cache } from './lib/cache-manager'
 import { getCustomDomain, getCustomDomainByHash, getWispDomain } from './lib/db'
 import { serveFromCache, serveFromCacheWithRewrite } from './lib/file-serving'
+import { takedownResponse } from './lib/moderation'
 import { notFoundLog } from './lib/not-found-log'
 import { privateNotFound, servePrivateSite } from './lib/private-serving'
 import { decodeRequestPathname, extractHeaders, isValidRkey } from './lib/request-utils'
 import { notFoundRecorder, requestVisibility, tagNotFound, tagSiteNotFound } from './lib/request-visibility'
 import { recordSiteResponse } from './lib/site-metrics'
 import { getStorageReadHealthSnapshot, type StorageReadHealthSnapshot } from './lib/storage'
+import { takedowns } from './lib/takedowns'
 import { isValidAtprotoIdentifier, resolveDid } from './lib/utils'
 
 const logger = createLogger('hosting-service')
@@ -141,6 +143,8 @@ export type HostingAppDeps = {
 	getCustomDomainByHash: DomainLookup
 	serveFromCache: typeof serveFromCache
 	serveFromCacheWithRewrite: typeof serveFromCacheWithRewrite
+	/** Whether the moderation labeler has taken this site or its account down. */
+	isTakenDown: (did: string, rkey: string) => boolean
 	metrics: Pick<typeof metricsCollector, 'recordHostingResponse' | 'recordHostingNotFound'>
 	notFoundLog: Pick<typeof notFoundLog, 'record'>
 }
@@ -178,6 +182,8 @@ async function serveMappedPublicDomain(
 	if (!isValidRkey(domain.rkey)) {
 		return c.text('Invalid site configuration', 500)
 	}
+
+	if (deps.isTakenDown(domain.did, domain.rkey)) return takedownResponse(c.req.method)
 
 	const headers = extractHeaders(c.req.raw.headers)
 	return trackPublicSiteResponse(
@@ -322,6 +328,7 @@ function serveSharedSiteFile(
 	logger.debug(
 		`sites.wisp.place request: identifier=${sitePath.identifier}, site=${sitePath.site}, filePath=${sitePath.filePath}`,
 	)
+	if (deps.isTakenDown(did, sitePath.site)) return Promise.resolve(takedownResponse(c.req.method))
 	const basePath = `/${sitePath.identifier}/${sitePath.site}/`
 	logger.debug(`Serving with basePath: ${basePath}`)
 	const headers = extractHeaders(c.req.raw.headers)
@@ -499,6 +506,7 @@ export default createApp({
 	getCustomDomainByHash,
 	serveFromCache,
 	serveFromCacheWithRewrite,
+	isTakenDown: takedowns.isTakenDown,
 	metrics: metricsCollector,
 	notFoundLog,
 })

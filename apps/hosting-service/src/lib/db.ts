@@ -16,6 +16,8 @@ export type HostingDbDeps = {
 	onReadRetry?: (outcome: HostingDbReadRetryOutcome) => void
 }
 
+const UNDEFINED_TABLE = '42P01'
+
 // Short TTL for negative / unmapped lookups so newly-mapped domains appear quickly.
 const NEGATIVE_TTL_MS = 10_000
 
@@ -113,7 +115,36 @@ export function createHostingDb({ sql, cache, onReadRetry }: HostingDbDeps) {
 		)
 	}
 
-	return { getWispDomain, getCustomDomain, getCustomDomainByHash, getSiteSettingsCache, getSiteCache }
+	/**
+	 * Subjects whose newest `!takedown` label from `labelerDid` is neither negated
+	 * nor expired. A label scoped to one record version (a cid) takes down the
+	 * whole site. Before the labeler has created its table there is nothing to obey.
+	 */
+	async function loadActiveTakedowns(labelerDid: string): Promise<string[]> {
+		try {
+			const rows = await read<{ uri: string }[]>`
+        SELECT uri FROM (
+          SELECT DISTINCT ON (uri) uri, neg, exp FROM labeler_labels
+          WHERE val = '!takedown' AND src = ${labelerDid}
+          ORDER BY uri, seq DESC
+        ) latest
+        WHERE NOT neg AND (exp IS NULL OR exp::timestamptz > now())
+      `
+			return rows.map((row) => row.uri)
+		} catch (error) {
+			if ((error as { code?: unknown }).code === UNDEFINED_TABLE) return []
+			throw error
+		}
+	}
+
+	return {
+		getWispDomain,
+		getCustomDomain,
+		getCustomDomainByHash,
+		getSiteSettingsCache,
+		getSiteCache,
+		loadActiveTakedowns,
+	}
 }
 
 export type HostingDb = ReturnType<typeof createHostingDb>
@@ -127,8 +158,14 @@ const sql = postgres(databaseUrl, {
 	idle_timeout: 20,
 })
 
-export const { getWispDomain, getCustomDomain, getCustomDomainByHash, getSiteSettingsCache, getSiteCache } =
-	createHostingDb({ sql, cache, onReadRetry: metricsCollector.recordHostingDbReadRetry })
+export const {
+	getWispDomain,
+	getCustomDomain,
+	getCustomDomainByHash,
+	getSiteSettingsCache,
+	getSiteCache,
+	loadActiveTakedowns,
+} = createHostingDb({ sql, cache, onReadRetry: metricsCollector.recordHostingDbReadRetry })
 
 export interface ClosableDatabasePool {
 	end(options?: { timeout?: number }): Promise<void>

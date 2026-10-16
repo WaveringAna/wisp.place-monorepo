@@ -35,6 +35,7 @@ const app = createApp({
 	getCustomDomainByHash: async () => null,
 	serveFromCache: serveSite,
 	serveFromCacheWithRewrite: serveSite,
+	isTakenDown: () => false,
 	// Both metrics are export-only, so they are observed where the router hands them over.
 	metrics: {
 		recordHostingResponse: (entry) => responses.push(entry),

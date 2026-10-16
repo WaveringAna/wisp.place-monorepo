@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { CAS_SCHEMA_STATEMENTS } from '@wispplace/database'
+import { CAS_SCHEMA_STATEMENTS, LABELER_SCHEMA_STATEMENTS } from '@wispplace/database'
 import postgres from 'postgres'
 import { CacheManager } from './cache-manager'
 import { type ClosableDatabasePool, createDatabasePoolCloser, createHostingDb } from './db'
@@ -79,5 +79,54 @@ suite('getSiteCache (postgres)', () => {
 		const row = await getSiteCache('did:plc:test', 'site')
 
 		expect(row?.file_objects).toEqual(objects)
+	})
+})
+
+suite('loadActiveTakedowns (postgres)', () => {
+	const LABELER = 'did:plc:labelerlabelerlabelerlab'
+	let admin: postgres.Sql
+	let reader: postgres.Sql
+	let loadActiveTakedowns: ReturnType<typeof createHostingDb>['loadActiveTakedowns']
+	const takedownSchema = `${schema}_labels`
+
+	beforeAll(async () => {
+		admin = postgres(url as string, { max: 1, onnotice: () => {} })
+		reader = postgres(`${url}${url?.includes('?') ? '&' : '?'}search_path=${takedownSchema}`, { max: 1 })
+		;({ loadActiveTakedowns } = createHostingDb({
+			sql: reader,
+			cache: new CacheManager({ domains: {}, customDomains: {}, settings: {}, siteCache: {} }),
+		}))
+		await admin.unsafe(`CREATE SCHEMA ${takedownSchema}`)
+	})
+
+	afterAll(async () => {
+		await reader.end()
+		await admin.unsafe(`DROP SCHEMA ${takedownSchema} CASCADE`)
+		await admin.end()
+	})
+
+	test('is empty before the labeler has created its table', async () => {
+		expect(await loadActiveTakedowns(LABELER)).toEqual([])
+	})
+
+	test('keeps subjects whose newest !takedown from this labeler is neither negated nor expired', async () => {
+		await admin.unsafe(`SET search_path TO ${takedownSchema}`)
+		for (const statement of LABELER_SCHEMA_STATEMENTS) await admin.unsafe(statement)
+		const insert = (uri: string, opts: { neg?: boolean; exp?: string; val?: string; src?: string } = {}) => admin`
+			INSERT INTO labeler_labels (src, uri, val, neg, cts, exp, sig)
+			VALUES (${opts.src ?? LABELER}, ${uri}, ${opts.val ?? '!takedown'}, ${opts.neg ?? false},
+				'2026-10-16T00:00:00.000Z', ${opts.exp ?? null}, ${new Uint8Array(64)})
+		`
+		await insert('did:plc:active')
+		await insert('at://did:plc:alice/place.wisp.fs/restored')
+		await insert('at://did:plc:alice/place.wisp.fs/restored', { neg: true })
+		await insert('did:plc:retaken', { neg: true })
+		await insert('did:plc:retaken')
+		await insert('did:plc:expired', { exp: '2020-01-01T00:00:00.000Z' })
+		await insert('did:plc:later', { exp: '2099-01-01T00:00:00.000Z' })
+		await insert('did:plc:hidden', { val: '!hide' })
+		await insert('did:plc:elsewhere', { src: 'did:plc:someoneelse' })
+
+		expect((await loadActiveTakedowns(LABELER)).sort()).toEqual(['did:plc:active', 'did:plc:later', 'did:plc:retaken'])
 	})
 })

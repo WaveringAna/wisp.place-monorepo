@@ -12,6 +12,7 @@ import { notFoundLog } from './lib/not-found-log'
 import { closePrivateSitesDatabase } from './lib/private-sites-db'
 import { closeRevalidateQueue } from './lib/revalidate-queue'
 import { getStorageConfig, storage } from './lib/storage'
+import { takedowns } from './lib/takedowns'
 import { unavailableLog } from './lib/unavailable-log'
 import app from './server'
 import { onceAsync, stopHttpServerWithGrace } from './shutdown'
@@ -60,6 +61,9 @@ notFoundLog.start()
 
 // Start cache invalidation subscriber (listens for firehose-service updates via Redis pub/sub)
 startCacheInvalidationSubscriber()
+
+// Load the moderation labeler's active takedowns and keep them current.
+void takedowns.start()
 
 // Optional: Bootstrap hot cache from warm tier on startup
 const BOOTSTRAP_HOT_ON_STARTUP = process.env.BOOTSTRAP_HOT_ON_STARTUP === 'true'
@@ -120,6 +124,7 @@ const shutdown = onceAsync(async (signal: 'SIGINT' | 'SIGTERM') => {
 	if (httpStop.forceStopFailed) logger.error('HTTP server force stop failed')
 
 	cache.stopCleanup()
+	takedowns.stop()
 	// Flush the partial window while the log exporters are still running.
 	unavailableLog.stop()
 	notFoundLog.stop()
