@@ -8,6 +8,7 @@
  */
 
 export { CAS_SCHEMA_STATEMENTS } from './cas-schema'
+export { LABELER_SCHEMA_STATEMENTS } from './labeler-schema'
 // Re-export types
 export type {
 	AdminUser,
