@@ -87,7 +87,7 @@ SERVICE_ENDPOINT=https://domain
 
 Notes:
 
-- `/.well-known/atproto-did` returns `SERVICE_DID`.
+- `/.well-known/atproto-did` returns `HANDLE_DID`, the DID of the account whose handle is the domain (wisp.place's by default; `SERVICE_DID` in local dev).
 - `/.well-known/did.json` publishes the DID doc, including `service` entries from `SERVICE_IDS`.
 - `SERVICE_IDS` must be quoted when it starts with `#` (otherwise dotenv treats it as a comment).
 - Service identity keys are stored in `service_identity_keys` in Postgres.  

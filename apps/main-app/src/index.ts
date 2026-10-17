@@ -62,6 +62,9 @@ const isLocalDev = Bun.env.LOCAL_DEV === 'true'
 const oauthAuthorizationServer = Bun.env.OAUTH_AUTHORIZATION_SERVER ?? 'https://atproto.wisp.place'
 const defaultServiceDid = isLocalDev ? 'did:web:localhost' : 'did:web:wisp.place'
 const serviceDid = Bun.env.SERVICE_DID ?? defaultServiceDid
+// The account the wisp.place handle belongs to, which /.well-known/atproto-did must name.
+// It is not the service DID: that one identifies the XRPC service, not a repo.
+const handleDid = Bun.env.HANDLE_DID ?? (isLocalDev ? serviceDid : 'did:plc:7puq73yz2hkvbcpdhnsze2qw')
 const parsedServiceIds = (Bun.env.SERVICE_IDS ?? '')
 	.split(',')
 	.map((id) => id.trim())
@@ -471,9 +474,9 @@ export const app = new Elysia({
 		return { light, dark }
 	})
 	.get('/.well-known/atproto-did', ({ set }) => {
-		// Return plain text DID for AT Protocol domain verification
+		// Return plain text DID for AT Protocol handle verification
 		set.headers['Content-Type'] = 'text/plain'
-		return serviceDid
+		return handleDid
 	})
 	.use(
 		cors({
