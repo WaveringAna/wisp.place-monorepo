@@ -9,12 +9,17 @@
   "dependencies": {
     "@atproto/crypto": "^0.4.5",
     "@atproto/lex-cbor": "^0.0.9",
+    "@atproto/oauth-client-node": "^0.3.17",
     "@wispplace/database": "workspace:*",
     "@wispplace/observability": "workspace:*",
-    "postgres": "^3.4.9"
+    "postgres": "^3.4.9",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
   },
   "devDependencies": {
     "@types/bun": "^1.3.14",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
     "typescript": "^5.9.3"
   }
 }

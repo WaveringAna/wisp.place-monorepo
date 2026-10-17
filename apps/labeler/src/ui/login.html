@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="color-scheme" content="light dark" />
+		<title>sign in · wisp moderation</title>
+		<link rel="stylesheet" href="./styles.css" />
+	</head>
+	<body>
+		<form class="login" method="get" action="/oauth/login">
+			<h1>wisp moderation</h1>
+			<label class="field">
+				<span>handle</span>
+				<input name="handle" value="okami.mom" autocomplete="username" autocapitalize="off" spellcheck="false" required />
+			</label>
+			<button type="submit">sign in with atproto</button>
+		</form>
+	</body>
+</html>

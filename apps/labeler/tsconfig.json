@@ -22,8 +22,9 @@
 		"outDir": "dist",
 		"sourceMap": true,
 
-		/* Code doesn't run in DOM */
-		"lib": ["es2022"],
+		/* The server and the interface (src/ui) share this config */
+		"lib": ["es2022", "DOM", "DOM.Iterable"],
+		"jsx": "react-jsx",
 
 		/* Workspace Paths */
 		"baseUrl": ".",
