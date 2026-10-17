@@ -20,8 +20,10 @@ COPY apps/webhook-service/package.json ./apps/webhook-service/package.json
 # Install dependencies
 RUN bun install --frozen-lockfile
 
-# Compile to a single binary
-RUN NODE_ENV=production bun build --compile --minify apps/labeler/src/index.ts --outfile /app/labeler
+# Compile to a single binary. --production, not just NODE_ENV: the interface is an
+# HTML import bundled here, and without it this build emitted React's development
+# JSX calls against the production React, which broke the page.
+RUN bun build --compile --production apps/labeler/src/index.ts --outfile /app/labeler
 
 # Stage 2: Minimal runtime
 FROM alpine:3.22
