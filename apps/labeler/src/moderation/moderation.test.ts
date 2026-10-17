@@ -282,7 +282,12 @@ suite('moderation (postgres)', () => {
 				jsonPost({ uri: siteUri(ALICE, 'shop'), val: '!takedown', neg: false, note: 'doorway' }, asMod),
 			)
 			expect((await res.json()).labels.map((l: { val: string }) => l.val)).toEqual(['!takedown'])
-			expect(emitted[emitted.length - 1]).toEqual({ uri: siteUri(ALICE, 'shop'), val: '!takedown', neg: false, note: 'doorway' })
+			expect(emitted[emitted.length - 1]).toEqual({
+				uri: siteUri(ALICE, 'shop'),
+				val: '!takedown',
+				neg: false,
+				note: 'doorway',
+			})
 			const kinds = (await store.events(null, 10, ALICE)).items.map((e) => [e.kind, e.actor])
 			expect(kinds.slice(0, 2)).toEqual([
 				['label', MOD],
