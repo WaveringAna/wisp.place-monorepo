@@ -1,5 +1,15 @@
 export const DEFAULT_LABEL_VALUES = ['!takedown', '!hide', 'spam', 'mass-created'] as const
 
+export type ModerationConfig = {
+	/** The https origin the interface is served at; OAuth needs it. */
+	publicUrl: string
+	moderators: string[]
+	apiToken: string
+	triageUrl: string | null
+	triageModel: string
+	syncIntervalMs: number
+}
+
 export type LabelerConfig = {
 	did: string
 	signingKeyHex: string
@@ -8,6 +18,8 @@ export type LabelerConfig = {
 	host: string
 	port: number
 	values: string[]
+	/** The moderation queue and interface; off unless MODERATION_PUBLIC_URL is set. */
+	moderation: ModerationConfig | null
 }
 
 type Env = Readonly<Record<string, string | undefined>>
@@ -40,5 +52,30 @@ export function resolveLabelerConfig(env: Env): LabelerConfig {
 		host: env.LABELER_HOST?.trim() || '127.0.0.1',
 		port,
 		values,
+		moderation: resolveModerationConfig(env),
+	}
+}
+
+function resolveModerationConfig(env: Env): ModerationConfig | null {
+	const publicUrl = env.MODERATION_PUBLIC_URL?.trim().replace(/\/$/, '')
+	if (!publicUrl) return null
+	if (!publicUrl.startsWith('https://')) throw new Error('MODERATION_PUBLIC_URL must be an https origin')
+	const moderators = (env.MODERATOR_DIDS ?? '')
+		.split(',')
+		.map((d) => d.trim())
+		.filter(Boolean)
+	if (moderators.length === 0) throw new Error('MODERATOR_DIDS is required with MODERATION_PUBLIC_URL')
+	const apiToken = env.MODERATION_API_TOKEN?.trim() ?? ''
+	if (apiToken && apiToken.length < 32) throw new Error('MODERATION_API_TOKEN must be at least 32 characters')
+	const syncIntervalMs = Number(env.MODERATION_SYNC_INTERVAL_MS ?? 30_000)
+	if (!Number.isInteger(syncIntervalMs) || syncIntervalMs < 1000)
+		throw new Error('MODERATION_SYNC_INTERVAL_MS must be ≥ 1000')
+	return {
+		publicUrl,
+		moderators,
+		apiToken,
+		triageUrl: env.TRIAGE_URL?.trim().replace(/\/$/, '') || null,
+		triageModel: env.TRIAGE_MODEL?.trim() || 'bonsai-2-27b',
+		syncIntervalMs,
 	}
 }
