@@ -126,6 +126,21 @@ describe('queryLabels', () => {
 		expect(second.cursor).toBeUndefined()
 		expect((await fetch(`${base}/xrpc/com.atproto.label.queryLabels`)).status).toBe(400)
 	})
+
+	test('answers other origins, preflight included, but the admin route stays without CORS', async () => {
+		const { base } = await start()
+		const query = `${base}/xrpc/com.atproto.label.queryLabels?uriPatterns=*`
+		const res = await fetch(query, { headers: { origin: 'https://pds.ls' } })
+		expect(res.headers.get('access-control-allow-origin')).toBe('*')
+		const preflight = await fetch(query, {
+			method: 'OPTIONS',
+			headers: { origin: 'https://pds.ls', 'access-control-request-method': 'GET' },
+		})
+		expect(preflight.status).toBe(204)
+		expect(preflight.headers.get('access-control-allow-methods')).toContain('GET')
+		const admin = await fetch(`${base}/admin/labels`, { method: 'POST', headers: { origin: 'https://pds.ls' } })
+		expect(admin.headers.get('access-control-allow-origin')).toBeNull()
+	})
 })
 
 describe('subscribeLabels', () => {

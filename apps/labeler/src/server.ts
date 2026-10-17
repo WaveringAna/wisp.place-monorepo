@@ -64,6 +64,19 @@ function tokenMatches(header: string | null, token: string): boolean {
 
 const xrpcError = (status: number, error: string, message: string) => Response.json({ error, message }, { status })
 
+// The read methods are public, and web clients such as pds.ls call them from other origins.
+const CORS_HEADERS = {
+	'access-control-allow-origin': '*',
+	'access-control-allow-methods': 'GET, OPTIONS',
+	'access-control-allow-headers': '*',
+	'access-control-max-age': '86400',
+}
+
+function withCors(res: Response): Response {
+	for (const [name, value] of Object.entries(CORS_HEADERS)) res.headers.set(name, value)
+	return res
+}
+
 function parseCursor(value: string | null): number | undefined | null {
 	if (value === null) return undefined
 	return /^\d{1,15}$/.test(value) ? Number(value) : null
@@ -194,6 +207,14 @@ export function createLabeler(deps: LabelerDeps) {
 
 	async function fetch(req: Request, server: Server<SocketData>): Promise<Response | undefined> {
 		const url = new URL(req.url)
+		if (!url.pathname.startsWith('/xrpc/') || url.pathname === '/xrpc/com.atproto.label.subscribeLabels')
+			return route(req, url, server)
+		if (req.method === 'OPTIONS') return withCors(new Response(null, { status: 204 }))
+		const res = await route(req, url, server)
+		return res && withCors(res)
+	}
+
+	async function route(req: Request, url: URL, server: Server<SocketData>): Promise<Response | undefined> {
 		switch (url.pathname) {
 			case '/xrpc/com.atproto.label.subscribeLabels': {
 				const cursor = parseCursor(url.searchParams.get('cursor'))
