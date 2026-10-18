@@ -109,6 +109,8 @@ when listing.
 { "registered": false }
 ```
 
+Caddy's on-demand TLS asks this endpoint, so a custom domain answers `registered: true` only once it is verified; an unverified claim answers 404.
+
 ### `POST /api/domain/claim`
 ```json
 { "success": true, "domain": "name.wisp.place" }

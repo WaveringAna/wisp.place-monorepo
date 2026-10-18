@@ -202,8 +202,9 @@ export const createDomainRoutes =
 
 					const result = await isDomainRegistered(domain)
 
-					// For Caddy on-demand TLS: 200 = allow, 404 = deny
-					if (result.registered) {
+					// For Caddy on-demand TLS: 200 = allow, 404 = deny. An unverified custom
+					// claim is not served, so it gets no certificate either.
+					if (result.registered && (result.type !== 'custom' || result.verified === true)) {
 						set.status = 200
 						return result
 					} else {
@@ -385,6 +386,12 @@ export const createDomainRoutes =
 					if (!domainInfo) {
 						set.status = 404
 						throw new Error('Domain not found')
+					}
+
+					// Verifying writes the row's verified flag, so only its owner may do it.
+					if (domainInfo.did !== auth.did) {
+						set.status = 403
+						throw new Error('Unauthorized: You do not own this domain')
 					}
 
 					// Verify DNS records (TXT + CNAME)
