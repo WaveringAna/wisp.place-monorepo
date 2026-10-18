@@ -1102,7 +1102,7 @@
                     const who = handle ? `@${handle}` : `${e.did.slice(0, 18)}…`;
                     const url = `https://sites.wisp.place/${encodeURIComponent(handle || e.did)}/${encodeURIComponent(e.rkey)}`;
                     const li = document.createElement('li');
-                    li.innerHTML = `<a class="feed-item" href="${esc(url)}" target="_blank" rel="noopener noreferrer"><span class="what">${e.op === 'create' ? '+ ' : '~ '}${esc(e.site)}</span><span class="when">${ago(e.t)}</span><span class="who">${esc(who)}${e.files ? ` · ${e.files} files` : ''}</span></a>`;
+                    li.innerHTML = `<a class="feed-item" href="${esc(url)}" target="_blank" rel="noopener noreferrer"><span class="what">${e.op === 'create' ? '+ ' : '~ '}${esc(e.site)}</span><span class="when">${ago(e.t)}</span><span class="who">${esc(who)}${e.files ? ` · ${esc(e.files)} files` : ''}</span></a>`;
                     return li;
                 }));
             };
@@ -1140,7 +1140,8 @@
                         did: m.did,
                         rkey: m.commit.rkey,
                         site: m.commit.record?.site || m.commit.rkey,
-                        files: m.commit.record?.fileCount,
+                        // Records are written by anyone, so only a whole number becomes a count.
+                        files: Number.isSafeInteger(m.commit.record?.fileCount) ? m.commit.record.fileCount : 0,
                         op: seen.has(key) ? 'update' : m.commit.operation,
                         t: m.time_us,
                     });
