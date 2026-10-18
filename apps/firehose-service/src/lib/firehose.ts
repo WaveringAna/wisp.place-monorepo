@@ -385,6 +385,7 @@ export function getFirehoseHealth() {
 					: new Date(sourceProgress.sourceEventTimeMs).toISOString(),
 			lastAcceptedSequence: sourceProgress.sequence,
 			relay: sourceProgress.relay,
+			invalidTimestamps: sourceProgress.invalidTimestamps,
 		},
 	}
 }

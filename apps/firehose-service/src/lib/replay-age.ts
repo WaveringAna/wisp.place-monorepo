@@ -12,6 +12,8 @@ export interface SourceProgress {
 	sequence?: number
 	/** The most recent event carried an unparseable or future timestamp. */
 	invalidTimestamp: boolean
+	/** Events with such a timestamp since the last reset. */
+	invalidTimestamps: number
 	/** An event has been observed since the last reset; used to report replay lag once. */
 	observed: boolean
 }
@@ -21,13 +23,13 @@ export type ReplayStatus = 'unknown' | 'invalid' | 'caught-up' | 'catching-up'
 export interface ReplayAge {
 	status: ReplayStatus
 	replayAgeMs?: number
-	/** Never true for unknown or invalid timestamps. */
+	/** Never true until a trusted timestamp has been seen. */
 	ready: boolean
 }
 
 /** Fresh progress for an initial start or a relay switch: no prior age may carry over. */
 export function resetSourceProgress(relay: RelayLabel): SourceProgress {
-	return { relay, invalidTimestamp: false, observed: false }
+	return { relay, invalidTimestamp: false, invalidTimestamps: 0, observed: false }
 }
 
 /** Epoch ms for a relay timestamp, or undefined if unparseable or beyond the allowed skew. */
@@ -39,9 +41,10 @@ export function parseSourceTime(time: unknown, now: number): number | undefined 
 }
 
 /**
- * Record an accepted event. An invalid timestamp drops the trusted age instead of keeping a stale one.
- * Relays forward the time each PDS stamped on its event, so a PDS re-emitting old events stamps them
- * in the past; progress is the newest trusted time, which such an event cannot pull back.
+ * Record an accepted event. Relays forward the time each PDS stamped on its event, so one PDS can
+ * stamp events in the past (re-emitting old ones) or in the future (a wrong clock). Progress is the
+ * newest trusted time: an old stamp cannot pull it back, and an unusable one leaves it as it was,
+ * where it keeps ageing until a trusted event arrives.
  */
 export function observeSourceEvent(
 	progress: SourceProgress,
@@ -50,10 +53,16 @@ export function observeSourceEvent(
 ): SourceProgress {
 	const eventTimeMs = parseSourceTime(event.time, now)
 	if (eventTimeMs === undefined) {
-		return { relay: progress.relay, sequence: event.seq, invalidTimestamp: true, observed: true }
+		return {
+			...progress,
+			sequence: event.seq,
+			invalidTimestamp: true,
+			invalidTimestamps: progress.invalidTimestamps + 1,
+			observed: true,
+		}
 	}
 	const sourceEventTimeMs = Math.max(progress.sourceEventTimeMs ?? eventTimeMs, eventTimeMs)
-	return { relay: progress.relay, sourceEventTimeMs, sequence: event.seq, invalidTimestamp: false, observed: true }
+	return { ...progress, sourceEventTimeMs, sequence: event.seq, invalidTimestamp: false, observed: true }
 }
 
 export function evaluateReplayAge(
@@ -61,8 +70,9 @@ export function evaluateReplayAge(
 	now: number,
 	maxAgeMs = REPLAY_READY_MAX_AGE_MS,
 ): ReplayAge {
-	if (progress.invalidTimestamp) return { status: 'invalid', ready: false }
-	if (progress.sourceEventTimeMs === undefined) return { status: 'unknown', ready: false }
+	if (progress.sourceEventTimeMs === undefined) {
+		return { status: progress.invalidTimestamp ? 'invalid' : 'unknown', ready: false }
+	}
 	const replayAgeMs = Math.max(0, now - progress.sourceEventTimeMs)
 	const ready = replayAgeMs <= maxAgeMs
 	return { status: ready ? 'caught-up' : 'catching-up', replayAgeMs, ready }

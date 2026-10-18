@@ -40,13 +40,32 @@ describe('replay age', () => {
 		expect(evaluateReplayAge(p, now + 1).ready).toBe(false)
 	})
 
-	test('invalid or future timestamps never claim ready, even after a fresh one', () => {
+	test('invalid or future timestamps alone never claim ready', () => {
+		for (const time of ['garbage', iso(3_600_000), undefined]) {
+			const p = observeSourceEvent(resetSourceProgress('primary'), { seq: 1, time }, now)
+			expect(evaluateReplayAge(p, now)).toEqual({ status: 'invalid', ready: false })
+			expect(p.sequence).toBe(1)
+		}
+	})
+
+	test('an invalid or future timestamp after a fresh one keeps the trusted age, which still ages', () => {
 		const fresh = observeSourceEvent(resetSourceProgress('primary'), { seq: 1, time: iso(-1_000) }, now)
 		for (const time of ['garbage', iso(3_600_000), undefined]) {
 			const p = observeSourceEvent(fresh, { seq: 2, time }, now)
-			expect(evaluateReplayAge(p, now)).toEqual({ status: 'invalid', ready: false })
 			expect(p.sequence).toBe(2)
+			expect(p.invalidTimestamp).toBe(true)
+			expect(p.invalidTimestamps).toBe(1)
+			expect(evaluateReplayAge(p, now)).toEqual({ status: 'caught-up', replayAgeMs: 1_000, ready: true })
+			expect(evaluateReplayAge(p, now + REPLAY_READY_MAX_AGE_MS).ready).toBe(false)
 		}
+		const next = observeSourceEvent(
+			observeSourceEvent(fresh, { seq: 2, time: 'garbage' }, now),
+			{ seq: 3, time: iso(0) },
+			now,
+		)
+		expect(next.invalidTimestamp).toBe(false)
+		expect(next.invalidTimestamps).toBe(1)
+		expect(resetSourceProgress('secondary').invalidTimestamps).toBe(0)
 	})
 
 	test('an old timestamp after a fresh one does not pull a caught-up stream behind', () => {
