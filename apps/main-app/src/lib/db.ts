@@ -330,27 +330,27 @@ export const isDomainRegistered = primaryPresentationRead.isDomainRegistered
 export const claimDomain = async (did: string, handle: string): Promise<string> => {
 	const h = handle.trim().toLowerCase()
 	if (!isValidHandle(h)) throw new Error('invalid_handle')
-
-	// Check if user already has 3 domains (unless they're a supporter)
-	const supporter = await isSupporter(did)
-	if (!supporter) {
-		const existingCount = await countWispDomains(did)
-		if (existingCount >= 3) {
-			throw new Error('domain_limit_reached')
-		}
-	}
-
 	const domain = toDomain(h)
-	try {
-		await db`
-            INSERT INTO domains (domain, did)
-            VALUES (${domain}, ${did})
-        `
-	} catch (_err) {
-		// Unique constraint violations -> already taken
-		throw new Error('conflict')
-	}
-	return domain
+
+	// Count and insert under a per-account lock: parallel claims would otherwise
+	// all see room under the limit and all insert.
+	return await db.begin(async (tx) => {
+		await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`wisp-domain-claim:${did}`}, 0))`
+		const supporter = await tx`SELECT 1 FROM supporter WHERE did = ${did} LIMIT 1`
+		if (supporter.length === 0) {
+			const rows = await tx`SELECT COUNT(*) AS count FROM domains WHERE did = ${did}`
+			if (Number(rows[0]?.count ?? 0) >= 3) {
+				throw new Error('domain_limit_reached')
+			}
+		}
+		try {
+			await tx`INSERT INTO domains (domain, did) VALUES (${domain}, ${did})`
+		} catch (_err) {
+			// Unique constraint violations -> already taken
+			throw new Error('conflict')
+		}
+		return domain
+	})
 }
 
 export const updateDomain = async (did: string, handle: string): Promise<string> => {
