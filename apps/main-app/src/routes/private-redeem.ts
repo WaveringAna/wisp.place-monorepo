@@ -3,6 +3,7 @@ import { createLogger } from '@wispplace/observability'
 import { PRIVATE_ACCESS_PAGE_STYLES } from '@wispplace/private-sites'
 import { Elysia } from 'elysia'
 import { authorizeWisp } from '../lib/oauth-authorize'
+import { OAUTH_FLOW_COOKIE_NAME, startOAuthFlow } from '../lib/oauth-flow'
 import { openPrivateSiteForAccount, redeemScopedShare, resolveShareLink } from '../lib/private-sites-service'
 import { authenticateRequest, SESSION_COOKIE_NAME } from '../lib/wisp-auth'
 
@@ -98,7 +99,7 @@ export const resolvePrivateShareState = async (
 }
 
 export const privateRedeemRoutes = (client: NodeOAuthClient, cookieSecret: string) =>
-	new Elysia({ cookie: { secrets: cookieSecret, sign: [SESSION_COOKIE_NAME] } })
+	new Elysia({ cookie: { secrets: cookieSecret, sign: [SESSION_COOKIE_NAME, OAUTH_FLOW_COOKIE_NAME] } })
 		.post('/private/redeem', async ({ body, cookie, request, set }) => {
 			const { siteId, token } = readBody(body)
 			if (!siteId || !token) {
@@ -149,14 +150,17 @@ export const privateRedeemRoutes = (client: NodeOAuthClient, cookieSecret: strin
 			set.headers['Referrer-Policy'] = 'no-referrer'
 			return ''
 		})
-		.post('/private/sign-in', async ({ body, set }) => {
+		.post('/private/sign-in', async ({ body, cookie, set }) => {
 			const { siteId, token, handle } = readBody(body)
 			if (!siteId || !handle) {
 				set.status = 400
 				return { error: 'missing handle' }
 			}
 			try {
-				const state = JSON.stringify({ kind: token ? 'privateShare' : 'privateOpen', siteId, token })
+				const state = startOAuthFlow(
+					cookie,
+					JSON.stringify({ kind: token ? 'privateShare' : 'privateOpen', siteId, token }),
+				)
 				return { url: (await authorizeWisp(client, handle, { state })).toString() }
 			} catch (err) {
 				logger.error('[PrivateSite] Sign-in failed', err)

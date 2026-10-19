@@ -15,6 +15,7 @@ import {
 	stateValue,
 	unmarkLegacyScopeState,
 } from '../lib/oauth-authorize'
+import { endOAuthFlow, isOwnOAuthFlow, OAUTH_FLOW_COOKIE_NAME, startOAuthFlow } from '../lib/oauth-flow'
 import type { BackfillSitesFromPds } from '../lib/pds-backfill'
 import { authenticateRequest, invalidateSessionCache, SESSION_COOKIE_NAME } from '../lib/wisp-auth'
 import type { resolvePrivateShareState } from './private-redeem'
@@ -37,7 +38,7 @@ export const createAuthRoutes =
 		new Elysia({
 			cookie: {
 				secrets: cookieSecret,
-				sign: [SESSION_COOKIE_NAME],
+				sign: [SESSION_COOKIE_NAME, OAUTH_FLOW_COOKIE_NAME],
 			},
 		})
 			/**
@@ -67,7 +68,7 @@ export const createAuthRoutes =
 					}
 
 					logger.info('Login attempt', { identifier, prompt })
-					const state = crypto.randomUUID()
+					const state = startOAuthFlow(c.cookie)
 					const url = await authorizeWisp(client, identifier, prompt ? { state, prompt } : { state })
 					if (sso) url.searchParams.set('sso', sso)
 					logger.info('Authorization URL generated', { identifier })
@@ -93,7 +94,7 @@ export const createAuthRoutes =
 				const domain = (c.query as { domain?: string }).domain
 				const extra: Record<string, string> = domain && DOMAIN_ID.test(domain) ? { domain } : {}
 				try {
-					const state = setupState(addOn, await grantedAddOns(auth.session), extra)
+					const state = startOAuthFlow(c.cookie, setupState(addOn, await grantedAddOns(auth.session), extra))
 					const url = await authorizeWisp(client, auth.did, { state })
 					return c.redirect(url.toString())
 				} catch (err) {
@@ -112,7 +113,7 @@ export const createAuthRoutes =
 					const body = c.body as { handle: string }
 					handle = body.handle
 					logger.info('Sign-in attempt', { handle })
-					const state = crypto.randomUUID()
+					const state = startOAuthFlow(c.cookie)
 					const url = await authorizeWisp(client, handle, { state })
 					logger.info('Authorization URL generated', { handle })
 					return { url: url.toString() }
@@ -138,6 +139,15 @@ export const createAuthRoutes =
 					if (!session) {
 						logger.error('[Auth] OAuth callback failed: no session returned')
 						c.cookie[SESSION_COOKIE_NAME].remove()
+						endOAuthFlow(c.cookie)
+						return c.redirect('/?error=auth_failed')
+					}
+
+					// A callback opened in a browser that did not start the sign-in
+					// would sign that browser into someone else's account.
+					if (!isOwnOAuthFlow(c.cookie, state)) {
+						logger.warn('[Auth] OAuth callback from a browser that did not start the sign-in')
+						endOAuthFlow(c.cookie)
 						return c.redirect('/?error=auth_failed')
 					}
 
@@ -169,6 +179,9 @@ export const createAuthRoutes =
 						}
 						logger.error('[Auth] Session is missing required permissions', { did: session.did, missing })
 					}
+
+					// Past the retry, this sign-in is finished.
+					endOAuthFlow(c.cookie)
 
 					const addOn = setupAddOn(state)
 					if (addOn) {
@@ -204,6 +217,7 @@ export const createAuthRoutes =
 					// This catches state validation failures and other OAuth errors
 					logger.error('[Auth] OAuth callback error', err)
 					c.cookie[SESSION_COOKIE_NAME].remove()
+					endOAuthFlow(c.cookie)
 					return c.redirect('/?error=auth_failed')
 				}
 			})
