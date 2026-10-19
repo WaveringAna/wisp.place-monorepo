@@ -278,15 +278,23 @@ export const createPresentationReadQueries = (sql: SQL) => {
 	}
 
 	const getAdminDatabaseReport = async () => {
-		const [siteCount, wispSubdomains, customDomainCount, siteSettingsCount, recentSites, recentDomains] =
-			await Promise.all([
-				sql<
-					Array<{ count: string | number }>
-				>`SELECT COUNT(*) as count FROM site_cache WHERE record_cid <> ${DELETED_SITE_RECORD_CID}`,
-				sql<Array<{ count: string | number }>>`SELECT COUNT(*) as count FROM domains WHERE domain LIKE '%.wisp.place'`,
-				sql<Array<{ count: string | number }>>`SELECT COUNT(*) as count FROM custom_domains WHERE verified = true`,
-				sql<Array<{ count: string | number }>>`SELECT COUNT(*) as count FROM site_settings_cache`,
-				sql`
+		const [
+			siteCount,
+			wispSubdomains,
+			customDomainCount,
+			siteSettingsCount,
+			recentSites,
+			recentDomains,
+			privateTotals,
+			privateOwners,
+		] = await Promise.all([
+			sql<
+				Array<{ count: string | number }>
+			>`SELECT COUNT(*) as count FROM site_cache WHERE record_cid <> ${DELETED_SITE_RECORD_CID}`,
+			sql<Array<{ count: string | number }>>`SELECT COUNT(*) as count FROM domains WHERE domain LIKE '%.wisp.place'`,
+			sql<Array<{ count: string | number }>>`SELECT COUNT(*) as count FROM custom_domains WHERE verified = true`,
+			sql<Array<{ count: string | number }>>`SELECT COUNT(*) as count FROM site_settings_cache`,
+			sql`
 				SELECT
 					s.did,
 					s.rkey,
@@ -301,8 +309,24 @@ export const createPresentationReadQueries = (sql: SQL) => {
 				ORDER BY s.cached_at DESC
 				LIMIT 10
 			`,
-				sql`SELECT domain, did, rkey, verified, created_at FROM custom_domains ORDER BY created_at DESC LIMIT 10`,
-			])
+			sql`SELECT domain, did, rkey, verified, created_at FROM custom_domains ORDER BY created_at DESC LIMIT 10`,
+			sql<
+				Array<{
+					sites: string | number
+					owners: string | number
+					never_expiring: string | number
+					bytes: string | number
+				}>
+			>`
+				SELECT
+					coalesce(sum(sites), 0) AS sites,
+					count(*) AS owners,
+					coalesce(sum(never_expiring), 0) AS never_expiring,
+					coalesce(sum(bytes), 0) AS bytes
+				FROM private_site_usage
+			`,
+			sql`SELECT * FROM private_site_usage ORDER BY bytes DESC, sites DESC LIMIT 20`,
+		])
 
 		return {
 			stats: {
@@ -314,6 +338,13 @@ export const createPresentationReadQueries = (sql: SQL) => {
 			},
 			recentSites,
 			recentDomains,
+			privateSites: {
+				sites: Number(privateTotals[0]?.sites ?? 0),
+				owners: Number(privateTotals[0]?.owners ?? 0),
+				neverExpiring: Number(privateTotals[0]?.never_expiring ?? 0),
+				bytes: Number(privateTotals[0]?.bytes ?? 0),
+				topOwners: privateOwners,
+			},
 		}
 	}
 

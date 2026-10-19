@@ -855,6 +855,41 @@ export const runDatabaseMigrations = async (primaryDb: SQL): Promise<void> => {
 				'idx_private_handoffs_secret',
 				async () => db`CREATE INDEX IF NOT EXISTS idx_private_handoffs_secret ON private_site_handoffs(secret_hash)`,
 			],
+			// Private sites are unlimited by design and reviewed by hand; these views
+			// show each owner's usage for that review. Rows being deleted are left out.
+			[
+				'create private_site_usage view',
+				async () => db`
+					CREATE OR REPLACE VIEW private_site_usage AS
+					SELECT
+						owner_did,
+						count(*) AS sites,
+						count(*) FILTER (WHERE expires_at IS NULL) AS never_expiring,
+						coalesce(sum(file_count), 0)::bigint AS files,
+						coalesce(sum(total_bytes), 0)::bigint AS bytes,
+						min(created_at) AS oldest_created_at,
+						max(created_at) AS newest_created_at
+					FROM private_sites
+					WHERE state <> 'deleting'
+					GROUP BY owner_did
+				`,
+			],
+			[
+				'create private_site_share_usage view',
+				async () => db`
+					CREATE OR REPLACE VIEW private_site_share_usage AS
+					SELECT
+						s.owner_did,
+						count(*) AS shares,
+						count(*) FILTER (
+							WHERE sh.revoked_at IS NULL AND (sh.expires_at IS NULL OR sh.expires_at > NOW())
+						) AS active_shares
+					FROM private_sites s
+					JOIN private_site_shares sh ON sh.site_id = s.site_id
+					WHERE s.state <> 'deleting'
+					GROUP BY s.owner_did
+				`,
+			],
 		]
 		for (const [name, run] of migrations) {
 			await runMigration(name, run)
