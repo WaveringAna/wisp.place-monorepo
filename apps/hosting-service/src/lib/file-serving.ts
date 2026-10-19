@@ -38,6 +38,12 @@ import {
 import { type HtmlPrewarm, triggerSiteHtmlHotCacheWarmup } from './html-prewarm'
 import { generate404Page, generateDirectoryListing, siteUpdatingResponse } from './page-generators'
 import { loadRedirectRules, matchRedirectRule, parseCookies, parseQueryString } from './redirects'
+import {
+	createRepairAllowance,
+	DEFAULT_REPAIR_ALLOWANCE,
+	type RepairAllowance,
+	requestClient,
+} from './repair-allowance'
 import { applyCustomHeaders, getIndexFiles, isValidMimeType } from './request-utils'
 import { markRedirectNotFound } from './request-visibility'
 import { recordStorageMiss } from './revalidate-metrics'
@@ -841,6 +847,8 @@ export interface FileServingDependencies {
 	gzipOperations: GzipOperations
 	/** Process-wide cap on concurrent gzip work; see resolveGzipProcessingConcurrency. */
 	gzipProcessingConcurrency: number
+	/** Per-client limit on repairs of sites with no cached row; a default bucket when omitted. */
+	unknownSiteRepairs?: RepairAllowance
 }
 
 /**
@@ -861,6 +869,7 @@ export function createFileServing(deps: FileServingDependencies) {
 		triggerSiteHtmlHotCacheWarmup,
 		gzipOperations,
 		gzipProcessingConcurrency,
+		unknownSiteRepairs = createRepairAllowance(DEFAULT_REPAIR_ALLOWANCE),
 	} = deps
 	// Bound once: a backend without streaming or a hot-tier probe is served from buffered reads.
 	const getStream = storage.getStream?.bind(storage)
@@ -1853,8 +1862,12 @@ export function createFileServing(deps: FileServingDependencies) {
 			recordStorageMiss('manifest')
 			// With no cached row the account and site may be made up. A did:web names
 			// a host its owner chooses, free to mint and slow to answer, so it gets no
-			// repair; other accounts get one at a time (see revalidateDedupeKey).
+			// repair; other accounts get one at a time (see revalidateDedupeKey), and
+			// each client a few a minute.
 			if (did.startsWith('did:web:')) return buildStyled404Response()
+			if (!unknownSiteRepairs.allow(requestClient(requestHeaders))) {
+				return buildStorageMissResponse({ reason: 'manifest-miss', revalidate: 'none' }, requestHeaders)
+			}
 			const { result } = await enqueueRevalidate(did, rkey, MANIFEST_MISS_REVALIDATE_REASON)
 			return buildStorageMissResponse({ reason: 'manifest-miss', revalidate: result }, requestHeaders)
 		}

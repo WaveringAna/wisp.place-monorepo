@@ -12,6 +12,7 @@ import {
 import { cache } from './cache-manager'
 import { createFileServing, type GzipOperations, SOURCE_CID_MISMATCH_TTL_MS } from './file-serving'
 import { createHtmlPrewarm } from './html-prewarm'
+import { createRepairAllowance, DEFAULT_REPAIR_ALLOWANCE } from './repair-allowance'
 import { siteNotFoundReason } from './request-visibility'
 import { StorageUnavailableError } from './storage'
 import { unavailableLog } from './unavailable-log'
@@ -221,6 +222,8 @@ const fakeGzipOperations: GzipOperations = {
 	},
 }
 
+let repairAllowance = createRepairAllowance(DEFAULT_REPAIR_ALLOWANCE)
+
 const { serveFileInternal, serveFileInternalWithRewrite, serveFromCache, serveFromCacheWithRewrite } =
 	createFileServing({
 		storage: fakeStorage,
@@ -265,6 +268,7 @@ const { serveFileInternal, serveFileInternalWithRewrite, serveFromCache, serveFr
 		triggerSiteHtmlHotCacheWarmup: prewarm.trigger,
 		gzipOperations: fakeGzipOperations,
 		gzipProcessingConcurrency: 2,
+		unknownSiteRepairs: { allow: (client) => repairAllowance.allow(client) },
 	})
 
 const DID = 'did:plc:test'
@@ -308,6 +312,7 @@ function resetServingState() {
 	cache.clear('siteCache')
 	cache.clear('siteFiles')
 	cache.clear('sourceCidMismatches')
+	repairAllowance = createRepairAllowance(DEFAULT_REPAIR_ALLOWANCE)
 	resetGzipWorkState()
 	prewarm.resetAll()
 }
@@ -412,6 +417,14 @@ describe('serveFileInternal directory-index fallback for extensioned paths', () 
 		expect(storageGetWithMetadataKeys).toHaveLength(0)
 		expect(recordedStorageMisses).toEqual(['manifest'])
 		expect(revalidateCalls).toEqual([{ did: DID, rkey: RKEY, reason: 'storage-miss:manifest' }])
+	})
+
+	test('queues repairs for unknown sites only within a client allowance', async () => {
+		const headers = { accept: 'application/octet-stream', 'x-forwarded-for': '203.0.113.9' }
+		for (const rkey of ['made-up-1', 'made-up-2', 'made-up-3', 'made-up-4']) {
+			expect((await serveFromCache(DID, rkey, 'index.html', 'https://example.com/', headers)).status).toBe(503)
+		}
+		expect(revalidateCalls.map((call) => call.rkey)).toEqual(['made-up-1', 'made-up-2', 'made-up-3'])
 	})
 
 	test('answers 404 without queueing repair for an unknown did:web site', async () => {
@@ -1683,7 +1696,9 @@ describe('fail-closed 503 visibility', () => {
 		expect(lines[0]).toContain(`"site":"${DID}/${RKEY}"`)
 		expect(lines[0]).toContain('"reason":"manifest-miss"')
 		expect(lines[0]).toContain('"count":1000')
-		expect(lines[0]).toContain('"revalidate":{"enqueued":1000}')
+		// One client asks for at most a few repairs; the rest answer without one.
+		expect(lines[0]).toContain('"enqueued":3')
+		expect(lines[0]).toContain('"none":997')
 		expect(lines[0]).not.toContain('index.html')
 	})
 })
