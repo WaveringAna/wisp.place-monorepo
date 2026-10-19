@@ -47,6 +47,25 @@ describe('enqueueRevalidateWithRedis', () => {
 		])
 	})
 
+	test('dedupes manifest-miss repairs per account, so made-up site names share one', async () => {
+		const dedupeKeys: string[] = []
+		const redis: RevalidateQueueClient = {
+			async eval(_script, _keyCount, ...keysAndArgs) {
+				dedupeKeys.push(keysAndArgs[0] as string)
+				return [1, '1-0']
+			},
+		}
+		for (const rkey of ['rt-amp-0', 'rt-amp-1']) {
+			await enqueueRevalidateWithRedis(redis, 'did:plc:test', rkey, 'storage-miss:manifest')
+		}
+		await enqueueRevalidateWithRedis(redis, 'did:plc:test', 'rt-amp-0', 'storage-miss:index.html')
+		expect(dedupeKeys).toEqual([
+			'revalidate:account:manifest-miss:did:plc:test',
+			'revalidate:account:manifest-miss:did:plc:test',
+			'revalidate:site:storage-miss:did:plc:test:rt-amp-0',
+		])
+	})
+
 	test('treats a script dedupe response as deduped', async () => {
 		const redis: RevalidateQueueClient = {
 			async eval() {

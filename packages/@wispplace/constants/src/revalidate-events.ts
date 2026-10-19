@@ -40,6 +40,20 @@ export function revalidateReasonCategory(reason: string): RevalidateReasonCatego
 	return 'other'
 }
 
+/** Repair for a site with no cached row, asked for by a request that found no manifest. */
+export const MANIFEST_MISS_REVALIDATE_REASON = 'storage-miss:manifest'
+
+/**
+ * Dedupe key for one repair. A manifest miss can be asked for by anyone naming
+ * any account and site, so unique site names would each get their own repair
+ * and could fill the shared stream; it is deduped per account instead, leaving
+ * at most one outstanding per DID. Every other repair is deduped per site.
+ */
+export function revalidateDedupeKey(did: string, rkey: string, reason: string): string {
+	if (reason === MANIFEST_MISS_REVALIDATE_REASON) return `revalidate:account:manifest-miss:${did}`
+	return `revalidate:site:${revalidateReasonCategory(reason)}:${did}:${rkey}`
+}
+
 /** The one call an enqueuer needs; ioredis and Bun's RedisClient both adapt to it. */
 export interface RevalidateQueueClient {
 	eval(script: string, keyCount: number, ...keysAndArgs: string[]): PromiseLike<unknown>
@@ -90,7 +104,7 @@ export async function enqueueSiteRevalidation(
 	const reply = await redis.eval(
 		REVALIDATE_ENQUEUE_SCRIPT,
 		4,
-		`revalidate:site:${revalidateReasonCategory(reason)}:${did}:${rkey}`,
+		revalidateDedupeKey(did, rkey, reason),
 		stream,
 		revalidationQuarantineKey(did, rkey),
 		revalidationSiteVersionKey(did, rkey),

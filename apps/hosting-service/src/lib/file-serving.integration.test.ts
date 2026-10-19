@@ -414,6 +414,22 @@ describe('serveFileInternal directory-index fallback for extensioned paths', () 
 		expect(revalidateCalls).toEqual([{ did: DID, rkey: RKEY, reason: 'storage-miss:manifest' }])
 	})
 
+	test('answers 404 without queueing repair for an unknown did:web site', async () => {
+		const response = await serveFromCache(
+			'did:web:attacker.invalid',
+			'rt-amp-0',
+			'index.html',
+			'https://example.com/',
+			{
+				accept: 'application/octet-stream',
+			},
+		)
+
+		expect(response.status).toBe(404)
+		expect(revalidateCalls).toEqual([])
+		expect(storageGetWithMetadataKeys).toHaveLength(0)
+	})
+
 	test('does not read _redirects when the manifest omits it', async () => {
 		storeFile('index.html', '<html>index</html>')
 		siteFileCids = { 'index.html': 'index-cid' }

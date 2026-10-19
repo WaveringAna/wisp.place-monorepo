@@ -6,7 +6,7 @@
 import { Readable } from 'node:stream'
 import { computeCID } from '@wispplace/atproto-utils'
 import { shouldCompressMimeType } from '@wispplace/atproto-utils/compression'
-import { MAX_BLOB_SIZE } from '@wispplace/constants'
+import { MANIFEST_MISS_REVALIDATE_REASON, MAX_BLOB_SIZE } from '@wispplace/constants'
 import type { SiteCache } from '@wispplace/database'
 import { type FileObjects, normalizeFileCids, normalizeFileObjects } from '@wispplace/fs-utils'
 import { isHtmlContent, rewriteHtmlPaths } from '@wispplace/fs-utils/html-rewriter'
@@ -1851,7 +1851,11 @@ export function createFileServing(deps: FileServingDependencies) {
 		const manifest = await getSiteManifest(did, rkey, trace)
 		if (manifest === null) {
 			recordStorageMiss('manifest')
-			const { result } = await enqueueRevalidate(did, rkey, 'storage-miss:manifest')
+			// With no cached row the account and site may be made up. A did:web names
+			// a host its owner chooses, free to mint and slow to answer, so it gets no
+			// repair; other accounts get one at a time (see revalidateDedupeKey).
+			if (did.startsWith('did:web:')) return buildStyled404Response()
+			const { result } = await enqueueRevalidate(did, rkey, MANIFEST_MISS_REVALIDATE_REASON)
 			return buildStorageMissResponse({ reason: 'manifest-miss', revalidate: result }, requestHeaders)
 		}
 		const settings = await span(trace, 'db:settings', () => getCachedSettings(did, rkey))
