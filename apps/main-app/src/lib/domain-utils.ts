@@ -14,6 +14,19 @@ const RESERVED_HANDLES = new Set([
 	'pds',
 	'staging',
 	'auth',
+	// Names the wisp.place zone already routes to infrastructure. A claim on one
+	// would never serve the user's site, and could pass for an official page.
+	'dns',
+	'mesh',
+	'moderation',
+	'preview-bot',
+	'priv',
+	'singapore',
+	'sites',
+	'status',
+	'status-origin',
+	'us-east',
+	'us-west',
 ])
 
 const RESERVED_CUSTOM_DOMAINS = new Set([
