@@ -13,6 +13,7 @@ export type S3ReadLine = {
 	keyKind: 'cas' | 'rewritten' | 'other'
 	outcome: S3Request['outcome']
 	durationMs: number
+	error?: string
 }
 
 const logger = createLogger('hosting-service')
@@ -29,6 +30,7 @@ export function s3ReadLine(request: S3Request): S3ReadLine | null {
 		keyKind: keyKind(request.key),
 		outcome: request.outcome,
 		durationMs: Math.round(request.durationMs),
+		...(request.error !== undefined && { error: request.error }),
 	}
 }
 

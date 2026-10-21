@@ -548,7 +548,20 @@ describe('S3StorageTier request reporting', () => {
 
 		const broken = reportingTier(failure('InternalError'))
 		await expect(broken.tier.exists('any')).rejects.toThrow('InternalError')
-		expect(broken.reports).toMatchObject([{ operation: 'HeadObject', outcome: 'error' }])
+		expect(broken.reports).toMatchObject([{ operation: 'HeadObject', outcome: 'error', error: 'InternalError' }])
+		expect(missing.reports[0]).not.toHaveProperty('error')
+	})
+
+	test('names a failure by its error name and HTTP status, never its message', async () => {
+		const { tier, reports } = reportingTier(() => {
+			throw Object.assign(new Error('https://bucket.example/secret-key?X-Amz-Signature=abc'), {
+				name: 'SlowDown',
+				$metadata: { httpStatusCode: 503 },
+			})
+		})
+		await expect(tier.get('cas/a')).rejects.toThrow()
+		expect(reports).toMatchObject([{ operation: 'GetObject', outcome: 'error', error: 'SlowDown 503' }])
+		expect(JSON.stringify(reports)).not.toContain('secret-key')
 	})
 
 	test('names no key for a command without one', async () => {

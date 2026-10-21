@@ -108,6 +108,18 @@ export interface S3Request {
 	outcome: S3RequestOutcome
 	durationMs: number
 	key?: string
+	/**
+	 * For `outcome: 'error'`: the SDK error name and, when the service answered, its
+	 * HTTP status, e.g. `SlowDown 503` or `TimeoutError`. Never the message, which
+	 * can carry the request URL.
+	 */
+	error?: string
+}
+
+function describeFailure(error: unknown): string {
+	const name = error instanceof Error ? error.name : typeof error
+	const status = (error as { $metadata?: { httpStatusCode?: unknown } } | null)?.$metadata?.httpStatusCode
+	return (typeof status === 'number' ? `${name} ${status}` : name).slice(0, 64)
 }
 
 /**
@@ -175,19 +187,21 @@ export class S3StorageTier implements StorageTier {
 				(next, context) => async (args) => {
 					const started = performance.now()
 					const { Key } = args.input as { Key?: unknown }
-					const report = (outcome: S3RequestOutcome) =>
+					const report = (outcome: S3RequestOutcome, error?: string) =>
 						onRequest({
 							operation: (context.commandName ?? 'Unknown').replace(/Command$/, ''),
 							outcome,
 							durationMs: performance.now() - started,
 							...(typeof Key === 'string' && { key: Key }),
+							...(error !== undefined && { error }),
 						})
 					try {
 						const result = await next(args)
 						report('ok')
 						return result
 					} catch (error) {
-						report(this.isNoSuchKeyError(error) ? 'not-found' : 'error')
+						if (this.isNoSuchKeyError(error)) report('not-found')
+						else report('error', describeFailure(error))
 						throw error
 					}
 				},

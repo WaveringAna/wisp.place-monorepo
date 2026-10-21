@@ -29,6 +29,12 @@ describe('S3 read log line', () => {
 		expect(s3ReadLine(request('did:plc:abc/site/index.html'))?.keyKind).toBe('other')
 	})
 
+	test('carries the failure name of a failed read', () => {
+		const failed = { ...request('cas/a'), outcome: 'error' as const, error: 'TimeoutError' }
+		expect(s3ReadLine(failed)).toMatchObject({ outcome: 'error', error: 'TimeoutError' })
+		expect(s3ReadLine(request('cas/a'))).not.toHaveProperty('error')
+	})
+
 	test('only GetObject with a key gets a line', () => {
 		expect(s3ReadLine(request('cas/a', 'HeadObject'))).toBeNull()
 		expect(s3ReadLine(request(undefined))).toBeNull()
