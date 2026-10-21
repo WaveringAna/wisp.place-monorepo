@@ -41,7 +41,7 @@ Or download a binary directly:
 
 <div class="downloads">
 
-<h2>Download v2.1.1</h2>
+<h2>Download v2.1.2</h2>
 
 <a href="https://sites.wisp.place/nekomimi.pet/wisp-cli-binaries/wisp-cli-aarch64-darwin" class="download-link" download="">
 
@@ -76,12 +76,12 @@ Or download a binary directly:
 <h3 style="margin-top: 1.5rem; margin-bottom: 0.5rem;">SHA-256 Checksums</h3>
 
 <pre style="font-size: 0.75rem; padding: 1rem;" class="language-bash" tabindex="0"><code class="language-bash">
-2738704f670cac0476f5164980fd017f4a08f115e85ee57368da9657fc83c360  wisp-cli-aarch64-darwin
-c06292611e4f755736cfd14cc2503658f617d49d913950af56436ef113036382  wisp-cli-aarch64-linux
-26650cb1f098a6655b94c85d796d04777766bd1c71686e437bca7012d9dc9e3b  wisp-cli-darwin-universal
-b7eb1f60cc88f776dd660fc80679cdd84c3b4f240b65291786913aee8f0edbfd  wisp-cli-x86_64-darwin
-27735a43c7ce97923854d2f1d55cbbf1ff28717751be783a2471b988b53df49e  wisp-cli-x86_64-linux
-1da4893270ede9a6c90c5210e38a507a335abbdd49af15d64df4cf95d49d3257  wisp-cli-x86_64-windows.exe
+28026797cc909a9101e459ff901768203e5bcbefc96eff1d00cf00f190601940  wisp-cli-aarch64-darwin
+ac5d72d1ddda95dc992add98bda56cb8519120407f6d31b8c1a58182d22f2299  wisp-cli-aarch64-linux
+655fb3b7fcd5285338e22620548466d49023386973e4005465bcca93c4b9950b  wisp-cli-darwin-universal
+537f2d7905b9b2c07ff778bd7d1aa6b7ee7c082bd8f6f59ef86a0e4729e5a4e7  wisp-cli-x86_64-darwin
+79a6250c5bcc0d2cf6b93a7a7550255bba78351af73566aca908f07a5def8fbc  wisp-cli-x86_64-linux
+0ea68a9f0c9bf3a9973882645adc13befdc3698fdd8c11556594be2d7979f002  wisp-cli-x86_64-windows.exe
 </code></pre>
 
 </div>
