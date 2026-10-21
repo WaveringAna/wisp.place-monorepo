@@ -105,6 +105,11 @@ A few things a script might notice:
 - Certificates: the system store is used, falling back to Mozilla's roots on Linux images that ship none.
   `SSL_CERT_FILE` points at a custom bundle, and `NODE_EXTRA_CA_CERTS` is still honoured.
 
+Version 2.1.2 updates the bundled Linux fallback roots to remove the emSign ECC Root CA - G3
+root following the eMudhra incident. Upgrade existing CI pins to 2.1.2. This fallback is used
+only when Linux has no system roots and neither `SSL_CERT_FILE` nor `SSL_CERT_DIR` is set;
+keep system and custom CA stores updated separately.
+
 ## CI/CD Integration
 
 Deploy on every push to `main` with Tangled Spindle. Save as `.tangled/workflows/deploy.yml`:
@@ -134,7 +139,7 @@ steps:
 
   - name: deploy
     command: |
-      npm install --global --prefix "$HOME/.local" wispctl@2.1.0
+      npm install --global --prefix "$HOME/.local" wispctl@2.1.2
       export PATH="$HOME/.local/bin:$PATH"
       wispctl deploy "$WISP_HANDLE" --path "$SITE_PATH" --site "$SITE_NAME" --yes
 ```

@@ -72,7 +72,7 @@ steps:
 
   - name: deploy preview
     command: |
-      npm install --global --prefix "$HOME/.local" wispctl@2.1.0
+      npm install --global --prefix "$HOME/.local" wispctl@2.1.2
       export PATH="$HOME/.local/bin:$PATH"
       wispctl preview deploy --path ./dist
 ```
@@ -91,7 +91,7 @@ Changing the subdomain in the dashboard takes effect on the next deploy, with no
 
 As a collaborator, pass your own handle (`wispctl preview deploy <your handle> --path ./dist`), since the account would otherwise be the repo's owner.
 
-Replace the build commands and `./dist` with your own. The workflow pins `wispctl@2.1.0` and installs it under `$HOME/.local`, not into the read-only Nix store.
+Replace the build commands and `./dist` with your own. The workflow pins `wispctl@2.1.2` and installs it under `$HOME/.local`, not into the read-only Nix store.
 
 ## Cleaning up
 
@@ -116,7 +116,7 @@ steps:
   - name: prune old previews
     command: |
       set -euo pipefail
-      npm install --global --prefix "$HOME/.local" wispctl@2.1.0
+      npm install --global --prefix "$HOME/.local" wispctl@2.1.2
       export PATH="$HOME/.local/bin:$PATH"
       wispctl site prune "$WISP_HANDLE" \
         --password "$WISP_APP_PASSWORD" \
