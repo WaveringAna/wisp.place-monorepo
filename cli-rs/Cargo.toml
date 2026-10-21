@@ -58,7 +58,7 @@ rusqlite = { version = "0.40.2", features = ["bundled"] }
 keyring = { version = "4.2.0", default-features = false, features = ["v1"] }
 # Linux fallback roots for containers without a CA bundle (see wispctl::tls).
 rustls-native-certs = "0.8.4"
-webpki-root-certs = "1.0.9"
+webpki-root-certs = "1.0.10"
 
 
 [profile.release]
