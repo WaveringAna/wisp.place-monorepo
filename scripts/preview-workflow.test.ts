@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { WISPCTL_VERSION } from '../apps/main-app/public/editor/recipes'
 
 const guide = await readFile(new URL('../docs/src/content/docs/guides/preview-deploys.md', import.meta.url), 'utf8')
 const workflows = [...guide.matchAll(/```yaml\n([\s\S]*?)```/g)].map(
@@ -22,7 +23,7 @@ const exercise = async (command: string, secret = 'fixture-password') => {
 			`#!/usr/bin/env bash
 set -eu
 [ "$1" = install ] && [ "$2" = --global ] && [ "$3" = --prefix ]
-[ "$4" = "$HOME/.local" ] && [ "$5" = wispctl@2.1.0 ]
+[ "$4" = "$HOME/.local" ] && [ "$5" = wispctl@2.1.2 ]
 mkdir -p "$4/bin"
 cp "$FAKE_CLI" "$4/bin/wispctl"
 `,
@@ -56,6 +57,21 @@ printf '%s\n' "$*" >> "$HOME/invocations"
 }
 
 describe('preview workflow installation', () => {
+	test('deployment workflows and documentation install the current workspace release', async () => {
+		const cargo = await readFile(new URL('../cli-rs/Cargo.toml', import.meta.url), 'utf8')
+		expect(cargo.match(/^version = "(.+)"$/m)?.[1]).toBe(WISPCTL_VERSION)
+		for (const path of [
+			'.tangled/workflows/deploy-wisp.yml',
+			'.tangled/workflows/deploy-blog.yml',
+			'docs/src/content/docs/cli.md',
+			'docs/src/content/docs/guides/preview-deploys.md',
+		]) {
+			const content = await readFile(new URL(`../${path}`, import.meta.url), 'utf8')
+			const pins = [...content.matchAll(/wispctl@(\d+\.\d+\.\d+)/g)].map((match) => match[1])
+			expect(pins.length).toBeGreaterThan(0)
+			for (const pin of pins) expect(pin).toBe(WISPCTL_VERSION)
+		}
+	})
 	test('deploy installs outside the read-only Nix store and leaves the rest to preview deploy', async () => {
 		const result = await exercise(deploy)
 		expect(result.exit).toBe(0)
