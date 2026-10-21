@@ -1,0 +1,39 @@
+---
+import Callout from "../../components/Callout.astro";
+import CodeBlock from "../../components/CodeBlock.astro";
+import Post from "../../layouts/Post.astro";
+---
+
+<Post slug="wispctl-2-1-2">
+	<p>
+		wispctl 2.1.2 is a security fix for the eMudhra certificate authority
+		compromise. the private keys of several eMudhra intermediate CAs leaked,
+		so anyone holding them can issue certificates that chain up to the
+		"emSign ECC Root CA - G3" root.
+	</p>
+
+	<p>
+		wispctl normally trusts whatever your operating system trusts, so on most
+		machines the fix is just updating your OS certificates. the exception is
+		a linux machine with no CA bundle at all: debian-slim without
+		<code>ca-certificates</code>, busybox, nixery images without
+		<code>cacert</code>. there wispctl falls back to the roots built into the
+		binary, and from 2.0.0 through 2.1.1 those still include the emSign root.
+		2.1.2 drops it.
+	</p>
+
+	<h2>do i need to do anything?</h2>
+
+	<p>
+		if your CI runs in one of those slim images and pins a wispctl version,
+		yes, bump it to 2.1.2. this includes preview workflows made from the
+		dashboard before today, which pin <code>wispctl@2.1.1</code>.
+	</p>
+
+	<CodeBlock lang="bash" code="npm install -g wispctl@2.1.2" />
+
+	<p>
+		if you download the binary straight from sites.wisp.place, you already
+		have 2.1.2 and don't need to change anything.
+	</p>
+</Post>

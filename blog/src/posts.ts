@@ -48,6 +48,14 @@ export const authors = {
 
 const posts: Post[] = [
 	{
+		slug: 'wispctl-2-1-2',
+		title: 'wispctl 2.1.2',
+		description: 'drops the leaked eMudhra root from the fallback certificates',
+		date: '2026-10-21',
+		author: authors.nekomimi,
+		tags: ['release', 'cli', 'security'],
+	},
+	{
 		slug: 'integrating-atproto',
 		title: 'Integrating Better with other Atproto Services',
 		description: 'preview deployments with tangled, and automatic DNS with marque.at',
