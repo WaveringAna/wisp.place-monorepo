@@ -12,6 +12,8 @@ interface Props {
 	/** 'article' on posts, 'website' everywhere else. */
 	ogType?: 'website' | 'article';
 	publishedAt?: string;
+	/** Path of the image link previews show, under public/. */
+	image?: string;
 	/** AT-URI of this page's Standard.site document record. */
 	standardDocumentUri?: string;
 	/** Constrain the main column to reading width. */
@@ -26,12 +28,14 @@ const {
 	path = Astro.url.pathname,
 	ogType = 'website',
 	publishedAt,
+	image,
 	standardDocumentUri,
 	narrow = false,
 	noindex = false,
 } = Astro.props;
 
 const canonical = new URL(path, site.url).href;
+const imageUrl = image && new URL(image, site.url).href;
 const fullTitle = path === '/' ? title : `${title} · ${site.title}`;
 const year = new Date().getFullYear();
 const shellClass = narrow ? 'shell shell--narrow' : 'shell';
@@ -57,10 +61,12 @@ const shellClass = narrow ? 'shell shell--narrow' : 'shell';
 		<meta property="og:description" content={description} />
 		<meta property="og:site_name" content={site.title} />
 		{publishedAt && <meta property="article:published_time" content={publishedAt} />}
+		{imageUrl && <meta property="og:image" content={imageUrl} />}
 
-		<meta name="twitter:card" content="summary" />
+		<meta name="twitter:card" content={imageUrl ? 'summary_large_image' : 'summary'} />
 		<meta name="twitter:title" content={title} />
 		<meta name="twitter:description" content={description} />
+		{imageUrl && <meta name="twitter:image" content={imageUrl} />}
 
 		<link rel="preconnect" href="https://fonts.googleapis.com" />
 		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

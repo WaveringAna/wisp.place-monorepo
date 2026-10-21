@@ -21,6 +21,7 @@ const documentUri = post.draft ? undefined : standardDocumentUri(slug);
 	path={postHref(slug)}
 	ogType="article"
 	publishedAt={post.date}
+	image={post.cover}
 	standardDocumentUri={documentUri}
 	narrow
 	noindex={post.draft}

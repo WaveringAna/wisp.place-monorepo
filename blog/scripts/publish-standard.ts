@@ -70,6 +70,27 @@ async function putRecord(
 	)
 }
 
+interface BlobRef {
+	$type: 'blob'
+	ref: { $link: string }
+	mimeType: string
+	size: number
+}
+
+/** Uploads a file from public/ as a blob; the same bytes always give the same ref. */
+async function uploadCover(pds: string, accessJwt: string, path: string): Promise<BlobRef> {
+	const file = Bun.file(new URL(`../public${path}`, import.meta.url))
+	const { blob } = await readJson<{ blob: BlobRef }>(
+		await fetch(`${pds}/xrpc/com.atproto.repo.uploadBlob`, {
+			method: 'POST',
+			headers: { Authorization: `Bearer ${accessJwt}`, 'Content-Type': file.type },
+			body: file,
+		}),
+		`Uploading cover ${path}`,
+	)
+	return blob
+}
+
 const password = process.env.STANDARD_APP_PASSWORD
 if (!password) {
 	throw new Error('Set STANDARD_APP_PASSWORD to a wisp.place app password before publishing Standard.site records.')
@@ -91,6 +112,7 @@ await putRecord(pds, session.accessJwt, standard.publicationCollection, standard
 
 const publishedPosts = allPosts.filter((post) => !post.draft)
 for (const post of publishedPosts) {
+	const coverImage = post.cover && (await uploadCover(pds, session.accessJwt, post.cover))
 	await putRecord(pds, session.accessJwt, standard.documentCollection, post.slug, {
 		$type: standard.documentCollection,
 		site: standardPublicationUri,
@@ -100,6 +122,7 @@ for (const post of publishedPosts) {
 		publishedAt: standardTimestamp(post.date),
 		...(post.updated && { updatedAt: standardTimestamp(post.updated) }),
 		tags: post.tags,
+		...(coverImage && { coverImage }),
 	})
 }
 

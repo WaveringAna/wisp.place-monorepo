@@ -1,11 +1,114 @@
 ---
 import Callout from '../../components/Callout.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
 import Terminal from '../../components/Terminal.astro';
 import Post from '../../layouts/Post.astro';
 ---
 
 <Post slug="integrating-atproto">
 	<p>
+		to me, atproto is that i shouldn't have to pay Elon $10/mo just to do
+		data analysis on my twitter posts, or pay GitHub to do CI on my code.
+		its that i can also easily use my one account to do things across many
+		services. the two stuff im about to talk about here shows what i like
+		about atproto.
+	</p>
 
+	<h2>pull request previews on tangled</h2>
+
+	<p>
+		if you keep your repos on <a href="https://tangled.org" target="_blank" rel="noopener">tangled</a>,
+		you can have wisp build and deploy a preview site whenever a pull request
+		opens or updates, and then you get a comment on that pull request with
+		the preview domain.
+	</p>
+
+	<figure>
+		<img
+			src="/images/tangled-pr-preview.png"
+			alt="A tangled pull request: the diff of .tangled/workflows/preview.yml on the left, and in the history on the right a comment from wisp.place titled preview deploys, linking the commit to its preview."
+		/>
+	</figure>
+
+	<Terminal title="preview deploy">
+		<span class="t-prompt">$</span> wispctl preview enable nekomimi.pet --repo blog --claim ana
+		{'\n\n'}
+		<span class="t-success">✓ Enabled previews for blog (claim ana)</span>
+		{'\n'}
+		<span class="t-muted">The repo still needs WISP_APP_PASSWORD on its spindle and the preview workflow.</span>
+	</Terminal>
+
+	<figure>
+		<img
+			src="/images/dashboard-previews.png"
+			alt="The pull-request previews setup in the wisp dashboard, in three steps: tangled ci is connected, previews are on, and the workflow to add to the repo."
+		/>
+	</figure>
+
+	<p>
+		this works on every commit, and to clean old ones up, you can just
+		have spindle sweep them on a cron using <code>wispctl site prune</code>.
+	</p>
+
+	<h2>automatic DNS with marque.at</h2>
+
+	<p>
+		setting up a custom domain on hosts sucks as you have to copy CNAME
+		and TXT records into whatever registrar you use. then you have to wait around for
+		DNS propagation, while clicking verify repeatedly (well with wisp hopefully not as i
+		check your root nameserver directly but i digress).
+	</p>
+
+	<p>
+		if <a href="marque.at">marque.at</a> runs the domain, wisp can just configure it for you by
+	    writing the CNAME and ownership TXT records with just one click. they can do the same too.
+		with one click, you can set a wisp site on marque.at's website.
+	</p>
+
+	<p>
+		i like this for atproto and **you can just do things** (do we still say that?) this way.
+	</p>
+
+	<h2>bluesky pbc</h2>
+	<p>
+		they are the company behind atproto though imo their contribution to the
+		rest of us mostly just begins and ends at running the relay for free. beyond
+		that how is a .bsky.social supposed to know whats outside the twitter clone?
+	</p>
+	<p>
+		bluesky never features or mentions other atproto
+		apps in its client or marketing. they don't use atproto OAuth themselves
+		which means 99% of people on the network have never even seen what the
+		OAuth looks like or realized their account can log into
+		anything else. dame.is's bsky38 showed this brillantly with the amount of
+		people who thought it was as scam solely because of the OAuth screen.
+	</p>
+
+	<p>
+		instead of funding (often unemployed) people who are building libraries and apps,
+		<s>they host an annual conference talk</s> (ive since learned its independently run but bsky is
+		a major sponsor and helps orchestrate things, still misinformation on my part sorry)
+	    which barely leads to us getting jobs,
+	    and it doesn't pay server bills or help sustain people. sometimes theyre more likely
+		to just shittalk the devs too whether they choose to not use AI, or have disagreeable
+		opinions on their poster children
+	</p>
+
+	<p>
+		and then on top of that, they launch competing *products* that have
+		an intention of turning a profit while ignoring community projects they could easily integrate with.
+		this week they launched "Sites" in Attie, their chatbot. (anyone whos proai in this space already
+		has a favorite chatbot they'd rather use) seemingly to compete with openai on chatgpt sites, but
+		they just forgot to build it on AT. the sites are not on your account.
+		they don't talk to existing static site projects (tangled and mine, lichen, theres more),
+		nate wrote a really good post about this pattern in
+		 <a href="https://half-baked.pckt.blog/thoughts-on-attie-qcp39a9" target="_blank" rel="noopener"> thoughts on attie</a>,
+		and a lot of devs building on atproto feel the same.
+	</p>
+
+	<p>
+		wisp talks to tangled and marque because
+		we actually care about composing things. bsky
+		doesn't do that, so that leaves us to just do it ourselves and not expect much from the big company.
 	</p>
 </Post>

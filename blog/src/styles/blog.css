@@ -120,6 +120,13 @@ html {
 	-webkit-text-size-adjust: 100%;
 }
 
+/* Read at 150% by default on screens wide enough to hold the post column at that size. */
+@media (min-width: 75rem) {
+	html {
+		zoom: 1.5;
+	}
+}
+
 @media (prefers-reduced-motion: no-preference) {
 	html {
 		scroll-behavior: smooth;

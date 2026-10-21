@@ -32,6 +32,8 @@ export interface Post {
 	updated?: string
 	author: Author
 	tags: string[]
+	/** Cover image under public/, e.g. `/images/<slug>.png`: the link preview and the Standard.site cover. Under 1 MB. */
+	cover?: string
 	/** Drafts are visible in `astro dev` but excluded from production builds. */
 	draft?: boolean
 }
@@ -52,6 +54,7 @@ const posts: Post[] = [
 		date: '2026-10-06',
 		author: authors.nekomimi,
 		tags: ['release', 'cli'],
+		cover: '/images/integrating-atproto.png',
 	},
 	{
 		slug: 'wispctl-1-3-2',
