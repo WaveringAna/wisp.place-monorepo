@@ -1,6 +1,7 @@
 import { type ReactNode, useEffect, useEffectEvent, useRef, useState } from 'react'
 import { ApiError, api, type UserInfo } from './api'
 import { ConfirmHost } from './confirm'
+import { DonateDialog } from './donate'
 import { isTypingTarget } from './keys'
 import { useAction, useUser } from './queries'
 import { noticeStore, useStore } from './store'
@@ -191,6 +192,7 @@ export function App() {
 			</div>
 			<Footer />
 			<ConfirmHost />
+			<DonateDialog ready={user.data !== undefined} />
 		</div>
 	)
 }
