@@ -146,9 +146,14 @@ historical DLQ entries establish a baseline, not an incident. new
 length flat. this is **new quarantine activity**, not an exact count of quarantine
 fence keys. state older than 5 minutes establishes a fresh baseline after downtime;
 entries added during that unobserved interval do not page retroactively. pending
-age means message age, not idle time. production claim idle is configured to
-1 hour, so the 30-minute threshold is an early operator stall warning, not proof
-of a worker defect. it never replays, claims, acknowledges or deletes work.
+age means message age, not idle time. production sets
+`WISP_REVALIDATE_CLAIM_IDLE_MS=300000` on both firehose hosts (baal's
+`docker-compose.yml`, stolas's `wisp-firehose.<rev>.env`), so a transient
+failure is reclaimed and retried within about 5 minutes and a message still
+pending at 30 minutes is a real stall. claim idle was 1 hour until 2026-10-22,
+which made every transient fetch failure page for half an hour. keep claim idle
+well under the 30-minute threshold. the probe never replays, claims,
+acknowledges or deletes work.
 standby nodes never publish false shared ingestion checks on probe errors.
 
 ## install and recover
