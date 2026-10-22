@@ -122,6 +122,7 @@ export interface BunFirehoseOptions {
 	onDisconnect?: () => void
 	filterCollections?: string[]
 	unauthenticatedCommits?: boolean
+	/** Last safely acknowledged sequence. Parse failures stop intake if this is unavailable. */
 	getCursor?: () => number | undefined | Promise<number | undefined>
 	/** Force reconnect if no messages received within this many ms (default: 15000); null checks liveness with ping/pong */
 	maxSilenceMs?: number | null
@@ -129,6 +130,7 @@ export interface BunFirehoseOptions {
 
 export class BunFirehose {
 	private subscription: BunSubscription<RepoEvent> | null = null
+	private running: Promise<void> | undefined
 	private abortController: AbortController
 	private matchCollection: ((col: string) => boolean) | null = null
 
@@ -157,44 +159,69 @@ export class BunFirehose {
 		}
 	}
 
-	async start(): Promise<void> {
-		this.subscription = new BunSubscription<RepoEvent>({
-			service: this.opts.service,
-			method: 'com.atproto.sync.subscribeRepos',
-			signal: this.abortController.signal,
-			validate: isValidRepoEvent,
-			getParams: async () => {
-				const cursor = await this.opts.getCursor?.()
-				return cursor !== undefined ? { cursor } : undefined
-			},
-			onReconnectError: (err, n) => {
-				this.opts.onError(new Error(`Reconnect attempt ${n}: ${err}`))
-			},
-			onConnect: this.opts.onConnect,
-			onDisconnect: this.opts.onDisconnect,
-			maxSilenceMs: this.opts.maxSilenceMs,
-		})
+	start(): Promise<void> {
+		this.running ??= this.run()
+		return this.running
+	}
 
-		try {
-			for await (const evt of this.subscription) {
-				try {
+	private async run(): Promise<void> {
+		let replayCursor: number | undefined
+		while (!this.abortController.signal.aborted) {
+			this.subscription = new BunSubscription<RepoEvent>({
+				service: this.opts.service,
+				method: 'com.atproto.sync.subscribeRepos',
+				signal: this.abortController.signal,
+				validate: isValidRepoEvent,
+				failOnFrameError: true,
+				getParams: async () => {
+					const cursor = (await this.opts.getCursor?.()) ?? replayCursor
+					return cursor !== undefined ? { cursor } : undefined
+				},
+				onReconnectError: (err, n) => {
+					this.opts.onError(new Error(`Reconnect attempt ${n}: ${err}`))
+				},
+				onConnect: this.opts.onConnect,
+				onDisconnect: this.opts.onDisconnect,
+				maxSilenceMs: this.opts.maxSilenceMs,
+			})
+			try {
+				for await (const evt of this.subscription) {
+					// Parsing owns the whole frame: no later sequence may pass a failed parse.
 					const events = await this.parseEvent(evt)
 					for (const event of events) {
+						if (this.abortController.signal.aborted) return
 						try {
 							await this.opts.handleEvent(event)
 						} catch (err) {
 							this.opts.onError(err instanceof Error ? err : new Error(String(err)))
 						}
 					}
-				} catch (err) {
-					this.opts.onError(err instanceof Error ? err : new Error(String(err)))
 				}
-			}
-		} catch (err) {
-			if ((err as any)?.name !== 'AbortError') {
+				return
+			} catch (err) {
+				this.subscription.close()
+				if (this.abortController.signal.aborted) return
 				this.opts.onError(err instanceof Error ? err : new Error(String(err)))
+				// Without an acknowledged cursor, reconnecting at the live head loses the failed frame.
+				replayCursor = await this.opts.getCursor?.()
+				if (replayCursor === undefined) return
+				await this.waitForReplay()
 			}
 		}
+	}
+
+	private waitForReplay(): Promise<void> {
+		const signal = this.abortController.signal
+		return new Promise((resolve) => {
+			const finish = () => {
+				clearTimeout(timer)
+				signal.removeEventListener('abort', finish)
+				resolve()
+			}
+			const timer = setTimeout(finish, 2_000)
+			signal.addEventListener('abort', finish, { once: true })
+			if (signal.aborted) finish()
+		})
 	}
 
 	private async parseEvent(evt: RepoEvent): Promise<Event[]> {
@@ -266,6 +293,7 @@ export class BunFirehose {
 				return op.cid?.equals(verifiedCids[op.path])
 			})
 
+			if (verifiedOps.length !== ops.length) throw new Error('Commit operations failed proof verification')
 			return this.formatCommitOps(evt, verifiedOps, { skipCidVerification: true })
 		} catch (err) {
 			// Retry with key refresh on verification error
@@ -305,9 +333,9 @@ export class BunFirehose {
 			}
 
 			if (op.action === 'create' || op.action === 'update') {
-				if (!op.cid) continue
+				if (!op.cid) throw new Error(`Missing record CID: ${op.path}`)
 				const recordBytes = car.blocks.get(op.cid)
-				if (!recordBytes) continue
+				if (!recordBytes) throw new Error(`Missing record block: ${op.path}`)
 				const record = cborToLexRecord(recordBytes)
 				events.push({
 					...meta,
@@ -328,8 +356,9 @@ export class BunFirehose {
 		return events
 	}
 
-	destroy(): void {
+	destroy(): Promise<void> {
 		this.abortController.abort()
 		this.subscription?.close()
+		return this.running ?? Promise.resolve()
 	}
 }

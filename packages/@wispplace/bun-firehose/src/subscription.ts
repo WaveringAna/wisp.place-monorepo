@@ -39,6 +39,8 @@ export function decodeFrame(bytes: Uint8Array): { header: FrameHeader; body: unk
 /** Default for {@link BunSubscriptionOptions.maxQueuedBytes}. */
 export const DEFAULT_MAX_QUEUED_BYTES = 16 * 1024 * 1024
 
+class FrameDecodeError extends Error {}
+
 export interface BunSubscriptionOptions<T> {
 	service: string
 	method: string
@@ -67,6 +69,8 @@ export interface BunSubscriptionOptions<T> {
 	 * it resumes after the last sequence number it delivered, so no frame is skipped.
 	 */
 	maxQueuedBytes?: number
+	/** Fail closed on malformed frames rather than skipping them. */
+	failOnFrameError?: boolean
 }
 
 type PingWebSocket = WebSocket & { ping(data: string): unknown }
@@ -74,17 +78,15 @@ type PingWebSocket = WebSocket & { ping(data: string): unknown }
 export class BunSubscription<T = unknown> {
 	private ws: WebSocket | null = null
 	private reconnectAttempts = 0
+	private readonly onAbort = () => this.close()
 	private aborted = false
+	private wake: (() => void) | undefined
 	/** `seq` of the last message handed to the consumer, the fallback cursor after an overflow. */
 	private lastSeq: number | undefined
 
 	constructor(public opts: BunSubscriptionOptions<T>) {
-		if (opts.signal) {
-			opts.signal.addEventListener('abort', () => {
-				this.aborted = true
-				this.ws?.close()
-			})
-		}
+		if (opts.signal?.aborted) this.close()
+		else opts.signal?.addEventListener('abort', this.onAbort, { once: true })
 	}
 
 	private async getUrl(resumeAfterOverflow: boolean): Promise<string> {
@@ -164,6 +166,7 @@ export class BunSubscription<T = unknown> {
 				this.ws.binaryType = 'arraybuffer'
 
 				this.ws.addEventListener('open', () => {
+					if (this.aborted || wsClosed) return
 					wsOpen = true
 					this.reconnectAttempts = 0
 					this.opts.onConnect?.()
@@ -179,7 +182,7 @@ export class BunSubscription<T = unknown> {
 
 				this.ws.addEventListener('message', (event) => {
 					const data = event.data
-					if (overflowed) return
+					if (overflowed || this.aborted || wsClosed) return
 					if (data instanceof ArrayBuffer) {
 						if (messageQueue.length > 0 && queuedBytes + data.byteLength > maxQueuedBytes) {
 							// This frame and any still in flight are dropped unseen; the
@@ -216,6 +219,7 @@ export class BunSubscription<T = unknown> {
 				while (!wsOpen && !wsError && !wsClosed) {
 					await new Promise<void>((resolve) => {
 						resolveMessage = resolve
+						this.wake = resolve
 						setTimeout(resolve, 100)
 					})
 				}
@@ -230,6 +234,7 @@ export class BunSubscription<T = unknown> {
 					while (messageQueue.length === 0 && !wsClosed && !this.aborted) {
 						await new Promise<void>((resolve) => {
 							resolveMessage = resolve
+							this.wake = resolve
 						})
 					}
 
@@ -262,6 +267,7 @@ export class BunSubscription<T = unknown> {
 							if (isPlainObject(body) && typeof body.seq === 'number') this.lastSeq = body.seq
 						}
 					} catch (err) {
+						if (this.opts.failOnFrameError) throw new FrameDecodeError('Invalid subscription frame', { cause: err })
 						// Log decode errors but continue
 						console.error('Frame decode error:', err)
 					}
@@ -269,8 +275,7 @@ export class BunSubscription<T = unknown> {
 
 				// Clean up
 				if (silenceTimer) clearTimeout(silenceTimer)
-				this.ws?.close()
-				this.ws = null
+				await this.closeSocket()
 
 				if (this.aborted) break
 				// Falling behind is not a connection failure: resume without backoff.
@@ -283,25 +288,50 @@ export class BunSubscription<T = unknown> {
 				this.reconnectAttempts++
 				const delay = this.getReconnectDelay()
 				this.opts.onReconnectError?.(new Error('Connection closed'), this.reconnectAttempts, false)
-				await new Promise((resolve) => setTimeout(resolve, delay))
+				await this.wait(delay)
 			} catch (err) {
 				if (silenceTimer) clearTimeout(silenceTimer)
-				this.ws?.close()
-				this.ws = null
+				await this.closeSocket()
 
 				if (this.aborted) break
+				if (err instanceof FrameDecodeError) throw err
 
 				this.reconnectAttempts++
 				const delay = this.getReconnectDelay()
 				this.opts.onReconnectError?.(err, this.reconnectAttempts, this.reconnectAttempts === 1)
-				await new Promise((resolve) => setTimeout(resolve, delay))
+				await this.wait(delay)
+			} finally {
+				if (silenceTimer) clearTimeout(silenceTimer)
+				await this.closeSocket()
 			}
 		}
 	}
 
+	private wait(delay: number): Promise<void> {
+		return new Promise((resolve) => {
+			const timer = setTimeout(resolve, delay)
+			this.wake = () => {
+				clearTimeout(timer)
+				resolve()
+			}
+			if (this.aborted) this.wake()
+		})
+	}
+
+	private closeSocket(): Promise<void> {
+		const socket = this.ws
+		if (!socket || socket.readyState === WebSocket.CLOSED) return Promise.resolve()
+		return new Promise((resolve) => {
+			socket.addEventListener('close', () => resolve(), { once: true })
+			socket.close()
+		})
+	}
+
 	close() {
+		this.opts.signal?.removeEventListener('abort', this.onAbort)
 		this.aborted = true
 		this.ws?.close()
+		this.wake?.()
 	}
 }
 
