@@ -73,7 +73,7 @@ export interface BunSubscriptionOptions<T> {
 	failOnFrameError?: boolean
 }
 
-type PingWebSocket = WebSocket & { ping(data: string): unknown }
+type BunWebSocket = WebSocket & { ping(data: string): unknown; terminate(): void }
 
 export class BunSubscription<T = unknown> {
 	private ws: WebSocket | null = null
@@ -136,7 +136,10 @@ export class BunSubscription<T = unknown> {
 					if (!wsClosed && !this.aborted) {
 						console.warn(`[BunSubscription] ${reason}, forcing reconnect`)
 						wsClosed = true
-						this.ws?.close()
+						// The peer has stopped answering, so don't wait for its close frame: since Bun
+						// 1.4.4, close() holds the socket open for about 36 s waiting for one.
+						;(this.ws as BunWebSocket | null)?.terminate()
+						reportDisconnect()
 						resolveMessage?.()
 					}
 				}
@@ -154,7 +157,7 @@ export class BunSubscription<T = unknown> {
 						pingNonce = crypto.randomUUID()
 						silenceTimer = setTimeout(() => dropSilentConnection('No pong'), this.opts.heartbeatTimeoutMs ?? 5_000)
 						try {
-							;(this.ws as PingWebSocket).ping(pingNonce)
+							;(this.ws as BunWebSocket).ping(pingNonce)
 						} catch {
 							dropSilentConnection('Ping failed')
 						}

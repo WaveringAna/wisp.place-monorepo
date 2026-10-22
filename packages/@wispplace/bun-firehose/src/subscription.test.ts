@@ -100,13 +100,15 @@ describe('BunSubscription silence handling', () => {
 		expect(harness.disconnects).toBe(0)
 	})
 
-	test('reconnects a source that stops answering pings', async () => {
+	test('reconnects a source that stops answering pings without waiting for its close frame', async () => {
 		const { url } = await deafServer()
 		const harness = run(url, { maxSilenceMs: null, heartbeatIntervalMs: 50, heartbeatTimeoutMs: 100 })
 
-		await sleep(600)
+		// Drop after ~150 ms, then the 1 s reconnect delay.
+		await sleep(1500)
 
 		expect(harness.disconnects).toBeGreaterThanOrEqual(1)
+		expect(harness.connects).toBeGreaterThanOrEqual(2)
 	})
 })
 

@@ -1,7 +1,7 @@
 # Build from monorepo root: docker build -f apps/preview-bot/Dockerfile .
 
 # Stage 1: Install dependencies and compile binary
-FROM docker.io/oven/bun:1.4.2-alpine AS builder
+FROM docker.io/oven/bun:1.4.4-alpine AS builder
 
 WORKDIR /app
 

@@ -1,7 +1,7 @@
 # Build from monorepo root: docker build -f apps/firehose-service/Dockerfile .
 
 # Stage 1: Install dependencies and compile binary
-FROM oven/bun:1.4.2-alpine AS builder
+FROM oven/bun:1.4.4-alpine AS builder
 
 WORKDIR /app
 

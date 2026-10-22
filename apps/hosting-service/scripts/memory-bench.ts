@@ -9,7 +9,7 @@
  *   bun apps/hosting-service/scripts/memory-bench.ts [--sites 2000] [--passes 4] [--idle 75] [--concurrency 16]
  *
  * Extra environment (HOT_CACHE_SIZE, MANIFEST_CACHE_SIZE, ...) is passed to the
- * server unchanged. Run it with the bun that production uses (1.4.2) for
+ * server unchanged. Run it with the bun that production uses (1.4.4) for
  * comparable numbers.
  */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'

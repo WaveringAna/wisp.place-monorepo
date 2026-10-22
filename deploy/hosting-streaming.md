@@ -39,7 +39,7 @@ There is no schema migration or new persisted source format.
 
 ## Verify
 
-Use the deployed runtime, Bun 1.4.2, and test isolation:
+Use the deployed runtime, Bun 1.4.4, and test isolation:
 
 ```text
 NODE_ENV=test WEBHOOK_ALLOW_INSECURE_DEV=1 bun test --isolate
