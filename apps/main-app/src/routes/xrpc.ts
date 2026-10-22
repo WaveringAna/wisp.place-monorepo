@@ -1,7 +1,5 @@
 import { createHash } from 'node:crypto'
-import { CompositeDidDocumentResolver, PlcDidDocumentResolver, WebDidDocumentResolver } from '@atcute/identity-resolver'
 import { json, XRPCError, XRPCRouter } from '@atcute/xrpc-server'
-import { ServiceJwtVerifier } from '@atcute/xrpc-server/auth'
 import {
 	isValidWebhookSecretId,
 	isValidWebhookSecretToken,
@@ -47,6 +45,7 @@ import {
 } from '../lib/db'
 import { verifyCustomDomain } from '../lib/dns-verify'
 import { extractWispHandle, isValidHandle, normalizeDomain, toDomain, validateCustomDomain } from '../lib/domain-utils'
+import { createXrpcServiceJwtVerifier } from './xrpc-auth'
 import { registerPrivateSiteMethods } from './xrpc-private-site'
 
 const logger = createLogger('main-app')
@@ -58,18 +57,7 @@ interface XrpcAuthContext {
 
 const DEFAULT_SERVICE_DID = isLocalDev ? 'did:web:localhost' : 'did:web:wisp.place'
 const SERVICE_DID = Bun.env.SERVICE_DID ?? DEFAULT_SERVICE_DID
-const serviceJwtVerifier = new ServiceJwtVerifier({
-	serviceDid: SERVICE_DID as any,
-	resolver: new CompositeDidDocumentResolver({
-		methods: {
-			// Devnet DIDs exist only in its local PLC directory.
-			plc: new PlcDidDocumentResolver(
-				Bun.env.WISP_PLC_DIRECTORY_URL ? { apiUrl: Bun.env.WISP_PLC_DIRECTORY_URL } : undefined,
-			),
-			web: new WebDidDocumentResolver(),
-		},
-	}),
-})
+const serviceJwtVerifier = createXrpcServiceJwtVerifier(SERVICE_DID as any)
 
 const NSID_ALIASES: Record<string, string> = {
 	'place.wisp.v2.domain.add-site': 'place.wisp.v2.domain.addSite',
