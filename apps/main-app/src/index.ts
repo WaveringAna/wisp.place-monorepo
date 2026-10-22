@@ -59,7 +59,6 @@ initializeGrafanaExporters({
 
 const logger = createLogger('main-app')
 const isLocalDev = Bun.env.LOCAL_DEV === 'true'
-const oauthAuthorizationServer = Bun.env.OAUTH_AUTHORIZATION_SERVER ?? 'https://atproto.wisp.place'
 const defaultServiceDid = isLocalDev ? 'did:web:localhost' : 'did:web:wisp.place'
 const serviceDid = Bun.env.SERVICE_DID ?? defaultServiceDid
 // The account the wisp.place handle belongs to, which /.well-known/atproto-did must name.
@@ -379,15 +378,6 @@ export const app = new Elysia({
 			redirect_uris: metadata.redirect_uris,
 		})
 		return metadata
-	})
-	.get('/.well-known/oauth-protected-resource', ({ request }) => {
-		const resource = new URL(request.url).origin
-
-		return {
-			resource,
-			authorization_servers: [oauthAuthorizationServer],
-			bearer_methods_supported: ['header'],
-		}
 	})
 	.get('/.well-known/did.json', ({ request, set }) => {
 		set.headers['Content-Type'] = 'application/did+json'
