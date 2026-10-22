@@ -99,43 +99,108 @@ export async function runReconcileTick(
 }
 
 const FIRST_RUN_DELAY_MS = 15 * 60 * 1000
-let timers: Array<ReturnType<typeof setTimeout>> = []
-let controller: AbortController | null = null
-let active: Promise<unknown> | null = null
+
+export interface CasGcJob {
+	name: string
+	intervalMs: number
+	run(signal: AbortSignal): Promise<Record<string, unknown>>
+}
+
+export function casGcJobs(config: CasGcConfig, dependencies: CasGcJobDependencies = defaultDependencies): CasGcJob[] {
+	return [
+		{
+			name: 'Collection',
+			intervalMs: config.collectIntervalMs,
+			run: async (signal) => ({ ...(await runCollectionTick(config, dependencies, signal)) }),
+		},
+		{
+			name: 'Reconcile',
+			intervalMs: config.reconcileIntervalMs,
+			run: async (signal) => ({ ...(await runReconcileTick(config, dependencies, signal)) }),
+		},
+	]
+}
+
+export interface CasGcClock {
+	set(callback: () => void, delayMs: number): unknown
+	clear(handle: unknown): void
+}
+
+const realClock: CasGcClock = {
+	set(callback, delayMs) {
+		const timer = setTimeout(callback, delayMs)
+		timer.unref?.()
+		return timer
+	},
+	clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+}
+
+export interface CasGcScheduler {
+	start(jobs: CasGcJob[]): void
+	stop(): Promise<void>
+}
+
+/**
+ * Each generation waits for the previous one to drain before its first pass, so a restart never overlaps
+ * SQL or S3 work that a stop has aborted but not yet settled. Stop resolves only once every pass has.
+ */
+export function createCasGcScheduler(
+	firstRunDelayMs = FIRST_RUN_DELAY_MS,
+	clock: CasGcClock = realClock,
+): CasGcScheduler {
+	let stopCurrent: (() => Promise<void>) | null = null
+	let drained: Promise<void> = Promise.resolve()
+	return {
+		start(jobs) {
+			if (stopCurrent) return
+			const own = new AbortController()
+			const previous = drained
+			const timers = new Set<unknown>()
+			const inFlight = new Set<Promise<void>>()
+			const pass = async (job: CasGcJob) => {
+				await previous
+				if (own.signal.aborted) return
+				try {
+					logger.info(`[CasGc] ${job.name} complete`, await job.run(own.signal))
+				} catch {
+					logger.warn(`[CasGc] ${job.name} failed`)
+				}
+				if (!own.signal.aborted) schedule(job, job.intervalMs)
+			}
+			const schedule = (job: CasGcJob, delayMs: number) => {
+				const timer = clock.set(() => {
+					timers.delete(timer)
+					const running = pass(job).finally(() => inFlight.delete(running))
+					inFlight.add(running)
+				}, delayMs)
+				timers.add(timer)
+			}
+			for (const job of jobs) schedule(job, firstRunDelayMs)
+			stopCurrent = async () => {
+				own.abort()
+				for (const timer of timers) clock.clear(timer)
+				timers.clear()
+				await previous
+				while (inFlight.size > 0) await Promise.allSettled(inFlight)
+			}
+		},
+		stop() {
+			if (stopCurrent) {
+				drained = stopCurrent()
+				stopCurrent = null
+			}
+			return drained
+		},
+	}
+}
+
+const scheduler = createCasGcScheduler()
 
 /** Leader-only: started and stopped with the revalidation worker. Two collectors would only contend on row locks. */
 export function startCasGarbageCollector(config: CasGcConfig = resolveCasGcConfig()): void {
-	if (controller) return
-	const own = new AbortController()
-	controller = own
-	const every = (intervalMs: number, name: string, work: () => Promise<Record<string, unknown>>) => {
-		const schedule = (delayMs: number) => {
-			const timer = setTimeout(async () => {
-				if (own.signal.aborted) return
-				active = work()
-					.then((result) => logger.info(`[CasGc] ${name} complete`, result))
-					.catch(() => logger.warn(`[CasGc] ${name} failed`))
-				await active
-				active = null
-				if (!own.signal.aborted) schedule(intervalMs)
-			}, delayMs)
-			timer.unref?.()
-			timers.push(timer)
-		}
-		schedule(FIRST_RUN_DELAY_MS)
-	}
-	every(config.collectIntervalMs, 'Collection', async () => ({
-		...(await runCollectionTick(config, defaultDependencies, own.signal)),
-	}))
-	every(config.reconcileIntervalMs, 'Reconcile', async () => ({
-		...(await runReconcileTick(config, defaultDependencies, own.signal)),
-	}))
+	scheduler.start(casGcJobs(config))
 }
 
-export async function stopCasGarbageCollector(): Promise<void> {
-	controller?.abort()
-	controller = null
-	for (const timer of timers) clearTimeout(timer)
-	timers = []
-	await active?.catch(() => undefined)
+export function stopCasGarbageCollector(): Promise<void> {
+	return scheduler.stop()
 }
