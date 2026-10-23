@@ -1,12 +1,10 @@
 import type { SiteCache } from '@wispplace/database'
-import { isHtmlContent } from '@wispplace/fs-utils/html-rewriter'
 import { createLogger, type HostingWarmMirrorOutcome, metricsCollector } from '@wispplace/observability'
 import type { StreamResult } from '@wispplace/tiered-storage'
-import { lookup } from 'mime-types'
 import { isSiteUpdating, setSiteUpdatedListener } from './cache-invalidation'
 import { listSiteCachePage, readSiteCache } from './db'
 import { disposeFileStream } from './file-streams'
-import { buildSiteManifest, resolveStorageKey, rewrittenStorageKey, type SiteManifest } from './site-storage-keys'
+import { buildSiteManifest, resolveStorageKey, type SiteManifest } from './site-storage-keys'
 import { getWarmTierUsage, isStorageUnavailableError, storage, warmTier } from './storage'
 import { takedowns } from './takedowns'
 
@@ -24,6 +22,7 @@ const UPDATE_DELAY_MS = 10_000
 // keys already warm cost no S3 read the second time.
 const RETRY_DELAY_MS = 5 * 60_000
 const MAX_PENDING_SITES = 10_000
+const CAS_PREFIX = 'cas/'
 
 /** Warm-mirror settings; null from {@link resolveWarmMirrorConfig} means the mirror is off. */
 export interface WarmMirrorConfig {
@@ -48,18 +47,18 @@ export function resolveWarmMirrorConfig(env: Readonly<Record<string, string | un
 }
 
 /**
- * Every storage key file serving can read for a site: the body its manifest names for each path, and
- * for HTML the per-site pre-rewritten copy that shared-origin (`sites.wisp.place/{did}/{rkey}/`)
- * requests read first. Paths without a stored body are left to the serving path's repair.
+ * The content-addressed bodies a site's manifest names. Only `cas/` keys are mirrored: their name is
+ * their content, so a mirrored copy can never go stale and site invalidation has nothing to purge.
+ * Per-site mutable objects (pre-rewritten HTML) stay filled on demand by visitors, as before.
+ * Paths without a stored body are left to the serving path's repair.
  */
 export function siteMirrorKeys(did: string, rkey: string, manifest: SiteManifest): string[] {
 	const keys = new Set<string>()
 	for (const [path, cid] of Object.entries(manifest.fileCids)) {
-		// Serving answers a path only when its manifest CID is set; rewritten copies follow their original.
-		if (typeof cid !== 'string' || cid.length === 0 || path.startsWith('.rewritten/')) continue
+		// Serving answers a path only when its manifest CID is set.
+		if (typeof cid !== 'string' || cid.length === 0) continue
 		const key = resolveStorageKey(did, rkey, path, manifest.fileObjects)
-		if (key !== null) keys.add(key)
-		if (isHtmlContent(path, lookup(path) || 'application/octet-stream')) keys.add(rewrittenStorageKey(did, rkey, path))
+		if (key?.startsWith(CAS_PREFIX)) keys.add(key)
 	}
 	return [...keys]
 }

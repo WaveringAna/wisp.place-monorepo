@@ -199,26 +199,27 @@ describe('resolveWarmMirrorConfig', () => {
 })
 
 describe('siteMirrorKeys', () => {
-	test('names each manifest body and the pre-rewritten copy of each HTML page', () => {
+	test('names each manifest body by its content-addressed key and nothing per-site', () => {
 		const row = site('blog', ['index.html', 'style.css', 'img/a.png'])
 		const keys = siteMirrorKeys(DID, 'blog', {
 			fileCids: row.file_cids,
 			fileObjects: row.file_objects as Record<string, string>,
 		})
-		expect(keys.sort()).toEqual(
-			[
-				casOf(row, 'index.html'),
-				casOf(row, 'style.css'),
-				casOf(row, 'img/a.png'),
-				`${DID}/blog/.rewritten/index.html`,
-			].sort(),
-		)
+		expect(keys.sort()).toEqual([casOf(row, 'index.html'), casOf(row, 'style.css'), casOf(row, 'img/a.png')].sort())
 	})
 
-	test('skips paths serving would not read: no stored body, no manifest CID, or a derived copy', () => {
+	test('skips paths with no stored body or manifest CID, and any key that is not content-addressed', () => {
 		const keys = siteMirrorKeys(DID, 'blog', {
-			fileCids: { 'unconverted.png': 'bafkreiaaaa', 'empty.png': '', '.rewritten/index.html': 'bafkreibbbb' },
-			fileObjects: { 'empty.png': casKey({ cid: 'bafkreicccc', path: 'empty.png' }) },
+			fileCids: {
+				'unconverted.png': 'bafkreiaaaa',
+				'empty.png': '',
+				'.rewritten/index.html': 'bafkreibbbb',
+				'legacy.css': 'bafkreidddd',
+			},
+			fileObjects: {
+				'empty.png': casKey({ cid: 'bafkreicccc', path: 'empty.png' }),
+				'legacy.css': `${DID}/blog/legacy.css`,
+			},
 		})
 		expect(keys).toEqual([])
 	})
@@ -262,8 +263,9 @@ describe('warm mirror startup pass', () => {
 	test('never promotes into the hot tier', async () => {
 		const row = site('a', ['index.html', 'app.js'])
 		rows = [row]
-		const keys = [casOf(row, 'index.html'), casOf(row, 'app.js'), `${DID}/a/.rewritten/index.html`]
-		for (const key of keys) await putCold(key)
+		const keys = [casOf(row, 'index.html'), casOf(row, 'app.js')]
+		const rewritten = `${DID}/a/.rewritten/index.html`
+		for (const key of [...keys, rewritten]) await putCold(key)
 
 		await runStartupPass()
 
@@ -271,6 +273,8 @@ describe('warm mirror startup pass', () => {
 			expect(await warm.exists(key)).toBe(true)
 			expect(await hot.exists(key)).toBe(false)
 		}
+		// Mutable per-site HTML stays on-demand: the mirror never writes it.
+		expect(await warm.exists(rewritten)).toBe(false)
 		expect((await hot.getStats()).items).toBe(0)
 	})
 
