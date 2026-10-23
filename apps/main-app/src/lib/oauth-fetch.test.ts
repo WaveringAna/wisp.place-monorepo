@@ -137,3 +137,49 @@ describe('createOAuthFetch', () => {
 		)
 	})
 })
+
+describe('per-request limits', () => {
+	const pinnedFetch = (seen: Array<{ url: string; bytes: number; timeoutMs: number }>) =>
+		createOAuthFetch({
+			resolver: async () => [PUBLIC_ADDRESS],
+			transport: async ({ url, body, timeoutMs }) => {
+				seen.push({ url: url.toString(), bytes: body?.byteLength ?? 0, timeoutMs })
+				return new Response('{}', { headers: { 'content-type': 'application/json' } })
+			},
+		})
+
+	test('a blob upload over 1 MiB reaches the PDS with the upload deadline', async () => {
+		const seen: Array<{ url: string; bytes: number; timeoutMs: number }> = []
+		const body = new Uint8Array(3 * 1024 * 1024)
+		const response = await pinnedFetch(seen)('https://pds.example/xrpc/com.atproto.repo.uploadBlob', {
+			method: 'POST',
+			body,
+		})
+
+		expect(response.status).toBe(200)
+		expect(seen).toEqual([
+			{ url: 'https://pds.example/xrpc/com.atproto.repo.uploadBlob', bytes: body.byteLength, timeoutMs: 300_000 },
+		])
+	})
+
+	test('other XRPC calls get a longer deadline and room for a site manifest', async () => {
+		const seen: Array<{ url: string; bytes: number; timeoutMs: number }> = []
+		await pinnedFetch(seen)('https://pds.example/xrpc/com.atproto.repo.putRecord', {
+			method: 'POST',
+			body: new Uint8Array(2 * 1024 * 1024),
+		})
+		expect(seen[0]?.timeoutMs).toBe(60_000)
+		expect(seen[0]?.bytes).toBe(2 * 1024 * 1024)
+	})
+
+	test('authorization-server requests keep the 10 s deadline and 1 MiB body cap', async () => {
+		const seen: Array<{ url: string; bytes: number; timeoutMs: number }> = []
+		const oauthFetch = pinnedFetch(seen)
+		await oauthFetch('https://auth.example/oauth/token', { method: 'POST', body: 'grant_type=refresh_token' })
+		expect(seen[0]?.timeoutMs).toBe(10_000)
+
+		await expect(
+			oauthFetch('https://auth.example/oauth/par', { method: 'POST', body: new Uint8Array(1024 * 1024 + 1) }),
+		).rejects.toThrow('OAuth request body exceeds size limit')
+	})
+})

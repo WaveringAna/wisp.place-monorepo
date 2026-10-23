@@ -520,6 +520,26 @@ function waitForBlobRetry(attempt: number, signal?: AbortSignal): Promise<void> 
 	})
 }
 
+// Our own transport failures, safe to log. PDS error messages are never logged: they can echo
+// request details back.
+const KNOWN_UPLOAD_FAILURES = new Set([
+	'OAuth request timed out',
+	'OAuth request body exceeds size limit',
+	'OAuth response exceeds size limit',
+	'OAuth request failed',
+])
+
+function uploadFailureCause(error: unknown): string {
+	if (typeof error !== 'object' || error === null) return typeof error
+	const code = (error as { code?: unknown }).code
+	if (typeof code === 'string' && /^E[A-Z_]+$/.test(code)) return code
+	const message = error instanceof Error ? error.message : ''
+	if (KNOWN_UPLOAD_FAILURES.has(message)) return message
+	const cause = (error as { cause?: unknown }).cause
+	if (cause instanceof Error && KNOWN_UPLOAD_FAILURES.has(cause.message)) return cause.message
+	return error instanceof Error ? error.name : 'unknown'
+}
+
 async function uploadBlobWithRetry(
 	agent: Agent,
 	content: Buffer,
@@ -539,7 +559,13 @@ async function uploadBlobWithRetry(
 				await waitForBlobRetry(attempt, signal)
 				continue
 			}
-			logger.warn('PDS blob upload failed', { errorKind: 'blob_upload_failed', status, path: safeFileLabel(path) })
+			logger.warn('PDS blob upload failed', {
+				errorKind: 'blob_upload_failed',
+				status,
+				path: safeFileLabel(path),
+				// The status falls back to 502 when no response came back; the cause says why.
+				cause: uploadFailureCause(error),
+			})
 			throw new PublicUploadError(500, UPLOAD_FAILED_MESSAGE)
 		}
 	}

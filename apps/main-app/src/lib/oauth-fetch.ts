@@ -17,8 +17,15 @@ import {
 	isPublicIdentityAddress,
 	pinnedKeepAliveAgent,
 } from '@wispplace/atproto-utils'
+import { MAX_BLOB_SIZE, MAX_JSON_SIZE } from '@wispplace/constants'
 
 const DEFAULT_TIMEOUT_MS = 10_000
+// Session (XRPC) calls carry user content: whole site manifests and file bodies. The 10 s and
+// 1 MiB limits are for authorization-server traffic and failed every blob upload over 1 MiB, and
+// any upload that a slow PDS front (e.g. a blob-staging worker) answered after 10 s.
+const XRPC_TIMEOUT_MS = 60_000
+const BLOB_UPLOAD_TIMEOUT_MS = 5 * 60_000
+const BLOB_UPLOAD_PATH = '/xrpc/com.atproto.repo.uploadBlob'
 const MAX_URL_LENGTH = 8192
 const MAX_REDIRECTS = 5
 const MAX_RESPONSE_BYTES = 1024 * 1024
@@ -388,6 +395,28 @@ function redirectedHeaders(headers: Headers): Headers {
 	return next
 }
 
+type RequestLimits = { timeoutMs: number; maxRequestBytes: number; maxResponseBytes: number }
+
+/**
+ * Authorization-server requests (metadata, PAR, token, revoke) keep the tight defaults. XRPC
+ * session calls get room for site manifests, and blob uploads for a whole file and a slow PDS.
+ */
+function requestLimits(url: string, method: string, defaults: { timeoutMs: number; maxBytes: number }): RequestLimits {
+	let pathname: string
+	try {
+		pathname = new URL(url).pathname
+	} catch {
+		pathname = ''
+	}
+	if (method.toUpperCase() === 'POST' && pathname === BLOB_UPLOAD_PATH) {
+		return { timeoutMs: BLOB_UPLOAD_TIMEOUT_MS, maxRequestBytes: MAX_BLOB_SIZE, maxResponseBytes: MAX_JSON_SIZE }
+	}
+	if (pathname.startsWith('/xrpc/')) {
+		return { timeoutMs: XRPC_TIMEOUT_MS, maxRequestBytes: MAX_JSON_SIZE, maxResponseBytes: MAX_JSON_SIZE }
+	}
+	return { timeoutMs: defaults.timeoutMs, maxRequestBytes: MAX_REQUEST_BYTES, maxResponseBytes: defaults.maxBytes }
+}
+
 async function pinnedFetch(
 	input: Parameters<typeof fetch>[0],
 	init: Parameters<typeof fetch>[1],
@@ -401,13 +430,14 @@ async function pinnedFetch(
 	},
 ): Promise<Response> {
 	const request = new Request(input, init)
-	const timer = deadline(config.timeoutMs, request.signal)
+	const limits = requestLimits(request.url, request.method, config)
+	const timer = deadline(limits.timeoutMs, request.signal)
 	try {
 		let currentUrl = parseRequestUrl(request.url, config.allowHttp)
 		let method = request.method.toUpperCase()
 		let headers = new Headers(request.headers)
 		headers.delete('host')
-		let body = await readBoundedRequest(request, MAX_REQUEST_BYTES, timer.signal)
+		let body = await readBoundedRequest(request, limits.maxRequestBytes, timer.signal)
 		if (body === undefined) {
 			headers.delete('content-length')
 			headers.delete('transfer-encoding')
@@ -425,7 +455,7 @@ async function pinnedFetch(
 			let lastError: unknown
 			for (const [index, address] of addresses.entries()) {
 				try {
-					const remaining = Math.max(1, config.timeoutMs)
+					const remaining = Math.max(1, limits.timeoutMs)
 					response = await waitForAbort(
 						config.transport({
 							url: currentUrl,
@@ -445,7 +475,7 @@ async function pinnedFetch(
 				}
 			}
 			if (!response) throw lastError ?? new Error('OAuth request failed')
-			response = await readBoundedResponse(response, config.maxBytes, timer.signal)
+			response = await readBoundedResponse(response, limits.maxResponseBytes, timer.signal)
 			if (!redirectStatus(response.status) || !response.headers.get('location')) return response
 			if (request.redirect === 'manual') return response
 			if (request.redirect === 'error') throw new Error('OAuth redirect blocked')
