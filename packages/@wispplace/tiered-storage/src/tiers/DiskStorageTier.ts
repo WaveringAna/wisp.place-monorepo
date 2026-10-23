@@ -754,6 +754,17 @@ export class DiskStorageTier implements StorageTier {
 		}
 	}
 
+	/**
+	 * Bytes the tier currently holds, from its in-memory index.
+	 *
+	 * @remarks
+	 * Constant time and lock-free, unlike {@link getStats}, which walks the
+	 * directory under the mutation lock. Writes still in flight are not counted.
+	 */
+	getIndexedBytes(): number {
+		return this.currentSize
+	}
+
 	async getStats(): Promise<TierStats> {
 		return await this.withMutation(async () => {
 			if (!existsSync(this.config.directory)) {

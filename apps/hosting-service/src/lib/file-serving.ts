@@ -8,7 +8,7 @@ import { computeCID } from '@wispplace/atproto-utils'
 import { shouldCompressMimeType } from '@wispplace/atproto-utils/compression'
 import { MANIFEST_MISS_REVALIDATE_REASON, MAX_BLOB_SIZE } from '@wispplace/constants'
 import type { SiteCache } from '@wispplace/database'
-import { type FileObjects, normalizeFileCids, normalizeFileObjects } from '@wispplace/fs-utils'
+import type { FileObjects } from '@wispplace/fs-utils'
 import { isHtmlContent, rewriteHtmlPaths } from '@wispplace/fs-utils/html-rewriter'
 import type { Record as WispSettings } from '@wispplace/lexicons/types/place/wisp/settings'
 import { createLogger } from '@wispplace/observability'
@@ -48,7 +48,7 @@ import { applyCustomHeaders, getIndexFiles, isValidMimeType } from './request-ut
 import { markRedirectNotFound } from './request-visibility'
 import { recordStorageMiss } from './revalidate-metrics'
 import { type EnqueueResult, enqueueRevalidate } from './revalidate-queue'
-import { resolveStorageKey, type SiteManifest } from './site-storage-keys'
+import { buildSiteManifest, resolveStorageKey, type SiteManifest } from './site-storage-keys'
 import { addPublicSourceCidIfChecksumMatches, evictPublicCacheKey, isStorageUnavailableError, storage } from './storage'
 import { createTrace, logTrace, type RequestTrace, span } from './trace'
 import { type RevalidateOutcome, type UnavailableReason, unavailableLog } from './unavailable-log'
@@ -204,19 +204,6 @@ function manifestHasPath(fileCids: Record<string, string> | null, filePath: stri
 // cache and is replaced whenever the entry expires or is invalidated, so keying on its identity can never
 // serve a manifest older than the row it was built from. Nothing mutates a manifest after it is built.
 const manifestsBySiteCache = new WeakMap<object, SiteManifest>()
-
-function buildSiteManifest(siteCache: SiteCache): SiteManifest {
-	// The owner's PDS confirmed the record is gone: serve it like a deleted site
-	// (an empty manifest, so every path 404s) while the files await the sweeper.
-	if (siteCache.absent_since !== null && siteCache.absent_since !== undefined) {
-		return { fileCids: {}, fileObjects: null }
-	}
-	return {
-		fileCids: normalizeFileCids(siteCache.file_cids).value,
-		// One snapshot with the CIDs: a body is only read from the key its own manifest names.
-		fileObjects: normalizeFileObjects(siteCache.file_objects),
-	}
-}
 
 function shouldServeUpdatingPage(requestHeaders?: Record<string, string>): boolean {
 	const accept = (requestHeaders?.accept ?? '').toLowerCase()

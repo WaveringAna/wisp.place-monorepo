@@ -187,6 +187,7 @@ const {
 	resetCacheInvalidationReplayForTests,
 	stopCacheInvalidationSubscriber,
 	resetUpdatingSitesForTests,
+	setSiteUpdatedListener,
 	startCacheInvalidationSubscriberForTests,
 } = await import('./cache-invalidation')
 
@@ -1064,5 +1065,51 @@ describe('cache invalidation subscriber heartbeat', () => {
 			replayConnected: false,
 			replayState: 'stopped',
 		})
+	})
+})
+
+describe('site update listener', () => {
+	afterEach(() => setSiteUpdatedListener(null))
+
+	test('is told about a completed update and nothing else', async () => {
+		const notified: Array<[string, string]> = []
+		const dependencies = {
+			...testDependencies,
+			notifySiteUpdated: (did: string, rkey: string) => notified.push([did, rkey]),
+		}
+
+		for (const action of ['updating', 'settings', 'delete'] as const) {
+			await applyCacheInvalidationForTests(siteMessage(action), 'pubsub', dependencies)
+		}
+		expect(notified).toEqual([])
+
+		await applyCacheInvalidationForTests(siteMessage('update'), 'pubsub', dependencies)
+		expect(notified).toEqual([[DID, RKEY]])
+	})
+
+	test('is not told when the file purge failed', async () => {
+		const notified: string[] = []
+		hotFailuresRemaining = 1
+
+		await expect(
+			applyCacheInvalidationForTests(siteMessage('update'), 'pubsub', {
+				...testDependencies,
+				notifySiteUpdated: (did) => notified.push(did),
+			}),
+		).rejects.toThrow('Failed to invalidate file caches')
+		expect(notified).toEqual([])
+	})
+
+	test('defaults to the registered listener, and a throwing one cannot fail the invalidation', async () => {
+		const notified: string[] = []
+		await applyForTest(siteMessage('update'))
+		setSiteUpdatedListener((did) => notified.push(did))
+		await applyForTest(siteMessage('update'))
+		expect(notified).toEqual([DID])
+
+		setSiteUpdatedListener(() => {
+			throw new Error('listener bug')
+		})
+		await expect(applyForTest(siteMessage('update'))).resolves.toBeUndefined()
 	})
 })

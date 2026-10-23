@@ -247,6 +247,15 @@ WARM_EVICTION_POLICY="lru"    # lru, fifo, or size
 BOOTSTRAP_HOT_ON_STARTUP=false
 BOOTSTRAP_HOT_LIMIT=100
 
+# Warm mirror: copy every public site's files into the warm disk tier in the
+# background (one pass at startup, then each updated site), so first reads stay
+# local. Off unless exactly "true"; needs S3 as the cold tier. It never fills the
+# hot tier and stops once the warm tier reaches WARM_MIRROR_FILL_PERCENT of
+# WARM_CACHE_SIZE. Leave it off where the disk cannot hold every public site.
+WARM_MIRROR=false
+WARM_MIRROR_CONCURRENCY=2      # concurrent object-store reads, 1-16
+WARM_MIRROR_FILL_PERCENT=80    # share of WARM_CACHE_SIZE the mirror may fill, 1-95
+
 # Required in every production-like or multi-node deployment: S3 is the
 # shared source of truth and Redis carries invalidations/revalidation. Endpoints
 # must use HTTPS outside explicit development/test mode.

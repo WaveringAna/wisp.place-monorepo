@@ -250,6 +250,31 @@ describe('TieredStorage streamed-read promotion', () => {
 		expect(staged).toBe(1)
 		expect(await warm.exists(KEY)).toBe(true)
 	})
+
+	test('skipHotTier fills warm from cold without reading or promoting into hot', async () => {
+		const key = 'did:plc:a/site/app.css'
+		const data = bytes(1024)
+		await cold.set(key, data, metadata(key, data.byteLength))
+		const storage = createStorage({ placementRules: [{ pattern: '**', tiers: ['hot', 'warm', 'cold'] }] })
+
+		const result = await storage.getStream(key, { skipHotTier: true })
+		expect(result?.source).toBe('cold')
+		expect(await readAll(result!.stream)).toEqual(Buffer.from(data))
+		expect(await warm.exists(key)).toBe(true)
+		expect(await hot.exists(key)).toBe(false)
+	})
+
+	test('skipHotTier reads past a hot-only copy to fill warm', async () => {
+		const data = bytes(1024)
+		await hot.set(KEY, data, metadata(KEY, data.byteLength))
+		await cold.set(KEY, data, metadata(KEY, data.byteLength))
+		const storage = createStorage()
+
+		const result = await storage.getStream(KEY, { skipHotTier: true })
+		expect(result?.source).toBe('cold')
+		await readAll(result!.stream)
+		expect(await warm.exists(KEY)).toBe(true)
+	})
 })
 
 describe('DiskStorageTier staged writes', () => {
@@ -292,6 +317,18 @@ describe('DiskStorageTier staged writes', () => {
 		await staged.commit()
 		expect(await capped.exists(KEY)).toBe(false)
 		expect(await stagingEntries()).toEqual([])
+	})
+
+	test('getIndexedBytes tracks committed bytes without walking the directory', async () => {
+		expect(warm.getIndexedBytes()).toBe(0)
+		await warm.set(KEY, bytes(5), metadata(KEY, 5))
+		const staged = await warm.stageWrite('did:plc:a/site/other.png', metadata('did:plc:a/site/other.png', 3))
+		await staged.write(bytes(3))
+		expect(warm.getIndexedBytes()).toBe(5)
+		await staged.commit()
+		expect(warm.getIndexedBytes()).toBe(8)
+		await warm.delete(KEY)
+		expect(warm.getIndexedBytes()).toBe(3)
 	})
 
 	test('startup removes staging files abandoned by a previous process', async () => {

@@ -98,21 +98,36 @@ export function createHostingDb({ sql, cache, onReadRetry }: HostingDbDeps) {
 		})
 	}
 
+	/** One `site_cache` row straight from the database, bypassing the lookup cache. */
+	async function readSiteCache(did: string, rkey: string): Promise<SiteCache | null> {
+		const result = await read<SiteCache[]>`
+      SELECT did, rkey, record_cid, file_cids, file_objects, cached_at, updated_at, absent_since
+      FROM site_cache
+      WHERE did = ${did} AND rkey = ${rkey}
+      LIMIT 1
+    `
+		return result[0] || null
+	}
+
 	async function getSiteCache(did: string, rkey: string): Promise<SiteCache | null> {
-		return cache.getOrFetch(
-			'siteCache',
-			`${did}:${rkey}`,
-			async () => {
-				const result = await read<SiteCache[]>`
-          SELECT did, rkey, record_cid, file_cids, file_objects, cached_at, updated_at, absent_since
-          FROM site_cache
-          WHERE did = ${did} AND rkey = ${rkey}
-          LIMIT 1
-        `
-				return result[0] || null
-			},
-			{ cacheIf: (v) => v !== null },
-		)
+		return cache.getOrFetch('siteCache', `${did}:${rkey}`, () => readSiteCache(did, rkey), {
+			cacheIf: (v) => v !== null,
+		})
+	}
+
+	/**
+	 * One keyset page of `site_cache` rows after `(afterDid, afterRkey)`, for a
+	 * background walk over every public site. Bypasses the lookup cache so the
+	 * walk does not fill it with sites nobody is requesting.
+	 */
+	async function listSiteCachePage(afterDid: string, afterRkey: string, limit: number): Promise<SiteCache[]> {
+		return await read<SiteCache[]>`
+      SELECT did, rkey, record_cid, file_cids, file_objects, cached_at, updated_at, absent_since
+      FROM site_cache
+      WHERE (did, rkey) > (${afterDid}, ${afterRkey})
+      ORDER BY did, rkey
+      LIMIT ${limit}
+    `
 	}
 
 	/**
@@ -143,6 +158,8 @@ export function createHostingDb({ sql, cache, onReadRetry }: HostingDbDeps) {
 		getCustomDomainByHash,
 		getSiteSettingsCache,
 		getSiteCache,
+		readSiteCache,
+		listSiteCachePage,
 		loadActiveTakedowns,
 	}
 }
@@ -164,6 +181,8 @@ export const {
 	getCustomDomainByHash,
 	getSiteSettingsCache,
 	getSiteCache,
+	readSiteCache,
+	listSiteCachePage,
 	loadActiveTakedowns,
 } = createHostingDb({ sql, cache, onReadRetry: metricsCollector.recordHostingDbReadRetry })
 

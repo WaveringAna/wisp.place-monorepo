@@ -24,6 +24,7 @@ import type {
 	HostingDbReadRetryOutcome,
 	HostingNotFoundReason,
 	HostingResponseEntry,
+	HostingWarmMirrorOutcome,
 	LogEntry,
 	MetricEntry,
 	RepoAbsenceAction,
@@ -397,12 +398,14 @@ export type HostingInstruments = {
 	recordResponse(entry: HostingResponseEntry): void
 	recordNotFound(reason: HostingNotFoundReason): void
 	recordDbReadRetry(outcome: HostingDbReadRetryOutcome): void
+	recordWarmMirror(outcome: HostingWarmMirrorOutcome, bytes: number): void
 }
 
 /**
- * Hosting latency, 404 and replica-read-retry instruments. Every label comes
- * from a closed set (at most 4 tiers x 5 status classes x 3 kinds, 8 reasons
- * and 2 retry outcomes), so series never grow with hosts, sites or paths.
+ * Hosting latency, 404, replica-read-retry and warm-mirror instruments. Every
+ * label comes from a closed set (at most 4 tiers x 5 status classes x 3 kinds,
+ * 8 reasons, 2 retry outcomes and 4 mirror outcomes), so series never grow with
+ * hosts, sites or paths.
  */
 export function createHostingInstruments(meter: Meter): HostingInstruments {
 	const responseTime = meter.createHistogram('hosting_response_time_ms', {
@@ -415,6 +418,13 @@ export function createHostingInstruments(meter: Meter): HostingInstruments {
 	})
 	const dbReadRetries = meter.createCounter('hosting_db_read_retries_total', {
 		description: 'Hosting replica reads retried after a dropped connection, by outcome',
+	})
+	const warmMirrorObjects = meter.createCounter('hosting_warm_mirror_objects_total', {
+		description: 'Storage keys the warm mirror visited, by outcome',
+	})
+	const warmMirrorBytes = meter.createCounter('hosting_warm_mirror_bytes_total', {
+		description: 'Bytes the warm mirror copied from cold storage into the warm tier',
+		unit: 'By',
 	})
 	return {
 		recordResponse(entry) {
@@ -429,6 +439,10 @@ export function createHostingInstruments(meter: Meter): HostingInstruments {
 		},
 		recordDbReadRetry(outcome) {
 			dbReadRetries.add(1, { outcome })
+		},
+		recordWarmMirror(outcome, bytes) {
+			warmMirrorObjects.add(1, { outcome })
+			if (bytes > 0) warmMirrorBytes.add(bytes)
 		},
 	}
 }
@@ -703,6 +717,11 @@ class MetricsExporter {
 	recordHostingDbReadRetry(outcome: HostingDbReadRetryOutcome) {
 		if (!this.config.enabled) return
 		this.hosting?.recordDbReadRetry(outcome)
+	}
+
+	recordHostingWarmMirror(outcome: HostingWarmMirrorOutcome, bytes: number) {
+		if (!this.config.enabled) return
+		this.hosting?.recordWarmMirror(outcome, bytes)
 	}
 
 	recordS3Request(entry: S3RequestEntry) {

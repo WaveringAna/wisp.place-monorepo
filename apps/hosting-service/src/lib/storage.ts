@@ -985,6 +985,15 @@ export async function evictPublicCacheKey(key: string): Promise<void> {
 	}
 }
 
+/**
+ * The warm disk tier's capacity and current fill, for background work that must
+ * stay under it. Null in disk-source mode, where the disk is the cold tier.
+ */
+export function getWarmTierUsage(): { usedBytes: number; maxBytes: number } | null {
+	if (!warmTier || !sharedDiskTier) return null
+	return { usedBytes: sharedDiskTier.getIndexedBytes(), maxBytes: WARM_CACHE_SIZE }
+}
+
 // Avoid promotion into shared caches that outlive the authorization decision.
 function initializePrivateStorage(): TieredStorage<Uint8Array> {
 	let coldTier: StorageTier

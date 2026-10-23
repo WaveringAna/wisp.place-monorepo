@@ -511,6 +511,10 @@ export class TieredStorage<T = unknown> {
 	 * When `borrowChunks` is enabled, do not mutate returned chunk views; they
 	 * may share storage with the hot-tier cache.
 	 *
+	 * `skipHotTier` neither reads nor promotes into the hot tier, so a
+	 * background fill can copy a cold object into warm without displacing the
+	 * memory-resident working set.
+	 *
 	 * @example
 	 * ```typescript
 	 * const result = await storage.getStream('large-file.mp4');
@@ -521,7 +525,7 @@ export class TieredStorage<T = unknown> {
 	 */
 	async getStream(
 		key: string,
-		options: { signal?: AbortSignal; borrowChunks?: boolean } = {},
+		options: { signal?: AbortSignal; borrowChunks?: boolean; skipHotTier?: boolean } = {},
 	): Promise<StreamResult | null> {
 		throwIfAborted(options.signal)
 		const fence = this.acquireReadFence(key)
@@ -530,7 +534,7 @@ export class TieredStorage<T = unknown> {
 		let ownsFence = false
 		try {
 			const tiers = [
-				['hot', this.config.tiers.hot],
+				['hot', options.skipHotTier ? undefined : this.config.tiers.hot],
 				['warm', this.config.tiers.warm],
 				['cold', this.config.tiers.cold],
 			] as const
@@ -556,7 +560,9 @@ export class TieredStorage<T = unknown> {
 				const source =
 					name === 'hot'
 						? result.stream
-						: await this.promoteStream(key, name, result, fence, generation, upperTierPromotionEpoch)
+						: await this.promoteStream(key, name, result, fence, generation, upperTierPromotionEpoch, {
+								skipHotTier: options.skipHotTier === true,
+							})
 				const owned = this.wrapStreamWithDecompression(
 					{ stream: source, metadata: cloneStorageMetadata(result.metadata) },
 					name,
@@ -610,10 +616,14 @@ export class TieredStorage<T = unknown> {
 		fence: KeyFence,
 		generation: number,
 		upperTierPromotionEpoch: number,
+		{ skipHotTier }: { skipHotTier: boolean },
 	): Promise<NodeJS.ReadableStream> {
 		if (this.config.promotionStrategy !== 'eager' || this.inFlightStreamPromotions.has(key)) return result.stream
 		const warm = source === 'cold' ? this.config.tiers.warm : undefined
-		const hot = this.config.tiers.hot && this.getTiersForKey(key).includes('hot') ? this.config.tiers.hot : undefined
+		const hot =
+			!skipHotTier && this.config.tiers.hot && this.getTiersForKey(key).includes('hot')
+				? this.config.tiers.hot
+				: undefined
 		if (!warm?.stageWrite && !hot) return result.stream
 
 		this.inFlightStreamPromotions.add(key)

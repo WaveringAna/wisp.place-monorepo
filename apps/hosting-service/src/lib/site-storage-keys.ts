@@ -1,4 +1,5 @@
-import type { FileObjects } from '@wispplace/fs-utils'
+import type { SiteCache } from '@wispplace/database'
+import { type FileObjects, normalizeFileCids, normalizeFileObjects } from '@wispplace/fs-utils'
 
 /** What hosting knows about a site's files: the manifest CIDs and where each body lives in storage. */
 export interface SiteManifest {
@@ -8,6 +9,20 @@ export interface SiteManifest {
 }
 
 const REWRITTEN_PREFIX = '.rewritten/'
+
+/** The manifest file serving reads a site's bodies through, built from its `site_cache` row. */
+export function buildSiteManifest(siteCache: SiteCache): SiteManifest {
+	// The owner's PDS confirmed the record is gone: serve it like a deleted site
+	// (an empty manifest, so every path 404s) while the files await the sweeper.
+	if (siteCache.absent_since !== null && siteCache.absent_since !== undefined) {
+		return { fileCids: {}, fileObjects: null }
+	}
+	return {
+		fileCids: normalizeFileCids(siteCache.file_cids).value,
+		// One snapshot with the CIDs: a body is only read from the key its own manifest names.
+		fileObjects: normalizeFileObjects(siteCache.file_objects),
+	}
+}
 
 function stripLeadingSlash(path: string): string {
 	return path.startsWith('/') ? path.slice(1) : path

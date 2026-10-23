@@ -83,6 +83,7 @@ export interface CacheInvalidationDependenciesForTests {
 	warmTier?: StorageTier
 	cache?: InvalidationCache
 	resetSiteHtmlHotCacheWarmup?: typeof resetSiteHtmlHotCacheWarmup
+	notifySiteUpdated?: SiteUpdatedListener
 }
 
 interface CacheInvalidationDependencies {
@@ -91,6 +92,31 @@ interface CacheInvalidationDependencies {
 	warmTier: StorageTier | undefined
 	cache: InvalidationCache
 	resetSiteHtmlHotCacheWarmup: typeof resetSiteHtmlHotCacheWarmup
+	notifySiteUpdated: SiteUpdatedListener
+}
+
+/** Told about a site once an `update` has purged its old files, so its new ones can be fetched. */
+export type SiteUpdatedListener = (did: string, rkey: string) => void
+
+let siteUpdatedListener: SiteUpdatedListener | null = null
+
+/** Register the one listener for completed site updates; null removes it. */
+export function setSiteUpdatedListener(listener: SiteUpdatedListener | null): void {
+	siteUpdatedListener = listener
+}
+
+function notifySiteUpdatedListener(did: string, rkey: string): void {
+	if (!siteUpdatedListener) return
+	try {
+		siteUpdatedListener(did, rkey)
+	} catch (err) {
+		// A listener is an optimization; it must never hold back the replay cursor.
+		logger.warn('[CacheInvalidation] Site update listener failed', {
+			operation: 'site-updated-listener',
+			...siteLogContext(did, rkey),
+			errorKind: errorKind(err),
+		})
+	}
 }
 
 function getCacheInvalidationDependencies(
@@ -103,6 +129,7 @@ function getCacheInvalidationDependencies(
 		warmTier: overrides?.warmTier ?? warmTier,
 		cache: overrides?.cache ?? cache,
 		resetSiteHtmlHotCacheWarmup: overrides?.resetSiteHtmlHotCacheWarmup ?? resetSiteHtmlHotCacheWarmup,
+		notifySiteUpdated: overrides?.notifySiteUpdated ?? notifySiteUpdatedListener,
 	}
 }
 
@@ -861,6 +888,7 @@ async function applyCacheInvalidation(
 	// Only a completed terminal invalidation can supersede an older replayed start.
 	recordTerminalSiteStreamId(did, rkey, streamId)
 	advanceReplayCursor(source, streamId)
+	if (action === 'update') dependencies.notifySiteUpdated(did, rkey)
 }
 
 export async function applyCacheInvalidationForTests(

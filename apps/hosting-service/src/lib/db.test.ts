@@ -47,11 +47,12 @@ suite('getSiteCache (postgres)', () => {
 	let admin: postgres.Sql
 	let reader: postgres.Sql
 	let getSiteCache: ReturnType<typeof createHostingDb>['getSiteCache']
+	let listSiteCachePage: ReturnType<typeof createHostingDb>['listSiteCachePage']
 
 	beforeAll(async () => {
 		admin = postgres(url as string, { max: 1, onnotice: () => {} })
 		reader = postgres(`${url}${url?.includes('?') ? '&' : '?'}search_path=${schema}`, { max: 1 })
-		;({ getSiteCache } = createHostingDb({
+		;({ getSiteCache, listSiteCachePage } = createHostingDb({
 			sql: reader,
 			cache: new CacheManager({ domains: {}, customDomains: {}, settings: {}, siteCache: {} }),
 		}))
@@ -79,6 +80,22 @@ suite('getSiteCache (postgres)', () => {
 		const row = await getSiteCache('did:plc:test', 'site')
 
 		expect(row?.file_objects).toEqual(objects)
+	})
+
+	test('pages every site in key order after a cursor', async () => {
+		for (const [did, rkey] of [
+			['did:plc:b', 'one'],
+			['did:plc:a', 'two'],
+			['did:plc:a', 'one'],
+		]) {
+			await admin`INSERT INTO site_cache (did, rkey, record_cid) VALUES (${did}, ${rkey}, 'cid')`
+		}
+
+		const first = await listSiteCachePage('', '', 2)
+		expect(first.map((row) => `${row.did}/${row.rkey}`)).toEqual(['did:plc:a/one', 'did:plc:a/two'])
+		const second = await listSiteCachePage('did:plc:a', 'two', 2)
+		expect(second.map((row) => `${row.did}/${row.rkey}`)).toEqual(['did:plc:b/one', 'did:plc:test/site'])
+		expect(await listSiteCachePage('did:plc:test', 'site', 2)).toEqual([])
 	})
 })
 

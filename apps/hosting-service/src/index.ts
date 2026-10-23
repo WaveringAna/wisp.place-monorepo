@@ -14,6 +14,7 @@ import { closeRevalidateQueue } from './lib/revalidate-queue'
 import { getStorageConfig, storage } from './lib/storage'
 import { takedowns } from './lib/takedowns'
 import { unavailableLog } from './lib/unavailable-log'
+import { startWarmMirror } from './lib/warm-mirror'
 import app from './server'
 import { onceAsync, stopHttpServerWithGrace } from './shutdown'
 
@@ -63,7 +64,10 @@ notFoundLog.start()
 startCacheInvalidationSubscriber()
 
 // Load the moderation labeler's active takedowns and keep them current.
-void takedowns.start()
+const takedownsLoaded = takedowns.start()
+
+// Off unless WARM_MIRROR=true. It waits for the takedown list so its first pass skips taken-down sites.
+const warmMirror = startWarmMirror(process.env, takedownsLoaded)
 
 // Optional: Bootstrap hot cache from warm tier on startup
 const BOOTSTRAP_HOT_ON_STARTUP = process.env.BOOTSTRAP_HOT_ON_STARTUP === 'true'
@@ -115,6 +119,8 @@ async function flushAccessStats(): Promise<void> {
 // Graceful shutdown. The shared promise makes SIGINT/SIGTERM races idempotent.
 const shutdown = onceAsync(async (signal: 'SIGINT' | 'SIGTERM') => {
 	logger.info('Shutting down...', { signal })
+	// Background fills have no client waiting: abort them first, and settle them before the pools close.
+	const warmMirrorStopped = warmMirror?.stop()
 
 	// Stop the listener first. Keep backing services available until active work
 	// drains, then terminate any request that exceeded the bounded grace period.
@@ -132,6 +138,7 @@ const shutdown = onceAsync(async (signal: 'SIGINT' | 'SIGTERM') => {
 		{ name: 'access statistics', promise: flushAccessStats() },
 		{ name: 'cache invalidation subscriber', promise: stopCacheInvalidationSubscriber() },
 		{ name: 'revalidation queue', promise: closeRevalidateQueue() },
+		...(warmMirrorStopped ? [{ name: 'warm mirror', promise: warmMirrorStopped }] : []),
 	]
 	const results = await Promise.allSettled(tasks.map(({ promise }) => promise))
 

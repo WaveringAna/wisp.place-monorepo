@@ -79,6 +79,9 @@ export type HostingNotFoundReason =
 /** What a retried replica read ended as: it succeeded on a retry, or ran out of retries. Closed so it can be a metric label. */
 export type HostingDbReadRetryOutcome = 'recovered' | 'exhausted'
 
+/** What the warm mirror did with one storage key. Closed so it can be a metric label. */
+export type HostingWarmMirrorOutcome = 'fetched' | 'already-warm' | 'skipped' | 'failed'
+
 /** How one S3 command ended. Closed so it can be a metric label. */
 export type S3RequestOutcome = 'ok' | 'not-found' | 'error'
 
@@ -418,6 +421,11 @@ export const metricsCollector = {
 	/** Hosting replica reads that needed a retry after a dropped connection, by outcome; exported only. */
 	recordHostingDbReadRetry(outcome: HostingDbReadRetryOutcome) {
 		metricsExporter.recordHostingDbReadRetry(outcome)
+	},
+
+	/** Warm-mirror keys by outcome, and bytes it copied into the warm tier; exported only. */
+	recordHostingWarmMirror(outcome: HostingWarmMirrorOutcome, bytes = 0) {
+		metricsExporter.recordHostingWarmMirror(outcome, bytes)
 	},
 
 	/** S3 commands by operation and outcome; exported only. */

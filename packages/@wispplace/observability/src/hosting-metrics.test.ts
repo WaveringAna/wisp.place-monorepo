@@ -71,6 +71,23 @@ describe('hosting instruments', () => {
 		for (const point of points) expect(Object.keys(point.attributes)).toEqual(['outcome'])
 	})
 
+	test('warm mirror keys are labelled by outcome only and bytes count only fetched copies', async () => {
+		const outcomes = ['fetched', 'already-warm', 'skipped', 'failed'] as const
+		const metrics = await collect(({ recordWarmMirror }) => {
+			for (let i = 0; i < 100; i++) {
+				const outcome = outcomes[i % outcomes.length] ?? 'skipped'
+				recordWarmMirror(outcome, outcome === 'fetched' ? 10 : 0)
+			}
+		})
+
+		const points = metrics.hosting_warm_mirror_objects_total?.dataPoints ?? []
+		expect(points).toHaveLength(outcomes.length)
+		for (const point of points) expect(Object.keys(point.attributes)).toEqual(['outcome'])
+		const [bytes] = metrics.hosting_warm_mirror_bytes_total?.dataPoints ?? []
+		expect(bytes?.value).toBe(250)
+		expect(Object.keys(bytes?.attributes ?? {})).toEqual([])
+	})
+
 	test('records time to headers in millisecond buckets fine enough for hot reads', async () => {
 		const metrics = await collect(({ recordResponse }) => {
 			for (const durationMs of [0.4, 0.9, 3, 180, 240]) {
