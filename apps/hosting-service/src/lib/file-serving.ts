@@ -654,6 +654,8 @@ interface RedirectRequestOptions extends CachedRequestOptions {
 	trace: RequestTrace | null
 	/** Request headers the _redirects conditions read; filled while matching. */
 	vary: Set<string>
+	/** Whether the site has a file (or a directory index) at a rewrite target. */
+	rewriteTargetExists(targetPath: string): boolean
 	resolveFile(filePath: string): Promise<Response>
 }
 
@@ -781,6 +783,20 @@ async function serveDirectoryListing(
 
 	const storageMissResponse = await resolver.expectedMissResponse()
 	return storageMissResponse ?? buildDirectoryListingResponse(requestPath, entries, status)
+}
+
+/** A rewrite target that names a file in the manifest, or a directory with one of its index files. */
+function manifestHasPage(fileCids: Record<string, string>, targetPath: string, indexFiles: string[]): boolean {
+	const has = (filePath: string) => getExpectedSourceCid(fileCids, filePath) !== undefined
+	let path = internalRedirectPath(targetPath.split('?')[0] ?? '')
+	try {
+		path = decodeURIComponent(path)
+	} catch {
+		return false
+	}
+	if (path && !path.endsWith('/') && has(path)) return true
+	const directory = path === '' || path.endsWith('/') ? path : `${path}/`
+	return indexFiles.some((index) => has(`${directory}${index}`))
 }
 
 function adjustRedirectTarget(targetPath: string, strategy: FileServingStrategy): string {
@@ -1796,6 +1812,7 @@ export function createFileServing(deps: FileServingDependencies) {
 			headers: requestHeaders,
 			cookies: parseCookies(requestHeaders?.cookie),
 			vary: options.vary,
+			rewriteTargetExists: options.rewriteTargetExists,
 		})
 		if (!redirectMatch) return null
 
@@ -1900,6 +1917,7 @@ export function createFileServing(deps: FileServingDependencies) {
 			resolveFile,
 			trace,
 			vary,
+			rewriteTargetExists: (targetPath) => manifestHasPage(manifest.fileCids, targetPath, indexFiles),
 		})
 		const response = withVary(redirectResponse ?? (await resolveFile(filePath)), vary)
 		// Start the manifest-backed warmup only after the requested response has

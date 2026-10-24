@@ -417,31 +417,39 @@ fn matches_conditions(conditions: &Conditions, context: &MatchRedirectContext) -
     }
     true
 }
-/// Same rule as the hosting service: the client must name one of the media types (q > 0); a rule
-/// value `type/*` matches any subtype, and wildcards in the request never match.
+/// Same rule as the hosting service: one of the rule's media types must be among the client's most
+/// preferred types it names itself. Wildcard ranges are ignored, as are parameters other than q
+/// and case; a rule value `type/*` matches any subtype.
 fn accepts_media_type(wanted: &[String], header: Option<&str>) -> bool {
-    header.is_some_and(|header| {
-        header.split(',').any(|range| {
-            let mut parts = range.split(';').map(|p| js_trim(p).to_lowercase());
-            let media = parts.next().unwrap_or_default();
-            if media.is_empty() || media.ends_with("/*") {
-                return false;
-            }
-            let quality_ok = parts
-                .find_map(|p| {
-                    p.strip_prefix("q=")
-                        .map(|q| q.parse::<f64>().is_ok_and(|q| q > 0.0))
-                })
-                .unwrap_or(true);
-            quality_ok
-                && wanted.iter().any(|w| {
-                    *w == media
-                        || w.strip_suffix('*').is_some_and(|prefix| {
-                            prefix.ends_with('/') && media.starts_with(prefix)
-                        })
-                })
-        })
-    })
+    let Some(header) = header else {
+        return false;
+    };
+    let (mut best, mut matched) = (0.0_f64, 0.0_f64);
+    for range in header.split(',') {
+        let mut parts = range.split(';').map(|p| js_trim(p).to_lowercase());
+        let media = parts.next().unwrap_or_default();
+        if media.is_empty() || media.ends_with("/*") {
+            continue;
+        }
+        let quality = parts
+            .find_map(|p| {
+                p.strip_prefix("q=")
+                    .map(|q| q.parse::<f64>().unwrap_or(0.0))
+            })
+            .unwrap_or(1.0);
+        if quality <= 0.0 || quality.is_nan() {
+            continue;
+        }
+        best = best.max(quality);
+        if wanted.iter().any(|w| {
+            *w == media
+                || w.strip_suffix('*')
+                    .is_some_and(|prefix| prefix.ends_with('/') && media.starts_with(prefix))
+        }) {
+            matched = matched.max(quality);
+        }
+    }
+    matched > 0.0 && matched == best
 }
 pub fn match_redirect_rule<'a>(
     request_path: &str,
@@ -487,6 +495,17 @@ pub fn match_redirect_rule_with_visited<'a>(
                 encoded
             };
             target = target.replacen(&format!(":{param}"), &encoded, 1);
+        }
+        // `/*  /:splat/index.md` on `/guide/` must not produce `/guide//index.md`.
+        if target.starts_with('/') {
+            let end = target.find('?').unwrap_or(target.len());
+            let mut path = String::with_capacity(end);
+            for c in target[..end].chars() {
+                if !(c == '/' && path.ends_with('/')) {
+                    path.push(c);
+                }
+            }
+            target = path + &target[end..];
         }
         for (key, placeholder) in &rule.query_params {
             if let Some(param) = placeholder.strip_prefix(':').filter(|v| !v.is_empty())
@@ -906,6 +925,7 @@ mod tests {
             "text/html;q=0.9, application/json",
             "Application/JSON; charset=utf-8",
             "text/turtle",
+            "image/png;q=0.5, application/json;q=0.9, */*",
         ] {
             assert_eq!(at(accept).as_deref(), Some("/index.json"), "{accept}");
         }
@@ -915,9 +935,22 @@ mod tests {
             "image/avif,image/webp,*/*;q=0.8",
             "application/json;q=0",
             "application/xml",
+            "image/png, application/json;q=0.1",
         ] {
             assert_eq!(at(accept), None, "{accept}");
         }
         assert_eq!(target(source, "/", Some(&context(&[], &[], &[]))), None);
+    }
+    #[test]
+    fn splat_targets_do_not_double_the_slash() {
+        let source = "/* /:splat/index.md 200!";
+        assert_eq!(
+            target(source, "/guide/", None).map(|(t, _)| t).as_deref(),
+            Some("/guide/index.md")
+        );
+        assert_eq!(
+            target(source, "/guide", None).map(|(t, _)| t).as_deref(),
+            Some("/guide/index.md")
+        );
     }
 }

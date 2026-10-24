@@ -539,6 +539,36 @@ describe('serveFileInternal directory-index fallback for extensioned paths', () 
 		}
 	})
 
+	test('markdown negotiation: a splat rewrite serves the copy if there is one, the page otherwise', async () => {
+		storeFile(
+			'_redirects',
+			['/ /llms.txt 200! Accept=text/markdown', '/* /:splat/index.md 200! Accept=text/markdown'].join('\n'),
+			'text/plain',
+		)
+		storeFile('llms.txt', '# site', 'text/plain')
+		storeFile('configuration/index.html', '<h1>config</h1>', 'text/html')
+		storeFile('configuration/index.md', '# config', 'text/markdown')
+		storeFile('about/index.html', '<h1>about</h1>', 'text/html')
+		siteFileCids = {
+			_redirects: 'redirects-cid',
+			'llms.txt': 'llms-cid',
+			'configuration/index.html': 'config-html-cid',
+			'configuration/index.md': 'config-md-cid',
+			'about/index.html': 'about-cid',
+		}
+		const markdown = { accept: 'text/markdown, text/html;q=0.9' }
+
+		const config = await serveFromCache(DID, RKEY, 'configuration/', 'https://example.com/configuration/', markdown)
+		const about = await serveFromCache(DID, RKEY, 'about/', 'https://example.com/about/', markdown)
+
+		expect(config.status).toBe(200)
+		expect(await config.text()).toBe('# config')
+		expect(config.headers.get('Content-Type')).toContain('text/markdown')
+		expect(about.status).toBe(200)
+		expect(await about.text()).toBe('<h1>about</h1>')
+		expect(about.headers.get('Vary')).toContain('Accept')
+	})
+
 	test('responses on paths no conditional rule covers do not vary on Accept', async () => {
 		storeFile('_redirects', '/api /index.json 200! Accept=application/json', 'text/plain')
 		storeFile('index.html', '<h1>home</h1>', 'text/html')

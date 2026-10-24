@@ -314,6 +314,11 @@ export interface MatchRedirectContext {
 	 * a rule matched: the response depends on them and should name them in Vary.
 	 */
 	vary?: Set<string>
+	/**
+	 * Whether an internal rewrite target exists. An `Accept=` rewrite whose target is missing is
+	 * skipped, so a splat rule falls through to the next rule or the page itself.
+	 */
+	rewriteTargetExists?: (targetPath: string) => boolean
 }
 
 export function matchRedirectRule(
@@ -345,6 +350,21 @@ export function matchRedirectRule(
 				param === 'splat' ? ':splat' : `:${param}`,
 				param === 'splat' ? encoded.replace(/%2F/g, '/') : encoded,
 			)
+		}
+		// `/*  /:splat/index.md` on `/guide/` or `/` must not produce `/guide//index.md` or `//index.md`.
+		if (targetPath.startsWith('/')) {
+			const queryStart = targetPath.indexOf('?')
+			const end = queryStart === -1 ? targetPath.length : queryStart
+			targetPath = targetPath.slice(0, end).replace(/\/{2,}/g, '/') + targetPath.slice(end)
+		}
+		if (
+			rule.conditions?.accept &&
+			rule.status === 200 &&
+			targetPath.startsWith('/') &&
+			context?.rewriteTargetExists &&
+			!context.rewriteTargetExists(targetPath)
+		) {
+			continue
 		}
 
 		if (rule.queryParams && context?.queryParams) {
@@ -409,18 +429,27 @@ function matchesConditions(conditions: RedirectRule['conditions'], context?: Mat
 	return true
 }
 
-// True when the Accept header explicitly lists one of the rule's media types with q > 0. A rule
-// value `type/*` matches any subtype; wildcards in the request (`*/*`, which browsers send on every
-// navigation) do not match, so only clients that ask for the type by name are redirected.
+// True when one of the rule's media types is among the client's most preferred types it names
+// itself. Wildcard ranges (`*/*`, which browsers send on every navigation, or `type/*`) are ignored,
+// so `text/html, application/json;q=0.1` stays HTML. Parameters other than q and case are ignored:
+// `application/ld+json; profile="..."` matches `application/ld+json`. A rule value `type/*` matches
+// any subtype.
 function acceptsMediaType(wanted: string[], header: string | undefined): boolean {
 	if (!header) return false
-	return header.split(',').some((range) => {
+	let best = 0
+	let matched = 0
+	for (const range of header.split(',')) {
 		const [type = '', ...parameters] = range.split(';').map((part) => part.trim().toLowerCase())
-		if (!type || type.endsWith('/*')) return false
-		const quality = parameters.find((parameter) => parameter.startsWith('q='))
-		if (quality !== undefined && !(Number(quality.slice(2)) > 0)) return false
-		return wanted.some((media) => media === type || (media.endsWith('/*') && type.startsWith(media.slice(0, -1))))
-	})
+		if (!type || type.endsWith('/*')) continue
+		const q = parameters.find((parameter) => parameter.startsWith('q='))
+		const quality = q === undefined ? 1 : Number(q.slice(2))
+		if (!(quality > 0)) continue
+		best = Math.max(best, quality)
+		if (wanted.some((media) => media === type || (media.endsWith('/*') && type.startsWith(media.slice(0, -1))))) {
+			matched = Math.max(matched, quality)
+		}
+	}
+	return matched > 0 && matched === best
 }
 
 function addConditionVary(conditions: NonNullable<RedirectRule['conditions']>, vary: Set<string>): void {

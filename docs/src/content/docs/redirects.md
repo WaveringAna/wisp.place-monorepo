@@ -60,7 +60,16 @@ Route based on country (ISO 3166-1 alpha-2), browser language, requested media t
 /*    /legacy/:splat    200  Cookie=is_legacy
 ```
 
-`Accept=` matches when the request's `Accept` header names one of the listed media types (with a non-zero `q`). A value like `text/*` matches any subtype. Wildcards sent by the client, such as the `*/*` every browser includes, never match, so a browser visiting `/` still gets your HTML while `curl -H 'Accept: application/json'` gets the JSON. Use `200!` when a file already exists at the path, since unforced rules only apply when no file matches.
+`Accept=` matches when one of the listed media types is the client's top preference among the types it names (ties count). Wildcards sent by the client, such as the `*/*` every browser includes, are ignored, so a browser visiting `/` still gets your HTML, `curl -H 'Accept: application/json'` gets the JSON, and `Accept: text/html, application/json;q=0.1` stays HTML. Media type parameters and case are ignored, so `application/ld+json; profile="…"` matches `application/ld+json`, and a rule value like `text/*` matches any subtype. Use `200!` when a file already exists at the path, since unforced rules only apply when no file matches.
+
+An `Accept=` rewrite whose target does not exist is skipped, and matching continues with the next rule or the page itself. That makes a splat rule usable for serving markdown copies of pages that have one:
+
+```
+/     /llms.txt          200!  Accept=text/markdown
+/*    /:splat/index.md   200!  Accept=text/markdown
+```
+
+`/configuration/` becomes `/configuration/index.md` (doubled slashes in a rewrite target are collapsed), and a page without an `index.md` falls through to its HTML. The response's `Content-Type` comes from the file it rewrote to.
 
 Responses on paths covered by an `Accept=`, `Language=` or `Cookie=` rule carry a matching `Vary` header, so browsers and caches keep the variants apart.
 

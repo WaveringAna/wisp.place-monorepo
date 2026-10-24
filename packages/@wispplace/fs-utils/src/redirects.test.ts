@@ -232,10 +232,22 @@ describe('matchRedirectRule', () => {
 		const match = (accept?: string) =>
 			matchRedirectRule('/', rules, { headers: accept === undefined ? {} : { accept } })?.targetPath
 
-		it('matches a media type the client names', () => {
+		it('matches a media type the client names as its top preference', () => {
 			expect(match('application/json')).toBe('/index.json')
 			expect(match('text/html;q=0.9, application/json')).toBe('/index.json')
 			expect(match('Application/JSON; charset=utf-8')).toBe('/index.json')
+			expect(match('image/png, application/json')).toBe('/index.json')
+		})
+
+		it('does not match a type the client accepts only as a fallback', () => {
+			expect(match('image/png, application/json;q=0.1')).toBeUndefined()
+			expect(match('image/png;q=0.5, application/json;q=0.9, */*')).toBe('/index.json')
+		})
+
+		it('ignores media type parameters', () => {
+			const ld = parseRedirectsFile('/ /index.jsonld 200! Accept=application/ld+json')
+			const accept = 'application/ld+json; profile="https://www.w3.org/ns/activitystreams"'
+			expect(matchRedirectRule('/', ld, { headers: { accept } })?.targetPath).toBe('/index.jsonld')
 		})
 
 		it('matches any subtype for a type/* rule value', () => {
@@ -249,6 +261,33 @@ describe('matchRedirectRule', () => {
 			expect(match('application/json;q=0')).toBeUndefined()
 			expect(match('application/xml')).toBeUndefined()
 			expect(match()).toBeUndefined()
+		})
+	})
+
+	describe('Accept splat rewrites', () => {
+		const rules = parseRedirectsFile(
+			['/ /llms.txt 200! Accept=text/markdown', '/* /:splat/index.md 200! Accept=text/markdown'].join('\n'),
+		)
+		const pages = new Set(['/llms.txt', '/configuration/index.md'])
+		const match = (path: string) =>
+			matchRedirectRule(path, rules, {
+				headers: { accept: 'text/markdown' },
+				rewriteTargetExists: (target) => pages.has(target),
+			})?.targetPath
+
+		it('joins a trailing-slash splat without a doubled slash', () => {
+			expect(match('/')).toBe('/llms.txt')
+			expect(match('/configuration/')).toBe('/configuration/index.md')
+			expect(match('/configuration')).toBe('/configuration/index.md')
+		})
+
+		it('skips a rewrite whose target is missing, so the page itself is served', () => {
+			expect(match('/no-markdown-copy/')).toBeUndefined()
+		})
+
+		it('keeps unconditional rewrites to a missing target as they were', () => {
+			const spa = parseRedirectsFile('/* /app.html 200')
+			expect(matchRedirectRule('/x', spa, { rewriteTargetExists: () => false })?.targetPath).toBe('/app.html')
 		})
 	})
 
