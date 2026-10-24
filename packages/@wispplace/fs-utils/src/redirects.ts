@@ -6,6 +6,7 @@ export interface RedirectRule {
 	conditions?: {
 		country?: string[]
 		language?: string[]
+		accept?: string[]
 		role?: string[]
 		cookie?: string[]
 	}
@@ -149,6 +150,9 @@ function parseRedirectLine(line: string): RedirectRule | null {
 				break
 			case 'language':
 				conditions.language = value.split(',').map((item) => item.trim().toLowerCase())
+				break
+			case 'accept':
+				conditions.accept = value.split(',').map((item) => item.trim().toLowerCase())
 				break
 			case 'role':
 				conditions.role = value.split(',').map((item) => item.trim())
@@ -305,6 +309,11 @@ export interface MatchRedirectContext {
 	queryParams?: Record<string, string>
 	headers?: Record<string, string>
 	cookies?: Record<string, string>
+	/**
+	 * Filled with the request headers that conditions on path-matching rules read, whether or not
+	 * a rule matched: the response depends on them and should name them in Vary.
+	 */
+	vary?: Set<string>
 }
 
 export function matchRedirectRule(
@@ -320,11 +329,12 @@ export function matchRedirectRule(
 
 	const requestSegments = path.split('/')
 	for (const rule of rules) {
-		if (!matchesQuery(rule.queryParams, context) || !matchesConditions(rule.conditions, context)) continue
-
+		if (!matchesQuery(rule.queryParams, context)) continue
 		const compiled = getCompiledPath(rule)
 		const captures = compiled && matchPath(compiled, path, requestSegments)
 		if (!compiled || !captures) continue
+		if (rule.conditions && context?.vary) addConditionVary(rule.conditions, context.vary)
+		if (!matchesConditions(rule.conditions, context)) continue
 
 		let targetPath = rule.to
 		for (const [index, param] of (rule.fromParams ?? compiled.params).entries()) {
@@ -391,11 +401,32 @@ function matchesConditions(conditions: RedirectRule['conditions'], context?: Mat
 			return false
 		}
 	}
+	if (conditions.accept && !acceptsMediaType(conditions.accept, context?.headers?.accept)) return false
 	if (conditions.cookie) {
 		const cookies = context?.cookies
 		if (!cookies || !conditions.cookie.some((name) => name in cookies)) return false
 	}
 	return true
+}
+
+// True when the Accept header explicitly lists one of the rule's media types with q > 0. A rule
+// value `type/*` matches any subtype; wildcards in the request (`*/*`, which browsers send on every
+// navigation) do not match, so only clients that ask for the type by name are redirected.
+function acceptsMediaType(wanted: string[], header: string | undefined): boolean {
+	if (!header) return false
+	return header.split(',').some((range) => {
+		const [type = '', ...parameters] = range.split(';').map((part) => part.trim().toLowerCase())
+		if (!type || type.endsWith('/*')) return false
+		const quality = parameters.find((parameter) => parameter.startsWith('q='))
+		if (quality !== undefined && !(Number(quality.slice(2)) > 0)) return false
+		return wanted.some((media) => media === type || (media.endsWith('/*') && type.startsWith(media.slice(0, -1))))
+	})
+}
+
+function addConditionVary(conditions: NonNullable<RedirectRule['conditions']>, vary: Set<string>): void {
+	if (conditions.language) vary.add('Accept-Language')
+	if (conditions.accept) vary.add('Accept')
+	if (conditions.cookie) vary.add('Cookie')
 }
 
 export function parseCookies(cookieHeader?: string): Record<string, string> {

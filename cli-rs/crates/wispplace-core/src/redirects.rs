@@ -9,6 +9,7 @@ pub type StringRecord = Vec<(String, String)>;
 pub struct Conditions {
     pub country: Option<Vec<String>>,
     pub language: Option<Vec<String>>,
+    pub accept: Option<Vec<String>>,
     pub role: Option<Vec<String>>,
     pub cookie: Option<Vec<String>>,
 }
@@ -233,6 +234,7 @@ fn parse_line(line: &str) -> Option<RedirectRule> {
             match key.as_str() {
                 "country" => conditions.country = Some(values),
                 "language" => conditions.language = Some(values),
+                "accept" => conditions.accept = Some(values),
                 "role" => conditions.role = Some(values),
                 "cookie" => conditions.cookie = Some(values),
                 _ => {}
@@ -401,6 +403,11 @@ fn matches_conditions(conditions: &Conditions, context: &MatchRedirectContext) -
             return false;
         }
     }
+    if let Some(accept) = &conditions.accept
+        && !accepts_media_type(accept, get(&context.headers, "accept"))
+    {
+        return false;
+    }
     if let Some(cookies) = &conditions.cookie
         && !cookies
             .iter()
@@ -409,6 +416,32 @@ fn matches_conditions(conditions: &Conditions, context: &MatchRedirectContext) -
         return false;
     }
     true
+}
+/// Same rule as the hosting service: the client must name one of the media types (q > 0); a rule
+/// value `type/*` matches any subtype, and wildcards in the request never match.
+fn accepts_media_type(wanted: &[String], header: Option<&str>) -> bool {
+    header.is_some_and(|header| {
+        header.split(',').any(|range| {
+            let mut parts = range.split(';').map(|p| js_trim(p).to_lowercase());
+            let media = parts.next().unwrap_or_default();
+            if media.is_empty() || media.ends_with("/*") {
+                return false;
+            }
+            let quality_ok = parts
+                .find_map(|p| {
+                    p.strip_prefix("q=")
+                        .map(|q| q.parse::<f64>().is_ok_and(|q| q > 0.0))
+                })
+                .unwrap_or(true);
+            quality_ok
+                && wanted.iter().any(|w| {
+                    *w == media
+                        || w.strip_suffix('*').is_some_and(|prefix| {
+                            prefix.ends_with('/') && media.starts_with(prefix)
+                        })
+                })
+        })
+    })
 }
 pub fn match_redirect_rule<'a>(
     request_path: &str,
@@ -856,5 +889,35 @@ mod tests {
             1
         );
         assert!(parse_redirects_file(&format!("/{} /ok", "🙂".repeat(1024))).is_empty());
+    }
+    #[test]
+    fn accept_condition_matches_named_media_types_only() {
+        let source = "/ /index.json 200! Accept=application/json,text/*";
+        let rules = parse_redirects_file(source);
+        assert_eq!(
+            rules[0].conditions.accept.as_deref(),
+            Some(&["application/json".to_string(), "text/*".to_string()][..])
+        );
+        let at = |accept: &str| {
+            target(source, "/", Some(&context(&[], &[("accept", accept)], &[]))).map(|(t, _)| t)
+        };
+        for accept in [
+            "application/json",
+            "text/html;q=0.9, application/json",
+            "Application/JSON; charset=utf-8",
+            "text/turtle",
+        ] {
+            assert_eq!(at(accept).as_deref(), Some("/index.json"), "{accept}");
+        }
+        for accept in [
+            "*/*",
+            "application/*",
+            "image/avif,image/webp,*/*;q=0.8",
+            "application/json;q=0",
+            "application/xml",
+        ] {
+            assert_eq!(at(accept), None, "{accept}");
+        }
+        assert_eq!(target(source, "/", Some(&context(&[], &[], &[]))), None);
     }
 }

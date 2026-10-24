@@ -46,7 +46,7 @@ Query parameters work too:
 
 ## Conditional Redirects
 
-Route based on country (ISO 3166-1 alpha-2), browser language, or cookie:
+Route based on country (ISO 3166-1 alpha-2), browser language, requested media type, or cookie:
 
 ```
 /    /us/    302  Country=us
@@ -55,8 +55,14 @@ Route based on country (ISO 3166-1 alpha-2), browser language, or cookie:
 /products    /en/products    301  Language=en
 /products    /de/products    301  Language=de
 
+/    /index.json    200!  Accept=application/json,application/ld+json
+
 /*    /legacy/:splat    200  Cookie=is_legacy
 ```
+
+`Accept=` matches when the request's `Accept` header names one of the listed media types (with a non-zero `q`). A value like `text/*` matches any subtype. Wildcards sent by the client, such as the `*/*` every browser includes, never match, so a browser visiting `/` still gets your HTML while `curl -H 'Accept: application/json'` gets the JSON. Use `200!` when a file already exists at the path, since unforced rules only apply when no file matches.
+
+Responses on paths covered by an `Accept=`, `Language=` or `Cookie=` rule carry a matching `Vary` header, so browsers and caches keep the variants apart.
 
 ## Common Patterns
 

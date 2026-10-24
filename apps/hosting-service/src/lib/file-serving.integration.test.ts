@@ -516,6 +516,38 @@ describe('serveFileInternal directory-index fallback for extensioned paths', () 
 		expect(storageGetWithMetadataKeys.filter((key) => key === storageKey('direct.md'))).toHaveLength(1)
 	})
 
+	test('an Accept rule rewrites only for clients that name the type, and both answers vary on Accept', async () => {
+		storeFile('_redirects', '/ /index.json 200! Accept=application/json', 'text/plain')
+		storeFile('index.html', '<h1>home</h1>', 'text/html')
+		storeFile('index.json', '{"home":true}', 'application/json')
+		siteFileCids = { _redirects: 'redirects-cid', 'index.html': 'html-cid', 'index.json': 'json-cid' }
+
+		const json = await serveFromCache(DID, RKEY, '', 'https://example.com/', { accept: 'application/json' })
+		const html = await serveFromCache(DID, RKEY, '', 'https://example.com/', {
+			accept: 'text/html,application/xhtml+xml,*/*;q=0.8',
+		})
+
+		expect(await json.text()).toBe('{"home":true}')
+		expect(await html.text()).toBe('<h1>home</h1>')
+		for (const response of [json, html]) {
+			expect(
+				response.headers
+					.get('Vary')
+					?.split(',')
+					.map((field) => field.trim()),
+			).toContain('Accept')
+		}
+	})
+
+	test('responses on paths no conditional rule covers do not vary on Accept', async () => {
+		storeFile('_redirects', '/api /index.json 200! Accept=application/json', 'text/plain')
+		storeFile('index.html', '<h1>home</h1>', 'text/html')
+		siteFileCids = { _redirects: 'redirects-cid', 'index.html': 'html-cid' }
+
+		const response = await serveFromCache(DID, RKEY, '', 'https://example.com/', { accept: 'application/json' })
+		expect(response.headers.get('Vary') ?? '').not.toContain('Accept')
+	})
+
 	test('names a _redirects 404 rule apart from a missing file', async () => {
 		storeFile('_redirects', '/old /gone.html 404', 'text/plain')
 		storeFile('gone.html', '<h1>gone</h1>', 'text/html')

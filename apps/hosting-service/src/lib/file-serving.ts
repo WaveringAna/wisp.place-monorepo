@@ -331,6 +331,20 @@ function addVaryHeader(headers: Record<string, string>, field: string): void {
 	}
 }
 
+/**
+ * Adds `fields` to the response's Vary in place: responses are built per request, and copying one
+ * would drop the identity-keyed facts other code attached to it (unavailable causes, 404 reasons).
+ */
+function withVary(response: Response, fields: Set<string>): Response {
+	if (fields.size === 0) return response
+	const headers: Record<string, string> = {}
+	const existing = response.headers.get('vary')
+	if (existing) headers.Vary = existing
+	for (const field of fields) addVaryHeader(headers, field)
+	if (headers.Vary) response.headers.set('Vary', headers.Vary)
+	return response
+}
+
 function applyFileResponseHeaders(
 	headers: Record<string, string>,
 	filePath: string,
@@ -638,6 +652,8 @@ interface RedirectRequestOptions extends CachedRequestOptions {
 	redirectsPresent: boolean
 	fileObjects: FileObjects | null
 	trace: RequestTrace | null
+	/** Request headers the _redirects conditions read; filled while matching. */
+	vary: Set<string>
 	resolveFile(filePath: string): Promise<Response>
 }
 
@@ -1779,6 +1795,7 @@ export function createFileServing(deps: FileServingDependencies) {
 			queryParams: fullUrl ? parseQueryString(fullUrl) : {},
 			headers: requestHeaders,
 			cookies: parseCookies(requestHeaders?.cookie),
+			vary: options.vary,
 		})
 		if (!redirectMatch) return null
 
@@ -1874,6 +1891,7 @@ export function createFileServing(deps: FileServingDependencies) {
 				manifest,
 			})
 
+		const vary = new Set<string>()
 		const redirectResponse = await serveRedirectResponse({
 			...options,
 			indexFiles,
@@ -1881,8 +1899,9 @@ export function createFileServing(deps: FileServingDependencies) {
 			fileObjects: manifest.fileObjects,
 			resolveFile,
 			trace,
+			vary,
 		})
-		const response = redirectResponse ?? (await resolveFile(filePath))
+		const response = withVary(redirectResponse ?? (await resolveFile(filePath)), vary)
 		// Start the manifest-backed warmup only after the requested response has
 		// resolved, so unrelated HTML reads cannot delay this request.
 		triggerSiteHtmlHotCacheWarmup(did, rkey, () => Object.keys(manifest.fileCids), manifest.fileObjects)

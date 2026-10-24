@@ -88,6 +88,13 @@ describe('parseRedirectsFile', () => {
 		expect(rules[0]?.conditions?.language).toEqual(['en'])
 	})
 
+	it('should parse accept-based redirects', () => {
+		const rules = parseRedirectsFile('/ /index.json 200! Accept=application/json,Application/LD+JSON')
+		expect(rules[0]?.conditions?.accept).toEqual(['application/json', 'application/ld+json'])
+		expect(rules[0]?.status).toBe(200)
+		expect(rules[0]?.force).toBe(true)
+	})
+
 	it('should parse cookie-based redirects', () => {
 		const content = `/* /legacy/:splat 200 Cookie=is_legacy,my_cookie`
 		const rules = parseRedirectsFile(content)
@@ -218,6 +225,44 @@ describe('matchRedirectRule', () => {
 		})
 		expect(match).toBeTruthy()
 		expect(match?.targetPath).toBe('/en/products')
+	})
+
+	describe('Accept condition', () => {
+		const rules = parseRedirectsFile('/ /index.json 200! Accept=application/json,text/*')
+		const match = (accept?: string) =>
+			matchRedirectRule('/', rules, { headers: accept === undefined ? {} : { accept } })?.targetPath
+
+		it('matches a media type the client names', () => {
+			expect(match('application/json')).toBe('/index.json')
+			expect(match('text/html;q=0.9, application/json')).toBe('/index.json')
+			expect(match('Application/JSON; charset=utf-8')).toBe('/index.json')
+		})
+
+		it('matches any subtype for a type/* rule value', () => {
+			expect(match('text/turtle')).toBe('/index.json')
+		})
+
+		it('does not match wildcards, q=0, other types, or no header', () => {
+			expect(match('*/*')).toBeUndefined()
+			expect(match('application/*')).toBeUndefined()
+			expect(match('image/avif,image/webp,*/*;q=0.8')).toBeUndefined()
+			expect(match('application/json;q=0')).toBeUndefined()
+			expect(match('application/xml')).toBeUndefined()
+			expect(match()).toBeUndefined()
+		})
+	})
+
+	it('reports the headers that conditions on path-matching rules read', () => {
+		const rules = parseRedirectsFile(
+			['/ /index.json 200! Accept=application/json', '/ /de/ 302 Language=de', '/other /x 302 Cookie=a'].join('\n'),
+		)
+		const vary = new Set<string>()
+		expect(matchRedirectRule('/', rules, { headers: { accept: 'text/html' }, vary })).toBeNull()
+		expect([...vary].sort()).toEqual(['Accept', 'Accept-Language'])
+
+		const varyOnMatch = new Set<string>()
+		matchRedirectRule('/', rules, { headers: { accept: 'application/json' }, vary: varyOnMatch })
+		expect([...varyOnMatch]).toEqual(['Accept'])
 	})
 
 	it('should match based on cookie presence', () => {
