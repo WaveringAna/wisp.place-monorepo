@@ -474,8 +474,7 @@ async function processFilesystemEvent(
 			event: event.event,
 			errorKind: errorKind(error),
 		})
-		recoveryReason =
-			event.event === 'delete' ? SITE_DELETE_TOMBSTONE_REASON : `firehose-processing-failed:${event.event}`
+		recoveryReason = recoveryReasonFor(event)
 	} finally {
 		resources.close()
 	}
@@ -518,7 +517,7 @@ async function processSettingsEvent(
 			event: event.event,
 			errorKind: errorKind(error),
 		})
-		recoveryReason = event.event === 'delete' ? SETTINGS_DELETE_FAILURE_REASON : SETTINGS_UPDATE_FAILURE_REASON
+		recoveryReason = recoveryReasonFor(event)
 	} finally {
 		resources.close()
 	}
@@ -526,10 +525,43 @@ async function processSettingsEvent(
 	if (recoveryReason) await requireDurableRevalidation(did, rkey, recoveryReason, lifecycleSignal)
 }
 
+/** The revalidation that recovers an op of this collection and action, as when processing it fails. */
+function recoveryReasonFor(event: CommitEvt): string | undefined {
+	if (event.collection === 'place.wisp.fs') {
+		return event.event === 'delete' ? SITE_DELETE_TOMBSTONE_REASON : `firehose-processing-failed:${event.event}`
+	}
+	if (event.collection === 'place.wisp.settings') {
+		return event.event === 'delete' ? SETTINGS_DELETE_FAILURE_REASON : SETTINGS_UPDATE_FAILURE_REASON
+	}
+	return undefined
+}
+
 function dispatchCommitWork(event: CommitEvt, reservation: CursorReservation, relayGeneration: number): void {
 	const { did, collection, rkey } = event
 	const siteKey = `${did}/${rkey}`
 	const lifecycleSignal = lifecycleAbortController.signal
+	if (event.unverified) {
+		// Its record is unknown: re-read the site from the PDS rather than apply the op.
+		const reason = recoveryReasonFor(event)
+		if (!reason) {
+			reservation.complete()
+			return
+		}
+		logger.warn('[Firehose] Commit failed proof verification; revalidating from the PDS', {
+			did,
+			collection,
+			rkey,
+			event: event.event,
+			seq: event.seq,
+		})
+		scheduleCursorWork(
+			siteKey,
+			() => requireDurableRevalidation(did, rkey, reason, lifecycleSignal),
+			reservation,
+			relayGeneration,
+		)
+		return
+	}
 	if (collection === 'place.wisp.fs') {
 		logger.info('[place.wisp.fs] Received event', { did, rkey, event: event.event })
 		const resources = createFilesystemEventResources(lifecycleSignal)

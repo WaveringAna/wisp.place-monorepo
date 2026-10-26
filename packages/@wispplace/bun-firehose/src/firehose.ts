@@ -4,7 +4,7 @@
  */
 
 import type { IdResolver } from '@atproto/identity'
-import { type BlockMap, cborToLexRecord, formatDataKey, parseDataKey, readCar, verifyProofs } from '@atproto/repo'
+import { BlockMap, cborToLexRecord, formatDataKey, parseDataKey, readCar, verifyProofs } from '@atproto/repo'
 import { AtUri } from '@atproto/syntax'
 import type { CID } from 'multiformats/cid'
 import { BunSubscription } from './subscription'
@@ -26,6 +26,11 @@ export interface CommitEvt extends CommitMeta {
 	event: 'create' | 'update' | 'delete'
 	cid?: CID
 	record?: unknown
+	/**
+	 * Set when the commit's proofs did not verify (e.g. its CAR is missing a block): only the op's
+	 * path and action are known, never its record, and the op must not be applied as such.
+	 */
+	unverified?: true
 }
 
 export interface IdentityEvt {
@@ -276,10 +281,10 @@ export class BunFirehose {
 			}
 		})
 
+		// Resolution failures are transient and still stop intake, so the frame is replayed.
+		const key = await this.opts.idResolver.did.resolveAtprotoKey(did, forceKeyRefresh)
 		try {
-			const key = await this.opts.idResolver.did.resolveAtprotoKey(did, forceKeyRefresh)
 			const verifiedCids: Record<string, CID | null> = {}
-
 			const results = await verifyProofs(evt.blocks, claims, did, key)
 			results.verified.forEach((op) => {
 				const path = formatDataKey(op.collection, op.rkey)
@@ -295,13 +300,33 @@ export class BunFirehose {
 
 			if (verifiedOps.length !== ops.length) throw new Error('Commit operations failed proof verification')
 			return this.formatCommitOps(evt, verifiedOps, { skipCidVerification: true })
-		} catch (err) {
-			// Retry with key refresh on verification error
-			if (!forceKeyRefresh && (err as any)?.name === 'RepoVerificationError') {
-				return this.parseCommitAuthenticated(evt, true)
-			}
-			throw err
+		} catch {
+			// The signing key may have rotated since it was cached.
+			if (!forceKeyRefresh) return this.parseCommitAuthenticated(evt, true)
+			// A commit that cannot be verified with a fresh key fails the same way on every replay,
+			// so stopping here would stall intake for everyone at this sequence. Pass its paths on
+			// marked unverified instead; the consumer re-reads those records from the repo's PDS.
+			return this.unverifiedCommitOps(evt, ops)
 		}
+	}
+
+	private unverifiedCommitOps(evt: Commit, ops: RepoOp[]): CommitEvt[] {
+		return ops.map((op) => {
+			const uri = AtUri.make(evt.repo, op.path)
+			return {
+				seq: evt.seq,
+				time: evt.time,
+				commit: evt.commit,
+				blocks: new BlockMap(),
+				rev: evt.rev,
+				uri,
+				did: uri.host,
+				collection: uri.collection,
+				rkey: uri.rkey,
+				event: op.action,
+				unverified: true,
+			}
+		})
 	}
 
 	private async parseCommitUnauthenticated(evt: Commit): Promise<CommitEvt[]> {

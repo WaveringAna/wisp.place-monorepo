@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { IdResolver } from '@atproto/identity'
 import { encode } from '@atproto/lex-cbor'
 import { CID } from 'multiformats/cid'
-import { BunFirehose } from './firehose'
+import { BunFirehose, type CommitEvt, type Event } from './firehose'
 
 // A signed two-record repository CAR, generated with Repo.formatInitCommit and Secp256k1Keypair.
 const fixture = {
@@ -185,24 +185,49 @@ describe('BunFirehose pre-dispatch ownership', () => {
 			server.stop()
 		}
 	})
-	test.each(['car', 'proof'] as const)('%s failure blocks later delivery and remains replayable', async (poison) => {
+	test.each([
+		'car',
+		'proof',
+	] as const)('a %s failure passes the ops on unverified, after a key refresh, and later frames still arrive', async (poison) => {
 		const server = relay(poison)
-		const failed = deferred()
-		const seen: number[] = []
+		const done = deferred()
+		const events: Event[] = []
+		const errors: Error[] = []
+		const refreshes: boolean[] = []
 		const firehose = new BunFirehose({
 			service: server.url,
 			getCursor: () => 9,
-			idResolver: resolver(async () => fixture.did),
-			onError: () => failed.resolve(),
+			idResolver: {
+				did: {
+					resolveAtprotoKey: async (_did: string, forceRefresh: boolean) => {
+						refreshes.push(forceRefresh)
+						return fixture.did
+					},
+				},
+			} as unknown as IdResolver,
+			onError: (error) => errors.push(error),
 			handleEvent: (event) => {
-				seen.push(event.seq)
+				events.push(event)
+				if (event.seq === 12) done.resolve()
 			},
 		})
 		const running = firehose.start()
 		try {
-			await failed.promise
-			await pause(25)
-			expect(seen).toEqual([10])
+			await Promise.race([
+				done.promise,
+				pause(4000).then(() => {
+					throw new Error('later frame never arrived')
+				}),
+			])
+			expect(errors).toEqual([])
+			expect(refreshes).toEqual([false, true])
+			expect(server.cursors).toEqual(['9'])
+			const unverified = events.filter((event) => event.seq === 11) as CommitEvt[]
+			const rkeys = poison === 'proof' ? ['absent', 'absent'] : ['one', 'two']
+			expect(unverified.map((event) => [event.collection, event.rkey, event.event, event.unverified])).toEqual(
+				rkeys.map((rkey) => ['place.wisp.settings', rkey, 'create', true]),
+			)
+			expect(unverified.every((event) => event.record === undefined)).toBe(true)
 		} finally {
 			await firehose.destroy()
 			await running
