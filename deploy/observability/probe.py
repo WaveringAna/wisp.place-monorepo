@@ -119,7 +119,17 @@ if redis.call('EXISTS', KEYS[2]) == 1 then
   local info = redis.call('XINFO', 'STREAM', KEYS[2])
   for i = 1, #info, 2 do if info[i] == 'last-generated-id' then dlq = info[i + 1] end end
 end
-return cjson.encode({pending=pending[1], oldest=pending[2], lag=group.lag, dlq=dlq})
+-- The newest entries' error codes, so a new entry can be told apart by cause.
+local recent = {}
+for _, entry in ipairs(redis.call('XREVRANGE', KEYS[2], '+', '-', 'COUNT', ARGV[2])) do
+  local code, did = '', ''
+  for i = 1, #entry[2], 2 do
+    if entry[2][i] == 'errorCode' then code = entry[2][i + 1] end
+    if entry[2][i] == 'did' then did = entry[2][i + 1] end
+  end
+  table.insert(recent, {entry[1], code, did})
+end
+return cjson.encode({pending=pending[1], oldest=pending[2], lag=group.lag, dlq=dlq, recent=recent})
 """
 
 
@@ -140,8 +150,36 @@ def queue_snapshot(container, redis_container):
         args.append("--tls")
     args += ["EVAL_RO", QUEUE_SCRIPT, "2", env.get("WISP_REVALIDATE_STREAM", "wisp:revalidate"),
              env.get("WISP_REVALIDATE_DLQ_STREAM", "wisp:revalidate:dlq"),
-             env.get("WISP_REVALIDATE_GROUP", "firehose-service")]
+             env.get("WISP_REVALIDATE_GROUP", "firehose-service"), str(RECENT_DLQ_ENTRIES)]
     return json.loads(json.loads(command(args, (password + "\n").encode())))
+
+
+RECENT_DLQ_ENTRIES = 64
+# A user's own PDS failing to serve their record (a 5xx, a timeout) quarantines that one site.
+# It is visible on the quarantine dashboard, but it is not ours to fix, so it does not page,
+# unless several accounts fail at once, which looks like our own fetches failing.
+REMOTE_PDS_CODES = {"FETCH_FAILED"}
+REMOTE_PDS_ACCOUNTS_TO_PAGE = 3
+
+
+def dlq_id(value):
+    return tuple(map(int, value.split("-")))
+
+
+def actionable_dlq_growth(sample, previous):
+    """Whether the DLQ gained an entry, since `previous`, that is not a remote PDS failure."""
+    if dlq_id(sample["dlq"]) <= previous:
+        return False
+    recent = sample.get("recent")
+    if recent is None:
+        return True
+    new = [(code, did) for entry_id, code, *did in recent if dlq_id(entry_id) > previous]
+    # More new entries than were read back: the unread ones may be anything.
+    if len(new) == len(recent) == RECENT_DLQ_ENTRIES or not new:
+        return True
+    if any(code not in REMOTE_PDS_CODES for code, _ in new):
+        return True
+    return len({tuple(did) for _, did in new}) >= REMOTE_PDS_ACCOUNTS_TO_PAGE
 
 
 def queue_ok(sample, state, now):
@@ -154,9 +192,9 @@ def queue_ok(sample, state, now):
     else:
         state.pop("backlogSince", None)
     # last-generated-id still advances when bounded DLQ trimming hides XLEN growth.
-    dlq = tuple(map(int, sample["dlq"].split("-")))
+    dlq = dlq_id(sample["dlq"])
     previous = tuple(state.get("dlq", dlq))
-    if dlq > previous:
+    if actionable_dlq_growth(sample, previous):
         state["growthAt"] = now
     state["dlq"] = dlq
     return (age < 1800 and (not high or now - state["backlogSince"] < 900)

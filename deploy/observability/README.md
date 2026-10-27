@@ -122,7 +122,7 @@ python's standard library, docker and existing redis-cli in stolas's redis conta
 | each region / log-exporter | all three containers running with log URL/path, fewer than 3 exporter errors in the last 5 minutes (bounded to last 2000 docker log lines, including stderr) |
 | operations / ingestion | only acquired leader reports: ready, connected, last firehose event <5 minutes, consecutive failures <5; standby withholds updates |
 | operations / relay-lag | only acquired leader reports: `firehose.replay.status` is `caught-up` and `replayAgeMs` <5 minutes, i.e. the relay event time of accepted events, not local receipt time; standby withholds updates. added 2026-10-01 after a leader replayed a 26-hour-old relay checkpoint while `ingestion` stayed green |
-| operations / revalidation | oldest pending <30 minutes; pending+consumer lag >=100 must persist 15 minutes; new DLQ entry marks unhealthy for 10 minutes |
+| operations / revalidation | oldest pending <30 minutes; pending+consumer lag >=100 must persist 15 minutes; new DLQ entry marks unhealthy for 10 minutes, except `FETCH_FAILED` entries (a user's own PDS not serving their record) from fewer than 3 accounts in one probe interval |
 | operations / log-ingestion | any main/hosting/firehose log ingested within 30 minutes, using VictoriaLogs `/select/logsql/query` |
 
 all failing predicates require 3 continuous minutes before pushing `success=false`.

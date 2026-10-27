@@ -91,6 +91,28 @@ class OperationsTests(unittest.TestCase):
         sample["dlq"] = "0-0"
         self.assertTrue(probe.queue_ok(sample, state, 1000))
 
+    def test_a_remote_pds_failure_in_the_dlq_does_not_page(self):
+        sample = {"pending": 0, "lag": 0, "oldest": False, "dlq": "1000-0", "recent": [["1000-0", "INVALID_RECORD"]]}
+        state = {}
+        self.assertTrue(probe.queue_ok(sample, state, 100))
+        sample.update(dlq="2000-0", recent=[["2000-0", "FETCH_FAILED", "did:a"], ["1000-0", "INVALID_RECORD", "did:z"]])
+        self.assertTrue(probe.queue_ok(sample, state, 200))
+        sample.update(dlq="3000-0", recent=[["3000-0", "INVALID_RECORD", "did:b"], ["2000-0", "FETCH_FAILED", "did:a"]])
+        self.assertFalse(probe.queue_ok(sample, state, 300))
+
+    def test_dlq_growth_pages_when_its_causes_cannot_all_be_read(self):
+        previous = (1000, 0)
+        overflow = {"dlq": "9000-0", "recent": [[f"{2000 + i}-0", "FETCH_FAILED"] for i in range(probe.RECENT_DLQ_ENTRIES)]}
+        self.assertTrue(probe.actionable_dlq_growth(overflow, previous))
+        trimmed = {"dlq": "9000-0", "recent": []}
+        self.assertTrue(probe.actionable_dlq_growth(trimmed, previous))
+        mixed = {"dlq": "3000-0", "recent": [["3000-0", "FETCH_FAILED", "did:a"], ["2000-0", "BLOB_500_BACKOFF", "did:a"]]}
+        self.assertTrue(probe.actionable_dlq_growth(mixed, previous))
+        one_account = {"dlq": "4000-0", "recent": [[f"{n}-0", "FETCH_FAILED", "did:a"] for n in (4000, 3000, 2000)]}
+        self.assertFalse(probe.actionable_dlq_growth(one_account, previous))
+        many_accounts = {"dlq": "4000-0", "recent": [[f"{n}-0", "FETCH_FAILED", f"did:{n}"] for n in (4000, 3000, 2000)]}
+        self.assertTrue(probe.actionable_dlq_growth(many_accounts, previous))
+
     def test_pending_age_and_backlog_windows_allow_retry(self):
         state = {}
         sample = {"pending": 1, "lag": 0, "oldest": "1000000-0", "dlq": "0-0"}
@@ -122,7 +144,7 @@ class OperationsTests(unittest.TestCase):
         args, credential = command.call_args.args
         self.assertNotIn("secret", " ".join(args))
         self.assertEqual(credential, b"secret\n")
-        self.assertEqual(args[-3:], ["live-stream", "wisp:revalidate:dlq", "firehose-service"])
+        self.assertEqual(args[-4:], ["live-stream", "wisp:revalidate:dlq", "firehose-service", "64"])
         self.assertIn("EVAL_RO", args)
 
     def test_exporter_checks_stderr_without_printing_logs(self):
