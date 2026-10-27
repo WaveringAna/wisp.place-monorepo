@@ -201,6 +201,15 @@ def queue_ok(sample, state, now):
             and now - state.get("growthAt", -1e12) >= 600)
 
 
+def scrape_ok(url):
+    """No VictoriaMetrics scrape target has failed every scrape of the last 5 minutes."""
+    query = "min_over_time(up[5m]) == 0"
+    body = json.loads(request(url + "/api/v1/query?" + urllib.parse.urlencode({"query": query})))
+    if body.get("status") != "success":
+        raise ValueError("query failed")
+    return len(body["data"]["result"]) == 0
+
+
 def logs_ok(url):
     query = '_time:30m job:in("main-app", "hosting-service", "firehose-service") | stats count() as rows'
     rows = request(url + "/select/logsql/query?" + urllib.parse.urlencode({"query": query}))
@@ -233,6 +242,8 @@ def collect(config, state, now):
 
     if "logs_url" in config:
         check("logs", lambda: logs_ok(config["logs_url"]))
+    if "metrics_url" in config:
+        check("metrics", lambda: scrape_ok(config["metrics_url"]))
     if "apps" in config:
         apps = config["apps"]
         network = config.get("network", "proxy_network")

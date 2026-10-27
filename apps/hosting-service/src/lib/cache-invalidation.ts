@@ -773,7 +773,8 @@ async function applyCacheInvalidation(
 		return
 	}
 
-	logger.info('[CacheInvalidation] Invalidation event received', {
+	// The outcome lines below already carry the site and stream id; this one is for local debugging.
+	logger.debug('[CacheInvalidation] Invalidation event received', {
 		operation: 'event-received',
 		source,
 		streamId,
@@ -840,7 +841,7 @@ async function applyCacheInvalidation(
 	if (!canClearUpdating && action === 'update' && token) {
 		// The marker may be absent after a restart/TTL expiry, or belong to a newer
 		// update. In either case, final invalidation is still required and idempotent.
-		logger.info('[CacheInvalidation] Updating marker absent; invalidating anyway', {
+		logger.debug('[CacheInvalidation] Updating marker absent; invalidating anyway', {
 			operation: 'updating-marker-missing',
 			reason: 'missing-or-replaced',
 			source,

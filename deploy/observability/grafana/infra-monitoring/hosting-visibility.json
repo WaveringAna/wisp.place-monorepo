@@ -169,7 +169,7 @@
       "id": 3,
       "title": "404s by reason \u00b7 req/s",
       "type": "timeseries",
-      "description": "Why hosting answered 404. Top hosts per reason are in the hosting log line `[NotFound] 404 summary`, once a minute.",
+      "description": "Why hosting answered 404. Top hosts per reason are in the hosting log line `[NotFound] 404 summary`, once every 5 minutes.",
       "datasource": {
         "type": "prometheus",
         "uid": "victoria-metrics"

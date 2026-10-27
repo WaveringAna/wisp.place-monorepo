@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Append operational endpoints to an existing Gatus JSON config; preserve its checks."""
+"""Append missing operational endpoints to an existing Gatus JSON config; preserve its checks."""
 
 import copy
 import json
@@ -8,7 +8,8 @@ import sys
 
 REGIONS = ("us-west", "eu", "us-east", "singapore")
 ENDPOINTS = [(region, name) for region in REGIONS for name in ("database-replica", "log-exporter")]
-ENDPOINTS += [("operations", name) for name in ("ingestion", "relay-lag", "revalidation", "log-ingestion")]
+ENDPOINTS += [("operations", name) for name in ("ingestion", "relay-lag", "revalidation", "log-ingestion",
+                                                "metrics-scrape")]
 
 
 def token_name(group, name):
@@ -20,8 +21,9 @@ def extend(config):
     endpoints = result.setdefault("external-endpoints", [])
     existing = {(entry["group"], entry["name"]) for entry in endpoints}
     for group, name in ENDPOINTS:
+        # Rerunning after a new endpoint is added leaves the installed ones as they are.
         if (group, name) in existing:
-            raise ValueError(f"operational endpoint already exists: {group}/{name}")
+            continue
         endpoints.append({
             "group": group, "name": name, "token": "${" + token_name(group, name) + "}",
             "heartbeat": {"interval": "4m"},

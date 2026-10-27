@@ -73,7 +73,7 @@ hosting exports `hosting_response_time_ms` (time to response headers, labels
 `tier` hot/warm/cold/none, `status_class` 2xx/3xx/404/4xx/5xx, `kind`
 html/asset/other) and `hosting_not_found_total{reason}`. every label is a closed
 set; hosts never become labels. the hosts behind each 404 reason are in the
-hosting log line `[NotFound] 404 summary`, once a minute per reason with its top
+hosting log line `[NotFound] 404 summary`, once every 5 minutes per reason with its top
 5 hosts. `grafana/infra-monitoring/hosting-visibility.json` charts both; there
 are no alert rules for them yet.
 
@@ -124,6 +124,7 @@ python's standard library, docker and existing redis-cli in stolas's redis conta
 | operations / relay-lag | only acquired leader reports: `firehose.replay.status` is `caught-up` and `replayAgeMs` <5 minutes, i.e. the relay event time of accepted events, not local receipt time; standby withholds updates. added 2026-10-01 after a leader replayed a 26-hour-old relay checkpoint while `ingestion` stayed green |
 | operations / revalidation | oldest pending <30 minutes; pending+consumer lag >=100 must persist 15 minutes; new DLQ entry marks unhealthy for 10 minutes, except `FETCH_FAILED` entries (a user's own PDS not serving their record) from fewer than 3 accounts in one probe interval |
 | operations / log-ingestion | any main/hosting/firehose log ingested within 30 minutes, using VictoriaLogs `/select/logsql/query` |
+| operations / metrics-scrape | no VictoriaMetrics scrape target failed every scrape of the last 5 minutes (`min_over_time(up[5m]) == 0` is empty). added 2026-10-27 after baal and stolas caddy metrics were rejected for 4 days by `sample_limit` without anyone noticing |
 
 all failing predicates require 3 continuous minutes before pushing `success=false`.
 gatus alerts through the **existing discord contact** after 1 failed push and
@@ -160,8 +161,8 @@ standby nodes never publish false shared ingestion checks on probe errors.
 
 1. back up gatus config/secrets and existing probe files with root-only permissions.
 2. run `gatus-overlay.py` against the actual existing JSON-format gatus config.
-   it appends exactly 11 endpoints, preserves the old checks/contact, and refuses
-   duplicate operational names. generate one independent token per endpoint;
+   it appends the operational endpoints the config does not have yet and leaves
+   installed ones and the old checks/contact unchanged, so rerun it after adding one. generate one independent token per endpoint;
    only operations/ingestion and operations/relay-lag are shared across app hosts.
 3. add `OPS_*_TOKEN` variables to the existing private gatus `secrets.env`. distribute
    only scoped destinations to each host's `/etc/wisp-operations/config.json`
@@ -187,7 +188,8 @@ fleet config shape (replace scoped tokens privately):
 stolas additionally sets `redis_container: "wisp-redis-replica"` and a `queue`
 destination for `operations_revalidation`. stolas also sets
 `logs_url: "http://valefar.mesh.wisp.place:9428"` and a `logs` destination for
-`operations_log-ingestion`. default network is `proxy_network`.
+`operations_log-ingestion`, and `metrics_url: "http://valefar.mesh.wisp.place:8428"`
+with a `metrics` destination for `operations_metrics-scrape`. default network is `proxy_network`.
 
 ```sh
 sudo systemctl daemon-reload

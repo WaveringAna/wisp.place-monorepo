@@ -31,7 +31,8 @@ export type NotFoundLogOptions = {
 	now?: () => number
 }
 
-const DEFAULT_WINDOW_MS = 60_000
+// hosting_not_found_total carries the counts; the line only names the busiest hosts.
+const DEFAULT_WINDOW_MS = 5 * 60_000
 const DEFAULT_MAX_HOSTS_PER_REASON = 256
 const DEFAULT_TOP_HOSTS = 5
 const MAX_HOST_LENGTH = 80

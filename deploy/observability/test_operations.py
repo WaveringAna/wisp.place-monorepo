@@ -4,6 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 import unittest
+import urllib.parse
 import tempfile
 from unittest.mock import patch
 
@@ -161,6 +162,16 @@ class OperationsTests(unittest.TestCase):
         with patch.object(probe, "request", return_value='{"rows":"0"}\n'):
             self.assertFalse(probe.logs_ok("http://logs"))
 
+    def test_a_target_down_for_five_minutes_fails_the_scrape_check(self):
+        with patch.object(probe, "request", return_value='{"status":"success","data":{"result":[]}}') as request:
+            self.assertTrue(probe.scrape_ok("http://metrics"))
+            self.assertIn("min_over_time", urllib.parse.unquote(request.call_args.args[0]))
+        down = '{"status":"success","data":{"result":[{"metric":{"job":"caddy-edges"},"value":[1,"0"]}]}}'
+        with patch.object(probe, "request", return_value=down):
+            self.assertFalse(probe.scrape_ok("http://metrics"))
+        with patch.object(probe, "request", return_value='{"status":"error"}'), self.assertRaises(ValueError):
+            probe.scrape_ok("http://metrics")
+
     def test_status_destination_is_fixed_and_credentials_not_redirected(self):
         destination = {"url": "https://status.wisp.place/api/v1/endpoints/operations_test/external", "token": "secret"}
         with patch.object(probe, "request") as request:
@@ -204,11 +215,20 @@ class OperationsTests(unittest.TestCase):
         self.assertEqual(result["alerting"], before["alerting"])
         self.assertEqual(result["endpoints"], before["endpoints"])
         self.assertEqual(result["external-endpoints"][0], before["external-endpoints"][0])
-        self.assertEqual(len(result["external-endpoints"]), 13)
+        self.assertEqual(len(result["external-endpoints"]), 14)
         for endpoint in result["external-endpoints"][1:]:
             self.assertEqual([alert["type"] for alert in endpoint["alerts"]], ["discord", "custom"])
-        with self.assertRaises(ValueError):
-            overlay.extend(result)
+        self.assertEqual(overlay.extend(result), result)
+
+    def test_overlay_adds_only_the_endpoints_an_installed_config_lacks(self):
+        installed = overlay.extend({"external-endpoints": []})
+        installed["external-endpoints"] = [entry for entry in installed["external-endpoints"]
+                                           if entry["name"] != "metrics-scrape"]
+        installed["external-endpoints"][0]["heartbeat"] = {"interval": "9m"}
+        result = overlay.extend(installed)
+        self.assertEqual(result["external-endpoints"][0]["heartbeat"], {"interval": "9m"})
+        self.assertEqual([entry["name"] for entry in result["external-endpoints"][len(installed["external-endpoints"]):]],
+                         ["metrics-scrape"])
 
 
 if __name__ == "__main__":
