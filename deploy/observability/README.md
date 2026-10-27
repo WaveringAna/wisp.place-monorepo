@@ -124,7 +124,7 @@ python's standard library, docker and existing redis-cli in stolas's redis conta
 | operations / relay-lag | only acquired leader reports: `firehose.replay.status` is `caught-up` and `replayAgeMs` <5 minutes, i.e. the relay event time of accepted events, not local receipt time; standby withholds updates. added 2026-10-01 after a leader replayed a 26-hour-old relay checkpoint while `ingestion` stayed green |
 | operations / revalidation | oldest pending <30 minutes; pending+consumer lag >=100 must persist 15 minutes; new DLQ entry marks unhealthy for 10 minutes, except `FETCH_FAILED` entries (a user's own PDS not serving their record) from fewer than 3 accounts in one probe interval |
 | operations / log-ingestion | any main/hosting/firehose log ingested within 30 minutes, using VictoriaLogs `/select/logsql/query` |
-| operations / metrics-scrape | no VictoriaMetrics scrape target failed every scrape of the last 5 minutes (`min_over_time(up[5m]) == 0` is empty). added 2026-10-27 after baal and stolas caddy metrics were rejected for 4 days by `sample_limit` without anyone noticing |
+| operations / metrics-scrape | no VictoriaMetrics scrape target failed every scrape of the last 5 minutes (`max_over_time(up[5m]) == 0` is empty). added 2026-10-27 after baal and stolas caddy metrics were rejected for 4 days by `sample_limit` without anyone noticing |
 
 all failing predicates require 3 continuous minutes before pushing `success=false`.
 gatus alerts through the **existing discord contact** after 1 failed push and

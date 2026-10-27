@@ -203,7 +203,8 @@ def queue_ok(sample, state, now):
 
 def scrape_ok(url):
     """No VictoriaMetrics scrape target has failed every scrape of the last 5 minutes."""
-    query = "min_over_time(up[5m]) == 0"
+    # max, not min: min_over_time is 0 after a single failed scrape, which pages on every blip.
+    query = "max_over_time(up[5m]) == 0"
     body = json.loads(request(url + "/api/v1/query?" + urllib.parse.urlencode({"query": query})))
     if body.get("status") != "success":
         raise ValueError("query failed")

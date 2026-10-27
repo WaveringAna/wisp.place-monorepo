@@ -165,7 +165,8 @@ class OperationsTests(unittest.TestCase):
     def test_a_target_down_for_five_minutes_fails_the_scrape_check(self):
         with patch.object(probe, "request", return_value='{"status":"success","data":{"result":[]}}') as request:
             self.assertTrue(probe.scrape_ok("http://metrics"))
-            self.assertIn("min_over_time", urllib.parse.unquote(request.call_args.args[0]))
+            # a target is down only when even its best scrape of the window failed
+            self.assertIn("max_over_time(up[5m]) == 0", urllib.parse.unquote_plus(request.call_args.args[0]))
         down = '{"status":"success","data":{"result":[{"metric":{"job":"caddy-edges"},"value":[1,"0"]}]}}'
         with patch.object(probe, "request", return_value=down):
             self.assertFalse(probe.scrape_ok("http://metrics"))
