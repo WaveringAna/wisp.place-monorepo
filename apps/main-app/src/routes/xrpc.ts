@@ -42,6 +42,7 @@ import {
 	updateCustomDomainRkey,
 	updateCustomDomainVerification,
 	updateWispDomainSite,
+	waitForSiteCache,
 } from '../lib/db'
 import { verifyCustomDomain } from '../lib/dns-verify'
 import { extractWispHandle, isValidHandle, normalizeDomain, toDomain, validateCustomDomain } from '../lib/domain-utils'
@@ -179,6 +180,14 @@ const domainLimitReached = (): never => {
 		status: 400,
 		error: 'DomainLimitReached',
 		description: 'free tier users can claim up to 3 wisp subdomains',
+	})
+}
+
+const siteNotReady = (): never => {
+	throw new XRPCError({
+		status: 503,
+		error: 'SiteNotReady',
+		description: 'the site is still being processed; try again in a moment',
 	})
 }
 
@@ -373,6 +382,12 @@ const claimWispSubdomain = async (did: DidString, input: { handle: string; siteR
 		alreadyClaimed('domain is already claimed')
 	}
 
+	// A site deployed moments ago reaches the site cache through the firehose; the
+	// domain's site mapping references that cache, so wait for it before claiming.
+	if (input.siteRkey !== undefined && !(await waitForSiteCache(did, input.siteRkey))) {
+		siteNotReady()
+	}
+
 	if (existing.registered && existing.did === did) {
 		if (input.siteRkey !== undefined) {
 			await updateWispDomainSite(domain, input.siteRkey)
@@ -388,7 +403,7 @@ const claimWispSubdomain = async (did: DidString, input: { handle: string; siteR
 	}
 
 	try {
-		await claimDomain(did, handle)
+		await claimDomain(did, handle, input.siteRkey)
 	} catch (err) {
 		const message = err instanceof Error ? err.message : ''
 
@@ -398,13 +413,13 @@ const claimWispSubdomain = async (did: DidString, input: { handle: string; siteR
 		if (message === 'invalid_handle') {
 			invalidDomain('invalid wisp subdomain handle')
 		}
+		if (message === 'site_not_ready') {
+			siteNotReady()
+		}
 
 		alreadyClaimed('domain is already claimed')
 	}
 
-	if (input.siteRkey !== undefined) {
-		await updateWispDomainSite(domain, input.siteRkey)
-	}
 	await publishDomainCacheInvalidation(domain, 'wisp')
 
 	return json({

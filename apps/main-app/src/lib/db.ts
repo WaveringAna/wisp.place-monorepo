@@ -327,7 +327,14 @@ export const isDomainAvailable = async (handle: string): Promise<boolean> => {
 
 export const isDomainRegistered = primaryPresentationRead.isDomainRegistered
 
-export const claimDomain = async (did: string, handle: string): Promise<string> => {
+/** SQLSTATE foreign_key_violation: the site cache has not seen the site the domain names yet. */
+const isForeignKeyViolation = (err: unknown) => (err as { errno?: unknown } | null)?.errno === '23503'
+
+/**
+ * Claims a wisp subdomain, mapped to `siteRkey` in the same transaction. A site the
+ * firehose has not cached yet throws `site_not_ready` and leaves nothing claimed.
+ */
+export const claimDomain = async (did: string, handle: string, siteRkey?: string): Promise<string> => {
 	const h = handle.trim().toLowerCase()
 	if (!isValidHandle(h)) throw new Error('invalid_handle')
 	const domain = toDomain(h)
@@ -344,8 +351,9 @@ export const claimDomain = async (did: string, handle: string): Promise<string> 
 			}
 		}
 		try {
-			await tx`INSERT INTO domains (domain, did) VALUES (${domain}, ${did})`
-		} catch (_err) {
+			await tx`INSERT INTO domains (domain, did, rkey) VALUES (${domain}, ${did}, ${siteRkey ?? null})`
+		} catch (err) {
+			if (isForeignKeyViolation(err)) throw new Error('site_not_ready')
 			// Unique constraint violations -> already taken
 			throw new Error('conflict')
 		}

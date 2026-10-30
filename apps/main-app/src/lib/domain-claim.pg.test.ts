@@ -20,6 +20,22 @@ describe.skipIf(!enabled)('wisp domain claims (postgres)', () => {
 		expect(new Set(reasons)).toEqual(new Set(['domain_limit_reached']))
 	})
 
+	test('a claim naming a site the cache has not seen claims nothing, and once cached claims and maps it', async () => {
+		const { db, claimDomain } = await import('./db')
+		const { runDatabaseMigrations } = await import('./migrations')
+		await runDatabaseMigrations(db)
+		const did = `did:plc:map${Date.now()}`
+		const handle = `map-${Date.now()}`
+
+		await expect(claimDomain(did, handle, 'blog')).rejects.toThrow('site_not_ready')
+		expect(await db`SELECT 1 FROM domains WHERE did = ${did}`).toHaveLength(0)
+
+		await db`INSERT INTO site_cache (did, rkey, record_cid) VALUES (${did}, 'blog', 'bafytest')`
+		const domain = await claimDomain(did, handle, 'blog')
+		const [row] = await db`SELECT did, rkey FROM domains WHERE domain = ${domain}`
+		expect(row).toEqual({ did, rkey: 'blog' })
+	})
+
 	test('private site usage counts each owner, leaving out sites being deleted', async () => {
 		const { db } = await import('./db')
 		const owner = `did:plc:usage${Date.now()}`
