@@ -6,7 +6,7 @@ StartLimitIntervalSec=300
 StartLimitBurst=5
 
 [Container]
-Image=valefar.mesh.wisp.place:5000/wisp/preview-bot@sha256:b2c91d59274e5465be22c8e97ca2618917746025d30943afc39d81b3816f44c1
+Image=valefar.mesh.wisp.place:5000/wisp/preview-bot@sha256:d145bbafbb6cef41110fb38d152c340daab85ac69985b7fceb01aa3b1eff82ea
 Pull=never
 ContainerName=preview-bot
 PublishPort=127.0.0.1:3004:3004
