@@ -478,6 +478,18 @@ describe('Tangled 1.0', () => {
 		expect(requested).toHaveLength(1)
 	})
 
+	test('talks to a hosted knot at its origin, not the per-repo path in the DID document', async () => {
+		const { fetch, requested } = fakeFetch({
+			[getRecord('org.tangled.repo.manifest', 'self')]: () =>
+				json({ value: { declaration: { owner: OWNER, name: 'blog' } } }),
+		})
+		const hosted = async (did: string, id: string) =>
+			id === '#tangled_knot' ? `${KNOT}/repo/tidperrepo` : services(did, id)
+
+		expect((await build({ fetch, service: hosted }).repoManifest(REPO))?.name).toBe('blog')
+		expect(requested[0]?.startsWith(`${KNOT}/xrpc/`)).toBe(true)
+	})
+
 	test('has no manifest for a repo whose DID names no knot, without a request', async () => {
 		const { fetch, requested } = fakeFetch({})
 

@@ -88,7 +88,15 @@ export function createHttpPorts(options: HttpPortsOptions): Ports {
 	const fetcher = options.fetch ?? defaultFetcher
 	const identity = options.identity ?? defaultIdentity
 	const service = options.service ?? defaultService
-	const knotOf = (repoDid: string) => (validDid(repoDid) ? service(repoDid, '#tangled_knot') : Promise.resolve(null))
+	/** A Tangled service is its endpoint's host: hosted knots publish a per-repo path that answers no XRPC. */
+	const serviceOrigin = async (did: string, id: string) => {
+		const endpoint = await service(did, id)
+		if (!endpoint) return null
+		const url = new URL(endpoint)
+		return validHost(url.host) ? url.origin : null
+	}
+	const knotOf = (repoDid: string) =>
+		validDid(repoDid) ? serviceOrigin(repoDid, '#tangled_knot') : Promise.resolve(null)
 
 	/** Up to `limit` records of one collection in a repo, read page by page from `base` (a PDS or knot). */
 	const listRecords = async (base: string, repo: string, collection: string, limit: number, request = {}) => {
@@ -139,10 +147,8 @@ export function createHttpPorts(options: HttpPortsOptions): Ports {
 	}
 	const spindleHost = async (did: unknown): Promise<string | undefined> => {
 		if (typeof did !== 'string' || !did.startsWith('did:web:')) return undefined
-		const endpoint = await service(did, '#tangled_spindle')
-		if (!endpoint) return undefined
-		const url = new URL(endpoint)
-		return url.pathname === '/' && validHost(url.host) ? url.host : undefined
+		const origin = await serviceOrigin(did, '#tangled_spindle')
+		return origin ? new URL(origin).host : undefined
 	}
 	const repoManifest = async (repoDid: string): Promise<RepoManifest | null> => {
 		const knot = await knotOf(repoDid)
