@@ -5,6 +5,7 @@ const OWNER = `did:plc:${'o'.repeat(24)}`
 const PDS = 'https://pds.example'
 const PULL_URI = `at://did:plc:${'u'.repeat(24)}/sh.tangled.repo.pull/3kpull`
 const SHA = 'ab12cd3ef4567890123456789012345678901234'
+const REPO = `did:plc:${'r'.repeat(24)}`
 
 type Json = Record<string, unknown>
 
@@ -21,9 +22,23 @@ function fakeFetch(routes: Record<string, () => Response | Promise<Response>>) {
 }
 
 const json = (body: unknown, status = 200) => Response.json(body, { status })
+const ownerRecords = (collection: string) =>
+	`${PDS}/xrpc/com.atproto.repo.listRecords?repo=${encodeURIComponent(OWNER)}&collection=${collection}&`
+/** The owner's pre-1.0 `sh.tangled.repo` records, and their 1.0 declarations. */
+const LEGACY_REPOS = ownerRecords('sh.tangled.repo')
+const DECLARATIONS = ownerRecords('org.tangled.repo.declaration')
+const noDeclarations = { [DECLARATIONS]: () => json({ records: [] }) }
 
-function build(options: { fetch?: (url: string) => Promise<Response>; sql?: unknown; agent?: unknown } = {}) {
+function build(
+	options: {
+		fetch?: (url: string, init?: Record<string, unknown>) => Promise<Response>
+		sql?: unknown
+		agent?: unknown
+		service?: (did: string, id: string) => Promise<string | null>
+	} = {},
+) {
 	return createHttpPorts({
+		service: options.service ?? (async () => null),
 		fetch: options.fetch ?? (async () => new Response('no', { status: 404 })),
 		sql: (options.sql ?? (async () => [])) as never,
 		baseHost: 'wisp.place',
@@ -41,7 +56,8 @@ const repoRecord = (name: string, extra: Json = {}) => ({
 describe('listRepoRecords', () => {
 	test('maps the fields the verifier needs, taking the repo DID only from repoDid', async () => {
 		const { fetch } = fakeFetch({
-			[`${PDS}/xrpc/com.atproto.repo.listRecords`]: () =>
+			...noDeclarations,
+			[LEGACY_REPOS]: () =>
 				json({ records: [repoRecord('blog'), repoRecord('legacy', { repoDid: undefined, did: OWNER })] }),
 		})
 
@@ -55,7 +71,8 @@ describe('listRepoRecords', () => {
 
 	test('falls back to rkey as repository name when value.name is omitted', async () => {
 		const { fetch } = fakeFetch({
-			[`${PDS}/xrpc/com.atproto.repo.listRecords`]: () =>
+			...noDeclarations,
+			[LEGACY_REPOS]: () =>
 				json({
 					records: [
 						{
@@ -94,7 +111,8 @@ describe('listRepoRecords', () => {
 
 	test('ignores records that are not objects', async () => {
 		const { fetch } = fakeFetch({
-			[`${PDS}/xrpc/`]: () => json({ records: [null, 'x', { uri: 'a', value: 5 }, repoRecord('ok')] }),
+			...noDeclarations,
+			[LEGACY_REPOS]: () => json({ records: [null, 'x', { uri: 'a', value: 5 }, repoRecord('ok')] }),
 		})
 
 		expect(await build({ fetch }).listRepoRecords(OWNER)).toHaveLength(1)
@@ -120,17 +138,19 @@ describe('getPipeline', () => {
 	test('reads a pull request trigger from the named spindle', async () => {
 		const { fetch, requested } = fakeFetch({ 'https://spindle.example/': () => json(pipelineBody(pullTrigger)) })
 
-		const pipeline = await build({ fetch }).getPipeline('spindle.example', '3kpipelineabc')
+		const pipeline = await build({ fetch }).getPipeline('spindle.example', REPO, '3kpipelineabc')
 
 		expect(pipeline).toEqual({ repo: `did:plc:${'r'.repeat(24)}`, pullRequest: { pull: PULL_URI, sourceSha: SHA } })
-		expect(requested[0]).toBe('https://spindle.example/xrpc/sh.tangled.ci.getPipeline?pipeline=3kpipelineabc')
+		expect(requested[0]).toBe(
+			`https://spindle.example/xrpc/org.tangled.ci.getPipeline?repo=${encodeURIComponent(REPO)}&pipeline=3kpipelineabc`,
+		)
 	})
 
 	test('reports a fork checkout', async () => {
 		const sourceRepo = `did:plc:${'f'.repeat(24)}`
 		const { fetch } = fakeFetch({ 'https://spindle.example/': () => json(pipelineBody(pullTrigger, { sourceRepo })) })
 
-		expect((await build({ fetch }).getPipeline('spindle.example', '3kpipelineabc'))?.sourceRepo).toBe(sourceRepo)
+		expect((await build({ fetch }).getPipeline('spindle.example', REPO, '3kpipelineabc'))?.sourceRepo).toBe(sourceRepo)
 	})
 
 	test.each([
@@ -140,7 +160,7 @@ describe('getPipeline', () => {
 	])('gives no pull request for %s', async (_name, trigger) => {
 		const { fetch } = fakeFetch({ 'https://spindle.example/': () => json(pipelineBody(trigger as Json)) })
 
-		expect((await build({ fetch }).getPipeline('spindle.example', '3kpipelineabc'))?.pullRequest).toBeUndefined()
+		expect((await build({ fetch }).getPipeline('spindle.example', REPO, '3kpipelineabc'))?.pullRequest).toBeUndefined()
 	})
 
 	test.each([
@@ -154,24 +174,26 @@ describe('getPipeline', () => {
 	])('refuses the host %p without making a request', async (host) => {
 		const { fetch, requested } = fakeFetch({})
 
-		expect(await build({ fetch }).getPipeline(host, '3kpipelineabc')).toBeNull()
+		expect(await build({ fetch }).getPipeline(host, REPO, '3kpipelineabc')).toBeNull()
 		expect(requested).toEqual([])
 	})
 
 	test('refuses a malformed pipeline id without making a request', async () => {
 		const { fetch, requested } = fakeFetch({})
 
-		expect(await build({ fetch }).getPipeline('spindle.example', '../x')).toBeNull()
+		expect(await build({ fetch }).getPipeline('spindle.example', REPO, '../x')).toBeNull()
 		expect(requested).toEqual([])
 	})
 
 	test('is null for 404 and malformed bodies, and throws for server errors', async () => {
-		expect(await build({ fetch: async () => json({}, 404) }).getPipeline('spindle.example', '3kpipelineabc')).toBeNull()
 		expect(
-			await build({ fetch: async () => json({ nope: 1 }) }).getPipeline('spindle.example', '3kpipelineabc'),
+			await build({ fetch: async () => json({}, 404) }).getPipeline('spindle.example', REPO, '3kpipelineabc'),
+		).toBeNull()
+		expect(
+			await build({ fetch: async () => json({ nope: 1 }) }).getPipeline('spindle.example', REPO, '3kpipelineabc'),
 		).toBeNull()
 		await expect(
-			build({ fetch: async () => json({}, 502) }).getPipeline('spindle.example', '3kpipelineabc'),
+			build({ fetch: async () => json({}, 502) }).getPipeline('spindle.example', REPO, '3kpipelineabc'),
 		).rejects.toThrow()
 	})
 })
@@ -363,7 +385,7 @@ describe('findPipelineForCommit', () => {
 	test('selects the newest matching pull-request pipeline', async () => {
 		const repoDid = `did:plc:${'r'.repeat(24)}`
 		const { fetch, requested } = fakeFetch({
-			'https://spindle.example/': () =>
+			'https://spindle.example/xrpc/sh.tangled.ci.': () =>
 				json({
 					pipelines: [
 						{
@@ -385,7 +407,10 @@ describe('findPipelineForCommit', () => {
 		expect(await build({ fetch }).findPipelineForCommit('spindle.example', repoDid, SHA.slice(0, 7))).toBe(
 			'3knewerpipeline',
 		)
-		expect(requested[0]).toContain('kinds=pull_request')
+		expect(requested[0]).toContain('org.tangled.ci.queryPipelines')
+		expect(requested[0]).toContain('triggers=org.tangled.event.pullRequest')
+		expect(requested[1]).toContain('sh.tangled.ci.queryPipelines')
+		expect(requested[1]).toContain('kinds=pull_request')
 	})
 
 	test('rejects invalid spindle hosts before fetching', async () => {
@@ -403,4 +428,251 @@ test('findPipelineForCommit maps upstream statuses', async () => {
 	).rejects.toThrow()
 	const four = async () => json({}, 404)
 	expect(await build({ fetch: four }).findPipelineForCommit('spindle.example', OWNER, SHA.slice(0, 7))).toBeNull()
+})
+
+describe('Tangled 1.0', () => {
+	const KNOT = 'https://knot.example'
+	const TICKET_URI = `at://${REPO}/org.tangled.track.ticket/42`
+	const BOT = 'did:plc:bot'
+	const services = async (did: string, id: string) =>
+		did === REPO && id === '#tangled_knot'
+			? KNOT
+			: did === 'did:web:spindle.example' && id === '#tangled_spindle'
+				? 'https://spindle.example'
+				: null
+	const repoRecords = (collection: string) =>
+		`${KNOT}/xrpc/com.atproto.repo.listRecords?repo=${encodeURIComponent(REPO)}&collection=${collection}&`
+	const getRecord = (collection: string, rkey: string) =>
+		`${KNOT}/xrpc/com.atproto.repo.getRecord?repo=${encodeURIComponent(REPO)}&collection=${collection}&rkey=${rkey}`
+	const patch = (ticket: string, branch: string, createdAt: string) => ({
+		uri: `at://${REPO}/org.tangled.review.patch/p${ticket}${createdAt}`,
+		value: { ticket, source: { branch, repo: REPO }, createdAt },
+	})
+	const ticket = (extra: Json = {}) =>
+		json({
+			cid: 'bafyticket',
+			value: { targetBranch: 'main', state: 'open', 'x-tngl-editor': OWNER, ...extra },
+		})
+
+	test("lists the owner's declarations as repos named by their slug", async () => {
+		const { fetch } = fakeFetch({
+			[LEGACY_REPOS]: () => json({ records: [] }),
+			[DECLARATIONS]: () =>
+				json({ records: [{ uri: `at://${OWNER}/org.tangled.repo.declaration/blog`, value: { repo: REPO } }] }),
+		})
+
+		expect(await build({ fetch }).listRepoRecords(OWNER)).toEqual([{ rkey: 'blog', name: 'blog', repoDid: REPO }])
+	})
+
+	test("reads the manifest from the repo's knot and resolves its spindle's did:web", async () => {
+		const { fetch, requested } = fakeFetch({
+			[getRecord('org.tangled.repo.manifest', 'self')]: () =>
+				json({ value: { declaration: { owner: OWNER, name: 'blog' }, spindle: 'did:web:spindle.example' } }),
+		})
+
+		expect(await build({ fetch, service: services }).repoManifest(REPO)).toEqual({
+			owner: OWNER,
+			name: 'blog',
+			spindle: 'spindle.example',
+		})
+		expect(requested).toHaveLength(1)
+	})
+
+	test('has no manifest for a repo whose DID names no knot, without a request', async () => {
+		const { fetch, requested } = fakeFetch({})
+
+		expect(await build({ fetch, service: async () => null }).repoManifest(REPO)).toBeNull()
+		expect(requested).toEqual([])
+	})
+
+	test('reads a 1.0 pull request trigger that names a ticket', async () => {
+		const { fetch } = fakeFetch({
+			'https://spindle.example/xrpc/org.tangled.ci.getPipeline': () =>
+				json({
+					id: '3kpipelineabc',
+					repo: REPO,
+					trigger: { $type: 'org.tangled.event.pullRequest', pull: TICKET_URI, sourceSha: SHA, sourceBranch: 'feat' },
+				}),
+		})
+
+		expect(await build({ fetch }).getPipeline('spindle.example', REPO, '3kpipelineabc')).toEqual({
+			repo: REPO,
+			pullRequest: { pull: TICKET_URI, sourceSha: SHA, sourceBranch: 'feat' },
+		})
+	})
+
+	test('asks a spindle without the 1.0 method the older one', async () => {
+		const { fetch, requested } = fakeFetch({
+			'https://spindle.example/xrpc/sh.tangled.ci.getPipeline': () =>
+				json({
+					id: '3kpipelineabc',
+					repo: REPO,
+					trigger: { $type: 'sh.tangled.ci.trigger#pullRequest', pull: PULL_URI, sourceSha: SHA },
+				}),
+		})
+
+		expect((await build({ fetch }).getPipeline('spindle.example', REPO, '3kpipelineabc'))?.pullRequest?.pull).toBe(
+			PULL_URI,
+		)
+		expect(requested.map((url) => url.split('?')[0])).toEqual([
+			'https://spindle.example/xrpc/org.tangled.ci.getPipeline',
+			'https://spindle.example/xrpc/sh.tangled.ci.getPipeline',
+		])
+	})
+
+	test("counts a ticket's rounds from its patches and takes its author from the knot's stamp", async () => {
+		const { fetch } = fakeFetch({
+			[getRecord('org.tangled.track.ticket', '42')]: () => ticket(),
+			[repoRecords('org.tangled.review.patch')]: () =>
+				json({ records: [patch('42', 'feat', '1'), patch('7', 'other', '2'), patch('42', 'feat', '3')] }),
+		})
+
+		expect(await build({ fetch, service: services }).getPull(TICKET_URI)).toEqual({
+			uri: TICKET_URI,
+			cid: 'bafyticket',
+			authorDid: OWNER,
+			targetRepoDid: REPO,
+			roundCount: 2,
+		})
+	})
+
+	test('is null for a ticket without a target branch, which is an issue', async () => {
+		const { fetch } = fakeFetch({
+			[getRecord('org.tangled.track.ticket', '42')]: () => ticket({ targetBranch: undefined }),
+		})
+
+		expect(await build({ fetch, service: services }).getPull(TICKET_URI)).toBeNull()
+	})
+
+	test("finds the open ticket of a branch's newest round", async () => {
+		const { fetch, requested } = fakeFetch({
+			[repoRecords('org.tangled.review.patch')]: () =>
+				json({
+					records: [
+						patch('7', 'feat', '2026-01-01'),
+						patch('42', 'feat', '2026-03-01'),
+						patch('9', 'other', '2026-04-01'),
+					],
+				}),
+			[getRecord('org.tangled.track.ticket', '42')]: () => ticket(),
+		})
+
+		expect((await build({ fetch, service: services }).findPullForBranch(REPO, 'feat'))?.uri).toBe(TICKET_URI)
+		expect(requested.some((url) => url.includes('listPulls'))).toBe(false)
+	})
+
+	test('ignores a closed ticket when looking up a branch', async () => {
+		const { fetch } = fakeFetch({
+			[repoRecords('org.tangled.review.patch')]: () => json({ records: [patch('42', 'feat', '1')] }),
+			[getRecord('org.tangled.track.ticket', '42')]: () => ticket({ state: 'closed' }),
+		})
+
+		expect(await build({ fetch, service: services }).findPullForBranch(REPO, 'feat')).toBeNull()
+	})
+
+	test("finds the bot's own comment in the repo account, not someone else's", async () => {
+		const comment = (rkey: string, editor: string, uri: string) => ({
+			uri: `at://${REPO}/org.tangled.feed.comment/${rkey}`,
+			value: { subject: { uri }, body: { text: `from ${editor}` }, 'x-tngl-editor': editor },
+		})
+		const { fetch } = fakeFetch({
+			[repoRecords('org.tangled.feed.comment')]: () =>
+				json({
+					records: [
+						comment('a', OWNER, TICKET_URI),
+						comment('b', BOT, `at://${REPO}/org.tangled.track.ticket/7`),
+						comment('c', BOT, TICKET_URI),
+					],
+				}),
+		})
+
+		expect(await build({ fetch, service: services }).findComment(TICKET_URI)).toEqual({
+			rkey: 'c',
+			body: `from ${BOT}`,
+		})
+	})
+
+	function writer(existingCid?: string) {
+		const calls: {
+			serviceAuth: unknown[]
+			posts: Array<{ url: string; init: Record<string, any> }>
+			attestations: unknown[]
+		} = {
+			serviceAuth: [],
+			posts: [],
+			attestations: [],
+		}
+		const agent = {
+			com: {
+				atproto: {
+					server: {
+						getServiceAuth: async (params: unknown) => {
+							calls.serviceAuth.push(params)
+							return { data: { token: 'tok' } }
+						},
+					},
+					repo: {
+						createRecord: async (params: unknown) => {
+							calls.attestations.push(params)
+							return { data: {} }
+						},
+					},
+				},
+			},
+		}
+		const fetch = async (url: string, init: Record<string, any> = {}) => {
+			if (init.method === 'POST') {
+				calls.posts.push({ url, init })
+				return json({ uri: `at://${REPO}/org.tangled.feed.comment/c1`, cid: 'bafynew', 'x-tngl-change': 'abc123' })
+			}
+			if (url.startsWith(getRecord('org.tangled.feed.comment', 'c1'))) return json({ cid: existingCid, value: {} })
+			return json({}, 404)
+		}
+		return { ports: build({ fetch, agent, service: services }), calls }
+	}
+	const input = { pull: { uri: TICKET_URI, cid: 'bafyticket' }, roundIdx: 1, body: 'preview' }
+
+	test('writes a new comment through the knot with a token minted for that repo, then attests it', async () => {
+		const { ports, calls } = writer()
+
+		await ports.createComment(input)
+
+		expect(calls.serviceAuth).toEqual([{ aud: REPO, lxm: 'com.atproto.repo.createRecord' }])
+		expect(calls.posts).toHaveLength(1)
+		expect(calls.posts[0]?.url).toBe(`${KNOT}/xrpc/com.atproto.repo.createRecord`)
+		expect(calls.posts[0]?.init.headers.authorization).toBe('Bearer tok')
+		const sent = JSON.parse(calls.posts[0]?.init.body)
+		expect(sent).toMatchObject({
+			repo: REPO,
+			collection: 'org.tangled.feed.comment',
+			record: {
+				$type: 'org.tangled.feed.comment',
+				subject: { $type: 'com.atproto.repo.strongRef', uri: TICKET_URI, cid: 'bafyticket' },
+				body: { $type: 'org.tangled.markup.markdown', text: 'preview' },
+			},
+		})
+		expect(sent.rkey).toBeUndefined()
+		expect(calls.attestations).toEqual([
+			{
+				repo: BOT,
+				collection: 'org.tangled.graph.attestation',
+				record: expect.objectContaining({
+					$type: 'org.tangled.graph.attestation',
+					subject: { uri: `at://${REPO}/org.tangled.feed.comment/c1`, cid: 'bafynew' },
+					change: 'abc123',
+				}),
+			},
+		])
+	})
+
+	test('updates a comment in place, swapping against the version it read', async () => {
+		const { ports, calls } = writer('bafyold')
+
+		await ports.updateComment('c1', input)
+
+		expect(calls.serviceAuth).toEqual([{ aud: REPO, lxm: 'com.atproto.repo.putRecord' }])
+		expect(calls.posts[0]?.url).toBe(`${KNOT}/xrpc/com.atproto.repo.putRecord`)
+		expect(JSON.parse(calls.posts[0]?.init.body)).toMatchObject({ rkey: 'c1', swapRecord: 'bafyold' })
+		expect(calls.attestations).toHaveLength(1)
+	})
 })

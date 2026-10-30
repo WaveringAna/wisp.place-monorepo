@@ -30,6 +30,7 @@ function world(overrides: Partial<Ports> = {}): World {
 			outbound++
 			return [{ rkey: 'blog', name: 'blog', spindle: 'spindle.example', repoDid: REPO_DID }]
 		},
+		repoManifest: async () => null,
 		getPipeline: async () => ({ repo: REPO_DID, pullRequest: { pull: PULL_URI, sourceSha: sha } }),
 		findPipelineForCommit: async () => '3kpipelineabc',
 		findPullForBranch: async () => null,

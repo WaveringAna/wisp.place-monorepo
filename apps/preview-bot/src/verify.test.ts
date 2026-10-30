@@ -29,9 +29,10 @@ function fakePorts(overrides: Partial<Ports> = {}): { ports: Ports; calls: Calls
 	const calls: Calls = { pipelines: [], probes: [] }
 	const ports: Ports = {
 		listRepoRecords: async () => [repoRecord],
+		repoManifest: async () => null,
 		findPipelineForCommit: async () => '3kpipelineabc',
 		findPullForBranch: async () => null,
-		getPipeline: async (host, id) => {
+		getPipeline: async (host, _repo, id) => {
 			calls.pipelines.push([host, id])
 			return pipeline
 		},
@@ -216,5 +217,36 @@ describe('verifyHook', () => {
 		})
 		expect((await verifyHook(hook, ports, config)).ok).toBe(true)
 		expect(asked).toEqual([[REPO_DID, 'fix']])
+	})
+})
+
+describe('Tangled 1.0 manifest', () => {
+	const manifest = { owner: OWNER, name: 'blog', spindle: 'ci.example' }
+
+	test("asks the spindle the repo's manifest names, not the owner's older record", async () => {
+		const { ports, calls } = fakePorts({ repoManifest: async () => manifest })
+
+		expect((await verifyPreview(request, ports, config)).ok).toBe(true)
+		expect(calls.pipelines).toEqual([['ci.example', '3kpipeline']])
+	})
+
+	test('accepts a declaration with no spindle of its own, and a name that differs only in case', async () => {
+		const { ports } = fakePorts({
+			listRepoRecords: async () => [{ rkey: 'blog', name: 'blog', repoDid: REPO_DID }],
+			repoManifest: async () => ({ ...manifest, name: 'Blog' }),
+		})
+
+		expect((await verifyPreview(request, ports, config)).ok).toBe(true)
+	})
+
+	test.each([
+		['repo-not-found', { ...manifest, owner: ATTACKER }],
+		['repo-not-found', { ...manifest, name: 'other' }],
+		['repo-unusable', { ...manifest, spindle: undefined }],
+	])('rejects %s when the manifest disagrees', async (reason, value) => {
+		const { ports, calls } = fakePorts({ repoManifest: async () => value })
+
+		expect(await verifyPreview(request, ports, config)).toEqual({ ok: false, reason: reason as Rejection })
+		expect(calls.pipelines).toEqual([])
 	})
 })

@@ -63,9 +63,10 @@ export function isWellFormed(request: PreviewRequest): boolean {
  * Decide whether the bot may comment a preview link on a pull request. Each fact is read from
  * the authority that owns it and has to agree with the next one:
  *
- *   owner's repo record (owner's PDS)  ->  names the spindle and the repo's DID
+ *   owner's repo record (owner's PDS)  ->  names the repo's DID
+ *   repo manifest (repo's knot, 1.0)   ->  agrees on owner and name, names the spindle
  *   pipeline (that spindle)            ->  same repo, a pull request run, names the pull
- *   pull record (author's PDS)         ->  targets that same repo
+ *   pull (repo's knot, or author's PDS before 1.0)  ->  targets that same repo
  *   wisp subdomain claim (our db)      ->  owned by the repo's owner or a collaborator on it
  *
  * The last link is what stops someone from naming a site `pr-<sha7>` under their own claim and
@@ -116,13 +117,20 @@ export async function verifyHook(
 
 type UsableRepo = RepoRecord & { spindle: string; repoDid: string }
 
+const sameName = (a: string | undefined, b: string) => a?.toLowerCase() === b.toLowerCase()
+
 async function findRepo(ports: Ports, owner: string, repo: string): Promise<UsableRepo | Rejection> {
-	const named = (await ports.listRepoRecords(owner)).filter((record) => record.name === repo)
+	const named = (await ports.listRepoRecords(owner)).filter((record) => sameName(record.name, repo))
 	if (named.length === 0) return 'repo-not-found'
 	const [record] = named
 	if (!record || new Set(named.map((candidate) => candidate.repoDid)).size > 1) return 'repo-ambiguous'
-	if (!record.spindle || !record.repoDid) return 'repo-unusable'
-	return { ...record, spindle: record.spindle, repoDid: record.repoDid }
+	if (!record.repoDid) return 'repo-unusable'
+	// A 1.0 repo's knot holds its manifest, which names the spindle; the owner's record no longer does.
+	const manifest = await ports.repoManifest(record.repoDid)
+	if (manifest && (manifest.owner !== owner || !sameName(manifest.name, repo))) return 'repo-not-found'
+	const spindle = manifest ? manifest.spindle : record.spindle
+	if (!spindle) return 'repo-unusable'
+	return { ...record, spindle, repoDid: record.repoDid }
 }
 
 async function verifyFromPipeline(
@@ -132,7 +140,7 @@ async function verifyFromPipeline(
 	ports: Ports,
 	config: { previewHost: string },
 ): Promise<Verification> {
-	const pipeline = await ports.getPipeline(record.spindle, pipelineId)
+	const pipeline = await ports.getPipeline(record.spindle, record.repoDid, pipelineId)
 	if (!pipeline) return reject('pipeline-not-found')
 	const trigger = pipeline.pullRequest
 	if (!trigger || !HEX40.test(trigger.sourceSha) || (!trigger.pull && !trigger.sourceBranch))

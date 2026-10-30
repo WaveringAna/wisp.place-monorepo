@@ -4,11 +4,16 @@
  * implementation is in ports-http.ts.
  *
  * Every value a port returns about a record or pipeline must come from the authority for it: a
- * record from the PDS of the DID in its AT-URI, a pipeline from the spindle named by the owner's
- * own repo record. The request that triggered the bot supplies none of it.
+ * record from the PDS of the DID in its AT-URI, a pipeline from the spindle named by the repo's
+ * own manifest (or, before Tangled 1.0, the owner's repo record). The request that triggered the
+ * bot supplies none of it.
+ *
+ * Tangled 1.0 keeps pull requests, rounds and comments in the repo DID's account on its knot
+ * (`org.tangled.*`); older repos keep them in their authors' PDSes (`sh.tangled.*`). The ports
+ * read whichever a repo or record has.
  */
 
-/** A `sh.tangled.repo` record in a repo owner's PDS. */
+/** A repo the owner claims in their PDS: a `sh.tangled.repo` record or an `org.tangled.repo.declaration`. */
 export interface RepoRecord {
 	rkey: string
 	name?: string
@@ -18,7 +23,7 @@ export interface RepoRecord {
 	repoDid?: string
 }
 
-/** A `sh.tangled.ci.pipeline` as reported by a spindle, reduced to what the bot needs. */
+/** A spindle pipeline (`org.tangled.ci.defs#pipeline`, or `sh.tangled.ci` before 1.0), reduced to what the bot needs. */
 export interface Pipeline {
 	/** DID of the repo the pipeline ran for. */
 	repo?: string
@@ -26,7 +31,7 @@ export interface Pipeline {
 	sourceRepo?: string
 	/** The pull request trigger, absent for push, manual and schedule pipelines. */
 	pullRequest?: {
-		/** AT-URI of the `sh.tangled.repo.pull` record. */
+		/** AT-URI of the pull: an `org.tangled.track.ticket`, or a `sh.tangled.repo.pull` before 1.0. */
 		pull?: string
 		/** Full 40-character head commit of the round that was built. */
 		sourceSha: string
@@ -35,13 +40,13 @@ export interface Pipeline {
 	}
 }
 
-/** A `sh.tangled.repo.pull` record with the CID of the exact version read. */
+/** A pull request (1.0 ticket or older pull record) with the CID of the exact version read. */
 export interface Pull {
 	uri: string
 	cid: string
-	/** DID in the AT-URI: the pull request's author. */
+	/** The AT-URI's DID before 1.0; on a 1.0 ticket, its `x-tngl-editor`, the account that last wrote it. */
 	authorDid: string
-	/** `target.repo`: DID of the repo the pull request is against. */
+	/** DID of the repo the pull request is against: `target.repo`, or a 1.0 ticket's own repo account. */
 	targetRepoDid: string
 	/** Number of submitted rounds; the newest round's index is one less. */
 	roundCount: number
@@ -60,14 +65,25 @@ export interface CommentInput {
 	body: string
 }
 
+/** A Tangled 1.0 `org.tangled.repo.manifest/self`, read from the repo's own knot. */
+export interface RepoManifest {
+	/** `declaration.owner` and `declaration.name`: the owner's half of the claim has to agree. */
+	owner: string
+	name: string
+	/** Hostname of the spindle the manifest names, resolved from its did:web. */
+	spindle?: string
+}
+
 export interface Ports {
-	/** The owner's `sh.tangled.repo` records, read from the owner's PDS. */
+	/** The repos the owner claims, read from the owner's PDS. */
 	listRepoRecords(ownerDid: string): Promise<RepoRecord[]>
-	/** `sh.tangled.ci.getPipeline` on the given spindle host; null when it has no such pipeline. */
-	getPipeline(spindleHost: string, pipelineId: string): Promise<Pipeline | null>
+	/** The repo's 1.0 manifest from its knot; null for a repo whose knot predates 1.0. */
+	repoManifest(repoDid: string): Promise<RepoManifest | null>
+	/** `getPipeline` on the given spindle host; null when it has no such pipeline. */
+	getPipeline(spindleHost: string, repoDid: string, pipelineId: string): Promise<Pipeline | null>
 	/** Find the newest pull-request pipeline whose source commit starts with sha7. */
 	findPipelineForCommit(spindleHost: string, repoDid: string, sha7: string): Promise<string | null>
-	/** The pull record from its author's PDS; null when it does not exist. */
+	/** The pull from its authority (repo's knot for a 1.0 ticket, author's PDS before); null when absent. */
 	getPull(uri: string): Promise<Pull | null>
 	/** The open pull from `sourceBranch` into the repo, by any author, for spindles that leave the pull URI out. */
 	findPullForBranch(targetRepoDid: string, sourceBranch: string): Promise<Pull | null>
