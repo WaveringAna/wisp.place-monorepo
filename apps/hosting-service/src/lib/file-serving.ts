@@ -788,7 +788,7 @@ async function serveDirectoryListing(
 /** A rewrite target that names a file in the manifest, or a directory with one of its index files. */
 function manifestHasPage(fileCids: Record<string, string>, targetPath: string, indexFiles: string[]): boolean {
 	const has = (filePath: string) => getExpectedSourceCid(fileCids, filePath) !== undefined
-	let path = internalRedirectPath(targetPath.split('?')[0] ?? '')
+	let path = internalRedirectPath(targetPath)
 	try {
 		path = decodeURIComponent(path)
 	} catch {
@@ -817,7 +817,8 @@ function buildRedirectResponse(status: number, targetPath: string, strategy: Fil
 }
 
 function internalRedirectPath(targetPath: string): string {
-	return targetPath.startsWith('/') ? targetPath.slice(1) : targetPath
+	const path = targetPath.split('?')[0] ?? ''
+	return path.startsWith('/') ? path.slice(1) : path
 }
 
 async function serveRedirectTarget(

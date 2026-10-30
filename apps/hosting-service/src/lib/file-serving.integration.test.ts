@@ -595,6 +595,20 @@ describe('serveFileInternal directory-index fallback for extensioned paths', () 
 		expect(siteNotFoundReason(served)).toBeNull()
 	})
 
+	test('a 200 rewrite reaches its file when the request has a query string', async () => {
+		storeFile('_redirects', ['/store id=:id /store/:id.json 200', '/* /200.html 200'].join('\n'), 'text/plain')
+		storeFile('store/7.json', '{"id":7}', 'application/json')
+		storeFile('200.html', '<h1>app</h1>', 'text/html')
+		siteFileCids = { _redirects: 'redirects-cid', 'store/7.json': 'store-cid', '200.html': 'app-cid' }
+
+		const item = await serveFromCache(DID, RKEY, 'store', 'https://example.com/store?id=7')
+		const page = await serveFromCache(DID, RKEY, 'manage/example.com', 'https://example.com/manage/example.com?utm=1')
+
+		expect([item.status, page.status]).toEqual([200, 200])
+		expect(await item.text()).toBe('{"id":7}')
+		expect(await page.text()).toBe('<h1>app</h1>')
+	})
+
 	test('serves decoded file names containing spaces', async () => {
 		const path = '486x486bb 3.webp'
 		storeFile(path, 'image bytes', 'image/webp')
