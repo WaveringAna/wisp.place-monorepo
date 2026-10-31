@@ -26,6 +26,9 @@ const MAX_FRAME_BYTES = 256 * 1024
 // Long enough for the read replica and the 10 s site lookup cache to show the update, and for a burst
 // of updates to one site to collapse into one reload.
 const RELOAD_DELAY_MS = 15_000
+// Long enough for a deploy's frames to reach storage; past it a relay gets the checkpoint rather than
+// waiting on a frame that may never come.
+const MISSING_FRAME_GRACE_MS = 5 * 60_000
 const MAX_SOCKETS = 1000
 // Per site, so one relay can follow any number of sites; above 1 so a half-open socket cannot block a redial.
 const MAX_SOCKETS_PER_CLIENT_PER_SITE = 4
@@ -41,6 +44,8 @@ export type SocketData = {
 	log: EventLog
 	/** The highest seq sent; the cursor table is re-applied with it on every log change. */
 	last: number
+	/** When the frame after `last` was first found missing; cleared by every send. */
+	missingSince?: number
 	busy: boolean
 	again: boolean
 	/** Set while the send loop waits for `drain`. */
@@ -63,6 +68,7 @@ export type SubscribeReposDeps = {
 	serveFile: (did: string, rkey: string, path: string) => Promise<Response>
 	isSupporter: (did: string) => Promise<boolean>
 	reloadDelayMs?: number
+	missingFrameGraceMs?: number
 	maxSockets?: number
 	maxSocketsPerClientPerSite?: number
 }
@@ -121,6 +127,7 @@ export function createSubscribeRepos({
 	serveFile,
 	isSupporter,
 	reloadDelayMs = RELOAD_DELAY_MS,
+	missingFrameGraceMs = MISSING_FRAME_GRACE_MS,
 	maxSockets = MAX_SOCKETS,
 	maxSocketsPerClientPerSite = MAX_SOCKETS_PER_CLIENT_PER_SITE,
 }: SubscribeReposDeps) {
@@ -187,17 +194,30 @@ export function createSubscribeRepos({
 
 	async function send(ws: Socket): Promise<void> {
 		const { data } = ws
+		const readFrame = (file: string) =>
+			readFile(data.did, data.rkey, `${EVENTS_DIR}/${file}`, MAX_FRAME_BYTES).catch(() => null)
 		try {
 			do {
 				data.again = false
 				const site = sites.get(siteKey(data.did, data.rkey))
-				if (!site?.log) return
-				for (const [seq, file] of framesAfter(site.log, data.last)) {
-					const path = `${EVENTS_DIR}/${file}`
-					const frame = await readFile(data.did, data.rkey, path, MAX_FRAME_BYTES).catch(() => null)
+				const log = site?.log
+				if (!site || !log) return
+				for (let [seq, file] of framesAfter(log, data.last)) {
+					let frame = await readFrame(file)
 					if (!site.sockets.has(ws)) return
+					// A frame is usually missing only until a deploy finishes reaching storage, and skipping it would
+					// leave a gap in the relay's copy of the repo, so wait for it. Past the grace period, send the
+					// checkpoint instead: a #sync at head is atproto's way of saying events may have been missed.
 					if (!frame) {
-						// Skipping it would leave a gap in the relay's copy of the repo, so wait for it instead.
+						data.missingSince ??= Date.now()
+						if (Date.now() - data.missingSince >= missingFrameGraceMs) {
+							seq = log.head
+							file = CHECKPOINT_FILE
+							frame = await readFrame(file)
+							if (!site.sockets.has(ws)) return
+						}
+					}
+					if (!frame) {
 						if (!data.again) schedule(site)
 						break
 					}
@@ -205,12 +225,15 @@ export function createSubscribeRepos({
 					// Dropped: the same frame goes again on the next drain or update.
 					if (status === 0) return
 					data.last = seq
+					data.missingSince = undefined
 					if (status === -1) {
 						await new Promise<void>((resolve) => {
 							data.resume = resolve
 						})
 						if (!site.sockets.has(ws)) return
 					}
+					// The rest of this pass is at or below the checkpoint's seq.
+					if (file === CHECKPOINT_FILE) break
 				}
 			} while (data.again)
 		} finally {

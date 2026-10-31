@@ -325,6 +325,34 @@ describe('subscribeRepos on a supporter custom domain that opted in', () => {
 		expect(client.frames).toEqual([frame(3), frame(4), frame(5)])
 	})
 
+	test('a frame still missing after the grace period gives way to the checkpoint, then the next deploy', async () => {
+		files.delete(`${ALICE}/feed/xrpc/_sdp/events/4.cbor`)
+		const grace = 100
+		const { port, subscribeRepos } = start({ missingFrameGraceMs: grace })
+
+		const dialled = Date.now()
+		const client = dial(port, 'feed.example.com', '?cursor=2')
+		await eventually(() => client.frames.length >= 2)
+		expect(Date.now() - dialled).toBeGreaterThanOrEqual(grace)
+		expect(client.frames).toEqual([frame(3), frame('checkpoint')])
+
+		deployLog(ALICE, 'feed', 100, 2, [3, 4, 5, 100])
+		subscribeRepos.siteUpdated(ALICE, 'feed')
+		await eventually(() => client.frames.length >= 3)
+		expect(client.frames).toEqual([frame(3), frame('checkpoint'), frame(100)])
+	})
+
+	test('a frame missing past the grace period is still waited for while the checkpoint is missing too', async () => {
+		files.delete(`${ALICE}/feed/xrpc/_sdp/events/4.cbor`)
+		files.delete(`${ALICE}/feed/xrpc/_sdp/events/checkpoint.cbor`)
+		const { port } = start({ missingFrameGraceMs: 20 })
+
+		const client = dial(port, 'feed.example.com', '?cursor=2')
+		await eventually(() => client.frames.length >= 1)
+		await Bun.sleep(100)
+		expect(client.frames).toEqual([frame(3)])
+	})
+
 	test('closeAll closes sockets as going away (1001) and refuses new dials', async () => {
 		const { port, subscribeRepos } = start()
 
