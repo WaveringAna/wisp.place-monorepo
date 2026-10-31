@@ -1,5 +1,6 @@
 import { MAX_REDIRECT_FILE_BYTES, parseRedirectsFileBytes } from '@wispplace/fs-utils'
 import type { Server, ServerWebSocket } from 'bun'
+import { parseBoundedInteger } from './env'
 import { requestClient } from './repair-allowance'
 import { extractHeaders } from './request-utils'
 
@@ -18,11 +19,19 @@ const EVENTS_DIR = 'xrpc/_sdp/events'
 const CHECKPOINT_FILE = 'checkpoint.cbor'
 const MAX_EVENTS = 1000
 const MAX_INDEX_BYTES = 1 << 20
-// A slow reader holds up to one frame in flight, so this bounds memory at sockets × frame: 256 MiB at
-// MAX_SOCKETS, not the firehose's 5 MB ceiling's 5 GB. It is at-sdp's default event-log budget, above
-// which at-sdp publishes a #sync instead.
-// ponytail: per-socket bound only; add a shared in-flight byte budget if hostile subscribers turn up.
+// at-sdp's default event-log budget, above which at-sdp publishes a #sync instead; well under the
+// firehose's 5 MB ceiling.
 const MAX_FRAME_BYTES = 256 * 1024
+// A slow reader holds at most one frame queued in its socket. Across all of them, queued frames stay
+// under this budget: past it, sends wait for a drain, so memory does not grow with the socket count.
+const MAX_BUFFERED_BYTES = 16 * 1024 * 1024
+// Frames never change once written, so subscribers at the same point share one read of each; this many
+// of a site's latest stay in memory, enough for every caught-up relay to take the newest from one copy.
+// Only sites with subscribers keep any, and only supporters' opted-in sites can have subscribers.
+const SHARED_FRAMES_PER_SITE = 4
+// A relay that has not taken a queued frame in this long is dropped, as relays drop slow consumers, so a
+// stalled socket cannot hold the shared budget; it redials with its cursor and resumes where it was.
+const SLOW_READER_TIMEOUT_MS = 60_000
 // Long enough for the read replica and the 10 s site lookup cache to show the update, and for a burst
 // of updates to one site to collapse into one reload.
 const RELOAD_DELAY_MS = 15_000
@@ -50,6 +59,8 @@ export type SocketData = {
 	again: boolean
 	/** Set while the send loop waits for `drain`. */
 	resume?: () => void
+	/** Bytes this socket has queued, counted against the shared budget until it drains or closes. */
+	queued: number
 }
 
 type Socket = ServerWebSocket<SocketData>
@@ -60,6 +71,8 @@ type Site = {
 	/** The last good log; null once the site drops its opt-in, which stops new frames. */
 	log: EventLog | null
 	sockets: Set<Socket>
+	/** Recent frame reads by file (the checkpoint by head too), shared by this site's subscribers. */
+	frames: Map<string, Promise<Uint8Array | null>>
 	timer?: ReturnType<typeof setTimeout>
 }
 
@@ -71,6 +84,23 @@ export type SubscribeReposDeps = {
 	missingFrameGraceMs?: number
 	maxSockets?: number
 	maxSocketsPerClientPerSite?: number
+	maxBufferedBytes?: number
+	slowReaderTimeoutMs?: number
+}
+
+/** `SUBSCRIBE_REPOS_MAX_SOCKETS` and `SUBSCRIBE_REPOS_MAX_BUFFERED_BYTES`, for edges with little memory. */
+export function resolveSubscribeReposLimits(
+	env: Readonly<Record<string, string | undefined>>,
+): Pick<SubscribeReposDeps, 'maxSockets' | 'maxBufferedBytes'> {
+	return {
+		maxSockets: parseBoundedInteger(env.SUBSCRIBE_REPOS_MAX_SOCKETS, MAX_SOCKETS, 1, 100_000),
+		maxBufferedBytes: parseBoundedInteger(
+			env.SUBSCRIBE_REPOS_MAX_BUFFERED_BYTES,
+			MAX_BUFFERED_BYTES,
+			MAX_FRAME_BYTES,
+			1 << 30,
+		),
+	}
 }
 
 const isSeq = (value: unknown): value is number => Number.isSafeInteger(value)
@@ -130,10 +160,14 @@ export function createSubscribeRepos({
 	missingFrameGraceMs = MISSING_FRAME_GRACE_MS,
 	maxSockets = MAX_SOCKETS,
 	maxSocketsPerClientPerSite = MAX_SOCKETS_PER_CLIENT_PER_SITE,
+	maxBufferedBytes = MAX_BUFFERED_BYTES,
+	slowReaderTimeoutMs = SLOW_READER_TIMEOUT_MS,
 }: SubscribeReposDeps) {
 	const sites = new Map<string, Site>()
 	let socketCount = 0
 	let closing = false
+	let bufferedBytes = 0
+	const budgetWaiters = new Set<() => void>()
 
 	/** A site file's bytes, or null when the site has none within `limit`. Throws when storage cannot say. */
 	async function readFile(did: string, rkey: string, path: string, limit: number): Promise<Uint8Array | null> {
@@ -158,6 +192,41 @@ export function createSubscribeRepos({
 		if (!rules?.some((rule) => rule.from === SUBSCRIBE_REPOS_PATH && rule.to === OPT_IN_TARGET)) return null
 		const index = await readFile(did, rkey, `${EVENTS_DIR}/head.json`, MAX_INDEX_BYTES)
 		return (index && parseEventLog(new TextDecoder().decode(index))) ?? undefined
+	}
+
+	/**
+	 * One frame, read once for every subscriber that wants it. A missing frame is not kept, since it may
+	 * still be on its way to storage.
+	 */
+	function readFrame(site: Site, file: string, head: number): Promise<Uint8Array | null> {
+		// Every deploy rewrites the checkpoint; a numbered frame is the same bytes forever.
+		const key = file === CHECKPOINT_FILE ? `${file}@${head}` : file
+		let frame = site.frames.get(key)
+		if (frame) {
+			site.frames.delete(key)
+		} else {
+			frame = readFile(site.did, site.rkey, `${EVENTS_DIR}/${file}`, MAX_FRAME_BYTES).catch(() => null)
+			const read = frame
+			void read.then((bytes) => {
+				if (!bytes && site.frames.get(key) === read) site.frames.delete(key)
+			})
+		}
+		site.frames.set(key, frame)
+		while (site.frames.size > SHARED_FRAMES_PER_SITE) {
+			const oldest = site.frames.keys().next().value
+			if (oldest === undefined) break
+			site.frames.delete(oldest)
+		}
+		return frame
+	}
+
+	/** Return a socket's queued bytes to the budget and let waiting sends try again. */
+	function releaseQueued(data: SocketData): void {
+		if (data.queued === 0) return
+		bufferedBytes -= data.queued
+		data.queued = 0
+		for (const wake of budgetWaiters) wake()
+		budgetWaiters.clear()
 	}
 
 	function schedule(site: Site): void {
@@ -194,8 +263,6 @@ export function createSubscribeRepos({
 
 	async function send(ws: Socket): Promise<void> {
 		const { data } = ws
-		const readFrame = (file: string) =>
-			readFile(data.did, data.rkey, `${EVENTS_DIR}/${file}`, MAX_FRAME_BYTES).catch(() => null)
 		try {
 			do {
 				data.again = false
@@ -203,7 +270,7 @@ export function createSubscribeRepos({
 				const log = site?.log
 				if (!site || !log) return
 				for (let [seq, file] of framesAfter(log, data.last)) {
-					let frame = await readFrame(file)
+					let frame = await readFrame(site, file, log.head)
 					if (!site.sockets.has(ws)) return
 					// A frame is usually missing only until a deploy finishes reaching storage, and skipping it would
 					// leave a gap in the relay's copy of the repo, so wait for it. Past the grace period, send the
@@ -213,7 +280,7 @@ export function createSubscribeRepos({
 						if (Date.now() - data.missingSince >= missingFrameGraceMs) {
 							seq = log.head
 							file = CHECKPOINT_FILE
-							frame = await readFrame(file)
+							frame = await readFrame(site, file, log.head)
 							if (!site.sockets.has(ws)) return
 						}
 					}
@@ -221,15 +288,33 @@ export function createSubscribeRepos({
 						if (!data.again) schedule(site)
 						break
 					}
+					while (bufferedBytes > 0 && bufferedBytes + frame.byteLength > maxBufferedBytes) {
+						await new Promise<void>((resolve) => budgetWaiters.add(resolve))
+						if (!site.sockets.has(ws)) return
+					}
 					const status = ws.sendBinary(frame)
 					// Dropped: the same frame goes again on the next drain or update.
 					if (status === 0) return
 					data.last = seq
 					data.missingSince = undefined
 					if (status === -1) {
-						await new Promise<void>((resolve) => {
-							data.resume = resolve
+						// Queued behind a slow reader: it holds a copy until the socket drains.
+						data.queued = frame.byteLength
+						bufferedBytes += frame.byteLength
+						const drained = await new Promise<boolean>((resolve) => {
+							const timer = setTimeout(() => resolve(false), slowReaderTimeoutMs)
+							data.resume = () => {
+								clearTimeout(timer)
+								resolve(true)
+							}
 						})
+						if (!drained) {
+							// A close frame would queue behind the backlog the relay is not reading; terminate frees
+							// the socket and its share of the budget now, and the relay redials with its cursor.
+							data.resume = undefined
+							ws.terminate()
+							return
+						}
 						if (!site.sockets.has(ws)) return
 					}
 					// The rest of this pass is at or below the checkpoint's seq.
@@ -271,7 +356,7 @@ export function createSubscribeRepos({
 		if (closing || socketCount >= maxSockets || socketsFrom(sites.get(key), client) >= maxSocketsPerClientPerSite)
 			return refuse(503, 'NotEnoughResources', 'Too many subscribers; try again later')
 
-		const data: SocketData = { did, rkey, client, log, last, busy: false, again: false }
+		const data: SocketData = { did, rkey, client, log, last, busy: false, again: false, queued: 0 }
 		if (!server.upgrade(request, { data }))
 			return refuse(426, 'InvalidRequest', 'subscribeRepos is a WebSocket endpoint')
 		// Bun ignores the response to an upgraded request; Hono's middleware needs one to finish.
@@ -286,7 +371,7 @@ export function createSubscribeRepos({
 			const key = siteKey(did, rkey)
 			let site = sites.get(key)
 			if (!site) {
-				site = { did, rkey, log, sockets: new Set() }
+				site = { did, rkey, log, sockets: new Set(), frames: new Map() }
 				sites.set(key, site)
 				// An update that settled while nobody followed the site was not heard, and this log may
 				// predate it: a relay dials as soon as at-sdp's notify asks, right after the deploy.
@@ -299,12 +384,14 @@ export function createSubscribeRepos({
 		},
 		message() {},
 		drain(ws: Socket) {
+			releaseQueued(ws.data)
 			const { resume } = ws.data
 			ws.data.resume = undefined
 			if (resume) resume()
 			else pump(ws)
 		},
 		close(ws: Socket) {
+			releaseQueued(ws.data)
 			const key = siteKey(ws.data.did, ws.data.rkey)
 			const site = sites.get(key)
 			if (site?.sockets.delete(ws)) {

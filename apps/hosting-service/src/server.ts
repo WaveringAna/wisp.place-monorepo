@@ -28,7 +28,12 @@ import { notFoundRecorder, requestVisibility, tagNotFound, tagSiteNotFound } fro
 import { recordSiteResponse } from './lib/site-metrics'
 import { siteVisits } from './lib/site-visits'
 import { getStorageReadHealthSnapshot, type StorageReadHealthSnapshot } from './lib/storage'
-import { createSubscribeRepos, SUBSCRIBE_REPOS_PATH, type SubscribeRepos } from './lib/subscribe-repos'
+import {
+	createSubscribeRepos,
+	resolveSubscribeReposLimits,
+	SUBSCRIBE_REPOS_PATH,
+	type SubscribeRepos,
+} from './lib/subscribe-repos'
 import { takedowns } from './lib/takedowns'
 import { isValidAtprotoIdentifier, resolveDid } from './lib/utils'
 
@@ -520,7 +525,11 @@ export function createApp(deps: HostingAppDeps): Hono {
 	return app
 }
 
-export const subscribeRepos = createSubscribeRepos({ serveFile: serveFileInternal, isSupporter })
+export const subscribeRepos = createSubscribeRepos({
+	serveFile: serveFileInternal,
+	isSupporter,
+	...resolveSubscribeReposLimits(process.env),
+})
 
 export default createApp({
 	hosts: resolveHostConfig(),

@@ -12,6 +12,7 @@ import {
 } from './lib/cache-invalidation'
 import { cache } from './lib/cache-manager'
 import { closeDatabase } from './lib/db'
+import { parseBoundedInteger } from './lib/env'
 import { notFoundLog } from './lib/not-found-log'
 import { closePrivateSitesDatabase } from './lib/private-sites-db'
 import { closeRevalidateQueue } from './lib/revalidate-queue'
@@ -40,13 +41,6 @@ const DEFAULT_BOOTSTRAP_HOT_LIMIT = 100
 const MAX_BOOTSTRAP_HOT_LIMIT = 10_000
 const HTTP_SHUTDOWN_GRACE_PERIOD_MS = 10_000
 const CACHE_SWEEP_INTERVAL_MS = 60_000
-
-function parseBoundedInteger(value: string | undefined, fallback: number, minimum: number, maximum: number): number {
-	const normalized = value?.trim()
-	if (!normalized) return fallback
-	const parsed = Number(normalized)
-	return Number.isSafeInteger(parsed) && parsed >= minimum && parsed <= maximum ? parsed : fallback
-}
 
 const PORT = parseBoundedInteger(process.env.PORT, DEFAULT_PORT, 0, 65_535)
 const CACHE_DIR = process.env.CACHE_DIR || './cache/sites'

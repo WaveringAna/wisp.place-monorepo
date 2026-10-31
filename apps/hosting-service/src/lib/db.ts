@@ -12,7 +12,7 @@ export type HostingSql = <T extends readonly (object | undefined)[]>(
 
 export type HostingDbDeps = {
 	sql: HostingSql
-	cache: Pick<CacheManager<'domains' | 'customDomains' | 'settings' | 'siteCache'>, 'getOrFetch'>
+	cache: Pick<CacheManager<'domains' | 'customDomains' | 'settings' | 'siteCache' | 'supporters'>, 'getOrFetch'>
 	onReadRetry?: (outcome: HostingDbReadRetryOutcome) => void
 }
 
@@ -130,9 +130,12 @@ export function createHostingDb({ sql, cache, onReadRetry }: HostingDbDeps) {
     `
 	}
 
+	/** Cached, positive and negative alike: anyone can ask about any custom domain's owner. */
 	async function isSupporter(did: string): Promise<boolean> {
-		const rows = await read<object[]>`SELECT 1 FROM supporter WHERE did = ${did} LIMIT 1`
-		return rows.length > 0
+		return cache.getOrFetch('supporters', did, async () => {
+			const rows = await read<object[]>`SELECT 1 FROM supporter WHERE did = ${did} LIMIT 1`
+			return rows.length > 0
+		})
 	}
 
 	/**

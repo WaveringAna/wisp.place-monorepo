@@ -260,6 +260,13 @@ WARM_MIRROR=false
 WARM_MIRROR_CONCURRENCY=2      # concurrent object-store reads, 1-16
 WARM_MIRROR_FILL_PERCENT=80    # share of WARM_CACHE_SIZE the mirror may fill, 1-95
 
+# subscribeRepos for at-sdp sites on supporter custom domains: relays hold one
+# socket per site. Frames queued to slow relays share one budget (a relay that
+# stalls for a minute is dropped and redials), so memory follows the budget, not
+# the socket count. Lower both on small edges.
+SUBSCRIBE_REPOS_MAX_SOCKETS=1000
+SUBSCRIBE_REPOS_MAX_BUFFERED_BYTES=16777216   # at least one 256 KiB frame
+
 # Required in every production-like or multi-node deployment: S3 is the
 # shared source of truth and Redis carries invalidations/revalidation. Endpoints
 # must use HTTPS outside explicit development/test mode.

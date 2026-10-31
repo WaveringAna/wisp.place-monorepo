@@ -3,6 +3,7 @@ import { createLogger, type HostingWarmMirrorOutcome, metricsCollector } from '@
 import type { StreamResult } from '@wispplace/tiered-storage'
 import { addSiteUpdatedListener, isSiteUpdating } from './cache-invalidation'
 import { listSiteCachePage, readSiteCache } from './db'
+import { parseBoundedInteger } from './env'
 import { disposeFileStream } from './file-streams'
 import { buildSiteManifest, resolveStorageKey, type SiteManifest } from './site-storage-keys'
 import { siteVisits } from './site-visits'
@@ -32,13 +33,6 @@ const CAS_PREFIX = 'cas/'
 export interface WarmMirrorConfig {
 	concurrency: number
 	fillPercent: number
-}
-
-function parseBoundedInteger(value: string | undefined, fallback: number, minimum: number, maximum: number): number {
-	const normalized = value?.trim()
-	if (!normalized) return fallback
-	const parsed = Number(normalized)
-	return Number.isSafeInteger(parsed) && parsed >= minimum && parsed <= maximum ? parsed : fallback
 }
 
 /** `WARM_MIRROR=true` turns the mirror on; anything else leaves it off. */

@@ -356,6 +356,7 @@ type CacheNamespace =
 	| 'siteCache'
 	| 'siteFiles'
 	| 'sourceCidMismatches'
+	| 'supporters'
 
 // Rough JavaScriptCore costs: a string cell plus header, an object or array
 // with its property storage, and one property or element slot.
@@ -427,4 +428,7 @@ export const cache = new CacheManager<CacheNamespace>({
 	// Short-lived local markers for non-transient source-CID validation failures.
 	// Invalidation clears these immediately.
 	sourceCidMismatches: { ttl: INVALIDATION_SAFETY_TTL_MS, maxEntries: 10_000 },
+	// Whether a DID is a supporter, asked on every subscribeRepos dial to a custom domain; supporters
+	// are added by hand, so minutes of staleness only delay a new one.
+	supporters: { ttl: 10 * 60_000, maxEntries: 5000 },
 })

@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { createSubscribeRepos, parseEventLog, type SubscribeReposDeps } from './lib/subscribe-repos'
+import {
+	createSubscribeRepos,
+	parseEventLog,
+	resolveSubscribeReposLimits,
+	type SubscribeReposDeps,
+} from './lib/subscribe-repos'
 import { createApp, resolveHostConfig } from './server'
 
 const ALICE = 'did:plc:abcdefghijklmnopqrstuvwx'
@@ -149,6 +154,7 @@ async function rawDial(port: number | undefined, host: string, query = '', clien
 	let status = ''
 	const frames: Array<{ opcode: number; payload: Buffer }> = []
 	let unread = Buffer.alloc(0)
+	const { promise: closed, resolve: onClose } = Promise.withResolvers<void>()
 	const socket = await Bun.connect({
 		hostname: '127.0.0.1',
 		port: port as number,
@@ -166,6 +172,9 @@ async function rawDial(port: number | undefined, host: string, query = '', clien
 					unread = unread.subarray(next.end)
 				}
 			},
+			close() {
+				onClose()
+			},
 		},
 	})
 	socket.write(
@@ -173,7 +182,7 @@ async function rawDial(port: number | undefined, host: string, query = '', clien
 			`X-Forwarded-For: ${client}\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n`,
 	)
 	await eventually(() => status !== '')
-	return { status, frames, socket }
+	return { status, frames, socket, closed }
 }
 
 async function closeCodeOnTheWire(port: number | undefined, host: string, close: () => void) {
@@ -394,6 +403,46 @@ describe('subscribeRepos on a supporter custom domain that opted in', () => {
 		)
 	})
 
+	test('relays at the same point share one read of each new frame', async () => {
+		let framesRead = 0
+		const { port, subscribeRepos } = start({
+			serveFile: (did, rkey, path) => {
+				if (path.endsWith('.cbor')) framesRead++
+				return serveFile(did, rkey, path)
+			},
+		})
+		const relays = [
+			dial(port, 'feed.example.com', '?cursor=5', '192.0.2.1'),
+			dial(port, 'feed.example.com', '?cursor=5', '192.0.2.2'),
+			dial(port, 'feed.example.com', '?cursor=5', '192.0.2.3'),
+		]
+		await Promise.all(relays.map((relay) => relay.opened))
+		framesRead = 0
+
+		deployLog(ALICE, 'feed', 8, 5, [6, 7, 8])
+		subscribeRepos.siteUpdated(ALICE, 'feed')
+		await eventually(() => relays.every((relay) => relay.frames.length >= 3))
+
+		for (const relay of relays) expect(relay.frames).toEqual([frame(6), frame(7), frame(8)])
+		expect(framesRead).toBe(3)
+	})
+
+	test('a stalled relay holding the shared budget is dropped, and the others then get every frame in order', async () => {
+		// Room for one queued frame across every socket, which the stalled relay takes.
+		const { port, relay, seqs } = await stalledRelay({ maxBufferedBytes: 300 * 1024, slowReaderTimeoutMs: 1000 })
+		const reader = await rawDial(port, 'feed.example.com', '?cursor=5', '192.0.2.9')
+
+		// Held back while the stalled relay holds the budget...
+		await Bun.sleep(300)
+		expect(reader.frames).toHaveLength(0)
+		// ...and served in full once it is dropped.
+		await eventually(() => reader.frames.length >= seqs.length)
+		relay.socket.resume()
+		await relay.closed
+		expect(relay.frames.filter(({ opcode }) => opcode === 0x2).length).toBeLessThan(seqs.length)
+		expect(reader.frames.map(({ opcode, payload }) => [opcode, payload[0]])).toEqual(seqs.map((seq) => [0x2, seq]))
+	})
+
 	test('a relay that disconnects while the stream waits on it frees its place for a redial', async () => {
 		const { port, relay, seqs, framesRead } = await stalledRelay({ maxSocketsPerClientPerSite: 1 })
 		expect(framesRead).toBeWithin(1, seqs.length)
@@ -432,6 +481,21 @@ describe('subscribeRepos falls through to the site as served today', () => {
 		expect(response.status).toBe(status)
 		if (status === 302) expect(response.headers.get('location')).toBe(BRIDGE)
 		expect(fromCache).toEqual([`${site}${PATH}`])
+	})
+})
+
+describe('resolveSubscribeReposLimits', () => {
+	test('reads the socket cap and buffer budget from the environment, ignoring bad values', () => {
+		expect(
+			resolveSubscribeReposLimits({
+				SUBSCRIBE_REPOS_MAX_SOCKETS: '100',
+				SUBSCRIBE_REPOS_MAX_BUFFERED_BYTES: String(4 << 20),
+			}),
+		).toEqual({ maxSockets: 100, maxBufferedBytes: 4 << 20 })
+		// A budget below one frame could never send anything.
+		expect(
+			resolveSubscribeReposLimits({ SUBSCRIBE_REPOS_MAX_SOCKETS: '0', SUBSCRIBE_REPOS_MAX_BUFFERED_BYTES: '1024' }),
+		).toEqual(resolveSubscribeReposLimits({}))
 	})
 })
 
