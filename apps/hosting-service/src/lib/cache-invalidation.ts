@@ -98,24 +98,26 @@ interface CacheInvalidationDependencies {
 /** Told about a site once an `update` has purged its old files, so its new ones can be fetched. */
 export type SiteUpdatedListener = (did: string, rkey: string) => void
 
-let siteUpdatedListener: SiteUpdatedListener | null = null
+const siteUpdatedListeners = new Set<SiteUpdatedListener>()
 
-/** Register the one listener for completed site updates; null removes it. */
-export function setSiteUpdatedListener(listener: SiteUpdatedListener | null): void {
-	siteUpdatedListener = listener
+/** Register a listener for completed site updates; the returned function removes it. */
+export function addSiteUpdatedListener(listener: SiteUpdatedListener): () => void {
+	siteUpdatedListeners.add(listener)
+	return () => siteUpdatedListeners.delete(listener)
 }
 
-function notifySiteUpdatedListener(did: string, rkey: string): void {
-	if (!siteUpdatedListener) return
-	try {
-		siteUpdatedListener(did, rkey)
-	} catch (err) {
-		// A listener is an optimization; it must never hold back the replay cursor.
-		logger.warn('[CacheInvalidation] Site update listener failed', {
-			operation: 'site-updated-listener',
-			...siteLogContext(did, rkey),
-			errorKind: errorKind(err),
-		})
+function notifySiteUpdatedListeners(did: string, rkey: string): void {
+	for (const listener of siteUpdatedListeners) {
+		try {
+			listener(did, rkey)
+		} catch (err) {
+			// A listener is an optimization; it must never hold back the replay cursor or the next listener.
+			logger.warn('[CacheInvalidation] Site update listener failed', {
+				operation: 'site-updated-listener',
+				...siteLogContext(did, rkey),
+				errorKind: errorKind(err),
+			})
+		}
 	}
 }
 
@@ -129,7 +131,7 @@ function getCacheInvalidationDependencies(
 		warmTier: overrides?.warmTier ?? warmTier,
 		cache: overrides?.cache ?? cache,
 		resetSiteHtmlHotCacheWarmup: overrides?.resetSiteHtmlHotCacheWarmup ?? resetSiteHtmlHotCacheWarmup,
-		notifySiteUpdated: overrides?.notifySiteUpdated ?? notifySiteUpdatedListener,
+		notifySiteUpdated: overrides?.notifySiteUpdated ?? notifySiteUpdatedListeners,
 	}
 }
 

@@ -1,7 +1,7 @@
 import type { SiteCache } from '@wispplace/database'
 import { createLogger, type HostingWarmMirrorOutcome, metricsCollector } from '@wispplace/observability'
 import type { StreamResult } from '@wispplace/tiered-storage'
-import { isSiteUpdating, setSiteUpdatedListener } from './cache-invalidation'
+import { addSiteUpdatedListener, isSiteUpdating } from './cache-invalidation'
 import { listSiteCachePage, readSiteCache } from './db'
 import { disposeFileStream } from './file-streams'
 import { buildSiteManifest, resolveStorageKey, type SiteManifest } from './site-storage-keys'
@@ -509,7 +509,7 @@ export function startWarmMirror(
 		record: metricsCollector.recordHostingWarmMirror,
 		config,
 	})
-	setSiteUpdatedListener(mirror.queueSite)
+	addSiteUpdatedListener(mirror.queueSite)
 	logger.info('Warm mirror enabled', { ...config })
 	mirror.start(ready)
 	return mirror

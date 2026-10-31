@@ -187,7 +187,7 @@ const {
 	resetCacheInvalidationReplayForTests,
 	stopCacheInvalidationSubscriber,
 	resetUpdatingSitesForTests,
-	setSiteUpdatedListener,
+	addSiteUpdatedListener,
 	startCacheInvalidationSubscriberForTests,
 } = await import('./cache-invalidation')
 
@@ -1069,7 +1069,10 @@ describe('cache invalidation subscriber heartbeat', () => {
 })
 
 describe('site update listener', () => {
-	afterEach(() => setSiteUpdatedListener(null))
+	const removals: Array<() => void> = []
+	afterEach(() => {
+		for (const remove of removals.splice(0)) remove()
+	})
 
 	test('is told about a completed update and nothing else', async () => {
 		const notified: Array<[string, string]> = []
@@ -1100,16 +1103,21 @@ describe('site update listener', () => {
 		expect(notified).toEqual([])
 	})
 
-	test('defaults to the registered listener, and a throwing one cannot fail the invalidation', async () => {
+	test('defaults to every registered listener, past one that throws, until each is removed', async () => {
 		const notified: string[] = []
-		await applyForTest(siteMessage('update'))
-		setSiteUpdatedListener((did) => notified.push(did))
-		await applyForTest(siteMessage('update'))
+		removals.push(
+			addSiteUpdatedListener(() => {
+				throw new Error('listener bug')
+			}),
+		)
+		const remove = addSiteUpdatedListener((did) => notified.push(did))
+		removals.push(remove)
+
+		await expect(applyForTest(siteMessage('update'))).resolves.toBeUndefined()
 		expect(notified).toEqual([DID])
 
-		setSiteUpdatedListener(() => {
-			throw new Error('listener bug')
-		})
-		await expect(applyForTest(siteMessage('update'))).resolves.toBeUndefined()
+		remove()
+		await applyForTest(siteMessage('update'))
+		expect(notified).toEqual([DID])
 	})
 })
