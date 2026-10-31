@@ -18,7 +18,11 @@ const EVENTS_DIR = 'xrpc/_sdp/events'
 const CHECKPOINT_FILE = 'checkpoint.cbor'
 const MAX_EVENTS = 1000
 const MAX_INDEX_BYTES = 1 << 20
-const MAX_FRAME_BYTES = 5_000_000
+// A slow reader holds up to one frame in flight, so this bounds memory at sockets × frame: 256 MiB at
+// MAX_SOCKETS, not the firehose's 5 MB ceiling's 5 GB. It is at-sdp's default event-log budget, above
+// which at-sdp publishes a #sync instead.
+// ponytail: per-socket bound only; add a shared in-flight byte budget if hostile subscribers turn up.
+const MAX_FRAME_BYTES = 256 * 1024
 // Long enough for the read replica and the 10 s site lookup cache to show the update, and for a burst
 // of updates to one site to collapse into one reload.
 const RELOAD_DELAY_MS = 15_000

@@ -268,9 +268,13 @@ describe('subscribeRepos on a supporter custom domain that opted in', () => {
 		expect((await handshake(port, 'feed.example.com', '', '192.0.2.3')).status).toBe(503)
 	})
 
-	test('a frame missing from storage is retried until it arrives, and nothing after it is skipped', async () => {
+	test.each([
+		['missing from storage', null],
+		['over 256 KiB', new Uint8Array(256 * 1024 + 1)],
+	])('a frame %s is held back until a good one arrives, and nothing after it is skipped', async (_, broken) => {
 		const missing = files.get(`${ALICE}/feed/xrpc/_sdp/events/4.cbor`) as Uint8Array<ArrayBuffer>
-		files.delete(`${ALICE}/feed/xrpc/_sdp/events/4.cbor`)
+		if (broken) put(ALICE, 'feed', 'xrpc/_sdp/events/4.cbor', broken)
+		else files.delete(`${ALICE}/feed/xrpc/_sdp/events/4.cbor`)
 		const { port } = start()
 
 		const client = dial(port, 'feed.example.com', '?cursor=2')
