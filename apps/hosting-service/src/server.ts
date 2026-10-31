@@ -26,6 +26,7 @@ import { privateNotFound, servePrivateSite } from './lib/private-serving'
 import { decodeRequestPathname, extractHeaders, isValidRkey } from './lib/request-utils'
 import { notFoundRecorder, requestVisibility, tagNotFound, tagSiteNotFound } from './lib/request-visibility'
 import { recordSiteResponse } from './lib/site-metrics'
+import { siteVisits } from './lib/site-visits'
 import { getStorageReadHealthSnapshot, type StorageReadHealthSnapshot } from './lib/storage'
 import { takedowns } from './lib/takedowns'
 import { isValidAtprotoIdentifier, resolveDid } from './lib/utils'
@@ -53,11 +54,14 @@ function trackPublicSiteResponse(
 	siteRkey: string,
 	responsePromise: Promise<Response>,
 	notFoundHost?: string,
+	recordVisit?: (did: string, rkey: string) => void,
 ): Promise<Response> {
 	const { method, signal } = request
 	return responsePromise
 		.then((response) => {
 			recordPublicSiteResponse(ownerDid, siteRkey, method, response)
+			// Only reads the site answered: probes for missing paths or sites are not visits.
+			if (method === 'GET' && response.status < 400) recordVisit?.(ownerDid, siteRkey)
 			tagSiteNotFound(request, response, notFoundHost)
 			return response
 		})
@@ -145,6 +149,8 @@ export type HostingAppDeps = {
 	serveFromCacheWithRewrite: typeof serveFromCacheWithRewrite
 	/** Whether the moderation labeler has taken this site or its account down. */
 	isTakenDown: (did: string, rkey: string) => boolean
+	/** Note a read of a public site, so background work can favour the sites visited here. */
+	recordSiteVisit?: (did: string, rkey: string) => void
 	metrics: Pick<typeof metricsCollector, 'recordHostingResponse' | 'recordHostingNotFound'>
 	notFoundLog: Pick<typeof notFoundLog, 'record'>
 }
@@ -194,6 +200,8 @@ async function serveMappedPublicDomain(
 			method: c.req.method,
 			signal: c.req.raw.signal,
 		}),
+		undefined,
+		deps.recordSiteVisit,
 	)
 }
 
@@ -341,6 +349,7 @@ function serveSharedSiteFile(
 			signal: c.req.raw.signal,
 		}),
 		`${deps.hosts.sharedSitesHost}/${sitePath.identifier}/${sitePath.site}`,
+		deps.recordSiteVisit,
 	)
 }
 
@@ -507,6 +516,7 @@ export default createApp({
 	serveFromCache,
 	serveFromCacheWithRewrite,
 	isTakenDown: takedowns.isTakenDown,
+	recordSiteVisit: siteVisits.record,
 	metrics: metricsCollector,
 	notFoundLog,
 })

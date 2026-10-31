@@ -5,6 +5,7 @@ import { isSiteUpdating, setSiteUpdatedListener } from './cache-invalidation'
 import { listSiteCachePage, readSiteCache } from './db'
 import { disposeFileStream } from './file-streams'
 import { buildSiteManifest, resolveStorageKey, type SiteManifest } from './site-storage-keys'
+import { siteVisits } from './site-visits'
 import { getWarmTierUsage, isStorageUnavailableError, storage, warmTier } from './storage'
 import { takedowns } from './takedowns'
 
@@ -21,6 +22,9 @@ const UPDATE_DELAY_MS = 10_000
 // After the cold tier's breaker opened or the site listing failed, run the whole pass again;
 // keys already warm cost no S3 read the second time.
 const RETRY_DELAY_MS = 5 * 60_000
+// Visitors evict mirrored files as the warm tier fills, and new visits change what comes first;
+// a daily pass puts back what fits. Keys already warm cost no S3 read.
+const REPASS_DELAY_MS = 24 * 60 * 60_000
 const MAX_PENDING_SITES = 10_000
 const CAS_PREFIX = 'cas/'
 
@@ -63,9 +67,15 @@ export function siteMirrorKeys(did: string, rkey: string, manifest: SiteManifest
 	return [...keys]
 }
 
-/** The one storage read the mirror issues: a streamed read that fills warm and leaves hot alone. */
+/**
+ * The one storage read the mirror issues: a streamed read that fills warm and leaves hot alone,
+ * writing the warm copy as never accessed so an LRU warm tier evicts it before visitors' files.
+ */
 export interface WarmMirrorStorage {
-	getStream(key: string, options: { signal: AbortSignal; skipHotTier: true }): Promise<StreamResult | null>
+	getStream(
+		key: string,
+		options: { signal: AbortSignal; skipHotTier: true; background: true },
+	): Promise<StreamResult | null>
 }
 
 /** Schedules one callback and returns its cancel handle; tests fire callbacks by hand. */
@@ -79,6 +89,8 @@ export interface WarmMirrorDependencies {
 	warmUsage(): { usedBytes: number; maxBytes: number } | null
 	listSites(afterDid: string, afterRkey: string, limit: number): Promise<SiteCache[]>
 	getSite(did: string, rkey: string): Promise<SiteCache | null>
+	/** Sites this edge's visitors read, most recent first; a pass mirrors these before the rest. */
+	recentSites?(): Array<{ did: string; rkey: string }>
 	isTakenDown(did: string, rkey: string): boolean
 	isSiteUpdating(did: string, rkey: string): boolean
 	record(outcome: HostingWarmMirrorOutcome, bytes: number): void
@@ -86,6 +98,7 @@ export interface WarmMirrorDependencies {
 	schedule?: WarmMirrorScheduler
 	updateDelayMs?: number
 	retryDelayMs?: number
+	repassDelayMs?: number
 	pageSize?: number
 }
 
@@ -128,10 +141,12 @@ function siteKeyOf(did: string, rkey: string): string {
 }
 
 /**
- * Keep this edge's warm disk tier holding every public site's files, so first reads stop paying the
- * object store's cold-read latency. One startup pass walks `site_cache` and copies each key that is not
- * already on disk; after that, each site update mirrors just that site. Reads go through tiered storage
- * with the hot tier skipped, so promotions keep its invalidation fences and memory is left to visitors.
+ * Keep this edge's warm disk tier holding public sites' files, so first reads stop paying the object
+ * store's cold-read latency. A pass copies each key not already on disk, sites this edge's visitors
+ * read first and then the rest of `site_cache`, up to the configured share of the warm tier; it runs at
+ * startup and again daily. Each site update mirrors just that site. Copies are written as never
+ * accessed, so when visitors need room the warm tier's LRU evicts unread mirrored files first. Reads
+ * skip the hot tier, so promotions keep its invalidation fences and memory is left to visitors.
  */
 export function createWarmMirror(deps: WarmMirrorDependencies): WarmMirror {
 	const {
@@ -140,6 +155,7 @@ export function createWarmMirror(deps: WarmMirrorDependencies): WarmMirror {
 		warmUsage,
 		listSites,
 		getSite,
+		recentSites = () => [],
 		isTakenDown,
 		isSiteUpdating,
 		record,
@@ -147,6 +163,7 @@ export function createWarmMirror(deps: WarmMirrorDependencies): WarmMirror {
 		schedule = scheduleRealTimer,
 		updateDelayMs = UPDATE_DELAY_MS,
 		retryDelayMs = RETRY_DELAY_MS,
+		repassDelayMs = REPASS_DELAY_MS,
 		pageSize = SITE_PAGE_SIZE,
 	} = deps
 	const abort = new AbortController()
@@ -160,6 +177,7 @@ export function createWarmMirror(deps: WarmMirrorDependencies): WarmMirror {
 	let updates: Promise<void> | null = null
 	let cancelUpdateTimer: (() => void) | null = null
 	let cancelRetryTimer: (() => void) | null = null
+	let cancelRepassTimer: (() => void) | null = null
 
 	/** Shared by the pass and site updates, so together they never exceed the configured fetches. */
 	async function acquireSlot(): Promise<() => void> {
@@ -218,7 +236,7 @@ export function createWarmMirror(deps: WarmMirrorDependencies): WarmMirror {
 				return
 			}
 			if (!hasRoomFor(0)) return 'budget'
-			result = await storage.getStream(key, { signal, skipHotTier: true })
+			result = await storage.getStream(key, { signal, skipHotTier: true, background: true })
 			if (!result) {
 				// Not in the object store either: serving repairs it on demand.
 				count(stats, 'skipped')
@@ -300,15 +318,33 @@ export function createWarmMirror(deps: WarmMirrorDependencies): WarmMirror {
 		const visited = new Set<string>()
 		const inFlight = new Set<Promise<void>>()
 		const stop: { reason?: StopReason } = {}
+		const mirroredSites = new Set<string>()
 		let afterDid = ''
 		let afterRkey = ''
 		let listFailed = false
 		try {
+			// Sites this edge's visitors read go first, so a warm tier too small for every site
+			// holds the ones people here actually open.
+			for (const { did, rkey } of recentSites()) {
+				if (stop.reason || abort.signal.aborted) break
+				const siteKey = siteKeyOf(did, rkey)
+				if (mirroredSites.has(siteKey)) continue
+				mirroredSites.add(siteKey)
+				const row = await getSite(did, rkey)
+				const keys = row ? keysForSite(row) : null
+				if (keys === null) {
+					stats.skippedSites++
+					continue
+				}
+				stats.sites++
+				await mirrorKeys(keys, stats, visited, inFlight, stop)
+			}
 			while (!stop.reason && !abort.signal.aborted) {
 				const rows = await listSites(afterDid, afterRkey, pageSize)
 				for (const row of rows) {
 					afterDid = row.did
 					afterRkey = row.rkey
+					if (mirroredSites.has(siteKeyOf(row.did, row.rkey))) continue
 					const keys = keysForSite(row)
 					if (keys === null) {
 						stats.skippedSites++
@@ -329,12 +365,18 @@ export function createWarmMirror(deps: WarmMirrorDependencies): WarmMirror {
 		if (listFailed) outcome = 'database-unavailable'
 		if (abort.signal.aborted) outcome = 'aborted'
 		logger.info('Warm mirror pass finished', { outcome, ...stats, durationMs: Date.now() - startedAt })
-		if ((outcome === 'cold-unavailable' || outcome === 'database-unavailable') && !stopped) {
-			cancelRetryTimer = schedule(() => {
-				cancelRetryTimer = null
+		if (stopped || outcome === 'aborted') return
+		const retry = outcome === 'cold-unavailable' || outcome === 'database-unavailable'
+		const cancel = schedule(
+			() => {
+				if (retry) cancelRetryTimer = null
+				else cancelRepassTimer = null
 				startPass()
-			}, retryDelayMs)
-		}
+			},
+			retry ? retryDelayMs : repassDelayMs,
+		)
+		if (retry) cancelRetryTimer = cancel
+		else cancelRepassTimer = cancel
 	}
 
 	function startPass(ready?: Promise<unknown>): void {
@@ -428,8 +470,10 @@ export function createWarmMirror(deps: WarmMirrorDependencies): WarmMirror {
 			abort.abort()
 			cancelUpdateTimer?.()
 			cancelRetryTimer?.()
+			cancelRepassTimer?.()
 			cancelUpdateTimer = null
 			cancelRetryTimer = null
+			cancelRepassTimer = null
 			pending.clear()
 			await settled()
 		},
@@ -459,6 +503,7 @@ export function startWarmMirror(
 		listSites: listSiteCachePage,
 		// Uncached: a replica row read early must not become the lookup cache's copy for serving.
 		getSite: readSiteCache,
+		recentSites: siteVisits.recent,
 		isTakenDown: takedowns.isTakenDown,
 		isSiteUpdating,
 		record: metricsCollector.recordHostingWarmMirror,

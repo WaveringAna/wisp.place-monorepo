@@ -11,6 +11,7 @@ import { closeDatabase } from './lib/db'
 import { notFoundLog } from './lib/not-found-log'
 import { closePrivateSitesDatabase } from './lib/private-sites-db'
 import { closeRevalidateQueue } from './lib/revalidate-queue'
+import { siteVisits } from './lib/site-visits'
 import { getStorageConfig, storage } from './lib/storage'
 import { takedowns } from './lib/takedowns'
 import { unavailableLog } from './lib/unavailable-log'
@@ -66,8 +67,13 @@ startCacheInvalidationSubscriber()
 // Load the moderation labeler's active takedowns and keep them current.
 const takedownsLoaded = takedowns.start()
 
-// Off unless WARM_MIRROR=true. It waits for the takedown list so its first pass skips taken-down sites.
-const warmMirror = startWarmMirror(process.env, takedownsLoaded)
+// Which sites this edge's visitors read, kept across restarts so the warm mirror can favour them.
+const siteVisitsLoaded = siteVisits.load()
+const stopSavingSiteVisits = siteVisits.startFlushing()
+
+// Off unless WARM_MIRROR=true. It waits for the takedown list so its first pass skips taken-down sites,
+// and for the saved visits so it starts with the sites people here read.
+const warmMirror = startWarmMirror(process.env, Promise.all([takedownsLoaded, siteVisitsLoaded]))
 
 // Optional: Bootstrap hot cache from warm tier on startup
 const BOOTSTRAP_HOT_ON_STARTUP = process.env.BOOTSTRAP_HOT_ON_STARTUP === 'true'
@@ -131,11 +137,13 @@ const shutdown = onceAsync(async (signal: 'SIGINT' | 'SIGTERM') => {
 
 	cache.stopCleanup()
 	takedowns.stop()
+	stopSavingSiteVisits()
 	// Flush the partial window while the log exporters are still running.
 	unavailableLog.stop()
 	notFoundLog.stop()
 	const tasks = [
 		{ name: 'access statistics', promise: flushAccessStats() },
+		{ name: 'site visits', promise: siteVisits.flush() },
 		{ name: 'cache invalidation subscriber', promise: stopCacheInvalidationSubscriber() },
 		{ name: 'revalidation queue', promise: closeRevalidateQueue() },
 		...(warmMirrorStopped ? [{ name: 'warm mirror', promise: warmMirrorStopped }] : []),

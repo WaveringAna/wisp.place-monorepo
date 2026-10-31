@@ -340,7 +340,65 @@ describe('warm mirror startup pass', () => {
 		expect(recorded.filter(([outcome]) => outcome === 'fetched')).toHaveLength(5)
 		// The sixth read sees the budget and is dropped; nothing after it is read.
 		expect(coldReads).toHaveLength(6)
-		expect(scheduler.active).toHaveLength(0)
+		// Only the daily re-pass is scheduled, not a retry.
+		expect(scheduler.active.map((entry) => entry.delayMs)).toEqual([24 * 60 * 60_000])
+	})
+
+	test('mirrors the sites visitors read here first, so a small share holds those', async () => {
+		const quiet = site('a-quiet', ['1.png', '2.png'])
+		const visited = site('z-visited', ['1.png', '2.png'])
+		rows = [quiet, visited]
+		for (const row of rows) for (const path of Object.keys(row.file_cids)) await putCold(casOf(row, path), 100)
+
+		// Room for two objects: by site order alone the quiet site would take it.
+		await runStartupPass({
+			recentSites: () => [{ did: DID, rkey: 'z-visited' }],
+			warmUsage: () => ({ usedBytes: warm.getIndexedBytes(), maxBytes: 1000 }),
+			config: { concurrency: 1, fillPercent: 20 },
+		})
+
+		for (const path of Object.keys(visited.file_cids)) expect(await warm.exists(casOf(visited, path))).toBe(true)
+		for (const path of Object.keys(quiet.file_cids)) expect(await warm.exists(casOf(quiet, path))).toBe(false)
+	})
+
+	test('a visited site is mirrored once, and visited sites that are gone or taken down are skipped', async () => {
+		const row = site('a', ['1.png'])
+		rows = [row, site('down', ['1.png'])]
+		for (const r of rows) await putCold(casOf(r, '1.png'))
+		takenDown.add('down')
+
+		await runStartupPass({
+			recentSites: () => [
+				{ did: DID, rkey: 'a' },
+				{ did: DID, rkey: 'deleted' },
+				{ did: DID, rkey: 'down' },
+			],
+		})
+
+		expect(coldReads).toEqual([casOf(row, '1.png')])
+	})
+
+	test('runs again daily, putting back what visitors evicted', async () => {
+		const row = site('a', ['1.png'])
+		rows = [row]
+		await putCold(casOf(row, '1.png'))
+		const created = await runStartupPass({ repassDelayMs: 4321 })
+		expect(scheduler.active.map((entry) => entry.delayMs)).toEqual([4321])
+
+		await warm.delete(casOf(row, '1.png'))
+		coldReads = []
+		scheduler.fireAll()
+		await created.settled()
+		expect(coldReads).toEqual([casOf(row, '1.png')])
+		expect(await warm.exists(casOf(row, '1.png'))).toBe(true)
+	})
+
+	test('writes mirrored copies as never visited', async () => {
+		const row = site('a', ['1.png'])
+		rows = [row]
+		await putCold(casOf(row, '1.png'))
+		await runStartupPass()
+		expect((await warm.getMetadata(casOf(row, '1.png')))?.lastAccessed.getTime()).toBe(0)
 	})
 
 	test('stops and retries later once the cold tier breaker is open', async () => {

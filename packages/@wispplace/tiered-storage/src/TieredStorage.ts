@@ -515,6 +515,10 @@ export class TieredStorage<T = unknown> {
 	 * background fill can copy a cold object into warm without displacing the
 	 * memory-resident working set.
 	 *
+	 * `background` marks the warm copy a cold read makes as never accessed, so an
+	 * LRU warm tier evicts it before anything a visitor has read; the first real
+	 * read of it records an access like any other.
+	 *
 	 * @example
 	 * ```typescript
 	 * const result = await storage.getStream('large-file.mp4');
@@ -525,7 +529,7 @@ export class TieredStorage<T = unknown> {
 	 */
 	async getStream(
 		key: string,
-		options: { signal?: AbortSignal; borrowChunks?: boolean; skipHotTier?: boolean } = {},
+		options: { signal?: AbortSignal; borrowChunks?: boolean; skipHotTier?: boolean; background?: boolean } = {},
 	): Promise<StreamResult | null> {
 		throwIfAborted(options.signal)
 		const fence = this.acquireReadFence(key)
@@ -562,6 +566,7 @@ export class TieredStorage<T = unknown> {
 						? result.stream
 						: await this.promoteStream(key, name, result, fence, generation, upperTierPromotionEpoch, {
 								skipHotTier: options.skipHotTier === true,
+								background: options.background === true,
 							})
 				const owned = this.wrapStreamWithDecompression(
 					{ stream: source, metadata: cloneStorageMetadata(result.metadata) },
@@ -616,7 +621,7 @@ export class TieredStorage<T = unknown> {
 		fence: KeyFence,
 		generation: number,
 		upperTierPromotionEpoch: number,
-		{ skipHotTier }: { skipHotTier: boolean },
+		{ skipHotTier, background }: { skipHotTier: boolean; background: boolean },
 	): Promise<NodeJS.ReadableStream> {
 		if (this.config.promotionStrategy !== 'eager' || this.inFlightStreamPromotions.has(key)) return result.stream
 		const warm = source === 'cold' ? this.config.tiers.warm : undefined
@@ -631,7 +636,9 @@ export class TieredStorage<T = unknown> {
 		const hotMaxBytes = this.config.streamHotPromotionMaxBytes ?? DEFAULT_STREAM_HOT_PROMOTION_MAX_BYTES
 		let staged: StagedTierWrite | undefined
 		try {
-			staged = await warm?.stageWrite?.(key, cloneStorageMetadata(metadata))
+			const warmMetadata = cloneStorageMetadata(metadata)
+			if (background) warmMetadata.lastAccessed = new Date(0)
+			staged = await warm?.stageWrite?.(key, warmMetadata)
 		} catch {
 			// Promotion is best-effort; the read itself still succeeds.
 		}

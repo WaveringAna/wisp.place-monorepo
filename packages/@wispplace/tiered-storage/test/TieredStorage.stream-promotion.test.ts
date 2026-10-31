@@ -264,6 +264,23 @@ describe('TieredStorage streamed-read promotion', () => {
 		expect(await hot.exists(key)).toBe(false)
 	})
 
+	test('a background fill is evicted from an LRU warm tier before a file a visitor read', async () => {
+		warm = new DiskStorageTier({ directory, maxSizeBytes: 2500, evictionPolicy: 'lru' })
+		const storage = createStorage({ placementRules: [{ pattern: '**', tiers: ['warm', 'cold'] }] })
+		const keys = ['did:plc:a/site/visited.css', 'did:plc:a/site/mirrored.css', 'did:plc:a/site/new.css']
+		for (const key of keys) await cold.set(key, bytes(1000), metadata(key, 1000))
+
+		await readAll((await storage.getStream(keys[0]!))!.stream)
+		await readAll((await storage.getStream(keys[1]!, { skipHotTier: true, background: true }))!.stream)
+		expect((await warm.getMetadata(keys[1]!))?.lastAccessed.getTime()).toBe(0)
+		// Over capacity: the background copy goes, even though it arrived after the visited one.
+		await readAll((await storage.getStream(keys[2]!))!.stream)
+
+		expect(await warm.exists(keys[0]!)).toBe(true)
+		expect(await warm.exists(keys[1]!)).toBe(false)
+		expect(await warm.exists(keys[2]!)).toBe(true)
+	})
+
 	test('skipHotTier reads past a hot-only copy to fill warm', async () => {
 		const data = bytes(1024)
 		await hot.set(KEY, data, metadata(KEY, data.byteLength))

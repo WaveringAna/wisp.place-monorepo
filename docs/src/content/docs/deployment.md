@@ -247,11 +247,15 @@ WARM_EVICTION_POLICY="lru"    # lru, fifo, or size
 BOOTSTRAP_HOT_ON_STARTUP=false
 BOOTSTRAP_HOT_LIMIT=100
 
-# Warm mirror: copy every public site's files into the warm disk tier in the
-# background (one pass at startup, then each updated site), so first reads stay
-# local. Off unless exactly "true"; needs S3 as the cold tier. It never fills the
-# hot tier and stops once the warm tier reaches WARM_MIRROR_FILL_PERCENT of
-# WARM_CACHE_SIZE. Leave it off where the disk cannot hold every public site.
+# Warm mirror: copy public sites' files into the warm disk tier in the
+# background, so first reads stay local. A pass runs at startup and daily, sites
+# this edge's visitors read first (saved in site-visits.json beside CACHE_DIR,
+# or WISP_SITE_VISITS_FILE), then the rest; each updated site is mirrored as it
+# changes. Off unless exactly "true"; needs S3 as the cold tier. It never fills
+# the hot tier and stops adding once the warm tier reaches
+# WARM_MIRROR_FILL_PERCENT of WARM_CACHE_SIZE. Mirrored copies count as never
+# visited, so with WARM_EVICTION_POLICY=lru they are evicted before anything a
+# visitor read; an edge whose disk cannot hold every site keeps its busiest ones.
 WARM_MIRROR=false
 WARM_MIRROR_CONCURRENCY=2      # concurrent object-store reads, 1-16
 WARM_MIRROR_FILL_PERCENT=80    # share of WARM_CACHE_SIZE the mirror may fill, 1-95
