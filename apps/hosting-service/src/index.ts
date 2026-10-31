@@ -5,7 +5,11 @@ import {
 	setInMemoryRetention,
 	shutdownGrafanaExporters,
 } from '@wispplace/observability'
-import { startCacheInvalidationSubscriber, stopCacheInvalidationSubscriber } from './lib/cache-invalidation'
+import {
+	addSiteUpdatedListener,
+	startCacheInvalidationSubscriber,
+	stopCacheInvalidationSubscriber,
+} from './lib/cache-invalidation'
 import { cache } from './lib/cache-manager'
 import { closeDatabase } from './lib/db'
 import { notFoundLog } from './lib/not-found-log'
@@ -16,7 +20,7 @@ import { getStorageConfig, storage } from './lib/storage'
 import { takedowns } from './lib/takedowns'
 import { unavailableLog } from './lib/unavailable-log'
 import { startWarmMirror } from './lib/warm-mirror'
-import app from './server'
+import app, { subscribeRepos } from './server'
 import { onceAsync, stopHttpServerWithGrace } from './shutdown'
 
 const logger = createLogger('hosting-service')
@@ -64,6 +68,9 @@ notFoundLog.start()
 // Start cache invalidation subscriber (listens for firehose-service updates via Redis pub/sub)
 startCacheInvalidationSubscriber()
 
+// Relays following a site's firehose get its new frames once its update settles.
+addSiteUpdatedListener(subscribeRepos.siteUpdated)
+
 // Load the moderation labeler's active takedowns and keep them current.
 const takedownsLoaded = takedowns.start()
 
@@ -100,6 +107,7 @@ if (BOOTSTRAP_HOT_ON_STARTUP) {
 const server = Bun.serve({
 	fetch: app.fetch,
 	port: PORT,
+	websocket: subscribeRepos.websocket,
 })
 
 // Log only safe storage mode and capacity fields. Bucket names, endpoints, and
@@ -130,7 +138,10 @@ const shutdown = onceAsync(async (signal: 'SIGINT' | 'SIGTERM') => {
 
 	// Stop the listener first. Keep backing services available until active work
 	// drains, then terminate any request that exceeded the bounded grace period.
-	const httpStop = await stopHttpServerWithGrace(server, HTTP_SHUTDOWN_GRACE_PERIOD_MS)
+	const httpStopping = stopHttpServerWithGrace(server, HTTP_SHUTDOWN_GRACE_PERIOD_MS)
+	// Relay sockets never finish on their own. Closed once the listener has stopped, so the drain can end.
+	subscribeRepos.closeAll()
+	const httpStop = await httpStopping
 	if (httpStop.forced) logger.warn('HTTP server did not stop gracefully; forced active connections closed')
 	if (httpStop.gracefulStopFailed) logger.error('HTTP server graceful stop failed')
 	if (httpStop.forceStopFailed) logger.error('HTTP server force stop failed')

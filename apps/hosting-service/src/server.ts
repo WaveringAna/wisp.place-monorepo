@@ -18,8 +18,8 @@ import { type Context, Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { type CacheInvalidationHealthSnapshot, getCacheInvalidationHealthSnapshot } from './lib/cache-invalidation'
 import { cache } from './lib/cache-manager'
-import { getCustomDomain, getCustomDomainByHash, getWispDomain } from './lib/db'
-import { serveFromCache, serveFromCacheWithRewrite } from './lib/file-serving'
+import { getCustomDomain, getCustomDomainByHash, getWispDomain, isSupporter } from './lib/db'
+import { serveFileInternal, serveFromCache, serveFromCacheWithRewrite } from './lib/file-serving'
 import { takedownResponse } from './lib/moderation'
 import { notFoundLog } from './lib/not-found-log'
 import { privateNotFound, servePrivateSite } from './lib/private-serving'
@@ -28,6 +28,7 @@ import { notFoundRecorder, requestVisibility, tagNotFound, tagSiteNotFound } fro
 import { recordSiteResponse } from './lib/site-metrics'
 import { siteVisits } from './lib/site-visits'
 import { getStorageReadHealthSnapshot, type StorageReadHealthSnapshot } from './lib/storage'
+import { createSubscribeRepos, SUBSCRIBE_REPOS_PATH, type SubscribeRepos } from './lib/subscribe-repos'
 import { takedowns } from './lib/takedowns'
 import { isValidAtprotoIdentifier, resolveDid } from './lib/utils'
 
@@ -153,6 +154,8 @@ export type HostingAppDeps = {
 	recordSiteVisit?: (did: string, rkey: string) => void
 	metrics: Pick<typeof metricsCollector, 'recordHostingResponse' | 'recordHostingNotFound'>
 	notFoundLog: Pick<typeof notFoundLog, 'record'>
+	/** Answers subscribeRepos for opted-in sites on custom domains; without it the path is an ordinary site path. */
+	subscribeRepos?: Pick<SubscribeRepos, 'handle'>
 }
 
 type NotFound = { reason: HostingNotFoundReason; message: string }
@@ -176,6 +179,7 @@ async function serveMappedPublicDomain(
 	domain: PublicDomainMapping | null,
 	path: string,
 	missing: NotFound,
+	firehose = false,
 ): Promise<Response> {
 	if (!domain) {
 		return notFound(c, missing)
@@ -190,6 +194,12 @@ async function serveMappedPublicDomain(
 	}
 
 	if (deps.isTakenDown(domain.did, domain.rkey)) return takedownResponse(c.req.method)
+
+	if (firehose && deps.subscribeRepos && `/${path}` === SUBSCRIBE_REPOS_PATH) {
+		// Bun hands Hono its server as the env, which is what upgrades the request.
+		const response = await deps.subscribeRepos.handle(c.req.raw, c.env, domain.did, domain.rkey)
+		if (response) return response
+	}
 
 	const headers = extractHeaders(c.req.raw.headers)
 	return trackPublicSiteResponse(
@@ -422,8 +432,10 @@ async function servePublicDomain(deps: HostingAppDeps, c: Context, request: Site
 		return serveMappedPublicDomain(deps, c, domainInfo, request.publicPath, SUBDOMAIN_MISSING)
 	}
 
+	// Only a custom domain is the site's own PDS host. A relay's domain ban matches by suffix, so one ban
+	// on a wisp subdomain's site would take out every site under the base host.
 	const customDomain = await deps.getCustomDomain(request.hostname)
-	return serveMappedPublicDomain(deps, c, customDomain, request.publicPath, CUSTOM_DOMAIN_MISSING)
+	return serveMappedPublicDomain(deps, c, customDomain, request.publicPath, CUSTOM_DOMAIN_MISSING, true)
 }
 
 function logSiteRequest(request: SiteRequest): void {
@@ -508,6 +520,8 @@ export function createApp(deps: HostingAppDeps): Hono {
 	return app
 }
 
+export const subscribeRepos = createSubscribeRepos({ serveFile: serveFileInternal, isSupporter })
+
 export default createApp({
 	hosts: resolveHostConfig(),
 	getWispDomain,
@@ -519,4 +533,5 @@ export default createApp({
 	recordSiteVisit: siteVisits.record,
 	metrics: metricsCollector,
 	notFoundLog,
+	subscribeRepos,
 })

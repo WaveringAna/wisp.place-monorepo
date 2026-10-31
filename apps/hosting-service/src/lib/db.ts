@@ -130,6 +130,11 @@ export function createHostingDb({ sql, cache, onReadRetry }: HostingDbDeps) {
     `
 	}
 
+	async function isSupporter(did: string): Promise<boolean> {
+		const rows = await read<object[]>`SELECT 1 FROM supporter WHERE did = ${did} LIMIT 1`
+		return rows.length > 0
+	}
+
 	/**
 	 * Subjects whose newest `!takedown` label from `labelerDid` is neither negated
 	 * nor expired. A label scoped to one record version (a cid) takes down the
@@ -161,6 +166,7 @@ export function createHostingDb({ sql, cache, onReadRetry }: HostingDbDeps) {
 		readSiteCache,
 		listSiteCachePage,
 		loadActiveTakedowns,
+		isSupporter,
 	}
 }
 
@@ -184,6 +190,7 @@ export const {
 	readSiteCache,
 	listSiteCachePage,
 	loadActiveTakedowns,
+	isSupporter,
 } = createHostingDb({ sql, cache, onReadRetry: metricsCollector.recordHostingDbReadRetry })
 
 export interface ClosableDatabasePool {
