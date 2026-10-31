@@ -19,6 +19,8 @@ const files = new Map<string, Uint8Array<ArrayBuffer>>()
 const fromCache: string[] = []
 
 const frame = (name: string | number) => new TextEncoder().encode(`frame ${name}`)
+/** A frame just under the 256 KiB cap, every byte of it its seq. */
+const bigFrame = (seq: number) => new Uint8Array(250 * 1024).fill(seq)
 const entry = (seq: number) => ({ seq, type: '#commit', file: `${seq}.cbor` })
 const index = (head: number, replayableFrom: number, seqs: number[]) => ({
 	version: 1,
@@ -34,10 +36,17 @@ function put(did: string, rkey: string, path: string, body: string | Uint8Array<
 }
 
 /** Deploy an at-sdp event log: head.json, its frames and the checkpoint. */
-function deployLog(did: string, rkey: string, head: number, replayableFrom: number, seqs: number[]): void {
+function deployLog(
+	did: string,
+	rkey: string,
+	head: number,
+	replayableFrom: number,
+	seqs: number[],
+	body: (seq: number) => Uint8Array<ArrayBuffer> = frame,
+): void {
 	put(did, rkey, 'xrpc/_sdp/events/head.json', JSON.stringify(index(head, replayableFrom, seqs)))
 	put(did, rkey, 'xrpc/_sdp/events/checkpoint.cbor', frame('checkpoint'))
-	for (const seq of seqs) put(did, rkey, `xrpc/_sdp/events/${seq}.cbor`, frame(seq))
+	for (const seq of seqs) put(did, rkey, `xrpc/_sdp/events/${seq}.cbor`, body(seq))
 }
 
 const serveFile: SubscribeReposDeps['serveFile'] = async (did, rkey, path) => {
@@ -117,34 +126,63 @@ function handshake(port: number | undefined, host: string, query = '', client = 
 	})
 }
 
-async function eventually(check: () => boolean): Promise<void> {
+async function eventually(check: () => boolean | Promise<boolean>): Promise<void> {
 	const deadline = Date.now() + 2000
-	while (!check() && Date.now() < deadline) await Bun.sleep(5)
+	while (!(await check()) && Date.now() < deadline) await Bun.sleep(5)
 }
 
-/** The close code on the wire after `close()`, read off a raw socket: Bun 1.3's WebSocket client reports 1001 as 1000. */
-async function closeCodeOnTheWire(port: number | undefined, host: string, close: () => void) {
-	let received = Buffer.alloc(0)
+/** The first whole WebSocket frame in `bytes`, as a server sends it: unmasked. */
+function nextFrame(bytes: Buffer) {
+	const short = (bytes[1] ?? 0) & 0x7f
+	const start = short === 127 ? 10 : short === 126 ? 4 : 2
+	if (bytes.length < start) return undefined
+	const length = short === 127 ? Number(bytes.readBigUInt64BE(2)) : short === 126 ? bytes.readUInt16BE(2) : short
+	if (bytes.length < start + length) return undefined
+	return { opcode: (bytes[0] ?? 0) & 0x0f, payload: bytes.subarray(start, start + length), end: start + length }
+}
+
+/**
+ * Dial subscribeRepos on a raw socket, which can stop reading as a stalled relay does, and which sees the
+ * close code: Bun 1.3's WebSocket client reports 1001 as 1000.
+ */
+async function rawDial(port: number | undefined, host: string, query = '', client = '192.0.2.1') {
+	let status = ''
+	const frames: Array<{ opcode: number; payload: Buffer }> = []
+	let unread = Buffer.alloc(0)
 	const socket = await Bun.connect({
 		hostname: '127.0.0.1',
 		port: port as number,
 		socket: {
 			data(_, chunk) {
-				received = Buffer.concat([received, chunk])
+				unread = Buffer.concat([unread, chunk])
+				if (!status) {
+					const end = unread.indexOf('\r\n\r\n')
+					if (end < 0) return
+					status = unread.subarray(0, 12).toString()
+					unread = unread.subarray(end + 4)
+				}
+				for (let next = nextFrame(unread); next; next = nextFrame(unread)) {
+					frames.push(next)
+					unread = unread.subarray(next.end)
+				}
 			},
 		},
 	})
 	socket.write(
-		`GET ${PATH}?cursor=5 HTTP/1.1\r\nHost: ${host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n` +
-			'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n',
+		`GET ${PATH}${query} HTTP/1.1\r\nHost: ${host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n` +
+			`X-Forwarded-For: ${client}\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n`,
 	)
-	const frameAt = () => received.indexOf('\r\n\r\n') + 4
-	await eventually(() => frameAt() > 3)
+	await eventually(() => status !== '')
+	return { status, frames, socket }
+}
+
+async function closeCodeOnTheWire(port: number | undefined, host: string, close: () => void) {
+	const relay = await rawDial(port, host, '?cursor=5')
 	close()
-	await eventually(() => received.length >= frameAt() + 4)
-	socket.end()
-	const frame = received.subarray(frameAt())
-	return { status: received.subarray(0, 12).toString(), code: frame[0] === 0x88 ? frame.readUInt16BE(2) : undefined }
+	await eventually(() => relay.frames.length > 0)
+	relay.socket.end()
+	const [frame] = relay.frames
+	return { status: relay.status, code: frame?.opcode === 0x8 ? frame.payload.readUInt16BE(0) : undefined }
 }
 
 describe('subscribeRepos on a supporter custom domain that opted in', () => {
@@ -294,6 +332,54 @@ describe('subscribeRepos on a supporter custom domain that opted in', () => {
 
 		expect(closed).toEqual({ status: 'HTTP/1.1 101', code: 1001 })
 		expect((await handshake(port, 'feed.example.com')).status).toBe(503)
+	})
+
+	/** A relay that stops reading while about 16 MB of frames are published: more than loopback's socket buffers hold. */
+	async function stalledRelay(options: Partial<SubscribeReposDeps> = {}) {
+		let framesRead = 0
+		const { port, subscribeRepos } = start({
+			...options,
+			serveFile: (did, rkey, path) => {
+				if (path.endsWith('.cbor')) framesRead++
+				return serveFile(did, rkey, path)
+			},
+		})
+		const relay = await rawDial(port, 'feed.example.com', '?cursor=5')
+		relay.socket.pause()
+		const seqs = Array.from({ length: 64 }, (_, i) => 6 + i)
+		deployLog(ALICE, 'feed', 69, 5, seqs, bigFrame)
+		subscribeRepos.siteUpdated(ALICE, 'feed')
+		await Bun.sleep(100)
+		return { port, relay, seqs, framesRead }
+	}
+
+	test('a relay that stops reading holds the stream back, then gets every frame once and in order', async () => {
+		const { relay, seqs, framesRead } = await stalledRelay()
+		expect(framesRead).toBeWithin(1, seqs.length)
+
+		relay.socket.resume()
+		await eventually(() => relay.frames.length >= seqs.length)
+		// Summarised, so a failure lists the frames that arrived rather than 16 MB of bytes.
+		const summary = (opcode: number, payload: Uint8Array) => ({ opcode, seq: payload[0], bytes: Bun.hash(payload) })
+		expect(relay.frames.map(({ opcode, payload }) => summary(opcode, payload))).toEqual(
+			seqs.map((seq) => summary(0x2, bigFrame(seq))),
+		)
+	})
+
+	test('a relay that disconnects while the stream waits on it frees its place for a redial', async () => {
+		const { port, relay, seqs, framesRead } = await stalledRelay({ maxSocketsPerClientPerSite: 1 })
+		expect(framesRead).toBeWithin(1, seqs.length)
+
+		relay.socket.terminate()
+		let accepted = false
+		await eventually(async () => {
+			accepted = await dial(port, 'feed.example.com', '?cursor=69').opened.then(
+				() => true,
+				() => false,
+			)
+			return accepted
+		})
+		expect(accepted).toBe(true)
 	})
 })
 
