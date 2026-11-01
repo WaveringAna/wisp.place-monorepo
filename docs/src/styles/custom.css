@@ -583,3 +583,19 @@ starlight-toc > nav > ul > li > ul a {
 	color: var(--sl-color-accent) !important;
 	margin-right: 0.4rem !important;
 }
+
+/* ── Diagrams (pele, rendered from ```mermaid blocks at build time) ─────────── */
+
+svg.pele {
+	--pele-bg: var(--sl-color-bg);
+	--pele-fg: var(--sl-color-white);
+	--pele-line: var(--sl-color-gray-3);
+	--pele-border: var(--sl-color-gray-4);
+	--pele-surface: var(--sl-color-gray-6);
+	--pele-accent: var(--sl-color-accent);
+	--pele-font: var(--sl-font, var(--sl-font-system));
+	display: block;
+	margin-inline: auto;
+	max-width: 100%;
+	height: auto;
+}

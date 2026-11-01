@@ -92,3 +92,14 @@ Responses on paths covered by an `Accept=`, `Language=` or `Cookie=` rule carry 
 /                   /uk/                                     302  Country=gb
 /*                  /index.html                              200
 ```
+
+## Special targets
+
+### `wisp:firehose`
+
+Targeting `wisp:firehose` serves an AT Protocol firehose websocket, suitable for relays to connect to. This is part of using your site as a static PDS; see [Static PDSes](/guides/static-pds/) for more context.
+
+```
+# (other atproto entries required)
+/xrpc/com.atproto.sync.subscribeRepos wisp:firehose 200
+```

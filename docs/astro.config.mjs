@@ -1,9 +1,19 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
+import { render } from 'pele';
+
+const renderMermaid = (node) => {
+	if (node.type === 'code' && node.lang === 'mermaid') {
+		Object.assign(node, { type: 'html', value: render(node.value).svg });
+	}
+	node.children?.forEach(renderMermaid);
+};
+const remarkMermaid = () => renderMermaid;
 
 // https://astro.build/config
 export default defineConfig({
+	markdown: { remarkPlugins: [remarkMermaid] },
 	integrations: [
 		starlight({
 			title: 'Wisp.place Docs',
@@ -35,6 +45,7 @@ export default defineConfig({
 						{ label: 'Redirects & Rewrites', slug: 'redirects' },
 						{ label: 'Blob Reuse & Framework Caveats', slug: 'guides/blob-reuse' },
 						{ label: 'Preview Deploys', slug: 'guides/preview-deploys' },
+						{ label: 'Static PDSes', slug: 'guides/static-pds' },
 					],
 				},
 				{
@@ -42,6 +53,7 @@ export default defineConfig({
 					items: [
 						{ label: 'XRPC API', slug: 'reference/xrpc-api' },
 						{ label: 'Main App API', slug: 'reference/main-app-api' },
+						{ label: 'Being a supporter', slug: 'reference/supporters' },
 					],
 				},
 			],
