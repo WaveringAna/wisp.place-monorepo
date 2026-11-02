@@ -10,7 +10,7 @@ If you do want to offer support, be awesome, or gimme money:
 - [GitHub Sponsors](https://github.com/sponsors/WaveringAna)
 - [Ko-fi](https://ko-fi.com/waveringana)
 
-Any amount is fine. Leave your atproto handle somewhere (in the donation note, or message [@nekomimi.pet](https://bsky.app/profile/nekomimi.pet)) so your supporter features can be turned on.
+Any amount is fine, and donations just help keep it running. Leave your atproto handle somewhere (in the donation note, or message [@nekomimi.pet](https://bsky.app/profile/nekomimi.pet)) so your supporter features can be turned on.
 
 ## Supporter benefits
 
