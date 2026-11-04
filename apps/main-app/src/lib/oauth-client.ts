@@ -8,6 +8,7 @@ import { logger } from './logger'
 import { deleteExpiredOAuthRows } from './oauth-cleanup'
 import { createClientMetadata } from './oauth-client-metadata'
 import { createOAuthFetch } from './oauth-fetch'
+import { needsRotation, newKid, type StoredKeyInfo, signingOrder } from './oauth-key-rotation'
 import { withReservedOAuthLock } from './oauth-lock'
 import { SlingshotHandleResolver } from './slingshot-handle-resolver'
 import { createTtlMemoryStore } from './ttl-memory-store'
@@ -230,55 +231,25 @@ export { sessionStore }
 
 export const cleanupExpiredSessions = () => deleteExpiredOAuthRows(db)
 
-const persistKey = async (key: JoseKey) => {
-	const priv = key.privateJwk
-	if (!priv) return
-	const kid = key.kid ?? crypto.randomUUID()
-	await db`
-        INSERT INTO oauth_keys (kid, jwk, created_at)
-        VALUES (${kid}, ${JSON.stringify(priv)}, EXTRACT(EPOCH FROM NOW()))
-        ON CONFLICT (kid) DO UPDATE SET
-            jwk = EXCLUDED.jwk,
-            created_at = EXCLUDED.created_at
-    `
-	keysCache = undefined
-}
-
-// 60s ttl: keys rotate ~twice a year, so cross-instance staleness after a
-// rotation self-heals well before the next sign-in checks the new keyset.
-let keysCache: { keys: JoseKey[]; fetchedAtMs: number } | undefined
-const KEYS_CACHE_TTL_MS = 60_000
-
 const loadPersistedKeys = async (): Promise<JoseKey[]> => {
-	const rows = await db`SELECT kid, jwk, created_at FROM oauth_keys ORDER BY kid`
-	const keys: JoseKey[] = []
+	const rows = await db`SELECT kid, jwk, created_at FROM oauth_keys`
+	const stored: (StoredKeyInfo & { key: JoseKey })[] = []
 	for (const row of rows) {
 		try {
 			const obj = JSON.parse(row.jwk)
 			const key = await JoseKey.fromImportable(obj as any, (obj as any).kid)
-			keys.push(key)
+			stored.push({ kid: row.kid, createdAt: Number(row.created_at ?? 0), key })
 		} catch (err) {
 			logger.error('[OAuth] Could not parse stored JWK', err)
 		}
 	}
-	return keys
+	return signingOrder(stored, Math.floor(Date.now() / 1000)).map((s) => s.key)
 }
 
-const ensureKeys = async (): Promise<JoseKey[]> => {
-	const keys = await loadPersistedKeys()
-	const needed: string[] = []
-	for (let i = 1; i <= 3; i++) {
-		const kid = `key${i}`
-		if (!keys.some((k) => k.kid === kid)) needed.push(kid)
-	}
-	for (const kid of needed) {
-		const newKey = await JoseKey.generate(['ES256'], kid)
-		await persistKey(newKey)
-		keys.push(newKey)
-	}
-	keys.sort((a, b) => (a.kid ?? '').localeCompare(b.kid ?? ''))
-	return keys
-}
+// 60s ttl: the OAuth client checks this cache every minute and rebuilds when a
+// rotation adds a key, and /jwks.json serves the same keys.
+let keysCache: { keys: JoseKey[]; fetchedAtMs: number } | undefined
+const KEYS_CACHE_TTL_MS = 60_000
 
 export const getCurrentKeys = async (): Promise<JoseKey[]> => {
 	if (keysCache && Date.now() - keysCache.fetchedAtMs < KEYS_CACHE_TTL_MS) return keysCache.keys
@@ -287,38 +258,35 @@ export const getCurrentKeys = async (): Promise<JoseKey[]> => {
 	return keys
 }
 
-// Key rotation - rotate keys older than 6 months
-const KEY_MAX_AGE = 182.5 * 24 * 60 * 60 // ~6 months in seconds
-
+/**
+ * Adds a key under a new kid when the newest one is past KEY_MAX_AGE_S. Every
+ * instance runs this hourly; the advisory lock keeps them from each adding one.
+ */
 export const rotateKeysIfNeeded = async (): Promise<boolean> => {
-	const now = Math.floor(Date.now() / 1000)
-	const cutoffTime = now - KEY_MAX_AGE
-
 	try {
-		// Find keys older than 30 days
-		const oldKeys = await db`
-            SELECT kid, created_at FROM oauth_keys
-            WHERE created_at IS NOT NULL AND created_at < ${cutoffTime}
-            ORDER BY created_at ASC
-        `
-
-		if (oldKeys.length === 0) {
+		const kid = await db.begin(async (tx) => {
+			await tx`SELECT pg_advisory_xact_lock(${lockKey('oauth-key-rotation').toString()}::bigint)`
+			const rows = await tx`SELECT kid, created_at FROM oauth_keys`
+			const now = Math.floor(Date.now() / 1000)
+			const known = rows.map((r: { kid: string; created_at: number | null }) => ({
+				kid: r.kid,
+				createdAt: Number(r.created_at ?? 0),
+			}))
+			if (!needsRotation(known, now)) return null
+			const kid = newKid(now)
+			const key = await JoseKey.generate(['ES256'], kid)
+			await tx`
+				INSERT INTO oauth_keys (kid, jwk, created_at)
+				VALUES (${kid}, ${JSON.stringify(key.privateJwk)}, ${now})
+			`
+			return kid
+		})
+		if (!kid) {
 			logger.debug('[KeyRotation] No keys need rotation')
 			return false
 		}
-
-		logger.info(`[KeyRotation] Found ${oldKeys.length} key(s) older than 6 months, rotating oldest key`)
-
-		// Rotate the oldest key
-		const oldestKey = oldKeys[0]
-		const oldKid = oldestKey.kid
-
-		// Generate new key with same kid
-		const newKey = await JoseKey.generate(['ES256'], oldKid)
-		await persistKey(newKey)
-
-		logger.info(`[KeyRotation] Rotated key ${oldKid}`)
-
+		keysCache = undefined
+		logger.info(`[KeyRotation] Added key ${kid}; instances sign with it once it has been published for an hour`)
 		return true
 	} catch (err) {
 		logger.error('[KeyRotation] Failed to rotate keys', err)
@@ -337,13 +305,48 @@ const METADATA_CACHE_MAX = 500
 // metadata; too short a TTL guarantees the challenge on every login instead.
 const DPOP_NONCE_CACHE_TTL_MS = 10 * 60_000
 
-export const getOAuthClient = async (config: {
+type OAuthClientConfig = {
 	domain: `http://${string}` | `https://${string}`
 	clientName: string
-}) => {
-	const keys = await ensureKeys()
+}
 
-	return new NodeOAuthClient({
+const keysetFingerprint = (keys: JoseKey[]): string =>
+	keys.map((k) => `${k.kid}:${(k.publicJwk as { x?: string } | undefined)?.x ?? ''}`).join(',')
+
+const KEYSET_CHECK_INTERVAL_MS = 60_000
+
+/**
+ * The returned client follows the stored keyset: once a minute it compares the
+ * keys it signs with against oauth_keys and swaps in a client built on the new
+ * ones. State and sessions live in Postgres, so a swap loses only caches.
+ */
+export const getOAuthClient = async (config: OAuthClientConfig): Promise<NodeOAuthClient> => {
+	if ((await getCurrentKeys()).length === 0) await rotateKeysIfNeeded()
+	let keys = await getCurrentKeys()
+	let current = buildOAuthClient(config, keys)
+
+	const timer = setInterval(() => {
+		void getCurrentKeys()
+			.then((latest) => {
+				if (latest.length === 0 || keysetFingerprint(latest) === keysetFingerprint(keys)) return
+				keys = latest
+				current = buildOAuthClient(config, keys)
+				logger.info(`[OAuth] Keyset changed; now signing with ${keys[0]?.kid}`)
+			})
+			.catch((err) => logger.error('[OAuth] Keyset check failed', err))
+	}, KEYSET_CHECK_INTERVAL_MS)
+	timer.unref?.()
+
+	return new Proxy({} as NodeOAuthClient, {
+		get: (_target, prop) => {
+			const value = Reflect.get(current, prop, current)
+			return typeof value === 'function' ? value.bind(current) : value
+		},
+	})
+}
+
+const buildOAuthClient = (config: OAuthClientConfig, keys: JoseKey[]) =>
+	new NodeOAuthClient({
 		...oauthNetworkOptions(),
 		clientMetadata: createClientMetadata(config),
 		keyset: keys,
@@ -361,4 +364,3 @@ export const getOAuthClient = async (config: {
 		}),
 		dpopNonceCache: createTtlMemoryStore({ ttlMs: DPOP_NONCE_CACHE_TTL_MS, max: METADATA_CACHE_MAX }),
 	})
-}
