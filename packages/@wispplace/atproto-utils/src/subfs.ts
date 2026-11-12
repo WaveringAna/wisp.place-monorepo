@@ -1,4 +1,4 @@
-import { parseLexiconJson } from '@wispplace/lexicons/public-json'
+import { parseWispTreeJson } from '@wispplace/lexicons/public-json'
 import type { Directory as FsDirectory, Entry as FsEntry } from '@wispplace/lexicons/types/place/wisp/fs'
 import type { Entry as NestedEntry, Record as SubfsRecord } from '@wispplace/lexicons/types/place/wisp/subfs'
 import { validateRecord as validateSubfsRecord } from '@wispplace/lexicons/types/place/wisp/subfs'
@@ -465,7 +465,7 @@ export async function expandSubfs(directory: FsDirectory, options: ExpandSubfsOp
 
 			let record: SubfsRecord
 			try {
-				record = parseLexiconJson<SubfsRecord>(rawRecord)
+				record = parseWispTreeJson<SubfsRecord>(rawRecord, 'place.wisp.subfs')
 			} catch {
 				throw new SubfsExpansionError('INVALID_RECORD')
 			}

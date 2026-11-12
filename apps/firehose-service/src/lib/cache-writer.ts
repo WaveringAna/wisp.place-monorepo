@@ -22,7 +22,7 @@ import {
 	normalizeFileObjects,
 } from '@wispplace/fs-utils'
 import { isHtmlContent, rewriteHtmlPaths } from '@wispplace/fs-utils/html-rewriter'
-import { parseLexiconJson } from '@wispplace/lexicons/public-json'
+import { parseLexiconJson, parseWispTreeJson } from '@wispplace/lexicons/public-json'
 import type { Directory, Entry, File, Record as WispFsRecord } from '@wispplace/lexicons/types/place/wisp/fs'
 import { validateRecord as validateFsRecord } from '@wispplace/lexicons/types/place/wisp/fs'
 import type { Record as WispSettings } from '@wispplace/lexicons/types/place/wisp/settings'
@@ -421,7 +421,7 @@ async function lookupAuthoritativeSiteRecord(
 	if (response.kind === 'absent') return response
 	const data = response.value
 
-	const record = parseLexiconJson<WispFsRecord>(data.value)
+	const record = parseWispTreeJson<WispFsRecord>(data.value, 'place.wisp.fs')
 	if (!validateFsRecord(record).success) throw new AuthoritativeSiteRecordError('INVALID_RECORD')
 	if (typeof data.cid !== 'string' || data.cid.length === 0 || data.cid.length > 256) {
 		throw new AuthoritativeSiteRecordError('MISSING_CID')
@@ -557,7 +557,7 @@ export async function fetchSiteRecord(
 			byteBudget: resources?.transferBudget,
 		})) as { value: unknown; cid?: string }
 
-		const record = parseLexiconJson<WispFsRecord>(data.value)
+		const record = parseWispTreeJson<WispFsRecord>(data.value, 'place.wisp.fs')
 		const validation = validateFsRecord(record)
 		if (!validation.success) {
 			logger.warn('Rejected invalid site record', { did, rkey })
@@ -683,7 +683,7 @@ function parseListedSiteRecord(row: unknown, did: string): ListedSiteRecord {
 	}
 	const rkey = parseListedRecordUri(row.uri, did)
 	try {
-		const record = parseLexiconJson<WispFsRecord>(row.value)
+		const record = parseWispTreeJson<WispFsRecord>(row.value, 'place.wisp.fs')
 		if (!validateFsRecord(record).success) throwSiteRecordListingError('INVALID_RECORD')
 		return { rkey, record, cid: row.cid }
 	} catch (error) {
