@@ -1,4 +1,5 @@
 import { createLogger } from '@wispplace/observability'
+import { safeFetchJson } from '@wispplace/safe-fetch'
 import type postgres from 'postgres'
 import type { ModerationStore, PublishedSite } from './store'
 
@@ -53,6 +54,8 @@ export async function readPublished(sql: postgres.Sql, after: SyncPosition, limi
 	}))
 }
 
+const DID_DOC_BYTES = 256 * 1024
+
 export type HandleResolver = (did: string) => Promise<string | null>
 
 /** The handle in a DID document's alsoKnownAs, from plc.directory or the did:web host. */
@@ -60,9 +63,9 @@ export const resolveHandleFromDidDoc: HandleResolver = async (did) => {
 	const url = did.startsWith('did:web:')
 		? `https://${decodeURIComponent(did.slice(8))}/.well-known/did.json`
 		: `https://plc.directory/${did}`
-	const res = await fetch(url, { signal: AbortSignal.timeout(10_000) })
-	if (!res.ok) return null
-	const doc = (await res.json()) as { alsoKnownAs?: string[] }
+	// A did:web names its own host, so this is a URL an account chose. safe-fetch
+	// refuses private and loopback addresses, on the first request and on redirects.
+	const doc = await safeFetchJson<{ alsoKnownAs?: string[] }>(url, { timeout: 10_000, maxSize: DID_DOC_BYTES })
 	return doc.alsoKnownAs?.find((a) => a.startsWith('at://'))?.slice(5) ?? null
 }
 

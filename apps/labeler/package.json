@@ -12,6 +12,7 @@
     "@atproto/oauth-client-node": "^0.3.17",
     "@wispplace/database": "workspace:*",
     "@wispplace/observability": "workspace:*",
+    "@wispplace/safe-fetch": "workspace:*",
     "postgres": "^3.4.9",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
