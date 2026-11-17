@@ -11,12 +11,29 @@ and interface a moderator works in. It replaces the `wisp-patrol` scratch page.
    cached, so the site is servable by then) and upserts a subject per site, with its
    wisp subdomains and verified custom domains. No jetstream connection and no
    per-request scanning: opening the page reads only moderation tables.
-2. **First pass by a local model.** A worker takes subjects in state `pending`,
-   fetches the page once (512 KiB cap) for its title, outbound hosts and first
-   3000 characters of text, and asks bonsai (llama.cpp OpenAI API on valefar,
-   `TRIAGE_URL`, over the wisp mesh) for `{flag, category, reason, confidence}`.
-   Result: `flagged` or `clear`. Pages that do not answer 200 are retried a few
-   times, then marked `clear` with the status as the reason. The model never labels.
+2. **First pass by a local model.** A worker takes subjects in state `pending`
+   and reads the whole site, not only `/`: the candidate paths are the site's
+   cached manifest (`site_cache.file_cids`, written by the firehose after expanding
+   subfs records). It fetches `/` and then up to 16 files, HTML first (top-level
+   and login-looking pages ahead of deep ones), then scripts, text and CSS; images
+   and other binaries are listed but never fetched. Bounds: 512 KiB for `/`,
+   256 KiB per file, 2 MiB and 90 s per site. Every fetch goes to
+   `sites.wisp.place/<did>/<rkey>/<path>`, and redirects are followed only within
+   that prefix, so neither a custom domain nor a `_redirects` rule can point the
+   service elsewhere; an off-site redirect is recorded as a signal. Each file is
+   reduced to its title, forms (action, method, input names and types), scripts,
+   shortened absolute URLs (tokens and ids dropped), visible text and pattern
+   signals (password or card field, webhook/bot endpoint, sends data, keystroke
+   capture, IP lookup, anti-inspection, off-site form or redirect). The model
+   (bonsai, llama.cpp OpenAI API on valefar, `TRIAGE_URL`, over the wisp mesh)
+   gets the path list and one `== <path>` section per file within 16k characters,
+   and answers `{flag, category, reason, confidence, files}`; the stored reason
+   names the files. A password or card field plus a webhook/bot endpoint anywhere
+   in the site is flagged as phishing even if the model lets it through or is
+   down (`reason` starts with `rules:`). A `/` that answers 404 does not end the
+   pass when other files answer. If a file answers 5xx or times out the site is
+   retried a few times; if nothing answers it is marked `clear` with each file's
+   status as the reason. Result: `flagged` or `clear`. The model never labels.
 3. **A moderator decides.** Verdicts (fine / empty / mass-created / spam) are
    private notes on a site or a whole account. Takedowns and hides are labels
    (`!takedown`, `!hide`, negated to restore), signed into the label log and obeyed

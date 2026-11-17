@@ -98,6 +98,8 @@ export function decodeCursor(cursor: string | null | undefined): { updated: stri
 }
 
 const MAX_LIMIT = 100
+/** Above the hosting limit (MAX_FILE_COUNT), so only a corrupt row is cut short. */
+const MAX_MANIFEST_PATHS = 5000
 
 /**
  * The moderation tables. Every read is one query; labels come from the labeler's
@@ -342,22 +344,39 @@ export function createModerationStore(sql: postgres.Sql, labelerDid: string) {
 				ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value`
 		},
 
-		/** The next site version for the model, newest first, skipping ones waiting out a retry. */
+		/**
+		 * The next site version for the model, newest first, skipping ones waiting out a
+		 * retry, with every path of its cached manifest (subfs already expanded).
+		 */
 		async nextPending(): Promise<{
 			uri: string
 			did: string
 			rkey: string
 			handle: string
 			files: number
+			paths: string[]
 			attempts: number
 		} | null> {
 			const [row] = await sql<
-				{ uri: string; did: string; rkey: string; handle: string; files: number; triage_attempts: number }[]
+				{
+					uri: string
+					did: string
+					rkey: string
+					handle: string
+					files: number
+					paths: string[] | null
+					triage_attempts: number
+				}[]
 			>`
-				SELECT uri, did, rkey, handle, files, triage_attempts FROM moderation_sites
-				WHERE state = 'pending' AND NOT deleted AND triage_after <= now()
-				ORDER BY updated DESC LIMIT 1`
-			return row ? { ...row, attempts: row.triage_attempts } : null
+				SELECT s.uri, s.did, s.rkey, s.handle, s.files, s.triage_attempts,
+					(SELECT array_agg(k ORDER BY k) FROM (
+						SELECT jsonb_object_keys(sc.file_cids) AS k FROM site_cache sc
+						WHERE sc.did = s.did AND sc.rkey = s.rkey LIMIT ${MAX_MANIFEST_PATHS}
+					) keys) AS paths
+				FROM moderation_sites s
+				WHERE s.state = 'pending' AND NOT s.deleted AND s.triage_after <= now()
+				ORDER BY s.updated DESC LIMIT 1`
+			return row ? { ...row, paths: row.paths ?? [], attempts: row.triage_attempts } : null
 		},
 		async deferTriage(uri: string, attempts: number, delaySeconds: number) {
 			await sql`

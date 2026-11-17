@@ -21,6 +21,8 @@ export type Triage = {
 	category: string
 	reason: string
 	confidence: number
+	/** The files the verdict rests on: `/` for the front page, else manifest paths. */
+	files?: string[]
 	model: string
 	at: string
 }
